@@ -794,7 +794,7 @@ fn brand_lockup_css_rules_are_not_accidentally_nested() {
     // what makes the inline SVG a block box inside the grid cell. In the
     // emitted CSS that means it is preceded by a closing brace, never by a
     // declaration.
-    let marker = "#codewhale-brand-mark svg{display:block;width:24px;height:24px;}";
+    let marker = "#codewhale-brand-mark svg{display:block;width:34px;height:34px;}";
     let at = css_region
         .find(marker)
         .expect("the mark's svg sizing rule must be emitted");
@@ -1436,14 +1436,15 @@ fn ocean_scene_fragment_mounts_a_canvas_and_honours_the_guards() {
 #[test]
 fn brand_fragment_is_explicit_responsive_and_slot_safe() {
     let js = super::brand::bundle_brand_js();
-    // The brand mark is the two-color Signal Current contract mark on ink,
-    // never an emoji (design system BRIEF.md: no emoji as icons).
+    // The brand mark is the Codewhale whale silhouette on the deep-blue tile
+    // (the same gradient and traced path as web/app/icon.svg), never an emoji.
     assert!(
-        js.contains("viewBox: \"0 0 64 64\""),
-        "Signal Current viewBox"
+        js.contains("viewBox: \"0 0 1254 1254\""),
+        "whale mark viewBox"
     );
-    assert!(js.contains("fill: \"#f6c453\""), "gold body path");
-    assert!(js.contains("fill: \"#48d7ff\""), "cyan current path");
+    assert!(js.contains("stopColor: \"#1D408A\""), "tile gradient start");
+    assert!(js.contains("stopColor: \"#052366\""), "tile gradient end");
+    assert!(js.contains("fill: \"#ffffff\""), "white whale silhouette");
     assert!(!js.contains("🐋"), "no whale emoji");
     assert!(js.contains("function CodewhaleBrand()"));
     assert!(js.contains("codewhale-brand-lockup"));

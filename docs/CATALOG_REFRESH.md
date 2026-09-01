@@ -1,6 +1,6 @@
 # Catalog refresh
 
-How CodeWhale keeps model metadata current — what already auto-updates, what
+How Codewhale keeps model metadata current — what already auto-updates, what
 is hand-maintained, and what a scheduled catalog job should (and should not) do.
 
 Related docs: [`PROVIDERS.md`](./PROVIDERS.md), RFC
@@ -13,7 +13,7 @@ Related docs: [`PROVIDERS.md`](./PROVIDERS.md), RFC
 | Question | Answer |
 |---|---|
 | Do users need a special model just to refresh models? | **No.** |
-| Does CodeWhale auto-update the public model catalog? | **Yes, at runtime**, from [Models.dev](https://models.dev/catalog.json), ~24 h TTL. |
+| Does Codewhale auto-update the public model catalog? | **Yes, at runtime**, from [Models.dev](https://models.dev/catalog.json), ~24 h TTL. |
 | Is the offline bundled seed auto-committed in CI? | **Not yet.** Live cache covers running installs; the in-repo seed is still manual / PR-driven. |
 | Should an LLM rewrite catalog JSON? | **No.** Ingest is deterministic public JSON. An LLM can *review* a PR, not own the source of truth. |
 
@@ -62,7 +62,7 @@ When the TUI/runtime starts (and is not disabled):
 
 1. Seed pickers from the **on-disk cache** if present (even if stale).
 2. If the cache is missing or older than **24 hours**, **background-fetch**
-   Models.dev (15 s timeout, explicit CodeWhale user-agent, **no credentials**).
+   Models.dev (15 s timeout, explicit Codewhale user-agent, **no credentials**).
 3. On success: atomic write to
    `~/.codewhale/catalog/models-dev-catalog.json` and publish rows into
    ProviderLake as `CatalogSource::Live`.
@@ -94,7 +94,7 @@ Defaults:
 
 - Catalog URL: `https://models.dev/catalog.json`
 - TTL: `24 * 60 * 60` seconds (`DEFAULT_MODELS_DEV_TTL_SECS`)
-- Cache file name: `models-dev-catalog.json` under the CodeWhale `catalog`
+- Cache file name: `models-dev-catalog.json` under the Codewhale `catalog`
   state dir
 
 Freshness values exposed for UI / status chips: `bundled` | `live` | `stale` |
@@ -226,7 +226,7 @@ truth** for catalog JSON.
 ## Auth note (Claude / Anthropic)
 
 Anthropic model **catalog** refresh does not require Claude Pro/Max OAuth.
-Models.dev is public. CodeWhale’s Anthropic route remains **API-key-based**
+Models.dev is public. Codewhale’s Anthropic route remains **API-key-based**
 for inference (`ANTHROPIC_API_KEY`). Do not couple catalog automation to
 subscription OAuth or Claude Code identity headers.
 

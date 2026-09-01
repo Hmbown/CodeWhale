@@ -786,6 +786,10 @@ pub enum ViewEvent {
     StatusMessage {
         message: String,
     },
+    /// The Tideline topbar's route segment requested the normal `/provider`
+    /// surface. It carries no catalog, readiness, or selected-route payload:
+    /// those facts remain owned by the provider picker and its apply path.
+    TopbarRoutePickerRequested,
     /// Emitted by the `/provider` picker on Esc so the next open can restore
     /// the browsing context — view mode and highlighted row.
     ProviderPickerDismissed {
@@ -944,14 +948,15 @@ pub enum ViewEvent {
         /// identify which row the operator selected.
         member_id: String,
     },
-    /// Open the live workers tab from the unified Fleet surface.
+    /// Open the live workers tab from the unified Pod surface.
     FleetRosterOpenWorkersRequested,
 
-    /// The roster asks the host to open the secondary named-Fleet switcher
-    /// (`/pod fleets`). Editing stays on setup; this is pick/select only.
+    /// The roster asks the host to open the secondary named-Pod switcher
+    /// (`/pod pods`; `/pod fleets` remains compatible). Editing stays on
+    /// setup; this is pick/select only.
     FleetRosterOpenFleetsRequested,
 
-    /// The Fleet list view asks the host to open a saved Fleet's detail view.
+    /// The Pod list view asks the host to open a saved Pod's detail view.
     FleetListOpenDetailRequested {
         name: String,
         scope: crate::fleet::store::FleetScope,
@@ -2168,7 +2173,6 @@ impl ConfigView {
                         .category(ConfigCategory::Motion)
                         .effective(app.fancy_animations.to_string()),
                 ),
-            },
             ConfigRow {
                 section: ConfigSection::Display,
                 key: "launch_screen".to_string(),
@@ -3357,7 +3361,6 @@ fn config_label_message(key: &str) -> Option<MessageId> {
         "calm_mode" => MessageId::ConfigLabelCalmMode,
         "low_motion" => MessageId::ConfigLabelLowMotion,
         "fancy_animations" => MessageId::ConfigLabelFancyAnimations,
-        "launch_screen" => MessageId::ConfigLabelLaunchScreen,
         "show_thinking" => MessageId::ConfigLabelShowThinking,
         "thinking_highlight" => MessageId::ConfigLabelThinkingHighlight,
         "show_tool_details" => MessageId::ConfigLabelShowToolDetails,
@@ -3461,11 +3464,9 @@ fn config_hint_for_key(locale: Locale, key: &str) -> Cow<'static, str> {
         "managed_allow_shell" => MessageId::ConfigHintManagedAllowShell,
         "allow_shell" => MessageId::ConfigHintAllowShell,
         "composer_multiline_mode" => MessageId::ConfigHintComposerMultilineMode,
-        "auto_compact"
-        | "launch_screen"
-        | "show_tool_details"
-        | "composer_border"
-        | "paste_burst_detection" => MessageId::ConfigHintBooleanValues,
+        "auto_compact" | "show_tool_details" | "composer_border" | "paste_burst_detection" => {
+            MessageId::ConfigHintBooleanValues
+        }
         "composer_density" | "transcript_spacing" => MessageId::ConfigHintDensity,
         "inline_diffs" => MessageId::ConfigHintInlineDiffs,
         "tool_collapse" => MessageId::ConfigHintToolCollapse,
@@ -3532,7 +3533,6 @@ fn config_boolean_key(key: &str) -> bool {
             | "calm_mode"
             | "low_motion"
             | "fancy_animations"
-            | "launch_screen"
             | "show_thinking"
             | "thinking_default_expanded"
             | "thinking_highlight"
@@ -5614,11 +5614,11 @@ impl ModalView for SubAgentsView {
 
         if self.agents.is_empty() {
             lines.push(Line::from(Span::styled(
-                "No Fleet workers running.",
+                tr(self.locale, MessageId::SubagentsNoCurrentSessionPodWorkers),
                 Style::default().fg(palette::TEXT_MUTED),
             )));
             lines.push(Line::from(Span::styled(
-                "Configure roles and launch posture with /pod.",
+                tr(self.locale, MessageId::SubagentsEmptyGuidance),
                 Style::default().fg(palette::TEXT_DIM),
             )));
         } else {
@@ -5630,26 +5630,56 @@ impl ModalView for SubAgentsView {
                 .unwrap_or_default();
 
             let status_summary = [
-                ("Running", running.len(), palette::STATUS_WARNING),
-                ("Completed", completed.len(), palette::STATUS_SUCCESS),
-                ("Interrupted", interrupted.len(), palette::STATUS_WARNING),
-                ("Failed", failed.len(), palette::WHALE_ERROR),
-                ("Cancelled", cancelled.len(), palette::TEXT_MUTED),
+                (
+                    MessageId::SubagentsStatusRunning,
+                    running.len(),
+                    palette::STATUS_WARNING,
+                ),
+                (
+                    MessageId::SubagentsStatusCompleted,
+                    completed.len(),
+                    palette::STATUS_SUCCESS,
+                ),
+                (
+                    MessageId::SubagentsStatusInterrupted,
+                    interrupted.len(),
+                    palette::STATUS_WARNING,
+                ),
+                (
+                    MessageId::SubagentsStatusFailed,
+                    failed.len(),
+                    palette::WHALE_ERROR,
+                ),
+                (
+                    MessageId::SubagentsStatusCancelled,
+                    cancelled.len(),
+                    palette::TEXT_MUTED,
+                ),
             ];
 
             lines.push(Line::from(Span::styled(
-                "Fleet workers",
+                tr(
+                    self.locale,
+                    MessageId::SubagentsCurrentSessionPodWorkersTitle,
+                ),
                 Style::default().fg(palette::WHALE_INFO).bold(),
             )));
             lines.push(Line::from(Span::styled(
-                "Sub-agent roles are Fleet worker roles.",
+                tr(
+                    self.locale,
+                    MessageId::SubagentsCurrentSessionPodWorkerRoles,
+                ),
                 Style::default().fg(palette::TEXT_DIM),
             )));
 
             let mut summary_parts = Vec::new();
-            for (label, count, color) in status_summary {
+            for (label_id, count, color) in status_summary {
+                let label = tr(self.locale, label_id);
+                let count = count.to_string();
                 summary_parts.push(Line::from(Span::styled(
-                    format!("{label}: {count}"),
+                    tr(self.locale, MessageId::SubagentsSummaryItem)
+                        .replace("{label}", label.as_ref())
+                        .replace("{count}", &count),
                     Style::default().fg(color),
                 )));
             }
@@ -5667,21 +5697,38 @@ impl ModalView for SubAgentsView {
                 Style::default().fg(palette::TEXT_DIM),
             )));
 
-            for (title, style, group) in [
+            for (title_id, style, group) in [
                 (
-                    "Running",
+                    MessageId::SubagentsStatusRunning,
                     ratatui::style::Style::from(palette::STATUS_WARNING),
                     &running,
                 ),
-                ("Completed", palette::STATUS_SUCCESS.into(), &completed),
-                ("Interrupted", palette::STATUS_WARNING.into(), &interrupted),
-                ("Failed", palette::WHALE_ERROR.into(), &failed),
-                ("Cancelled", palette::TEXT_MUTED.into(), &cancelled),
+                (
+                    MessageId::SubagentsStatusCompleted,
+                    palette::STATUS_SUCCESS.into(),
+                    &completed,
+                ),
+                (
+                    MessageId::SubagentsStatusInterrupted,
+                    palette::STATUS_WARNING.into(),
+                    &interrupted,
+                ),
+                (
+                    MessageId::SubagentsStatusFailed,
+                    palette::WHALE_ERROR.into(),
+                    &failed,
+                ),
+                (
+                    MessageId::SubagentsStatusCancelled,
+                    palette::TEXT_MUTED.into(),
+                    &cancelled,
+                ),
             ] {
+                let title = tr(self.locale, title_id);
                 append_subagent_group(
                     &mut lines,
                     &mut row_lines,
-                    title,
+                    title.as_ref(),
                     style,
                     group,
                     content_width,
@@ -5698,12 +5745,12 @@ impl ModalView for SubAgentsView {
             area,
             buf,
             &[
-                ActionHint::new("Esc", "close"),
-                ActionHint::new("↑/↓", "select"),
-                ActionHint::new("Enter", "focus"),
-                ActionHint::new("X", "stop"),
-                ActionHint::new("R", "refresh"),
-                ActionHint::new("F", "roster/setup"),
+                ActionHint::new("Esc", tr(self.locale, MessageId::SessionsActionClose)),
+                ActionHint::new("↑/↓", tr(self.locale, MessageId::CtxInspActionSelect)),
+                ActionHint::new("Enter", tr(self.locale, MessageId::ExtensionsActionFocus)),
+                ActionHint::new("X", tr(self.locale, MessageId::SidebarStopControl)),
+                ActionHint::new("R", tr(self.locale, MessageId::SubagentsActionRefresh)),
+                ActionHint::new("F", tr(self.locale, MessageId::SubagentsActionRosterSetup)),
             ],
         );
         let shell = ratatui::layout::Layout::default()
@@ -5716,15 +5763,25 @@ impl ModalView for SubAgentsView {
         Paragraph::new(vec![
             Line::from(vec![
                 Span::styled(
-                    "─ fleet ",
+                    format!("─ {} ", tr(self.locale, MessageId::FleetRosterHeaderLabel)),
                     Style::default().fg(palette::WHALE_ACTION).bold(),
                 ),
                 Span::styled(
                     "──────────────────────── ",
                     Style::default().fg(palette::BORDER_COLOR),
                 ),
-                Span::styled("roster  setup  ", Style::default().fg(palette::TEXT_MUTED)),
-                Span::styled("workers", Style::default().fg(palette::WHALE_INFO).bold()),
+                Span::styled(
+                    format!(
+                        "{}  {}  ",
+                        tr(self.locale, MessageId::SubagentsHeaderRoster),
+                        tr(self.locale, MessageId::FleetRosterTabSetup),
+                    ),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ),
+                Span::styled(
+                    tr(self.locale, MessageId::FleetRosterWorkers),
+                    Style::default().fg(palette::WHALE_INFO).bold(),
+                ),
                 Span::styled(
                     " ─────────────────",
                     Style::default().fg(palette::BORDER_COLOR),
@@ -5732,7 +5789,7 @@ impl ModalView for SubAgentsView {
             ]),
             Line::from(""),
             Line::from(Span::styled(
-                "  live worker status · role · objective · model · elapsed",
+                format!("  {}", tr(self.locale, MessageId::SubagentsHeaderColumns)),
                 Style::default().fg(palette::TEXT_MUTED),
             )),
         ])
@@ -5782,7 +5839,9 @@ fn append_subagent_group(
     }
 
     lines.push(Line::from(Span::styled(
-        format!("{title} ({})", agents.len()),
+        tr(whale.locale, MessageId::SubagentsGroupHeading)
+            .replace("{label}", title)
+            .replace("{count}", &agents.len().to_string()),
         section_style.bold(),
     )));
 
@@ -5795,8 +5854,9 @@ fn append_subagent_group(
             .as_deref()
             .map(|nick| format!("{nick:<12}"))
             .unwrap_or_else(|| format!("{id:<12}"));
-        let kind = format_agent_type(&agent.agent_type);
-        let (status, status_style, status_detail) = format_agent_status(&agent.status);
+        let kind = format_agent_type(whale.locale, &agent.agent_type);
+        let (status, status_style, status_detail) =
+            format_agent_status(whale.locale, &agent.status);
 
         let name_style = if is_selected {
             Style::default().fg(palette::WHALE_ACTION).bold()
@@ -5864,7 +5924,10 @@ fn append_subagent_group(
             let max_len = content_width.saturating_sub(10);
             let detail = truncate_view_text(detail, max_len);
             lines.push(Line::from(vec![
-                Span::styled("    reason: ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(
+                    tr(whale.locale, MessageId::SubagentsLabelReason),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ),
                 Span::styled(detail, Style::default().fg(palette::WHALE_ERROR)),
             ]));
         }
@@ -5873,22 +5936,43 @@ fn append_subagent_group(
             let max_len = content_width.saturating_sub(14);
             let role = truncate_view_text(role, max_len);
             lines.push(Line::from(vec![
-                Span::styled("    role: ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(
+                    tr(whale.locale, MessageId::SubagentsLabelRole),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ),
                 Span::styled(role, Style::default().fg(palette::WHALE_INFO)),
             ]));
         }
 
         if let Some(permissions) = agent.runtime_permissions.as_ref() {
-            let posture = format!(
-                "network={} · shell={} · write={}",
-                if permissions.network { "on" } else { "off" },
-                permissions.shell,
-                if permissions.write { "on" } else { "off" },
+            let network = tr(
+                whale.locale,
+                if permissions.network {
+                    MessageId::SubagentsValueOn
+                } else {
+                    MessageId::SubagentsValueOff
+                },
             );
+            let shell = format_subagent_shell(whale.locale, &permissions.shell);
+            let write = tr(
+                whale.locale,
+                if permissions.write {
+                    MessageId::SubagentsValueOn
+                } else {
+                    MessageId::SubagentsValueOff
+                },
+            );
+            let posture = tr(whale.locale, MessageId::SubagentsPostureDetails)
+                .replace("{network}", network.as_ref())
+                .replace("{shell}", shell.as_ref())
+                .replace("{write}", write.as_ref());
             let max_len = content_width.saturating_sub(18);
             let posture = truncate_view_text(&posture, max_len);
             lines.push(Line::from(vec![
-                Span::styled("    posture: ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(
+                    tr(whale.locale, MessageId::SubagentsLabelPosture),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ),
                 Span::styled(posture, Style::default().fg(palette::WHALE_INFO)),
             ]));
         }
@@ -5900,14 +5984,19 @@ fn append_subagent_group(
                 .and_then(|path| path.file_name())
                 .and_then(|name| name.to_str())
                 .filter(|name| !name.is_empty());
-            let mut branch_detail = format!("branch {branch}");
-            if let Some(workspace) = workspace {
-                branch_detail.push_str(&format!(" @ {workspace}"));
-            }
+            let branch_detail = match workspace {
+                Some(workspace) => tr(whale.locale, MessageId::SubagentsBranchWithWorkspace)
+                    .replace("{branch}", branch)
+                    .replace("{workspace}", workspace),
+                None => tr(whale.locale, MessageId::SubagentsBranch).replace("{branch}", branch),
+            };
             let max_len = content_width.saturating_sub(14);
             let branch_detail = truncate_view_text(&branch_detail, max_len);
             lines.push(Line::from(vec![
-                Span::styled("    git: ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(
+                    tr(whale.locale, MessageId::SubagentsLabelGit),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ),
                 Span::styled(branch_detail, Style::default().fg(palette::WHALE_INFO)),
             ]));
         }
@@ -5915,7 +6004,10 @@ fn append_subagent_group(
         let max_len = content_width.saturating_sub(18);
         let objective = truncate_view_text(&agent.assignment.objective, max_len);
         lines.push(Line::from(vec![
-            Span::styled("    objective: ", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled(
+                tr(whale.locale, MessageId::SubagentsLabelObjective),
+                Style::default().fg(palette::TEXT_MUTED),
+            ),
             Span::styled(objective, Style::default().fg(palette::TEXT_DIM)),
         ]));
 
@@ -5923,7 +6015,10 @@ fn append_subagent_group(
             let max_len = content_width.saturating_sub(16);
             let preview = truncate_view_text(result, max_len);
             lines.push(Line::from(vec![
-                Span::styled("    result: ", Style::default().fg(palette::TEXT_MUTED)),
+                Span::styled(
+                    tr(whale.locale, MessageId::SubagentsLabelResult),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ),
                 Span::styled(preview, Style::default().fg(palette::TEXT_DIM)),
             ]));
         }
@@ -5951,40 +6046,71 @@ fn agent_type_order(agent_type: &FleetRole) -> u8 {
     }
 }
 
-fn format_agent_type(agent_type: &FleetRole) -> &'static str {
-    // Source of truth lives on the enum so any new role lands in both
-    // the user-visible label and the sort order via the as_str() helper.
-    agent_type.as_str()
+fn format_agent_type(locale: Locale, agent_type: &FleetRole) -> Cow<'static, str> {
+    // `FleetRole::as_str()` is the durable runtime/schema identifier. The
+    // register is a localized user surface, so map only the known roles here
+    // and leave the internal identifier untouched everywhere else.
+    let message_id = match agent_type {
+        FleetRole::Worker => MessageId::SubagentsRoleWorker,
+        FleetRole::Scout => MessageId::SubagentsRoleScout,
+        FleetRole::Planner => MessageId::SubagentsRolePlanner,
+        FleetRole::Builder => MessageId::SubagentsRoleBuilder,
+        FleetRole::Verifier => MessageId::SubagentsRoleVerifier,
+        FleetRole::Reviewer => MessageId::SubagentsRoleReviewer,
+        FleetRole::Consultant => MessageId::SubagentsRoleConsultant,
+        FleetRole::Custom => MessageId::SubagentsRoleCustom,
+    };
+    tr(locale, message_id)
 }
 
 fn format_agent_status(
+    locale: Locale,
     status: &SubAgentStatus,
-) -> (&'static str, ratatui::style::Style, Option<&str>) {
+) -> (Cow<'static, str>, ratatui::style::Style, Option<&str>) {
     use ratatui::style::Style;
 
     match status {
-        SubAgentStatus::Running => ("running", Style::default().fg(palette::WHALE_INFO), None),
+        SubAgentStatus::Running => (
+            tr(locale, MessageId::AutomationRunStatusRunning),
+            Style::default().fg(palette::WHALE_INFO),
+            None,
+        ),
         SubAgentStatus::Completed => (
-            "completed",
+            tr(locale, MessageId::AutomationRunStatusCompleted),
             Style::default().fg(palette::STATUS_SUCCESS),
             None,
         ),
         SubAgentStatus::Interrupted(reason) => (
-            "interrupted",
+            tr(locale, MessageId::SubagentsRowStatusInterrupted),
             Style::default().fg(palette::STATUS_WARNING),
             Some(reason.as_str()),
         ),
-        SubAgentStatus::Cancelled => ("cancelled", Style::default().fg(palette::TEXT_MUTED), None),
+        SubAgentStatus::Cancelled => (
+            tr(locale, MessageId::SubagentsRowStatusCancelled),
+            Style::default().fg(palette::TEXT_MUTED),
+            None,
+        ),
         SubAgentStatus::BudgetExhausted => (
-            "budget_exhausted",
+            tr(locale, MessageId::SubagentsRowStatusBudgetExhausted),
             Style::default().fg(palette::STATUS_WARNING),
             None,
         ),
         SubAgentStatus::Failed(reason) => (
-            "failed",
+            tr(locale, MessageId::AutomationRunStatusFailed),
             Style::default().fg(palette::WHALE_ERROR),
             Some(reason.as_str()),
         ),
+    }
+}
+
+fn format_subagent_shell(locale: Locale, shell: &str) -> Cow<'static, str> {
+    match shell {
+        "none" => tr(locale, MessageId::SubagentsShellNone),
+        "read_only" => tr(locale, MessageId::SubagentsShellReadOnly),
+        "full" => tr(locale, MessageId::SubagentsShellFull),
+        // A future runtime may add a posture before the TUI knows how to
+        // localize it. Preserve that exact runtime value instead of guessing.
+        _ => Cow::Owned(shell.to_string()),
     }
 }
 
@@ -6116,6 +6242,177 @@ mod tests {
         assert_modal_usable_and_opaque(
             || SubAgentsView::new(Vec::new()),
             &["close", "refresh", "setup"],
+        );
+    }
+
+    #[test]
+    fn subagents_modal_names_current_session_pod_workers_in_each_locale() {
+        let area = Rect::new(0, 0, 160, 40);
+        let app = create_test_app();
+
+        let empty = SubAgentsView::for_app(&app, Vec::new());
+        let mut empty_buf = Buffer::empty(area);
+        empty.render(area, &mut empty_buf);
+        let empty_text = buffer_text(&empty_buf, area);
+        assert!(
+            empty_text.contains("No current-session Pod workers."),
+            "{empty_text}"
+        );
+        assert!(
+            empty_text.contains("Configure roles and launch posture with /pod."),
+            "{empty_text}"
+        );
+
+        let english = SubAgentsView::for_app(
+            &app,
+            vec![manager_agent("agent_live", SubAgentStatus::Running)],
+        );
+        let mut english_buf = Buffer::empty(area);
+        english.render(area, &mut english_buf);
+        let english_text = buffer_text(&english_buf, area);
+        assert!(
+            english_text.contains("Current-session Pod workers"),
+            "{english_text}"
+        );
+        assert!(
+            english_text.contains("Sub-agent roles are current-session Pod worker roles."),
+            "{english_text}"
+        );
+
+        let mut zh_hans_app = create_test_app();
+        zh_hans_app.ui_locale = Locale::ZhHans;
+        let zh_hans = SubAgentsView::for_app(
+            &zh_hans_app,
+            vec![manager_agent("agent_live", SubAgentStatus::Running)],
+        );
+        let mut zh_hans_buf = Buffer::empty(area);
+        zh_hans.render(area, &mut zh_hans_buf);
+        let zh_hans_text = buffer_text(&zh_hans_buf, area);
+        // Ratatui gives each CJK glyph a trailing buffer cell. Strip those
+        // layout spaces before asserting the actual rendered copy.
+        let zh_hans_compact = zh_hans_text
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>();
+        assert_eq!(
+            tr(
+                Locale::ZhHans,
+                MessageId::SubagentsCurrentSessionPodWorkersTitle
+            ),
+            "当前会话的 Pod 工作器"
+        );
+        assert!(
+            zh_hans_compact.contains("当前会话的Pod工作器"),
+            "{zh_hans_text}"
+        );
+        assert!(
+            zh_hans_compact.contains("子代理角色是当前会话的Pod工作器角色。"),
+            "{zh_hans_text}"
+        );
+        assert!(
+            !zh_hans_text.contains("Current-session Pod workers"),
+            "{zh_hans_text}"
+        );
+    }
+
+    #[test]
+    fn subagents_modal_localizes_worker_rows_and_preserves_english_status_rendering() {
+        let area = Rect::new(0, 0, 200, 60);
+        let mut agent = manager_agent("agent_live", SubAgentStatus::Running);
+        agent.agent_type = FleetRole::Builder;
+        agent.assignment.role = Some("release".to_string());
+        agent.assignment.objective = "verify localized row".to_string();
+        agent.runtime_permissions = Some(codewhale_protocol::fleet::FleetEffectivePermissions {
+            write: true,
+            network: true,
+            shell: "read_only".to_string(),
+            tool_scope: "inherit".to_string(),
+            tools: Vec::new(),
+            background: false,
+            max_spawn_depth: 0,
+            profile_id: None,
+            profile_origin: None,
+            source: "test".to_string(),
+        });
+        agent.git_branch = Some("feature/localize".to_string());
+        agent.workspace = Some(PathBuf::from("/tmp/pod-workers"));
+        agent.result = Some("all checks passed".to_string());
+        let mut interrupted = manager_agent(
+            "agent_interrupted",
+            SubAgentStatus::Interrupted("manual review".to_string()),
+        );
+        interrupted.agent_type = FleetRole::Reviewer;
+
+        let app = create_test_app();
+        let english = SubAgentsView::for_app(&app, vec![agent.clone(), interrupted.clone()]);
+        let mut english_buf = Buffer::empty(area);
+        english.render(area, &mut english_buf);
+        let english_text = buffer_text(&english_buf, area);
+        for expected in [
+            "Current-session Pod workers",
+            "Running: 1",
+            "Completed: 0",
+            "Interrupted: 1",
+            "Failed: 0",
+            "Cancelled: 0",
+            "Running (1)",
+            "builder",
+            "running",
+            "reason: manual review",
+            "role: release",
+            "posture: network=on · shell=read-only · write=on",
+            "git: branch feature/localize @ pod-workers",
+            "objective: verify localized row",
+            "result: all checks passed",
+            "live worker status · role · objective · model · elapsed",
+            "close",
+            "select",
+            "focus",
+            "stop",
+            "refresh",
+            "roster/setup",
+        ] {
+            assert!(
+                english_text.contains(expected),
+                "missing {expected:?}: {english_text}"
+            );
+        }
+
+        let mut zh_hans_app = create_test_app();
+        zh_hans_app.ui_locale = Locale::ZhHans;
+        let zh_hans = SubAgentsView::for_app(&zh_hans_app, vec![agent, interrupted]);
+        let mut zh_hans_buf = Buffer::empty(area);
+        zh_hans.render(area, &mut zh_hans_buf);
+        let zh_hans_text = buffer_text(&zh_hans_buf, area);
+        let zh_hans_compact = zh_hans_text
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>();
+        for expected in [
+            "当前会话的Pod工作器",
+            "运行中：1",
+            "已中断：1",
+            "名册设置工作器",
+            "实时工作器状态·角色·目标·模型·已用时间",
+            "运行中（1）",
+            "构建者",
+            "原因：manualreview",
+            "角色：release",
+            "权限：网络=开·Shell=只读·写入=开",
+            "Git：分支feature/localize@pod-workers",
+            "目标：verifylocalizedrow",
+            "结果：allcheckspassed",
+            "刷新",
+            "名册/设置",
+        ] {
+            assert!(
+                zh_hans_compact.contains(expected),
+                "missing {expected:?}: {zh_hans_text}"
+            );
+        }
+        assert!(
+            !zh_hans_text.contains("Running: 1"),
+            "English status leaked into zh-Hans modal: {zh_hans_text}"
         );
     }
 

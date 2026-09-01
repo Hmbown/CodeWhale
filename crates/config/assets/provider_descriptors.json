@@ -1,0 +1,63 @@
+{
+  "schema": "codewhale.provider_descriptors.v1",
+  "note": "How to talk to a host. Model ids are not compiled here; live /v1/models and the Codewhale catalog are truth. default_model is a bootstrap hint only.",
+  "descriptors": [
+    {
+      "id": "sensenova",
+      "label": "SenseNova",
+      "wire": "openai-compatible",
+      "base_url": "https://token.sensenova.cn/v1",
+      "api_key_env": "SENSENOVA_API_KEY",
+      "default_model": "deepseek-v4-flash",
+      "discovery": "models_endpoint",
+      "aliases": ["sense-nova", "meituan-sensenova", "meituan-sensenova-cn"]
+    },
+    {
+      "id": "baseten",
+      "label": "Baseten",
+      "wire": "openai-compatible",
+      "base_url": "https://inference.baseten.co/v1",
+      "api_key_env": "BASETEN_API_KEY",
+      "default_model": "deepseek-ai/DeepSeek-V4-Pro",
+      "discovery": "models_endpoint",
+      "docs_url": "https://docs.baseten.co/inference/model-apis/overview",
+      "credential_url": "https://app.baseten.co/settings/api_keys",
+      "aliases": ["base-ten", "base_ten"]
+    },
+    {
+      "id": "groq",
+      "label": "Groq",
+      "wire": "openai-compatible",
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_key_env": "GROQ_API_KEY",
+      "default_model": "llama-3.3-70b-versatile",
+      "discovery": "models_endpoint",
+      "docs_url": "https://console.groq.com/docs/quickstart",
+      "credential_url": "https://console.groq.com/keys"
+    },
+    {
+      "id": "cerebras",
+      "label": "Cerebras",
+      "wire": "openai-compatible",
+      "base_url": "https://api.cerebras.ai/v1",
+      "api_key_env": "CEREBRAS_API_KEY",
+      "default_model": "llama-3.3-70b",
+      "discovery": "models_endpoint",
+      "docs_url": "https://inference-docs.cerebras.ai/quickstart",
+      "credential_url": "https://cloud.cerebras.ai"
+    },
+    {
+      "id": "command-code",
+      "label": "Command Code",
+      "wire": "openai-compatible",
+      "base_url": "https://api.commandcode.ai/provider/v1",
+      "api_key_env": "COMMAND_CODE_API_KEY",
+      "default_model": "deepseek/deepseek-v4-flash",
+      "discovery": "models_endpoint",
+      "docs_url": "https://commandcode.ai/docs/provider",
+      "credential_url": "https://commandcode.ai/provider",
+      "guidance": "Published Provider API (OpenAI Chat Completions + GET /v1/models). Do not import the Command Code CLI login. Store COMMAND_CODE_API_KEY, not a raw key.",
+      "aliases": ["commandcode", "cmd-code"]
+    }
+  ]
+}

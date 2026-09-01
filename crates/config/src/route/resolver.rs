@@ -431,8 +431,23 @@ impl RouteResolver {
             // Aggregators, local runtimes, and custom OpenAI-compatible
             // endpoints legitimately accept arbitrary / prefixed ids verbatim.
             ProviderClass::Aggregator | ProviderClass::LocalOrCustom => {
-                let _ = provider_kind;
                 if require_catalog_match {
+                    // Opencode Zen serves Muse Spark exclusively over Responses.
+                    // Handle any future muse-spark variant (e.g. -free suffix)
+                    // even when no exact bundled offering exists — fail open to
+                    // responses rather than failing closed to "unproven".
+                    if provider_kind == ProviderKind::OpencodeZen
+                        && raw.to_ascii_lowercase().contains("muse-spark")
+                    {
+                        return Ok(ResolvedOffering {
+                            wire_model_id: WireModelId::from(raw),
+                            canonical_model: None,
+                            endpoint_key: "responses".to_string(),
+                            limits: RouteLimits::default(),
+                            capabilities: RouteCapabilities::default(),
+                            pricing: PricingSku::UnknownOrStale,
+                        });
+                    }
                     return Err(RouteError::UnsupportedModelProtocol {
                         provider: provider_id.clone(),
                         model: raw.to_string(),

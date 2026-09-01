@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { detectLocaleFromHeaders } from "@/lib/i18n/detect";
 import { pathLocale, replacePathLocale } from "@/lib/i18n/path";
+import {
+  canonicalPublicAuthPath,
+  publicAuthCallbackDestination,
+} from "@/lib/public-auth-routes";
 
 const COOKIE = "NEXT_LOCALE";
 
@@ -55,6 +59,23 @@ export function middleware(req: NextRequest) {
     pathname.includes(".")
   ) {
     return applySecurityHeaders(NextResponse.next());
+  }
+
+  // Auth callbacks belong on the CWC app. Locale-prefixing them produced
+  // `/en/auth/callback` 404s (#5767). Preserve the query string.
+  const callback = publicAuthCallbackDestination(req.nextUrl);
+  if (callback) {
+    return applySecurityHeaders(NextResponse.redirect(callback, 307));
+  }
+
+  // `/login` and `/register` are aliases for the public sign-in / create-account
+  // pages. Fold them before locale detection so `/login` becomes `/en/signin`
+  // instead of `/en/login` (which has no page).
+  const canonicalAuth = canonicalPublicAuthPath(pathname);
+  if (canonicalAuth && canonicalAuth !== pathname) {
+    const url = req.nextUrl.clone();
+    url.pathname = canonicalAuth;
+    return applySecurityHeaders(NextResponse.redirect(url, 308));
   }
 
   // Check if locale is already in path (`pt-BR` is one segment).

@@ -2,7 +2,7 @@
  * getting-started.ts — the canonical new-user path for codewhale.net.
  *
  * Four steps, in order: install → first offline session → provider connection
- * → fleet setup. Both the homepage band and the /docs/guide page
+ * → pod setup. Both the homepage band and the /docs/guide page
  * render from this module, so the path reads identically everywhere.
  *
  * TRUTH CONTRACT:
@@ -20,7 +20,7 @@
 import type { LocalizedText } from "./vocabulary";
 
 export interface GuideStep {
-  id: "install" | "first-session" | "connect-provider" | "fleet-workflow";
+  id: "install" | "first-session" | "connect-provider" | "pod-workflow";
   title: LocalizedText;
   body: LocalizedText;
   /** Locale-agnostic shell commands shown for the step (may be empty). */
@@ -70,16 +70,16 @@ export const GETTING_STARTED_STEPS: GuideStep[] = [
     },
   },
   {
-    id: "fleet-workflow",
-    title: { en: "Set up your ideal fleet", zh: "配置你的理想 Fleet" },
+    id: "pod-workflow",
+    title: { en: "Set up your ideal pod", zh: "配置你的理想 Pod" },
     body: {
-      en: "Add each provider you use with one auth set (local runtimes need none). Then run /fleet setup. It goes one member at a time — a semantic role, a model from any configured provider, a thinking tier, then an exact identity/route review — and saves the roster profile for this repo or for every repo on this machine. Runtime permissions stay separate. A single task needs none of this.",
-      zh: "每个要用的提供商执行一次 auth set（本地运行时不需要）。然后运行 /fleet setup。它一次配置一个成员——语义角色、任意已配置提供商的模型、思考档位，再核对准确的身份与路由——并保存为花名册档案，可只用于本仓库或本机所有仓库。Runtime 权限始终独立。单个任务不需要这些。",
+      en: "Add each provider you use with one auth set (local runtimes need none). Then run /pod setup. It goes one member at a time — a semantic role, a model from any configured provider, a thinking tier, then an exact identity/route review — and saves the roster profile for this repo or for every repo on this machine. Runtime permissions stay separate. A single task needs none of this. The older /fleet spelling still works.",
+      zh: "每个要用的提供商执行一次 auth set（本地运行时不需要）。然后运行 /pod setup。它一次配置一个成员——语义角色、任意已配置提供商的模型、思考档位，再核对准确的身份与路由——并保存为花名册档案，可只用于本仓库或本机所有仓库。Runtime 权限始终独立。单个任务不需要这些。旧的 /fleet 拼写仍然可用。",
     },
-    commands: ["/fleet setup", "codewhale fleet status"],
+    commands: ["/pod setup", "codewhale pod status"],
     link: {
-      href: "/docs/fleet",
-      label: { en: "Fleet and Workflow docs", zh: "Fleet 与 Workflow 文档" },
+      href: "/docs/pod",
+      label: { en: "Pod and Workflow docs", zh: "Pod 与 Workflow 文档" },
     },
   },
 ];

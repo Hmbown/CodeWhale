@@ -1,4 +1,9 @@
 //! Durable automation formatting and operator actions.
+//!
+//! Receipts for run/definition events are typed `HistoryCell::Automation`
+//! cards (AUTOMATION-VISIBILITY-SPEC §2.2); query responses (list/show) and
+//! the delete preview stay `System` text until the Slice-2 panel replaces
+//! them.
 
 use crate::automation_manager::{
     AutomationRecord, AutomationRunRecord, AutomationRunStatus, AutomationStatus,
@@ -7,7 +12,8 @@ use crate::automation_manager::{
 use crate::localization::{Locale, MessageId, tr};
 use crate::task_manager::SharedTaskManager;
 use crate::tui::app::{App, AutomationAction};
-use crate::tui::history::HistoryCell;
+use crate::tui::automation_panel::{SettledOutcome, SettledRun};
+use crate::tui::history::{AutomationCell, AutomationCellKind, HistoryCell};
 
 pub(super) async fn handle_action(
     app: &mut App,
@@ -15,6 +21,9 @@ pub(super) async fn handle_action(
     task_manager: &SharedTaskManager,
 ) {
     let locale = app.ui_locale;
+    // Engaging the automation surface acknowledges the failures the activity
+    // band is demanding attention for (spec §2.1).
+    app.automation_panel.acknowledge_failures();
     let Some(automations) = app.runtime_services.automations.clone() else {
         add_message(
             app,
@@ -23,20 +32,21 @@ pub(super) async fn handle_action(
         return;
     };
 
-    let content = match action {
-        AutomationAction::List => list(locale, &automations).await,
-        AutomationAction::Show(id) => show(locale, &automations, &id).await,
+    let cell = match action {
+        AutomationAction::List => HistoryCell::System {
+            content: list(locale, &automations).await,
+        },
+        AutomationAction::Show(id) => HistoryCell::System {
+            content: show(locale, &automations, &id).await,
+        },
         AutomationAction::Pause(id) => mutate(locale, &automations, &id, Mutation::Pause).await,
         AutomationAction::Resume(id) => mutate(locale, &automations, &id, Mutation::Resume).await,
         AutomationAction::Delete { id, confirmation } => {
             delete(locale, &automations, &id, confirmation.as_deref()).await
         }
-        AutomationAction::Run(id) => match run_now_shared(&automations, &id, task_manager).await {
-            Ok(run) => format_run_enqueued(locale, &id, &run),
-            Err(error) => action_failed(locale, MessageId::AutomationActionRun, &id, &error),
-        },
+        AutomationAction::Run(id) => run_now(locale, &automations, &id, task_manager).await,
     };
-    add_message(app, content);
+    app.add_message(cell);
 }
 
 async fn list(locale: Locale, automations: &SharedAutomationManager) -> String {
@@ -86,7 +96,7 @@ async fn mutate(
     automations: &SharedAutomationManager,
     id: &str,
     mutation: Mutation,
-) -> String {
+) -> HistoryCell {
     let manager = automations.lock().await;
     let result = match mutation {
         Mutation::Pause => manager.pause_automation(id),
@@ -94,15 +104,13 @@ async fn mutate(
     };
 
     match result {
-        Ok(record) => tr(locale, MessageId::AutomationMutationReceipt)
-            .replace("{name}", &display_text(&record.name))
-            .replace("{action}", &tr(locale, mutation.receipt_id()))
-            .replace(
-                "{status_label}",
-                &tr(locale, MessageId::AutomationStatusLabel),
-            )
-            .replace("{status}", &status_label(locale, record.status)),
-        Err(error) => action_failed(locale, mutation.action_id(), id, &error),
+        Ok(record) => HistoryCell::Automation(AutomationCell::mutated(
+            display_text(&record.name),
+            tr(locale, mutation.receipt_id()).into_owned(),
+        )),
+        Err(error) => HistoryCell::System {
+            content: action_failed(locale, mutation.action_id(), id, &error),
+        },
     }
 }
 
@@ -111,24 +119,39 @@ async fn delete(
     automations: &SharedAutomationManager,
     id: &str,
     confirmation: Option<&str>,
-) -> String {
+) -> HistoryCell {
     let manager = automations.lock().await;
     let record = match manager.get_automation(id) {
         Ok(record) => record,
         Err(error) => {
-            return action_failed(locale, MessageId::AutomationActionDelete, id, &error);
+            return system(action_failed(
+                locale,
+                MessageId::AutomationActionDelete,
+                id,
+                &error,
+            ));
         }
     };
     let runs = match manager.list_runs(id, None) {
         Ok(runs) => runs,
         Err(error) => {
-            return action_failed(locale, MessageId::AutomationActionDelete, id, &error);
+            return system(action_failed(
+                locale,
+                MessageId::AutomationActionDelete,
+                id,
+                &error,
+            ));
         }
     };
     let token = match deletion_token(&record, &runs) {
         Ok(token) => token,
         Err(error) => {
-            return action_failed(locale, MessageId::AutomationActionDelete, id, &error);
+            return system(action_failed(
+                locale,
+                MessageId::AutomationActionDelete,
+                id,
+                &error,
+            ));
         }
     };
 
@@ -141,23 +164,40 @@ async fn delete(
             .replace("{name}", &display_text(&record.name))
             .replace("{run_count}", &runs.len().to_string())
             .replace("{command}", &command);
-        return format!("{detail}\n\n{preview}");
+        return system(format!("{detail}\n\n{preview}"));
     };
 
     if confirmation != token {
         let command = format!("/automation delete {id}");
-        return tr(locale, MessageId::AutomationDeleteConfirmationStale)
-            .replace("{id}", id)
-            .replace("{command}", &command);
+        return system(
+            tr(locale, MessageId::AutomationDeleteConfirmationStale)
+                .replace("{id}", id)
+                .replace("{command}", &command),
+        );
     }
 
     match manager.delete_automation(id) {
-        Ok(record) => tr(locale, MessageId::AutomationDeleted)
-            .replace("{id}", id)
-            .replace("{name}", &display_text(&record.name))
-            .replace("{run_count}", &runs.len().to_string()),
-        Err(error) => action_failed(locale, MessageId::AutomationActionDelete, id, &error),
+        Ok(record) => HistoryCell::Automation(
+            AutomationCell::mutated(
+                display_text(&record.name),
+                tr(locale, MessageId::AutomationReceiptDeleted).into_owned(),
+            )
+            .with_detail(Some(
+                tr(locale, MessageId::AutomationDeletedRunsDetail)
+                    .replace("{run_count}", &runs.len().to_string()),
+            )),
+        ),
+        Err(error) => system(action_failed(
+            locale,
+            MessageId::AutomationActionDelete,
+            id,
+            &error,
+        )),
     }
+}
+
+fn system(content: String) -> HistoryCell {
+    HistoryCell::System { content }
 }
 
 fn deletion_token(
@@ -315,11 +355,110 @@ fn display_text(value: &str) -> String {
     codewhale_config::persistence::redact_secrets(&visible)
 }
 
-fn format_run_enqueued(locale: Locale, id: &str, run: &AutomationRunRecord) -> String {
-    tr(locale, MessageId::AutomationRunEnqueued)
-        .replace("{id}", id)
-        .replace("{status}", &run_status_label(locale, run.status))
-        .replace("{task}", run.task_id.as_deref().unwrap_or("-"))
+/// `run <id>`: enqueue immediately and acknowledge with a typed `Started`
+/// receipt — the `${subject} started in background` line, promoted from tip
+/// to receipt (spec §2.2).
+async fn run_now(
+    locale: Locale,
+    automations: &SharedAutomationManager,
+    id: &str,
+    task_manager: &SharedTaskManager,
+) -> HistoryCell {
+    let name = automations
+        .lock()
+        .await
+        .get_automation(id)
+        .ok()
+        .map(|record| display_text(&record.name));
+    match run_now_shared(automations, id, task_manager).await {
+        Ok(run) => {
+            // The run record can come back already settled: a refused
+            // enqueue returns Ok with status Failed, and a "started in
+            // background" receipt would then be a lie. Branch the receipt
+            // on the record's own status. Running/Queued are the live
+            // states; Completed/Canceled cannot occur this soon after
+            // enqueue, but if one ever does, "started" would be false —
+            // report the settled verb instead.
+            let kind = match run.status {
+                AutomationRunStatus::Failed => AutomationCellKind::Failed,
+                AutomationRunStatus::Queued | AutomationRunStatus::Running => {
+                    AutomationCellKind::Started
+                }
+                AutomationRunStatus::Completed => AutomationCellKind::Completed,
+                AutomationRunStatus::Canceled => AutomationCellKind::Mutated,
+            };
+            // The operator asked for this run by hand: echo its full id so
+            // it can be copied straight from the receipt.
+            let mut detail = format!(
+                "{} {} · {} {}",
+                tr(locale, MessageId::AutomationRunLabel),
+                run.id,
+                tr(locale, MessageId::AutomationTaskLabel),
+                run.task_id.as_deref().map(short_id).unwrap_or("-")
+            );
+            if let Some(error) = run.error.as_deref() {
+                detail.push_str(" · ");
+                detail.push_str(&display_text(error));
+            }
+            let name = name.unwrap_or_else(|| id.to_string());
+            let cell = if run.status == AutomationRunStatus::Canceled {
+                AutomationCell::mutated(
+                    name,
+                    tr(locale, MessageId::AutomationRunStatusCanceled).into_owned(),
+                )
+                .with_detail(Some(detail))
+            } else {
+                AutomationCell::event(kind, name, locale).with_detail(Some(detail))
+            };
+            HistoryCell::Automation(cell)
+        }
+        Err(error) => system(action_failed(
+            locale,
+            MessageId::AutomationActionRun,
+            id,
+            &error,
+        )),
+    }
+}
+
+/// Receipt for a run the projection watched go live and settle (spec §2.2:
+/// `Documentation completed in background  42s · run r-8f19`). `Completed`
+/// wears Outcome ink; a genuinely failed run is the one receipt that wears
+/// Failure, and its detail leads with the (redacted) error.
+pub(super) fn settled_run_receipt(locale: Locale, run: &SettledRun) -> HistoryCell {
+    let kind = match run.outcome {
+        SettledOutcome::Completed => AutomationCellKind::Completed,
+        SettledOutcome::Failed => AutomationCellKind::Failed,
+    };
+    let mut parts = Vec::new();
+    if let Some(error) = run
+        .error
+        .as_deref()
+        .map(display_text)
+        .filter(|error| !error.is_empty())
+    {
+        parts.push(error);
+    }
+    if let Some(duration_ms) = run.duration_ms {
+        parts.push(crate::elapsed::format_elapsed_ms(duration_ms));
+    }
+    parts.push(format!(
+        "{} {}",
+        tr(locale, MessageId::AutomationRunLabel),
+        short_id(&run.run_id)
+    ));
+    HistoryCell::Automation(
+        AutomationCell::event(kind, display_text(&run.automation_name), locale)
+            .with_detail(Some(parts.join(" · "))),
+    )
+}
+
+/// Background receipts name a run/task by prefix — full UUIDs would eat the
+/// card's one line. The complete ids stay on the records for
+/// `/automation show`; only the operator-driven `/automation run` echo
+/// carries the whole run id.
+fn short_id(id: &str) -> &str {
+    id.get(..12).unwrap_or(id)
 }
 
 fn status_label(locale: Locale, status: AutomationStatus) -> String {
@@ -479,12 +618,112 @@ mod tests {
             for id in [
                 MessageId::AutomationManagerUnavailable,
                 MessageId::AutomationDeletePreview,
-                MessageId::AutomationDeleted,
-                MessageId::AutomationRunEnqueued,
+                MessageId::AutomationReceiptDeleted,
+                MessageId::AutomationDeletedRunsDetail,
+                MessageId::AutomationReceiptStarted,
+                MessageId::AutomationRunLabel,
+                MessageId::AutomationBandScheduled,
             ] {
                 assert_ne!(tr(*locale, id).as_ref(), format!("{id:?}"), "{locale:?}");
             }
         }
+    }
+
+    #[test]
+    fn settled_runs_become_completed_or_failed_receipts() {
+        let completed = settled_run_receipt(
+            Locale::En,
+            &SettledRun {
+                automation_id: "auto_1".to_string(),
+                automation_name: "Documentation".to_string(),
+                run_id: "r-8f19deadbeef-0000".to_string(),
+                outcome: SettledOutcome::Completed,
+                duration_ms: Some(42_000),
+                error: None,
+            },
+        );
+        let HistoryCell::Automation(cell) = completed else {
+            panic!("a settled run is a typed Automation receipt");
+        };
+        assert_eq!(cell.kind, AutomationCellKind::Completed);
+        assert_eq!(cell.name, "Documentation");
+        assert_eq!(cell.verb, "completed in background");
+        assert_eq!(cell.detail.as_deref(), Some("42s · run r-8f19deadbe"));
+
+        let failed = settled_run_receipt(
+            Locale::En,
+            &SettledRun {
+                automation_id: "auto_1".to_string(),
+                automation_name: "Documentation".to_string(),
+                run_id: "r-8f20".to_string(),
+                outcome: SettledOutcome::Failed,
+                duration_ms: None,
+                error: Some(
+                    "provider timeout\u{1b}[31m token=sk-abcdefghijklmnopqrstuvwxyz0123456789"
+                        .to_string(),
+                ),
+            },
+        );
+        let HistoryCell::Automation(cell) = failed else {
+            panic!("a failed run is a typed Automation receipt");
+        };
+        assert_eq!(cell.kind, AutomationCellKind::Failed);
+        assert_eq!(cell.verb, "failed");
+        let detail = cell.detail.expect("failure detail");
+        assert!(detail.starts_with("provider timeout"), "{detail}");
+        assert!(!detail.contains("\u{1b}"), "ANSI stripped: {detail}");
+        assert!(
+            !detail.contains("abcdefghijklmnopqrstuvwxyz0123456789"),
+            "secrets redacted: {detail}"
+        );
+        assert!(detail.ends_with("· run r-8f20"), "{detail}");
+    }
+
+    #[tokio::test]
+    async fn pause_and_resume_emit_typed_mutation_receipts() {
+        let temp = TempDir::new().expect("temp dir");
+        let manager = AutomationManager::open(temp.path().to_path_buf()).expect("manager");
+        let automation = manager
+            .create_automation(CreateAutomationRequest {
+                name: "Nightly checks".to_string(),
+                prompt: "Run checks".to_string(),
+                rrule: "FREQ=HOURLY;INTERVAL=1".to_string(),
+                cwds: Vec::new(),
+                model: None,
+                mode: None,
+                allow_shell: None,
+                trust_mode: None,
+                auto_approve: None,
+                delivery_mode: None,
+                status: Some(AutomationStatus::Active),
+            })
+            .expect("automation");
+        let manager = Arc::new(Mutex::new(manager));
+
+        let HistoryCell::Automation(paused) =
+            mutate(Locale::En, &manager, &automation.id, Mutation::Pause).await
+        else {
+            panic!("pause emits a typed Automation receipt");
+        };
+        assert_eq!(paused.kind, AutomationCellKind::Mutated);
+        assert_eq!(paused.verb, "paused");
+        assert_eq!(paused.name, "Nightly checks");
+        assert_eq!(paused.detail, None);
+
+        let HistoryCell::Automation(resumed) =
+            mutate(Locale::En, &manager, &automation.id, Mutation::Resume).await
+        else {
+            panic!("resume emits a typed Automation receipt");
+        };
+        assert_eq!(resumed.verb, "resumed");
+
+        // A failed action keeps the System error path.
+        let HistoryCell::System { content } =
+            mutate(Locale::En, &manager, "missing", Mutation::Pause).await
+        else {
+            panic!("a failed mutation stays a System error");
+        };
+        assert!(content.contains("missing"), "{content}");
     }
 
     #[tokio::test]
@@ -530,7 +769,11 @@ mod tests {
         .expect("write run");
         let manager = Arc::new(Mutex::new(manager));
 
-        let preview = delete(Locale::En, &manager, &automation.id, None).await;
+        let HistoryCell::System { content: preview } =
+            delete(Locale::En, &manager, &automation.id, None).await
+        else {
+            panic!("delete preview stays a System text report");
+        };
         assert!(preview.contains("Nothing was deleted"), "{preview}");
         assert!(preview.contains("Recorded runs: 1"), "{preview}");
         assert!(
@@ -548,7 +791,11 @@ mod tests {
             "preview must preserve run history"
         );
 
-        let stale = delete(Locale::En, &manager, &automation.id, Some("wrong-receipt")).await;
+        let HistoryCell::System { content: stale } =
+            delete(Locale::En, &manager, &automation.id, Some("wrong-receipt")).await
+        else {
+            panic!("stale confirmation stays a System text report");
+        };
         assert!(stale.contains("no longer matches"), "{stale}");
         assert!(
             manager.lock().await.get_automation(&automation.id).is_ok(),
@@ -560,8 +807,21 @@ mod tests {
             .find(|line| line.starts_with("/automation delete "))
             .and_then(|line| line.split_whitespace().last())
             .expect("preview confirmation receipt");
-        let deleted = delete(Locale::En, &manager, &automation.id, Some(token)).await;
-        assert!(deleted.contains("Recorded runs deleted: 1"), "{deleted}");
+        let HistoryCell::Automation(deleted) =
+            delete(Locale::En, &manager, &automation.id, Some(token)).await
+        else {
+            panic!("confirmed deletion is a typed Automation receipt");
+        };
+        assert_eq!(deleted.kind, AutomationCellKind::Mutated);
+        assert_eq!(deleted.verb, "deleted");
+        assert_eq!(deleted.name, "Nightly checks");
+        assert!(
+            deleted
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains('1')),
+            "the run count rides the receipt detail: {deleted:?}"
+        );
         assert!(
             manager.lock().await.get_automation(&automation.id).is_err(),
             "confirmed deletion removes definition"

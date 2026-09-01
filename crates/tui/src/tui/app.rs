@@ -250,11 +250,9 @@ fn initial_onboarding_state(
     } else if was_onboarded && needs_workspace_trust {
         OnboardingState::TrustDirectory
     } else {
-        // First run always starts at Welcome. Enter then routes to language,
-        // provider setup, trust, or ready depending on what this run needs.
-        // Skipping Welcome to land on the provider list was an over-correction:
-        // new users never saw a start screen or the calm API-key explanation.
-        OnboardingState::Welcome
+        // First paint is the composer. Language, provider, and trust stay in
+        // /setup. A 5-gate wizard must not block the first keystroke.
+        OnboardingState::None
     }
 }
 
@@ -1206,7 +1204,7 @@ pub type DispatchApplyFn = Box<
 #[allow(clippy::struct_excessive_bools)]
 /// A route change made in-session that the user has not yet decided how to
 /// save. Route changes are temporary by default; persisting them requires an
-/// explicit choice (Update this Fleet / Save as a new Fleet / Remember as my
+/// explicit choice (Update this Pod / Save as a new Pod / Remember as my
 /// default / Keep for this session only).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingRouteSave {
@@ -1576,6 +1574,9 @@ pub struct App {
     pub launch: LaunchState,
     /// Mouse-selected launch action, consumed by the async UI loop.
     pub pending_launch_action: Option<crate::tui::underwater::LaunchAction>,
+    /// Mouse click on the live composer's `[↑]` send target. The async UI loop
+    /// consumes it through the same submit dispatcher as Enter.
+    pub pending_composer_submit: Option<ComposerSubmitChord>,
     /// Mouse-selected hotbar slot, consumed by the async UI loop.
     pub pending_hotbar_slot: Option<u8>,
     /// Whether the renderer should wrap each frame in DEC mode 2026
@@ -1970,6 +1971,9 @@ pub struct App {
     /// compaction rewrites history, since the receipt describes the
     /// pre-compaction context.
     pub last_billed_input_tokens: Option<u32>,
+    /// Last successful compaction, so `/context` and the inspector can name
+    /// the path and the last-round floor instead of looking empty.
+    pub last_compaction: Option<crate::compaction::LastCompactionSnapshot>,
     /// Accumulated reasoning text
     pub reasoning_buffer: String,
     /// Live reasoning header extracted from bold text
@@ -2095,6 +2099,17 @@ pub struct App {
     pub memory_size_hint: Option<String>,
     /// Cached background tasks for sidebar rendering.
     pub task_panel: Vec<TaskPanelEntry>,
+    /// Live scheduled-work projection for the activity band
+    /// (AUTOMATION-VISIBILITY-SPEC §2.1), refreshed on the task-panel cadence
+    /// by `refresh_automation_panel`. The band reads it;
+    /// `background_indicator` never learns about automations.
+    pub automation_panel: crate::tui::automation_panel::AutomationPanelState,
+    /// The automation store scan in flight for `automation_panel`, if any.
+    /// The scan reads every definition and run file, so it runs on a
+    /// blocking thread and the tick folds it once it has finished — the
+    /// async UI loop never parks behind the automation store's disk.
+    pub automation_scan:
+        Option<tokio::task::JoinHandle<crate::tui::automation_panel::AutomationScan>>,
     /// Session-local quieting and command detectors for event-driven tips.
     pub behavioral_tips: crate::tui::behavioral_tips::BehavioralTipState,
     /// Unified Workflow activity surface (#4121). Lives above the composer so
@@ -2305,8 +2320,8 @@ impl App {
         match choice {
             RouteSaveChoice::UpdateFleet => {
                 let Some((name, scope)) = pending.fleet.clone() else {
-                    return "Nothing to update — no Fleet is selected. Use /pod save-as to \
-                             save this route as a new Fleet."
+                    return "Nothing to update — no Pod is selected. Use /pod save-as to \
+                             save this route as a new Pod."
                         .to_string();
                 };
                 match crate::fleet::store::load_fleet_in_scope(&name, scope, &self.workspace) {
@@ -2318,15 +2333,15 @@ impl App {
                         });
                         match save_fleet(&fleet, scope, &self.workspace) {
                             Ok(path) => format!(
-                                "Fleet `{}` now runs on {route} — wrote {}",
+                                "Pod `{}` now runs on {route} — wrote {}",
                                 fleet.name,
                                 path.display()
                             ),
-                            Err(err) => format!("Fleet update failed: {err}"),
+                            Err(err) => format!("Pod update failed: {err}"),
                         }
                     }
                     Err(err) => format!(
-                        "Fleet update failed: {err} — the saved Fleet may have moved. Use \
+                        "Pod update failed: {err} — the saved Pod may have moved. Use \
                          /pod save-as to persist the route."
                     ),
                 }
@@ -2343,7 +2358,7 @@ impl App {
                     display.clone(),
                     Some("Saved from a session route choice.".to_string()),
                 ) else {
-                    return "Could not create the Fleet.".to_string();
+                    return "Could not create the Pod.".to_string();
                 };
                 fleet.operator = Some(FleetOperator {
                     provider: pending.provider_identity.clone(),
@@ -2368,7 +2383,7 @@ impl App {
                             Err(err) => format!(" — selection failed: {err}"),
                         };
                         format!(
-                            "Saved route {route} as new Fleet `{}` — wrote {}{selected_note}",
+                            "Saved route {route} as new Pod `{}` — wrote {}{selected_note}",
                             display,
                             path.display()
                         )
@@ -4870,7 +4885,14 @@ impl App {
     /// retains its existing "interrupt this turn" / "close modal" semantics.
     pub fn arm_quit(&mut self) {
         self.quit_armed_until = Some(Instant::now() + Self::QUIT_CONFIRMATION_WINDOW);
-        self.needs_redraw = true;
+        // The armed state must be spoken, not silent: surface the localized
+        // press-again hint as a typed toast with the same lifetime as the
+        // confirmation window, so the user learns a second Ctrl+C exits.
+        self.push_status_toast(
+            self.tr(MessageId::FooterPressCtrlCAgain),
+            StatusToastLevel::Info,
+            Some(Self::QUIT_CONFIRMATION_WINDOW.as_millis() as u64),
+        );
     }
 
     /// Whether the quit timer is currently armed (i.e. a prior Ctrl+C set it

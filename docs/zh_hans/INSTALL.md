@@ -425,7 +425,7 @@ Scoop 清单维护在本仓库的发布工作流之外，可能落后于 GitHub/
 
 ### Windows winget（v0.9.5+）
 
-CodeWhale 为 `Hmbown.CodeWhale` 发布 winget manifest（解决 #1561）。Winget 只安装 `codewhale` + `codew` 命令。GitHub Releases 保留字节完全一致的 `codewhale-tui-*` 文件名，仅用于旧版更新器兼容；它们不是第三个已安装命令。
+Codewhale 为 `Hmbown.CodeWhale` 发布 winget manifest（解决 #1561）。Winget 只安装 `codewhale` + `codew` 命令。GitHub Releases 保留字节完全一致的 `codewhale-tui-*` 文件名，仅用于旧版更新器兼容；它们不是第三个已安装命令。
 
 ```powershell
 winget install Hmbown.CodeWhale

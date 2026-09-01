@@ -278,6 +278,30 @@ pub(crate) async fn open_launch_provider_picker(
     app.needs_redraw = true;
 }
 
+/// Open the existing provider/route surface from any shell entry point.
+///
+/// The chrome and `/provider` command both delegate here, so they expose the
+/// same picker without duplicating catalog or runtime-readiness facts. A
+/// picker preview remains non-authoritative until its normal apply handler
+/// commits a route.
+pub(crate) async fn open_provider_picker(
+    app: &mut App,
+    config: &Config,
+    engine_handle: &EngineHandle,
+) {
+    if app.onboarding == OnboardingState::Provider {
+        open_onboarding_provider_picker(
+            app,
+            config,
+            engine_handle,
+            app.onboarding_missing_key_recovery,
+        )
+        .await;
+    } else {
+        open_launch_provider_picker(app, config, engine_handle).await;
+    }
+}
+
 pub(crate) fn open_text_pager(app: &mut App, title: String, content: String) {
     let width = app
         .viewport

@@ -9,7 +9,7 @@ is correct and this document is history.
 
 **Scope:** everything below landed as a **TUI runtime** feature. No hook in
 this RFC fires from `codewhale exec`, the CLI subcommands, the app-server /
-ACP surfaces, or the `workflow` tool. The RFC's use of "CodeWhale" as the
+ACP surfaces, or the `workflow` tool. The RFC's use of "Codewhale" as the
 actor should be read as "the Codewhale TUI" throughout.
 
 ## 0. Implementation status
@@ -60,7 +60,7 @@ Four contract points hardened after this RFC, all documented in
 
 ## 1. Problem
 
-CodeWhale already has lifecycle hooks and MCP support, but the current hook
+Codewhale already has lifecycle hooks and MCP support, but the current hook
 surface is mostly observer-only. This blocks portable extensions that need to
 participate in the agent data flow:
 

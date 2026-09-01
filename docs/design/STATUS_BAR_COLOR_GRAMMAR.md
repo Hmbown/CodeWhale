@@ -50,6 +50,7 @@ status bar. Each segment picks a `ChromeInk` that already exists as a
 | Effort | `Info` | Identity |
 | Permission (Ask / Auto-Review / Full Access) | `PermissionAsk` / `PermissionAutoReview` / `PermissionFullAccess` | Cognition |
 | Goal (live / paused) | `Active` / `Attention` | Active / Cognition |
+| Automation slot (`⏱ N scheduled · M running`) | `Info` / `Active` / `Attention` | Identity / Active / Cognition |
 | Workflow chip | `Info` | Identity |
 | Update chip | `Attention` | Cognition |
 | Repo / worktree · branch`*` | `Metadata` | Metadata |

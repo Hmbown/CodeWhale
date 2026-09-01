@@ -95,8 +95,10 @@ fn exact_builtin_provider(provider_id: &str) -> Option<ApiProvider> {
 
 const fn catalog_provenance(source: &CatalogSource) -> &'static str {
     match source {
-        CatalogSource::Bundled => "bundled catalog",
-        CatalogSource::Live { .. } | CatalogSource::ModelsDevLive { .. } => "live catalog",
+        CatalogSource::Bundled | CatalogSource::CodewhaleBundled { .. } => "bundled catalog",
+        CatalogSource::Live { .. }
+        | CatalogSource::ModelsDevLive { .. }
+        | CatalogSource::CodewhaleLive { .. } => "live catalog",
         CatalogSource::ConfigOverride | CatalogSource::UserOverride => "override",
     }
 }

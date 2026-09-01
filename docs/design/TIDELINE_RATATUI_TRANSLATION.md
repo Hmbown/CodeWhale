@@ -17,11 +17,11 @@ prose > the recovered motion sketch (motion language) > `tideline-redesign.html`
 
 Cell-inventory read of the references (startup, work+pod, settings/appearance):
 
-- **Topbar (all three).** One row: fluke + `CODEWHALE` wordmark; contextual
+- **Topbar (all three).** One row: `CODEWHALE` wordmark; contextual
   segments (`run …`, `pod …`, `3/4 whales`, `model …`, `theme …`,
   `Settings / Appearance`, `folder …`); pinned right = `context NN% ▰▰▱▱▱` +
   full clock. Segment set varies per screen; brand/meter/clock never move.
-- **Startup.** Centered hero: fluke mark, "What are we working on?", one dim
+- **Startup.** Centered hero: "What are we working on?", one dim
   subtitle; `QUICK ACTIONS` band with 3 rows (icon · label · description ·
   command + `›`); a 4-column option strip (New worktree / Chat only / Theme /
   Help); whale-outline composer; footer with route · cost · keys.
@@ -41,7 +41,7 @@ Cell-inventory read of the references (startup, work+pod, settings/appearance):
 
 | In the reference | Why it cannot ship | Decision |
 |---|---|---|
-| Composer drawn as a stroked whale outline | No bezier strokes; only box-drawing glyphs | **Rounded border + fluke cap.** `╭─╮│╰╯` border (dim at rest, Info on focus), fluke glyph (`▚△▞`, ASCII `<.>`) set into the top-right corner cell as the cap. The hull taper silhouette is **dropped** — it is sub-cell vector work, and the fluke cap carries the identity at 1/50th the cells. The send `↑` becomes a 3-cell hitbox `[↑]` right-aligned inside the border. |
+| Composer drawn as a stroked whale outline | No bezier strokes; only box-drawing glyphs | **Rounded border.** `╭─╮│╰╯` border (dim at rest, Info on focus); the old fluke cap is retired and no brand glyph is hand-drawn into the composer. The send `↑` becomes a 3-cell hitbox `[↑]` right-aligned inside the border. The terminal never approximates the canonical raster mark. |
 | Translucent whale silhouettes behind text (Deepsea preview) | No alpha; painting over text destroys it | **Empty-cells-only compositing**, the `ambient_life.rs` rule verbatim: write only cells that are open water (`is_open_water` + `TEXT_CLEARANCE_ROWS = 1` clearance from `occupied_text_bounds`). Eviction order when water is scarce: bubbles first, then fish school, then jellyfish; the whale cameo is evicted last (highest identity value). Caustic-style tinting stays bg-only on `cell.symbol() == " "`. Deepsea ambient runs only under `MotionMode::Full`. |
 | SVG icons (plug, clock, folder, palette, chat) | Not renderable | One glyph per action, added to `glyphs.rs` with declared ASCII fallbacks via `ascii_fallback`: plug `⌁`→`+`, resume `↺`→`<`, folder `▤`→`=`, palette `◐`→`*`, chat `◌`→`o`, worktree `⑂`→`y`, help `?`→`?` (identity). Each is 1 cell, no wide glyphs. |
 | Ledger cells wrapping to two lines | Table columns are exact integer cells | Fixed column widths + per-column truncation: WHALE 10 (never truncates — names are short by contract), ASSIGNMENT = remainder (truncate with `…`, never wrap), STATE 12 (glyph + word), ELAPSED 8, RECEIPTS 8, LAST UPDATE 8 (`HH:MM:SS`). **At 80 columns** the rail is hidden and ledger sheds to `WHALE │ ASSIGNMENT │ STATE` — ELAPSED, RECEIPTS, LAST UPDATE drop in that order before ASSIGNMENT loses cells. |
@@ -65,7 +65,7 @@ constraints ~:928). The references collapse the bottom into one footer:
 | 4 background-work chip | **Deleted as a band**; the fact moves to the topbar `pod n/m` segment and the rail WORK group (one surface owns each fact). |
 | 5 session boot receipt | **Deleted as a band**; boot lines become ordinary transcript receipts. |
 | 6 activity band | **Merged into the footer** (left half: phase chip + echolocation + cost). |
-| 7 composer | **Extends** — rounded border + fluke cap + `[↑]` hitbox; composer authority logic untouched. |
+| 7 composer | **Extends** — rounded border + `[↑]` hitbox; composer authority logic untouched. |
 | 8 identity band | **Merged into the footer** (right half: depth line + key legend). `phase_strip::render_identity` is the merge target; `render_footer` delegates today already. |
 
 Orphaned facts, each with exactly one home: cost/token ledger → footer;
@@ -109,7 +109,7 @@ where the `Rect` is stored for `mouse_ui` (existing pattern:
 | Component | What it does | States | Data source | Replaces | Owning file | Keys | Mouse hitbox | Golden name |
 |---|---|---|---|---|---|---|---|---|
 | Topbar | One-row status surface | per-screen segment set; hover; shed | `effective_route_identity_display()`, run/pod summaries, `context_budget` pct, injected clock | `underwater::render_header` | `tui/topbar.rs` ✅ | Tab⇄, Enter activate | brand/menu + per-segment rects → `viewport.last_topbar_hitboxes` | `topbar_{startup,work,settings}_{w}x{h}` ✅ |
-| Hero (startup) | Centered fluke + prompt | first-run vs returning | `LaunchState`, `workspace_session_count` | `render_launch_screen` | `tui/underwater.rs` | — | fluke = open menu (`launch.row_areas`) | `startup_{w}x{h}` |
+| Hero (startup) | Centered prompt + subtitle | first-run vs returning | `LaunchState`, `workspace_session_count` | `render_launch_screen` | `tui/underwater.rs` | — | none | `startup_{w}x{h}` |
 | Quick actions | 3 command rows | selected/hover/disabled (no model) | `LaunchAction`, provider state | launch menu rows | `tui/underwater.rs` + `mouse_ui.rs:441` | ↑/↓, Enter, Esc | row rects (exists) | `startup_*` |
 | Option strip | 4 columns (worktree/chat/theme/help) | hover/selected | `LaunchState` | launch options row | same | Tab, Enter | 4 col rects | `startup_*` |
 | Rail | Left column, 5 groups + collapse | expanded/collapsed/focused | `WorkSurfaceState`, `subagent_cache`, run list, git status | work strip + `sidebar` remnants | `tui/work_surface/` (#5699 territory) | Tab, ↑/↓, Enter, `«` | `WorkHitbox{WorkRowId,row_y}` (exists) | `work_{w}x{h}` |
@@ -118,7 +118,7 @@ where the `Rect` is stored for `mouse_ui` (existing pattern:
 | Theme list | 13 themes + motion toggles | selected/preview/applying | `ThemeId`, `ocean_treatment`, `low_motion`, `fancy_animations` | `theme_picker.rs` | `tui/theme_picker.rs`, `views/` | ↑/↓, Enter preview/apply | row rects | `settings_{w}x{h}` |
 | Live preview | Projection of a real screen in chosen theme | mirrors screen state; never a second store | same render fns, `TestBackend`-style projection into the pane | settings preview | `tui/views/` settings | — | none (passive) | `settings_*` |
 | Settings rail | 8 categories + meta rows | selected | `ConfigView` | `ConfigView` nav | `tui/views/mod.rs` | ↑/↓, Tab | category rects | `settings_*` |
-| Composer | Input with fluke cap + send hitbox | focus, pending crumb, approval-replaced | `ComposerState`, pending preview | composer_ui/chrome (extends) | existing composer files | Enter, ⇧Enter, Esc | `[↑]` submit rect; border focus click | `composer_{w}x{h}` |
+| Composer | Input with rounded border + send hitbox | focus, pending crumb, approval-replaced | `ComposerState`, pending preview | composer_ui/chrome (extends) | existing composer files | Enter, ⇧Enter, Esc | `[↑]` submit rect; border focus click | `composer_{w}x{h}` |
 | Footer | One band: phase·cost (left), depth line·keys (right) | per-phase ink; 80% warn | `SessionState` cost, phase, `context_budget` | slots 6+8 merged | `tui/phase_strip.rs` | — | depth segment → context inspector | `footer_{w}x{h}` |
 | Notifications inbox | Attention rows (gold ◆) | unread/read; per-kind | `status_toasts`/`sticky_status` → typed records | toast soup | `tui/notifications.rs` | Enter, `r`, Esc | row rects | `notifications_{w}x{h}` |
 
@@ -141,7 +141,7 @@ Startup stage:
 
 ```rust
 let [hero, rule_a, quick, rule_b, strip, spacer] = Layout::vertical([
-    Constraint::Percentage(38), // hero: fluke + heading + subtitle
+    Constraint::Percentage(38), // hero: heading + subtitle
     Constraint::Length(1),      // wave rule `⋯ ∼∼∼ ⋯` (dim, static)
     Constraint::Length(3 + 2),  // QUICK ACTIONS: label row + 3 rows + margins
     Constraint::Length(1),      // wave rule
@@ -220,7 +220,7 @@ families obey `STATUS_BAR_COLOR_GRAMMAR.md`:
 
 | Element | ChromeInk | Family |
 |---|---|---|
-| Fluke + wordmark | `Attention` (gold) | Cognition — the sanctioned whale-mark gold |
+| Wordmark | `Attention` (gold) | Cognition — restrained text identity |
 | Segment labels / separators / clock | `Metadata` / `MetadataDim` / `MetadataHint` | Metadata |
 | Route · model · run | `Identity` | Identity |
 | Pod (live) / `3/4` / context meter / theme name | `Active` / `Info` | Active / Identity |
@@ -281,8 +281,8 @@ authored, everything else staying calm:
   **spout** — the one payoff moment; suppressed if work resumes instantly.
   *Failure:* flat `✗` + the model segment says what to do next (microcopy:
   "no route yet — /connect"), never "Error". *Exit into work:* composer
-  keeps focus — no modal re-orientation. Surprise budget: spout, the fluke
-  cap waking on composer focus, hero breath.
+  keeps focus — no modal re-orientation. Surprise budget: spout and hero
+  breath; composer focus changes only its border and send affordance.
 - **Work + Pod.** *Orient:* the pod-formation tree draws its `├──└──` rows in
   one ≤600 ms top-down reveal, then is forever still (continuity: the tree is
   the same object in the ledger below). *Waiting:* receipt rows carry typed

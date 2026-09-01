@@ -10,7 +10,7 @@ import type { ChromeDict } from "../types";
  *
  * Terminologie alignée sur le pack TUI : les modes et les postures de
  * permissions restent littéraux (Plan / Work / Operate, Ask / Auto-Review /
- * Full Access), « receipt » est « reçu », « runtime », `Fleet` et `TUI`
+ * Full Access), « receipt » est « reçu », « runtime », `Pod` et `TUI`
  * restent des noms produits. L'apostrophe est typographique (’).
  *
  * Les libellés secondaires de navigation associent le libellé français à un

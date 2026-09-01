@@ -91,9 +91,10 @@ impl AppModeUi for AppMode {
 /// `Off` to `Low` and displays/sends `Max` as `xhigh` at the provider
 /// boundary. The default keyboard cycler walks the three DeepSeek-distinct
 /// tiers: `Off` → `High` → `Max` → `Off`; provider-aware callers should use
-/// [`ReasoningEffort::cycle_next_for_provider`]. Auto routing has no concrete
-/// provider yet, so [`ReasoningEffort::cycle_next_for_auto_model`] retains the
-/// full provider-neutral preference vocabulary until dispatch.
+/// [`ReasoningEffort::cycle_next_in`] with the route's effort list. Auto
+/// routing has no concrete provider yet, so
+/// [`ReasoningEffort::cycle_next_for_auto_model`] retains the full
+/// provider-neutral preference vocabulary until dispatch.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ReasoningEffort {
     Off,
@@ -509,24 +510,6 @@ impl ReasoningEffort {
                 Self::Max
             }
             Self::Max => Self::Off,
-        }
-    }
-
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn cycle_next_for_provider(self, provider: ApiProvider) -> Self {
-        if provider != ApiProvider::OpenaiCodex {
-            return self.cycle_next();
-        }
-        match self.normalize_for_provider(provider) {
-            Self::Minimal => Self::Low,
-            Self::Low => Self::Medium,
-            Self::Medium => Self::High,
-            Self::High => Self::Max,
-            Self::XHigh => Self::Low,
-            Self::Ultra => Self::Low,
-            Self::Max => Self::Low,
-            Self::Off | Self::Auto => Self::Low,
         }
     }
 

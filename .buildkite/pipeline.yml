@@ -1,0 +1,52 @@
+# Buildkite pipeline for Codewhale.
+#
+# Why this file exists: the `codewhale-ci` pipeline's steps lived in the
+# Buildkite UI and ran a 67-second smoke test (`cargo fmt` plus two focused
+# crates). That is not this repository's CI, so a green Buildkite build proved
+# almost nothing. Steps belong in the repo, reviewable in the same diff as the
+# code they gate.
+#
+# Scope, stated honestly: this covers the Linux and macOS legs only. Buildkite
+# hosted agents are Linux and macOS; there is no hosted Windows. `Test
+# (windows-latest)` in .github/workflows/ci.yml runs the installer PATH helper
+# and an NSIS installer regression on a product that ships a Windows installer,
+# so that leg must stay on GitHub Actions until a Windows agent exists. Do not
+# read a green build here as full platform coverage.
+#
+# This pipeline is advisory until its checks are proven green on real pull
+# requests. The required checks in the `protect-main` ruleset are still the
+# GitHub Actions contexts; moving them is a separate, deliberate change.
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # Matches .github/workflows/ci.yml: the product's thread stack, not a default.
+  RUST_MIN_STACK: "16777216"
+
+steps:
+  - group: ":rust: Linux"
+    key: linux
+    steps:
+      - label: ":rust: fmt + clippy"
+        key: lint
+        agents:
+          queue: linux-large
+        timeout_in_minutes: 45
+        command: .buildkite/steps/lint.sh
+
+      - label: ":rust: workspace tests"
+        key: test-linux
+        agents:
+          queue: linux-large
+        timeout_in_minutes: 90
+        command: .buildkite/steps/test.sh
+
+  - group: ":apple: macOS"
+    key: macos
+    steps:
+      - label: ":apple: workspace tests"
+        key: test-macos
+        agents:
+          queue: macos-large
+        timeout_in_minutes: 90
+        command: .buildkite/steps/test.sh

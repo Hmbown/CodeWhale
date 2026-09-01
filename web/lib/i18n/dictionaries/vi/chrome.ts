@@ -8,7 +8,7 @@ import type { ChromeDict } from "../types";
  * things the same way: nhà cung cấp (provider), phiên (session), kho mã
  * (repository), mức quyền (permission posture), biên nhận (receipt). Product
  * terms — Codewhale, Plan / Work / Operate, Ask / Auto-Review / Full Access,
- * Fleet, Workflow, Runtime — stay literal, as they do in the TUI.
+ * Pod, Workflow, Runtime — stay literal, as they do in the TUI.
  *
  * The masthead pairs a Vietnamese primary label with a short English
  * secondary one; the Han seals are the English edition's own device and are

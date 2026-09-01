@@ -13,6 +13,17 @@ use crate::models::{
     CacheControl, ContentBlock, Message, MessageRequest, SystemBlock, SystemPrompt,
 };
 
+#[path = "compaction/last_round.rs"]
+mod last_round;
+#[cfg(test)]
+#[path = "compaction/survival_contract.rs"]
+mod survival_contract;
+pub(crate) use last_round::last_round_start;
+pub use last_round::{
+    CompactionCoverage, CompactionKeep, CompactionPath, LastCompactionSnapshot,
+    inspect_compaction_keep, last_round_kept_count, pinned_anchors_text,
+};
+
 /// Configuration for conversation compaction behavior.
 ///
 /// v0.8.11 simplified this from the prior token-OR-message-count trigger
@@ -126,7 +137,7 @@ const RETAINED_TOOL_RESULT_MAX_CHARS: usize = 64 * 1024;
 const RETAINED_THINKING_MAX_CHARS: usize = 16 * 1024;
 /// Token budget for the recent user messages retained verbatim in the
 /// replacement history (Codex parity: COMPACT_USER_MESSAGE_MAX_TOKENS).
-const COMPACT_RETAINED_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
+pub(crate) const COMPACT_RETAINED_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 /// Handoff summarization prompt, appended to the live conversation as the
 /// final user message (ported from Codex `templates/compact/prompt.md`).
 const COMPACT_PROMPT: &str = "You are performing a context checkpoint compaction. Create a \
@@ -912,6 +923,8 @@ pub struct CompactionResult {
     pub summary_prompt: Option<SystemPrompt>,
     /// Number of retries used before success
     pub retries_used: u32,
+    /// Last-round coverage for inspector receipts.
+    pub coverage: CompactionCoverage,
 }
 
 /// Classify a compaction LLM failure for the retry / input-ladder policy.
@@ -1075,10 +1088,21 @@ pub async fn compact_messages_safe(
             "Local tool-result prune saved {pruned_bytes} bytes before LLM compaction"
         ));
         if was_over_threshold && now_under_threshold {
+            let kept = sanitize_retained_messages(pruned_messages);
+            last_round::validate_last_round_coverage(messages, &kept)?;
+            let coverage = last_round::measure_coverage(
+                messages,
+                &kept,
+                CompactionPath::PruneOnly,
+                pinned_anchors_text(config.workspace.as_deref())
+                    .map(|text| text.chars().count())
+                    .unwrap_or(0),
+            );
             return Ok(CompactionResult {
-                messages: sanitize_retained_messages(pruned_messages),
+                messages: kept,
                 summary_prompt: None,
                 retries_used: 0,
+                coverage,
             });
         }
         &pruned_messages
@@ -1099,12 +1123,18 @@ pub async fn compact_messages_safe(
         match compact_messages_with_metadata(client, compaction_input, config, &mut quality_retries)
             .await
         {
-            Ok((msgs, prompt, removed)) => {
-                drop(removed);
+            Ok((msgs, prompt, mut coverage)) => {
+                let kept = sanitize_retained_messages(msgs);
+                last_round::validate_last_round_coverage(compaction_input, &kept)?;
+                let keep: CompactionKeep = inspect_compaction_keep(&kept);
+                coverage.last_round_messages = keep.last_round_messages;
+                coverage.last_round_tool_results = keep.last_round_tool_results;
+                coverage.last_round_assistant = keep.last_round_assistant;
                 return Ok(CompactionResult {
-                    messages: sanitize_retained_messages(msgs),
+                    messages: kept,
                     summary_prompt: prompt,
                     retries_used: attempt.saturating_add(quality_retries),
+                    coverage,
                 });
             }
             Err(e) => {
@@ -1137,7 +1167,7 @@ fn build_compaction_summary_block_text(summary: &str, anchors: &str) -> String {
 /// selected newest-first within a fixed token budget and restored to
 /// transcript order. The oldest selected message is truncated to fit rather
 /// than dropped whole.
-fn retained_user_messages(messages: &[Message], max_tokens: usize) -> Vec<Message> {
+pub(crate) fn retained_user_messages(messages: &[Message], max_tokens: usize) -> Vec<Message> {
     let mut selected: Vec<Message> = Vec::new();
     let mut remaining = max_tokens;
     for msg in messages.iter().rev() {
@@ -1175,20 +1205,9 @@ fn retained_user_messages(messages: &[Message], max_tokens: usize) -> Vec<Messag
 /// user's own words, re-stated after the summary because the command promises
 /// they survive compaction.
 fn user_anchors_section(workspace: Option<&std::path::Path>) -> String {
-    let Some(workspace) = workspace else {
-        return String::new();
-    };
-    let primary = workspace.join(".codewhale").join("anchors.md");
-    let path = if primary.exists() {
-        primary
-    } else {
-        workspace.join(".deepseek").join("anchors.md")
-    };
-    match std::fs::read_to_string(path) {
-        Ok(contents) if !contents.trim().is_empty() => {
-            format!("\n\nUser-pinned anchors (verbatim):\n{}", contents.trim())
-        }
-        _ => String::new(),
+    match pinned_anchors_text(workspace) {
+        Some(contents) => format!("\n\nUser-pinned anchors (verbatim):\n{contents}"),
+        None => String::new(),
     }
 }
 
@@ -1199,9 +1218,9 @@ async fn compact_messages(
     config: &CompactionConfig,
 ) -> Result<(Vec<Message>, Option<SystemPrompt>, Vec<Message>)> {
     let mut quality_retries = 0;
-    let (messages, summary_prompt, removed) =
+    let (messages, summary_prompt, _coverage) =
         compact_messages_with_metadata(client, messages, config, &mut quality_retries).await?;
-    Ok((messages, summary_prompt, removed))
+    Ok((messages, summary_prompt, Vec::new()))
 }
 
 async fn compact_messages_with_metadata(
@@ -1209,9 +1228,9 @@ async fn compact_messages_with_metadata(
     messages: &[Message],
     config: &CompactionConfig,
     quality_retries: &mut u32,
-) -> Result<(Vec<Message>, Option<SystemPrompt>, Vec<Message>)> {
+) -> Result<(Vec<Message>, Option<SystemPrompt>, CompactionCoverage)> {
     if messages.is_empty() {
-        return Ok((Vec::new(), None, Vec::new()));
+        return Ok((Vec::new(), None, CompactionCoverage::default()));
     }
 
     let summary = create_summary(client, messages, config, quality_retries).await?;
@@ -1225,14 +1244,23 @@ async fn compact_messages_with_metadata(
         }),
     };
 
-    let mut retained = retained_user_messages(messages, COMPACT_RETAINED_USER_MESSAGE_MAX_TOKENS);
-    retained.push(compaction_checkpoint_message(&SystemPrompt::Text(
-        checkpoint_text,
-    )));
+    let retained = last_round::build_replacement_history(
+        messages,
+        &checkpoint_text,
+        pinned_anchors_text(config.workspace.as_deref()).as_deref(),
+    )?;
+    let coverage = last_round::measure_coverage(
+        messages,
+        &retained,
+        CompactionPath::Summary,
+        pinned_anchors_text(config.workspace.as_deref())
+            .map(|text| text.chars().count())
+            .unwrap_or(0),
+    );
     Ok((
         retained,
         Some(SystemPrompt::Blocks(vec![summary_block])),
-        Vec::new(),
+        coverage,
     ))
 }
 
@@ -1975,21 +2003,54 @@ mod tests {
         assert!(text.contains(FIXED_SUMMARY));
         assert!(text.contains("Another language model"));
 
-        // Replacement history is the recent plain user messages followed by
-        // one Codex-style checkpoint. Tool calls, results, and assistant text
-        // do not survive verbatim.
-        assert_eq!(retained.len(), 3);
-        assert!(retained.iter().all(|message| message.role == "user"));
-        assert!(retained[0].content.iter().any(|block| matches!(
-            block,
-            ContentBlock::Text { text, .. } if text.contains("Objective: migrate")
-        )));
-        assert!(retained[1].content.iter().any(|block| matches!(
-            block,
-            ContentBlock::Text { text, .. } if text == "Sounds good, do it"
-        )));
-        assert!(is_compaction_checkpoint_message(&retained[2]));
-        assert_eq!(user_text_of(&retained[2]).as_deref(), Some(text.as_str()));
+        // Replacement history keeps older user turns, then the open round
+        // verbatim (user + assistant + tools), then one checkpoint.
+        assert!(retained.iter().any(|message| {
+            user_text_of(message).is_some_and(|text| text.contains("Objective: migrate"))
+        }));
+        assert!(
+            retained
+                .iter()
+                .any(|message| { user_text_of(message).as_deref() == Some("Sounds good, do it") })
+        );
+        assert!(retained.iter().any(|message| {
+            message.role.is_assistant_like()
+                && message.content.iter().any(|block| {
+                    matches!(
+                        block,
+                        ContentBlock::Text { text, .. }
+                            if text.contains("Nearly done, rerunning the suite.")
+                    )
+                })
+        }));
+        assert!(retained.iter().any(|message| {
+            message.content.iter().any(|block| {
+                matches!(
+                    block,
+                    ContentBlock::ToolResult { content, .. }
+                        if content.contains("session_store::roundtrip")
+                )
+            })
+        }));
+        assert!(is_compaction_checkpoint_message(retained.last().unwrap()));
+        assert_eq!(
+            user_text_of(retained.last().unwrap()).as_deref(),
+            Some(text.as_str())
+        );
+        last_round::validate_last_round_coverage(&messages, &retained[..retained.len() - 1])
+            .unwrap();
+    }
+
+    #[test]
+    fn coverage_floor_rejects_a_replacement_that_drops_last_round_assistant() {
+        let original = vec![
+            msg("user", "What failed?"),
+            msg("assistant", "session_store::roundtrip panics on reload."),
+        ];
+        let gutting = vec![msg("user", "What failed?")];
+        let error = last_round::validate_last_round_coverage(&original, &gutting)
+            .expect_err("dropping last-round assistant text must fail closed");
+        assert!(error.to_string().contains("assistant"), "{error}");
     }
 
     #[test]
@@ -2673,6 +2734,7 @@ mod tests {
             messages: vec![],
             summary_prompt: None,
             retries_used: 2,
+            coverage: CompactionCoverage::default(),
         };
 
         assert_eq!(result.retries_used, 2);

@@ -66,7 +66,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "第一次用？四步。",
   startLede:
-    "安装 → 首次会话，无需密钥 → 接入提供商 → 配置 Fleet。",
+    "安装 → 首次会话，无需密钥 → 接入提供商 → 配置 Pod。",
   startGuideLink: "阅读新手指引 →",
   startVocabularyLink: "查名词 →",
 
@@ -87,7 +87,7 @@ export const home: HomeDict = {
     ["codewhale exec", "脚本与 CI"],
     ["Web 客户端", "浏览器客户端，仅限本机"],
     ["运行时 API + MCP", "本地集成"],
-    ["Fleet", "多个智能体协作一件事"],
+    ["Pod", "多个智能体协作一件事"],
   ],
   runtimeLink: "运行时界面与稳定程度 →",
 
