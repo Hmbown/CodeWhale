@@ -1833,6 +1833,20 @@ fn run() -> Result<()> {
             error
         }
     })?;
+    // Root session flags only reach the TUI through the `None` branch below;
+    // no subcommand handler reads them. Accepting them silently resumes
+    // nothing -- `codewhale --resume abc exec "..."` would start a fresh
+    // session while looking like it continued one.
+    if command.is_some()
+        && (cli.continue_session || cli.resume.is_some() || cli.session_id.is_some())
+    {
+        anyhow::bail!(
+            "--continue/--resume/--session-id apply to the interactive session and \
+             cannot be combined with a subcommand. Run them without a subcommand, or \
+             use the subcommand's own flag (for example `codewhale exec --session-id <id>`)."
+        );
+    }
+
     match command {
         Some(Commands::Run(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
@@ -2095,8 +2109,18 @@ fn root_tui_passthrough(cli: &Cli) -> Result<Vec<String>> {
         .resume
         .as_deref()
         .or(cli.session_id.as_deref())
-        .map(str::trim)
-        .filter(|id| !id.is_empty());
+        .map(str::trim);
+    if resume_session_id.is_some_and(str::is_empty) {
+        // A shell expanding an unset variable -- `codewhale --resume
+        // "$SESSION_ID"` -- must not quietly become a fresh session. The user
+        // asked to resume; starting new loses the session they meant, and the
+        // mistake is invisible until the history is gone.
+        bail!(
+            "--resume/--session-id needs a session id, but got an empty value \
+             (an unset shell variable?). Use `codewhale --continue` to resume \
+             the most recent session."
+        );
+    }
     if let Some(session_id) = resume_session_id {
         forwarded.push("--resume".to_string());
         forwarded.push(session_id.to_string());
@@ -9183,6 +9207,26 @@ verbosity = "project-imported"
                 root_tui_passthrough(&cli).unwrap(),
                 vec!["--resume".to_string(), "800596e6".to_string()],
                 "{argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_resume_identifier_is_rejected_rather_than_starting_fresh() {
+        // `codewhale --resume "$SESSION_ID"` with the variable unset used to
+        // trim to empty, filter to None, and start a brand-new session while
+        // looking like it resumed one. Losing the session the user asked for
+        // must be loud.
+        for argv in [
+            &["codewhale", "--resume", ""][..],
+            &["codewhale", "--session-id", "   "][..],
+        ] {
+            let cli = parse_ok(argv);
+            let err = root_tui_passthrough(&cli)
+                .expect_err("an empty resume id must not silently start a fresh session");
+            assert!(
+                err.to_string().contains("needs a session id"),
+                "{argv:?}: {err}"
             );
         }
     }

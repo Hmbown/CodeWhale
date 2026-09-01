@@ -23972,6 +23972,11 @@ fn fresh_session_turn_lifecycle_leaves_no_orphan_checkpoint() {
     // engine minted its own id, `SessionUpdated` re-keyed the App to it, and
     // `checkpoints/<app id>.json` survived every completed turn; `--continue`
     // then "recovered" that one-message orphan as a duplicate session.
+    //
+    // `build_session_snapshot` calls `set_live_session`, which writes the
+    // process-global LIVE_SESSIONS registry. Without this lock the test races
+    // the other live-session tests under the default multi-thread runner.
+    let _lock = crate::test_support::lock_test_env();
     let mut app = create_test_app();
     app.current_session_id = None;
     app.current_session_metadata = None;
