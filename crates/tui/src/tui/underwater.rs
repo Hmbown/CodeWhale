@@ -486,7 +486,7 @@ impl RunningToolFacts {
 }
 
 const WORKING_BUBBLE_FRAMES: [&str; 8] = ["⠀", "⢀", "⣀", "⣄", "⣤", "⣦", "⣶", "⣿"];
-const COMPLETION_BREATH_MS: u128 = 800;
+use super::ocean::COMPLETION_BREATH_MS;
 const COMPLETION_RELEASE_MS: u128 = 560;
 // The idle whale portrait rows (IDLE_WHALE_ROWS / UWU_IDLE_WHALE_ROWS) and
 // their caustic shimmer were deleted per the 2026-08-29 founder directive:
