@@ -7904,10 +7904,14 @@ fn runtime_mcp_refresh_replaces_the_pool_slice() {
 
     // The mirror transition: a live 401 kills the pool's real tools and
     // re-offers the synthetic login tool.
-    let universe: HashSet<String> = ["mcp_static_read", "mcp_dynamic_render", "mcp_alpha_authenticate"]
-        .into_iter()
-        .map(str::to_string)
-        .collect();
+    let universe: HashSet<String> = [
+        "mcp_static_read",
+        "mcp_dynamic_render",
+        "mcp_alpha_authenticate",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
     replace_runtime_mcp_tools(
         &mut catalog,
         &mut active,

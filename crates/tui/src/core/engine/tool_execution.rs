@@ -272,11 +272,7 @@ impl Engine {
             return Ok(rich);
         }
         let needs_auth_generation_before = pool.lock().await.needs_auth_generation();
-        let result = pool
-            .lock()
-            .await
-            .call_tool(name, input)
-            .await;
+        let result = pool.lock().await.call_tool(name, input).await;
         match result {
             Ok(result) => {
                 Ok(crate::tools::registry::mcp_result_to_bounded_rich_tool_result(result))
@@ -300,10 +296,9 @@ impl Engine {
                         "MCP tool failed: {error}"
                     )));
                 }
-                let tool_result = crate::tools::spec::ToolResult::error(format!(
-                    "MCP tool failed: {error}"
-                ))
-                .with_metadata(serde_json::json!({ "mcp_catalog_changed": true }));
+                let tool_result =
+                    crate::tools::spec::ToolResult::error(format!("MCP tool failed: {error}"))
+                        .with_metadata(serde_json::json!({ "mcp_catalog_changed": true }));
                 Ok(RichToolResult::plain(tool_result))
             }
         }

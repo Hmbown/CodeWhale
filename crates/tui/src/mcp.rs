@@ -2597,11 +2597,7 @@ impl McpPool {
     /// pre-registered redirect URI. The synthetic self-serve login tool must
     /// use the same overrides as `/mcp login`, or the provider rejects its
     /// ephemeral loopback redirect.
-    pub fn with_oauth_callback(
-        mut self,
-        port: Option<u16>,
-        url: Option<String>,
-    ) -> Self {
+    pub fn with_oauth_callback(mut self, port: Option<u16>, url: Option<String>) -> Self {
         self.oauth_callback_port = port;
         self.oauth_callback_url = url;
         self
@@ -3350,7 +3346,9 @@ impl McpPool {
                     }
                 }
                 Err(error).with_context(|| {
-                    format!("MCP server '{server_name}' completed OAuth login but the reconnect failed")
+                    format!(
+                        "MCP server '{server_name}' completed OAuth login but the reconnect failed"
+                    )
                 })
             }
         }
@@ -3785,8 +3783,11 @@ impl McpPool {
     /// instead of additively merging it — the synthetic entry must leave
     /// after a login, and dead real tools must leave after a live 401.
     pub fn model_tool_names(&self) -> std::collections::HashSet<String> {
-        let mut names: std::collections::HashSet<String> =
-            self.to_api_tools().into_iter().map(|tool| tool.name).collect();
+        let mut names: std::collections::HashSet<String> = self
+            .to_api_tools()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect();
         let dynamic = self.dynamic_servers.read();
         for (server, config) in self.config.servers.iter().chain(dynamic.iter()) {
             if config.is_enabled() && oauth::server_supports_oauth_login(config) {

@@ -3981,20 +3981,17 @@ impl Engine {
                         .and_then(|metadata| metadata.get("mcp_catalog_changed"))
                         .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false);
-                    if mcp_catalog_changed
-                        && let Some(pool) = self.mcp_pool.as_ref().cloned()
-                    {
+                    if mcp_catalog_changed && let Some(pool) = self.mcp_pool.as_ref().cloned() {
                         let (universe, refreshed) = {
                             let pool = pool.lock().await;
                             (pool.model_tool_names(), pool.to_api_tools())
                         };
-                        tool_surface_changed |=
-                            replace_runtime_mcp_tools(
-                                tool_catalog,
-                                active_tool_names,
-                                &universe,
-                                refreshed,
-                            ) > 0;
+                        tool_surface_changed |= replace_runtime_mcp_tools(
+                            tool_catalog,
+                            active_tool_names,
+                            &universe,
+                            refreshed,
+                        ) > 0;
                     }
                     // Any of the legitimate mid-turn tool-surface changes above
                     // re-pin the header under a declared `change:tool_surface`
