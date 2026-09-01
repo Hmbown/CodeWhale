@@ -342,13 +342,20 @@ pub enum SkillSyncEntry {
 }
 
 /// Aggregate `/skills sync` outcome.
+///
+/// Registry-level network-policy outcomes are carried as variants so the
+/// portable handler composes the exact `needs_approval` / `denied` messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SkillSyncOutcome {
-    pub total: usize,
-    pub downloaded: usize,
-    pub fresh: usize,
-    pub failed: usize,
-    pub entries: Vec<SkillSyncEntry>,
+pub enum SkillSyncOutcome {
+    Done {
+        total: usize,
+        downloaded: usize,
+        fresh: usize,
+        failed: usize,
+        entries: Vec<SkillSyncEntry>,
+    },
+    RegistryNeedsApproval(String),
+    RegistryDenied(String),
 }
 
 /// Successful skill activation data (host performs the side effects).
@@ -373,14 +380,13 @@ pub enum SkillActivationError {
 }
 
 /// `/review` outcome data (host performs the side effects).
+///
+/// On success the baseline `/review` renders no message — it only emits the
+/// `SendMessage` action — so `Ready` carries no payload (D1 exact-minimum).
+/// Warnings are only rendered on the not-found path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewOutcome {
-    Ready {
-        name: String,
-        description: String,
-        body: String,
-        warnings: Vec<String>,
-    },
+    Ready,
     NotFound {
         skills_dir: String,
         global_dir: String,
@@ -459,8 +465,9 @@ pub trait CommandSkillGroupContext {
     fn recommend_skills(&mut self, task: &str) -> Result<Vec<SkillRecommendation>, String>;
     /// `/skills sync` — host registry sync (async bridge host-side).
     fn sync_registry(&mut self) -> Result<SkillSyncOutcome, String>;
-    /// `/review` activation: host discovery + side effects.
-    fn run_review(&mut self, target: &str) -> Result<ReviewOutcome, String>;
+    /// `/review` activation: host discovery + side effects (empty-target
+    /// validation and `SendMessage` composition are handler-side).
+    fn run_review(&mut self) -> Result<ReviewOutcome, String>;
     /// `/restore` snapshot listing.
     fn snapshot_list(&mut self, limit: usize) -> Result<Vec<SnapshotEntry>, String>;
     /// `/restore <N>`: host restores by snapshot id; handler composes the

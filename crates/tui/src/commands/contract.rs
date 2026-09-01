@@ -32,10 +32,14 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use codewhale_command_contract::facets::{
-    CommandCostContext, CommandMediaContext, CommandModePolicyContext, CommandModelContext,
-    CommandPresentationContext, CommandProjectContext, CommandSessionContext, CommandSkillsContext,
-    CommandSystemPromptContext, CommandWorkspaceContext, MediaAttachmentReceipt, ProjectGoalState,
-    ProjectGoalStatus, ProjectShareProjection,
+    CommandApprovalState, CommandCostContext, CommandMediaContext, CommandModePolicyContext,
+    CommandModelContext, CommandPresentationContext, CommandProjectContext, CommandSessionContext,
+    CommandSkillGroupContext, CommandSkillsContext, CommandSystemPromptContext,
+    CommandWorkspaceContext, MediaAttachmentReceipt, ProjectGoalState, ProjectGoalStatus,
+    ProjectShareProjection, RemoteRegistryOutcome, RemoteSkillEntry, ReviewOutcome,
+    SkillActivationError, SkillActivationOutcome, SkillBundledTier, SkillEntry,
+    SkillMutationOutcome, SkillMutationReceipt, SkillRecommendation, SkillRegistryProjection,
+    SkillSourceKind, SkillSyncEntry, SkillSyncOutcome, SkillTargetScope, SnapshotEntry,
 };
 use codewhale_command_contract::handler::CommandContexts;
 #[cfg(test)]
@@ -48,8 +52,10 @@ use codewhale_core::request::{Message, SystemPrompt};
 use codewhale_execpolicy::ApprovalMode;
 
 use crate::localization::{MessageId, tr};
+use crate::network_policy::NetworkPolicy;
 use crate::pricing::CostCurrency;
 use crate::tui::app::{App, ReasoningEffort};
+use crate::tui::history::HistoryCell;
 
 // ---------------------------------------------------------------------------
 // Pending frontier projection (D4)
@@ -732,16 +738,660 @@ impl CommandProjectContext for ProjectAdapter<'_> {
 }
 
 // ---------------------------------------------------------------------------
+// Skill group adapter (FEAT-022 D1/D3)
+// ---------------------------------------------------------------------------
+
+/// The single new skills-specific host adapter.
+///
+/// Owns every concrete skills touch: `App` skill state, `crate::skills`
+/// discovery/mutation/install/recommend services, `crate::plugins` authority
+/// verification, `SnapshotRepo`, config/network policy, and the async bridge
+/// (`tokio::task::block_in_place`). Portable handlers never name these
+/// subsystems (D3); every method returns portable contract values or safe
+/// error text (D1).
+pub(crate) struct SkillGroupAdapter<'a> {
+    host: SharedCommandHost<'a>,
+}
+
+/// Bridge a sync slash-command handler back into the async ecosystem.
+///
+/// We are on the TUI's thread, which is part of the multi-threaded runtime;
+/// `block_in_place` + `Handle::current().block_on` bridges sync handlers back
+/// into the async ecosystem. Mirrors `groups/skills/skills.rs::run_async`;
+/// the legacy copy is removed in Phase 4 when the handlers are ported.
+fn run_async<F, T>(future: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(future))
+}
+
+/// Read the active config knobs for the installer (network policy, max size,
+/// registry URL). `Config::load` is cheap and `App` does not carry a `Config`;
+/// on parse failure we fall back to defaults so the user still gets a
+/// network-gated install rather than a silent crash. Mirrors
+/// `groups/skills/skills.rs::installer_settings`.
+fn installer_settings() -> (NetworkPolicy, u64, String) {
+    let cfg = crate::config::Config::load(None, None).unwrap_or_default();
+    let network = cfg
+        .network
+        .clone()
+        .map(|policy| policy.into_runtime())
+        .unwrap_or_default();
+    let skills_cfg = cfg.skills.as_ref();
+    let max_size = skills_cfg
+        .and_then(|s| s.max_install_size_bytes)
+        .unwrap_or(crate::skills::install::DEFAULT_MAX_SIZE_BYTES);
+    let registry_url = skills_cfg
+        .and_then(|s| s.registry_url.clone())
+        .unwrap_or_else(|| crate::skills::install::DEFAULT_REGISTRY_URL.to_string());
+    (network, max_size, registry_url)
+}
+
+/// Inspect an anyhow chain and surface a one-line hint pointing at the most
+/// common cause of a registry fetch failure (DNS, refused, TLS, HTTP status,
+/// timeout). Mirrors `groups/skills/skills.rs::registry_fetch_error_hint`.
+fn registry_fetch_error_hint(err: &anyhow::Error) -> Option<&'static str> {
+    let msg = format!("{err:#}").to_lowercase();
+    if msg.contains("dns")
+        || msg.contains("name resolution")
+        || msg.contains("getaddrinfo")
+        || msg.contains("nodename nor servname")
+    {
+        Some(
+            "Hint: DNS lookup failed. Check internet/DNS connectivity, or override the registry URL in [skills] of ~/.codewhale/config.toml.",
+        )
+    } else if msg.contains("connection refused")
+        || msg.contains("connection reset")
+        || msg.contains("connection aborted")
+    {
+        Some(
+            "Hint: connection refused/reset. The registry host may be unreachable from this network (corporate proxy, firewall, offline).",
+        )
+    } else if msg.contains("tls")
+        || msg.contains("certificate")
+        || msg.contains("ssl")
+        || msg.contains("handshake")
+    {
+        Some(
+            "Hint: TLS handshake failed. The system trust store may be missing the registry's CA, or a TLS-intercepting proxy is rewriting the certificate.",
+        )
+    } else if msg.contains(" 404") || msg.contains("not found") {
+        Some(
+            "Hint: registry URL returned 404. Verify the registry URL in [skills] of ~/.codewhale/config.toml.",
+        )
+    } else if msg.contains(" 401") || msg.contains(" 403") || msg.contains("forbidden") {
+        Some(
+            "Hint: registry returned an auth error. The registry may require credentials or have been moved.",
+        )
+    } else if msg.contains(" 429") || msg.contains("rate limit") || msg.contains("too many") {
+        Some("Hint: rate-limited by the registry. Try again in a moment.")
+    } else if msg.contains("timed out") || msg.contains("timeout") {
+        Some("Hint: request timed out. Network may be slow or the registry host may be down.")
+    } else {
+        None
+    }
+}
+
+/// Append the actionable hint to a registry fetch error. Mirrors
+/// `groups/skills/skills.rs::format_registry_error`.
+fn format_registry_error(prefix: &str, err: &anyhow::Error) -> String {
+    let mut out = format!("{prefix}: {err:#}");
+    if let Some(hint) = registry_fetch_error_hint(err) {
+        out.push_str("\n\n");
+        out.push_str(hint);
+    }
+    out
+}
+
+/// Discover the enabled visible skills for the current App state.
+fn discover_visible(app: &App) -> crate::skills::SkillRegistry {
+    crate::skills::discover_for_workspace_and_dir_with_mode_and_plugins(
+        &app.workspace,
+        &app.skills_dir,
+        crate::skills::SkillDiscoveryMode::from_codewhale_only(app.skills_scan_codewhale_only),
+        Some(app.plugin_registry.as_ref()),
+    )
+    .into_enabled()
+}
+
+/// Map a TUI skill to its portable projection entry.
+fn portable_skill_entry(skill: &crate::skills::Skill) -> SkillEntry {
+    let source = match &skill.source {
+        crate::skills::SkillSource::Native => SkillSourceKind::Native,
+        crate::skills::SkillSource::Plugin {
+            plugin_id,
+            plugin_name,
+            ..
+        } => SkillSourceKind::Plugin {
+            plugin_name: plugin_name.clone(),
+            plugin_id: plugin_id.clone(),
+        },
+    };
+    let path = match &skill.source {
+        crate::skills::SkillSource::Native => Some(skill.path.display().to_string()),
+        crate::skills::SkillSource::Plugin { .. } => None,
+    };
+    let bundled_tier = crate::skills::bundled_skill_tier(&skill.name).map(|tier| match tier {
+        crate::skills::BundledSkillTier::CoreAgentic => SkillBundledTier::CoreAgentic,
+        crate::skills::BundledSkillTier::FormatTooling => SkillBundledTier::FormatTooling,
+    });
+    SkillEntry {
+        name: skill.name.clone(),
+        description: skill.description.clone(),
+        source,
+        path,
+        bundled_tier,
+    }
+}
+
+/// Map a TUI mutation receipt to its portable receipt.
+fn portable_mutation_receipt(
+    receipt: &crate::skills::mutation::SkillMutationReceipt,
+) -> SkillMutationReceipt {
+    use crate::skills::mutation::SkillMutationOutcome as TuiOutcome;
+    let outcome = match &receipt.outcome {
+        TuiOutcome::Installed => SkillMutationOutcome::Installed,
+        TuiOutcome::Updated => SkillMutationOutcome::Updated,
+        TuiOutcome::NoChange => SkillMutationOutcome::NoChange,
+        TuiOutcome::Removed => SkillMutationOutcome::Removed,
+        TuiOutcome::Trusted => SkillMutationOutcome::Trusted,
+        TuiOutcome::Imported => SkillMutationOutcome::Imported,
+        TuiOutcome::AlreadyPresent => SkillMutationOutcome::AlreadyPresent,
+        TuiOutcome::NeedsApproval(host) => SkillMutationOutcome::NeedsApproval(host.clone()),
+        TuiOutcome::NetworkDenied(host) => SkillMutationOutcome::NetworkDenied(host.clone()),
+    };
+    SkillMutationReceipt {
+        name: receipt.name.clone(),
+        safe_target_path: receipt.safe_target_path.clone(),
+        outcome,
+    }
+}
+
+/// Map a portable target scope to the TUI scope.
+fn portable_scope(
+    scope: Option<SkillTargetScope>,
+) -> Option<crate::skills::mutation::SkillTargetScope> {
+    use crate::skills::mutation::SkillTargetScope as TuiScope;
+    scope.map(|s| match s {
+        SkillTargetScope::Project => TuiScope::Project,
+        SkillTargetScope::Global => TuiScope::Global,
+    })
+}
+
+/// Map a curated registry document to portable entries.
+fn portable_registry_entries(
+    doc: &crate::skills::install::RegistryDocument,
+) -> Vec<RemoteSkillEntry> {
+    doc.skills
+        .iter()
+        .map(|(name, entry)| RemoteSkillEntry {
+            name: name.clone(),
+            description: entry.description.clone(),
+            source: entry.source.clone(),
+        })
+        .collect()
+}
+
+/// Message shown when a network-policy host requires approval. Moved
+/// verbatim from `groups/skills/skills.rs`; the legacy copy is removed in
+/// Phase 4. Rendered by the portable handler from the typed outcome.
+fn needs_approval_message(host: &str) -> String {
+    format!(
+        "Network policy requires approval for {host}.\n\
+         Add it to your allow list with `/network allow {host}` (or set [network].default = \"allow\" in ~/.codewhale/config.toml), then retry."
+    )
+}
+
+/// Message shown when a network-policy host is denied. Moved verbatim from
+/// `groups/skills/skills.rs`; the legacy copy is removed in Phase 4.
+fn network_denied_message(host: &str) -> String {
+    format!(
+        "Network policy denied access to {host}.\n\
+         Remove the deny entry from ~/.codewhale/config.toml under [network] or contact your administrator."
+    )
+}
+
+impl CommandSkillGroupContext for SkillGroupAdapter<'_> {
+    fn skill_registry_projection(&self) -> SkillRegistryProjection {
+        let app = self.host.app.borrow();
+        let mode =
+            crate::skills::SkillDiscoveryMode::from_codewhale_only(app.skills_scan_codewhale_only);
+        let dirs = crate::skills::skill_directories_for_workspace_and_dir(
+            &app.workspace,
+            &app.skills_dir,
+            mode,
+        );
+        let registry = discover_visible(&app);
+        let mode_label = match mode {
+            crate::skills::SkillDiscoveryMode::Compatible => "compatible",
+            crate::skills::SkillDiscoveryMode::CodeWhaleOnly => "codewhale-only",
+        };
+        SkillRegistryProjection {
+            workspace: app.workspace.display().to_string(),
+            skills_dir: app.skills_dir.display().to_string(),
+            mode_label: mode_label.to_string(),
+            dirs: dirs.iter().map(|dir| dir.display().to_string()).collect(),
+            entries: registry.list().iter().map(portable_skill_entry).collect(),
+            warnings: registry.warnings().to_vec(),
+            total: registry.len(),
+        }
+    }
+
+    fn activate_skill(
+        &mut self,
+        name: &str,
+    ) -> Result<SkillActivationOutcome, SkillActivationError> {
+        let lookup_name = if name == "new" { "skill-creator" } else { name };
+        let registry = {
+            let app = self.host.app.borrow();
+            discover_visible(&app)
+        };
+        if let Some(skill) = registry.get(lookup_name) {
+            let plugin_provenance = match &skill.source {
+                crate::skills::SkillSource::Native => None,
+                crate::skills::SkillSource::Plugin { authority, .. } => {
+                    if let Err(reason) = crate::plugins::registry::verify_plugin_component_authority(
+                        authority,
+                        crate::plugins::activation::PluginActivationCapability::Skills,
+                    ) {
+                        return Err(SkillActivationError::PluginRejected {
+                            name: skill.name.clone(),
+                            reason,
+                        });
+                    }
+                    Some(authority.as_ref().clone())
+                }
+            };
+            let skill = skill.clone();
+            let instruction = format!(
+                "You are now using a skill. Follow these instructions:\n\n# Skill: {}\n\n{}\n\n---\n\nNow respond to the user's request following the above skill instructions.",
+                skill.name, skill.body
+            );
+            let mut app = self.host.app.borrow_mut();
+            app.add_message(HistoryCell::System {
+                content: format!("Activated skill: {}\n\n{}", skill.name, skill.description),
+            });
+            app.active_skill = Some(instruction);
+            app.active_skill_provenance = plugin_provenance;
+            Ok(SkillActivationOutcome {
+                name: skill.name,
+                description: skill.description,
+            })
+        } else {
+            let available: Vec<String> = registry.list().iter().map(|s| s.name.clone()).collect();
+            Err(SkillActivationError::NotFound {
+                requested: name.to_string(),
+                available,
+                warnings: registry.warnings().to_vec(),
+            })
+        }
+    }
+
+    fn install_skill(
+        &mut self,
+        scope: Option<SkillTargetScope>,
+        spec: &str,
+    ) -> Result<SkillMutationReceipt, String> {
+        use crate::skills::mutation::{MutationContext, SkillMutationRequest};
+        let source = match crate::skills::install::InstallSource::parse(spec) {
+            Ok(source) => source,
+            Err(err) => return Err(format!("Invalid install source: {err}")),
+        };
+        let target =
+            portable_scope(scope).unwrap_or(crate::skills::mutation::SkillTargetScope::Global);
+        let workspace = self.host.app.borrow().workspace.clone();
+        let home = crate::config::effective_home_dir();
+        let (network, max_size, registry_url) = installer_settings();
+        let outcome = run_async(async move {
+            let ctx = MutationContext {
+                workspace: &workspace,
+                home: home.as_deref(),
+                configured_skills_dir: None,
+                network: &network,
+                max_size,
+                registry_url: &registry_url,
+            };
+            crate::skills::mutation::execute(
+                SkillMutationRequest::InstallRemote { source, target },
+                &ctx,
+            )
+            .await
+        });
+        match outcome {
+            Ok(receipt) => {
+                let portable = portable_mutation_receipt(&receipt);
+                if matches!(
+                    receipt.outcome,
+                    crate::skills::mutation::SkillMutationOutcome::Installed
+                ) {
+                    self.host.app.borrow_mut().refresh_skill_cache();
+                }
+                Ok(portable)
+            }
+            Err(err) => Err(format!("Install failed: {err:#}")),
+        }
+    }
+
+    fn update_skill(
+        &mut self,
+        scope: Option<SkillTargetScope>,
+        name: &str,
+    ) -> Result<SkillMutationReceipt, String> {
+        use crate::skills::mutation::{MutationContext, SkillMutationRequest};
+        let workspace = self.host.app.borrow().workspace.clone();
+        let home = crate::config::effective_home_dir();
+        let (network, max_size, registry_url) = installer_settings();
+        let owned_name = name.to_string();
+        let scope = portable_scope(scope);
+        let outcome = run_async(async move {
+            let ctx = MutationContext {
+                workspace: &workspace,
+                home: home.as_deref(),
+                configured_skills_dir: None,
+                network: &network,
+                max_size,
+                registry_url: &registry_url,
+            };
+            crate::skills::mutation::execute(
+                SkillMutationRequest::UpdateByName {
+                    name: owned_name,
+                    scope,
+                    expected_digest: None,
+                },
+                &ctx,
+            )
+            .await
+        });
+        match outcome {
+            Ok(receipt) => {
+                let portable = portable_mutation_receipt(&receipt);
+                if matches!(
+                    receipt.outcome,
+                    crate::skills::mutation::SkillMutationOutcome::Updated
+                ) {
+                    self.host.app.borrow_mut().refresh_skill_cache();
+                }
+                Ok(portable)
+            }
+            Err(err) => Err(format!("Update failed: {err:#}")),
+        }
+    }
+
+    fn uninstall_skill(
+        &mut self,
+        scope: Option<SkillTargetScope>,
+        name: &str,
+    ) -> Result<SkillMutationReceipt, String> {
+        use crate::skills::mutation::{MutationContext, SkillMutationRequest};
+        let workspace = self.host.app.borrow().workspace.clone();
+        let home = crate::config::effective_home_dir();
+        let (network, max_size, registry_url) = installer_settings();
+        let ctx = MutationContext {
+            workspace: &workspace,
+            home: home.as_deref(),
+            configured_skills_dir: None,
+            network: &network,
+            max_size,
+            registry_url: &registry_url,
+        };
+        match crate::skills::mutation::execute_sync(
+            SkillMutationRequest::RemoveByName {
+                name: name.to_string(),
+                scope: portable_scope(scope),
+                expected_digest: None,
+            },
+            &ctx,
+        ) {
+            Ok(receipt) => {
+                self.host.app.borrow_mut().refresh_skill_cache();
+                Ok(portable_mutation_receipt(&receipt))
+            }
+            Err(err) => Err(format!("Uninstall failed: {err:#}")),
+        }
+    }
+
+    fn trust_skill(
+        &mut self,
+        scope: Option<SkillTargetScope>,
+        name: &str,
+    ) -> Result<SkillMutationReceipt, String> {
+        use crate::skills::mutation::{MutationContext, SkillMutationRequest};
+        let workspace = self.host.app.borrow().workspace.clone();
+        let home = crate::config::effective_home_dir();
+        let (network, max_size, registry_url) = installer_settings();
+        let ctx = MutationContext {
+            workspace: &workspace,
+            home: home.as_deref(),
+            configured_skills_dir: None,
+            network: &network,
+            max_size,
+            registry_url: &registry_url,
+        };
+        match crate::skills::mutation::execute_sync(
+            SkillMutationRequest::TrustByName {
+                name: name.to_string(),
+                scope: portable_scope(scope),
+                expected_digest: None,
+            },
+            &ctx,
+        ) {
+            Ok(receipt) => Ok(portable_mutation_receipt(&receipt)),
+            Err(err) => Err(format!("Trust failed: {err:#}")),
+        }
+    }
+
+    fn fetch_remote_registry(&mut self) -> Result<RemoteRegistryOutcome, String> {
+        let (network, _max_size, registry_url) = installer_settings();
+        let registry = run_async(async move {
+            crate::skills::install::fetch_registry(&network, &registry_url).await
+        });
+        match registry {
+            Ok(crate::skills::install::RegistryFetchResult::Loaded(doc)) => {
+                Ok(RemoteRegistryOutcome::Loaded {
+                    entries: portable_registry_entries(&doc),
+                })
+            }
+            Ok(crate::skills::install::RegistryFetchResult::NeedsApproval(host)) => {
+                Ok(RemoteRegistryOutcome::NeedsApproval(host))
+            }
+            Ok(crate::skills::install::RegistryFetchResult::Denied(host)) => {
+                Ok(RemoteRegistryOutcome::Denied(host))
+            }
+            Err(err) => Err(format_registry_error("Failed to fetch registry", &err)),
+        }
+    }
+
+    fn recommend_skills(&mut self, task: &str) -> Result<Vec<SkillRecommendation>, String> {
+        let (network, _max_size, registry_url) = installer_settings();
+        let registry = run_async(async move {
+            crate::skills::install::fetch_registry(&network, &registry_url).await
+        });
+        match registry {
+            Ok(crate::skills::install::RegistryFetchResult::Loaded(doc)) => {
+                let recommendations =
+                    crate::skills::recommend::recommend_remote_skills(task, &doc, 3);
+                Ok(recommendations
+                    .into_iter()
+                    .map(|recommendation| SkillRecommendation {
+                        name: recommendation.name.to_string(),
+                        description: recommendation.entry.description.clone(),
+                        matched_terms: recommendation.matched_terms.clone(),
+                    })
+                    .collect())
+            }
+            Ok(crate::skills::install::RegistryFetchResult::NeedsApproval(host)) => {
+                Err(needs_approval_message(&host))
+            }
+            Ok(crate::skills::install::RegistryFetchResult::Denied(host)) => {
+                Err(network_denied_message(&host))
+            }
+            Err(err) => Err(format_registry_error("Failed to fetch registry", &err)),
+        }
+    }
+
+    fn sync_registry(&mut self) -> Result<SkillSyncOutcome, String> {
+        use crate::skills::install::{SkillSyncOutcome as TuiSyncOutcome, SyncResult};
+        let (network, max_size, registry_url) = installer_settings();
+        let cache_dir = crate::skills::install::default_cache_skills_dir();
+        let result = run_async(async move {
+            crate::skills::install::sync_registry(&network, &registry_url, &cache_dir, max_size)
+                .await
+        });
+        match result {
+            Ok(SyncResult::RegistryDenied(host)) => Ok(SkillSyncOutcome::RegistryDenied(host)),
+            Ok(SyncResult::RegistryNeedsApproval(host)) => {
+                Ok(SkillSyncOutcome::RegistryNeedsApproval(host))
+            }
+            Ok(SyncResult::Done { outcomes }) => {
+                let total = outcomes.len();
+                let mut downloaded = 0usize;
+                let mut fresh = 0usize;
+                let mut failed = 0usize;
+                let entries = outcomes
+                    .into_iter()
+                    .map(|outcome| match outcome {
+                        TuiSyncOutcome::Downloaded { name, path } => {
+                            downloaded += 1;
+                            SkillSyncEntry::Downloaded {
+                                name,
+                                path: path.display().to_string(),
+                            }
+                        }
+                        TuiSyncOutcome::Fresh { name } => {
+                            fresh += 1;
+                            SkillSyncEntry::Fresh { name }
+                        }
+                        TuiSyncOutcome::Failed { name, reason } => {
+                            failed += 1;
+                            SkillSyncEntry::Failed { name, reason }
+                        }
+                        TuiSyncOutcome::Denied { name, host } => {
+                            failed += 1;
+                            SkillSyncEntry::Denied { name, host }
+                        }
+                        TuiSyncOutcome::NeedsApproval { name, host } => {
+                            failed += 1;
+                            SkillSyncEntry::NeedsApproval { name, host }
+                        }
+                    })
+                    .collect();
+                Ok(SkillSyncOutcome::Done {
+                    total,
+                    downloaded,
+                    fresh,
+                    failed,
+                    entries,
+                })
+            }
+            Err(err) => Err(format_registry_error("Sync failed", &err)),
+        }
+    }
+
+    fn run_review(&mut self) -> Result<ReviewOutcome, String> {
+        let skills_dir = self.host.app.borrow().skills_dir.clone();
+        let registry = crate::skills::SkillRegistry::discover(&skills_dir).into_enabled();
+        let mut warnings: Vec<String> = registry.warnings().to_vec();
+        let mut skill = registry.get("review").cloned();
+
+        let global_dir = crate::skills::default_skills_dir();
+        if skill.is_none() && global_dir != skills_dir {
+            let registry = crate::skills::SkillRegistry::discover(&global_dir).into_enabled();
+            if warnings.is_empty() {
+                warnings = registry.warnings().to_vec();
+            } else if !registry.warnings().is_empty() {
+                warnings.extend(registry.warnings().iter().cloned());
+            }
+            skill = registry.get("review").cloned();
+        }
+
+        match skill {
+            Some(skill) => {
+                // Host-side side effects (D2): session-message insertion and
+                // active-skill mutation are authoritative App operations; the
+                // portable handler renders no success message (baseline emits
+                // only the SendMessage action) and never touches App.
+                let instruction = format!(
+                    "You are now using a skill. Follow these instructions:\n\n# Skill: {}\n\n{}\n\n---\n\nNow respond to the user's request following the above skill instructions.",
+                    skill.name, skill.body
+                );
+                let mut app = self.host.app.borrow_mut();
+                app.add_message(HistoryCell::System {
+                    content: format!("Activated skill: {}\n\n{}", skill.name, skill.description),
+                });
+                app.active_skill = Some(instruction);
+                app.active_skill_provenance = None;
+                Ok(ReviewOutcome::Ready)
+            }
+            None => Ok(ReviewOutcome::NotFound {
+                skills_dir: skills_dir.display().to_string(),
+                global_dir: global_dir.display().to_string(),
+                warnings,
+            }),
+        }
+    }
+
+    fn snapshot_list(&mut self, limit: usize) -> Result<Vec<SnapshotEntry>, String> {
+        let workspace = self.host.app.borrow().workspace.clone();
+        let repo = match crate::snapshot::SnapshotRepo::open_or_init(&workspace) {
+            Ok(repo) => repo,
+            Err(err) => {
+                return Err(format!(
+                    "Snapshot repo unavailable for {}: {err}",
+                    workspace.display(),
+                ));
+            }
+        };
+        let snapshots = match repo.list(limit) {
+            Ok(snapshots) => snapshots,
+            Err(err) => return Err(format!("Failed to list snapshots: {err}")),
+        };
+        Ok(snapshots
+            .into_iter()
+            .map(|snapshot| SnapshotEntry {
+                id: snapshot.id.0,
+                label: snapshot.label,
+                timestamp: snapshot.timestamp,
+            })
+            .collect())
+    }
+
+    fn restore_snapshot(&mut self, id: &str) -> Result<(), String> {
+        let workspace = self.host.app.borrow().workspace.clone();
+        let repo = match crate::snapshot::SnapshotRepo::open_or_init(&workspace) {
+            Ok(repo) => repo,
+            Err(err) => {
+                return Err(format!(
+                    "Snapshot repo unavailable for {}: {err}",
+                    workspace.display(),
+                ));
+            }
+        };
+        repo.restore(&crate::snapshot::SnapshotId(id.to_string()))
+            .map_err(|err| format!("Restore failed: {err}"))
+    }
+
+    fn approval_state(&self) -> CommandApprovalState {
+        let app = self.host.app.borrow();
+        CommandApprovalState {
+            yolo: app.yolo,
+            trust_mode: app.trust_mode,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Envelope construction (D1)
 // ---------------------------------------------------------------------------
 
-/// Owns ten facet objects sharing one synchronous TUI host proxy.
+/// Owns eleven facet objects sharing one synchronous TUI host proxy.
 ///
 /// Handlers borrow only these adapters. Every method delegates to the real App
 /// authority and releases its `RefCell` borrow before returning, so facets can
 /// be called sequentially without exposing TUI types across the boundary.
 pub(crate) struct CommandContextBundle<'a> {
     session: SessionAdapter<'a>,
+    skill_group: SkillGroupAdapter<'a>,
     model: ModelAdapter<'a>,
     cost: CostAdapter<'a>,
     mode_policy: ModePolicyAdapter<'a>,
@@ -766,6 +1416,7 @@ impl<'a> CommandContextBundle<'a> {
             .with_presentation(&mut self.presentation)
             .with_media(&mut self.media)
             .with_project(&mut self.project)
+            .with_skill_group(&mut self.skill_group)
     }
 
     /// Test-only: consume the bundle into independent facet parts.
@@ -792,7 +1443,8 @@ impl App {
             workspace: WorkspaceAdapter { host: host.clone() },
             presentation: PresentationAdapter { host: host.clone() },
             project: ProjectAdapter { host: host.clone() },
-            media: MediaAdapter { host },
+            media: MediaAdapter { host: host.clone() },
+            skill_group: SkillGroupAdapter { host },
         }
     }
 }
@@ -802,6 +1454,7 @@ mod tests {
     use super::*;
     use crate::localization::Locale;
     use crate::models::Role;
+    use tempfile::TempDir;
 
     fn test_app() -> App {
         crate::test_support::test_app_with_options(crate::test_support::test_tui_options(
@@ -1449,5 +2102,366 @@ mod tests {
         assert!(parts.project.is_some());
         assert!(parts.workspace.is_some());
         assert!(parts.presentation.is_some());
+    }
+
+    // ─── FEAT-022 skill-group adapter tests ───────────────────────────────────
+
+    /// Pins HOME to a tempdir for the duration of the test under the
+    /// crate-wide env mutex (keeps global skill/snapshot discovery hermetic).
+    struct ScopedHome {
+        prev: Option<std::ffi::OsString>,
+        _home: TempDir,
+        _guard: crate::test_support::TestEnvLock,
+    }
+    impl Drop for ScopedHome {
+        fn drop(&mut self) {
+            // SAFETY: process-wide lock still held.
+            unsafe {
+                match self.prev.take() {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+    }
+    fn scoped_home(_workspace: &TempDir) -> ScopedHome {
+        let guard = crate::test_support::lock_test_env();
+        let prev = std::env::var_os("HOME");
+        let home = TempDir::new().expect("home tempdir");
+        // SAFETY: serialised by the global env lock.
+        unsafe {
+            std::env::set_var("HOME", home.path());
+        }
+        ScopedHome {
+            prev,
+            _home: home,
+            _guard: guard,
+        }
+    }
+
+    fn skill_test_app(tmp: &TempDir, skills_dir: &Path) -> App {
+        let mut options = crate::test_support::test_tui_options(tmp.path());
+        options.skills_dir = skills_dir.to_path_buf();
+        crate::test_support::test_app_with_options(options)
+    }
+
+    fn write_skill(dir: &Path, name: &str) {
+        let skill_dir = dir.join(name);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {name} skill\n---\n{name} instructions"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn skill_group_projection_maps_native_skills_and_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let skills_dir = tmp.path().join("skills");
+        write_skill(&skills_dir, "demo");
+        let mut app = skill_test_app(&tmp, &skills_dir);
+        let mut bundle = app.command_contexts();
+        let group = bundle
+            .parts()
+            .skill_group
+            .expect("skill_group facet must be present");
+        let projection = group.skill_registry_projection();
+        assert_eq!(projection.total, 1);
+        assert_eq!(projection.entries.len(), 1);
+        assert_eq!(projection.entries[0].name, "demo");
+        assert_eq!(projection.entries[0].description, "demo skill");
+        assert_eq!(projection.entries[0].source, SkillSourceKind::Native);
+        assert!(projection.entries[0].path.is_some());
+        assert_eq!(projection.skills_dir, skills_dir.display().to_string());
+        assert!(!projection.dirs.is_empty());
+        assert!(projection.warnings.is_empty());
+    }
+
+    #[test]
+    fn skill_group_projection_reports_empty_registry() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        let mut app = skill_test_app(&tmp, &skills_dir);
+        let mut bundle = app.command_contexts();
+        let group = bundle
+            .parts()
+            .skill_group
+            .expect("skill_group facet must be present");
+        let projection = group.skill_registry_projection();
+        assert_eq!(projection.total, 0);
+        assert!(projection.entries.is_empty());
+    }
+
+    #[test]
+    fn skill_group_activation_sets_active_skill_and_history() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let skills_dir = tmp.path().join("skills");
+        write_skill(&skills_dir, "demo");
+        let mut app = skill_test_app(&tmp, &skills_dir);
+        {
+            let mut bundle = app.command_contexts();
+            let group = bundle
+                .parts()
+                .skill_group
+                .expect("skill_group facet must be present");
+            let outcome = group.activate_skill("demo").unwrap();
+            assert_eq!(outcome.name, "demo");
+            assert_eq!(outcome.description, "demo skill");
+        }
+        assert!(app.active_skill.is_some());
+        assert!(
+            app.active_skill
+                .as_deref()
+                .unwrap()
+                .contains("# Skill: demo")
+        );
+        assert!(app.active_skill_provenance.is_none());
+        assert!(!app.history.is_empty());
+    }
+
+    #[test]
+    fn skill_group_activation_new_aliases_skill_creator() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let skills_dir = tmp.path().join("skills");
+        write_skill(&skills_dir, "skill-creator");
+        let mut app = skill_test_app(&tmp, &skills_dir);
+        {
+            let mut bundle = app.command_contexts();
+            let group = bundle
+                .parts()
+                .skill_group
+                .expect("skill_group facet must be present");
+            let outcome = group.activate_skill("new").unwrap();
+            assert_eq!(outcome.name, "skill-creator");
+        }
+        assert!(app.active_skill.is_some());
+    }
+
+    #[test]
+    fn skill_group_activation_not_found_lists_available() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let skills_dir = tmp.path().join("skills");
+        write_skill(&skills_dir, "demo");
+        let mut app = skill_test_app(&tmp, &skills_dir);
+        {
+            let mut bundle = app.command_contexts();
+            let group = bundle
+                .parts()
+                .skill_group
+                .expect("skill_group facet must be present");
+            let err = group.activate_skill("missing").unwrap_err();
+            match err {
+                SkillActivationError::NotFound {
+                    requested,
+                    available,
+                    ..
+                } => {
+                    assert_eq!(requested, "missing");
+                    assert!(available.contains(&"demo".to_string()));
+                }
+                _ => panic!("expected NotFound"),
+            }
+        }
+        assert!(app.active_skill.is_none());
+    }
+
+    #[test]
+    fn skill_group_install_invalid_source_returns_safe_error() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        let mut app = skill_test_app(&tmp, &skills_dir);
+        {
+            let mut bundle = app.command_contexts();
+            let group = bundle
+                .parts()
+                .skill_group
+                .expect("skill_group facet must be present");
+            let err = group.install_skill(None, "   ").unwrap_err();
+            assert!(err.contains("Invalid install source"), "{err}");
+        }
+    }
+
+    #[test]
+    fn skill_group_review_ready_sets_side_effects() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let skills_dir = tmp.path().join("skills");
+        write_skill(&skills_dir, "review");
+        let mut app = skill_test_app(&tmp, &skills_dir);
+        {
+            let mut bundle = app.command_contexts();
+            let group = bundle
+                .parts()
+                .skill_group
+                .expect("skill_group facet must be present");
+            let outcome = group.run_review().unwrap();
+            assert_eq!(outcome, ReviewOutcome::Ready);
+        }
+        assert!(app.active_skill.is_some());
+        assert!(app.active_skill_provenance.is_none());
+        assert!(!app.history.is_empty());
+    }
+
+    #[test]
+    fn skill_group_review_not_found_reports_searched_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let skills_dir = tmp.path().join("skills");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        let mut app = skill_test_app(&tmp, &skills_dir);
+        {
+            let mut bundle = app.command_contexts();
+            let group = bundle
+                .parts()
+                .skill_group
+                .expect("skill_group facet must be present");
+            let outcome = group.run_review().unwrap();
+            match outcome {
+                ReviewOutcome::NotFound {
+                    skills_dir: found_dir,
+                    global_dir,
+                    warnings,
+                } => {
+                    assert_eq!(found_dir, skills_dir.display().to_string());
+                    assert_eq!(
+                        global_dir,
+                        crate::skills::default_skills_dir().display().to_string()
+                    );
+                    assert!(warnings.is_empty());
+                }
+                _ => panic!("expected NotFound"),
+            }
+        }
+        assert!(app.active_skill.is_none());
+    }
+
+    #[test]
+    fn skill_group_snapshot_list_and_restore_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let skills_dir = tmp.path().join("skills");
+        let file = tmp.path().join("a.txt");
+        let repo = crate::snapshot::SnapshotRepo::open_or_init(tmp.path()).unwrap();
+        std::fs::write(&file, b"v1").unwrap();
+        repo.snapshot("pre-turn:1").unwrap();
+        std::fs::write(&file, b"v2").unwrap();
+        let mut app = skill_test_app(&tmp, &skills_dir);
+        {
+            let mut bundle = app.command_contexts();
+            let group = bundle
+                .parts()
+                .skill_group
+                .expect("skill_group facet must be present");
+            let entries = group.snapshot_list(20).unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].label, "pre-turn:1");
+            assert!(!entries[0].id.is_empty());
+            group.restore_snapshot(&entries[0].id).unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "v1");
+    }
+
+    #[test]
+    fn skill_group_approval_state_reflects_app_posture() {
+        let tmp = TempDir::new().unwrap();
+        let _home = scoped_home(&tmp);
+        let skills_dir = tmp.path().join("skills");
+        let mut app = skill_test_app(&tmp, &skills_dir);
+        app.yolo = true;
+        app.trust_mode = false;
+        {
+            let mut bundle = app.command_contexts();
+            let group = bundle
+                .parts()
+                .skill_group
+                .expect("skill_group facet must be present");
+            let state = group.approval_state();
+            assert!(state.yolo);
+            assert!(!state.trust_mode);
+        }
+        app.yolo = false;
+        app.trust_mode = true;
+        {
+            let mut bundle = app.command_contexts();
+            let group = bundle
+                .parts()
+                .skill_group
+                .expect("skill_group facet must be present");
+            let state = group.approval_state();
+            assert!(!state.yolo);
+            assert!(state.trust_mode);
+        }
+    }
+
+    #[test]
+    fn portable_scope_maps_both_scopes_and_none() {
+        use crate::skills::mutation::SkillTargetScope as TuiScope;
+        assert_eq!(
+            portable_scope(Some(SkillTargetScope::Project)),
+            Some(TuiScope::Project)
+        );
+        assert_eq!(
+            portable_scope(Some(SkillTargetScope::Global)),
+            Some(TuiScope::Global)
+        );
+        assert_eq!(portable_scope(None), None);
+    }
+
+    #[test]
+    fn portable_mutation_receipt_maps_distinct_outcomes() {
+        use crate::skills::audit::SkillActionKind;
+        use crate::skills::mutation::{
+            SkillMutationOutcome as TuiOutcome, SkillMutationReceipt as TuiReceipt,
+        };
+        use crate::skills::roots::SkillScope;
+        let make = |outcome: TuiOutcome| TuiReceipt {
+            action: SkillActionKind::Install,
+            name: "demo".to_string(),
+            scope: SkillScope::Global,
+            safe_target_path: "/tmp/demo".to_string(),
+            before_digest: None,
+            after_digest: None,
+            outcome,
+        };
+        let installed = portable_mutation_receipt(&make(TuiOutcome::Installed));
+        assert_eq!(installed.outcome, SkillMutationOutcome::Installed);
+        assert_eq!(installed.name, "demo");
+        assert_eq!(installed.safe_target_path, "/tmp/demo");
+
+        let approval =
+            portable_mutation_receipt(&make(TuiOutcome::NeedsApproval("acme.com".to_string())));
+        assert_eq!(
+            approval.outcome,
+            SkillMutationOutcome::NeedsApproval("acme.com".to_string())
+        );
+
+        let denied =
+            portable_mutation_receipt(&make(TuiOutcome::NetworkDenied("acme.com".to_string())));
+        assert_eq!(
+            denied.outcome,
+            SkillMutationOutcome::NetworkDenied("acme.com".to_string())
+        );
+        assert_ne!(installed.outcome, denied.outcome);
+    }
+
+    #[test]
+    fn skill_group_adapter_exposure_matches_main_envelope_model() {
+        // The envelope populates the skill_group slot alongside the other
+        // adapters; handlers destructure only their declared facets (D4).
+        let mut app = test_app();
+        let mut bundle = app.command_contexts();
+        let parts = bundle.parts();
+        assert!(parts.skill_group.is_some());
+        assert!(parts.project.is_some());
+        assert!(parts.skills.is_some());
     }
 }

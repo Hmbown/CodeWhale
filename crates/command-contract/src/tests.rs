@@ -549,7 +549,7 @@ impl FakeSkillGroup {
                     source: "github.com/acme/skills".into(),
                 }],
             }),
-            sync: Ok(SkillSyncOutcome {
+            sync: Ok(SkillSyncOutcome::Done {
                 total: 1,
                 downloaded: 1,
                 fresh: 0,
@@ -559,12 +559,7 @@ impl FakeSkillGroup {
                     path: "/cache/demo".into(),
                 }],
             }),
-            review: Ok(ReviewOutcome::Ready {
-                name: "review".into(),
-                description: "Review skill".into(),
-                body: "Review the code".into(),
-                warnings: vec![],
-            }),
+            review: Ok(ReviewOutcome::Ready),
             snapshots: vec![SnapshotEntry {
                 id: "abcdef123456".into(),
                 label: "pre-turn:1".into(),
@@ -639,7 +634,7 @@ impl CommandSkillGroupContext for FakeSkillGroup {
         self.sync.clone()
     }
 
-    fn run_review(&mut self, _target: &str) -> Result<ReviewOutcome, String> {
+    fn run_review(&mut self) -> Result<ReviewOutcome, String> {
         self.review.clone()
     }
 
@@ -766,7 +761,7 @@ fn remote_registry_outcome_variants_are_distinguishable() {
 
 #[test]
 fn skill_sync_outcome_preserves_all_entry_variants() {
-    let outcome = SkillSyncOutcome {
+    let outcome = SkillSyncOutcome::Done {
         total: 4,
         downloaded: 1,
         fresh: 1,
@@ -791,21 +786,40 @@ fn skill_sync_outcome_preserves_all_entry_variants() {
             },
         ],
     };
-    assert_eq!(outcome.total, 4);
-    assert_eq!(outcome.downloaded, 1);
-    assert_eq!(outcome.fresh, 1);
-    assert_eq!(outcome.failed, 2);
-    assert_eq!(outcome.entries.len(), 5);
+    let SkillSyncOutcome::Done {
+        total,
+        downloaded,
+        fresh,
+        failed,
+        entries,
+    } = &outcome
+    else {
+        panic!("expected Done");
+    };
+    assert_eq!(*total, 4);
+    assert_eq!(*downloaded, 1);
+    assert_eq!(*fresh, 1);
+    assert_eq!(*failed, 2);
+    assert_eq!(entries.len(), 5);
+    assert!(matches!(entries[0], SkillSyncEntry::Downloaded { .. }));
+    assert!(matches!(entries[1], SkillSyncEntry::Fresh { .. }));
+    assert!(matches!(entries[2], SkillSyncEntry::Failed { .. }));
+    assert!(matches!(entries[3], SkillSyncEntry::Denied { .. }));
+    assert!(matches!(entries[4], SkillSyncEntry::NeedsApproval { .. }));
+}
+
+#[test]
+fn skill_sync_registry_policy_variants_are_distinguishable() {
+    let approval = SkillSyncOutcome::RegistryNeedsApproval("acme.com".into());
+    let denied = SkillSyncOutcome::RegistryDenied("acme.com".into());
+    assert_ne!(approval, denied);
     assert!(matches!(
-        outcome.entries[0],
-        SkillSyncEntry::Downloaded { .. }
+        approval,
+        SkillSyncOutcome::RegistryNeedsApproval(host) if host == "acme.com"
     ));
-    assert!(matches!(outcome.entries[1], SkillSyncEntry::Fresh { .. }));
-    assert!(matches!(outcome.entries[2], SkillSyncEntry::Failed { .. }));
-    assert!(matches!(outcome.entries[3], SkillSyncEntry::Denied { .. }));
     assert!(matches!(
-        outcome.entries[4],
-        SkillSyncEntry::NeedsApproval { .. }
+        denied,
+        SkillSyncOutcome::RegistryDenied(host) if host == "acme.com"
     ));
 }
 
@@ -853,7 +867,7 @@ fn review_outcome_variants_are_distinguishable() {
         global_dir: "/home/u/.codewhale/skills".into(),
         warnings: vec!["w".into()],
     });
-    let outcome = group.run_review("x.rs").unwrap();
+    let outcome = group.run_review().unwrap();
     match outcome {
         ReviewOutcome::NotFound {
             skills_dir,
