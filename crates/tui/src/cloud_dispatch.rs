@@ -11,6 +11,10 @@
 //! - missing Daytona credentials fail closed; success is never faked
 //!
 //! Watch/cancel of a live sandbox and auto-decide heuristics are leftover.
+//!
+//! A sandbox create receipt is infrastructure identity, not Computer
+//! entitlement. Metering requires [`crate::computer_meter`] admission plus a
+//! provider-accepted active observation.
 
 use std::fs;
 use std::io::Write;
@@ -22,6 +26,11 @@ use anyhow::{Context, Result, anyhow, bail};
 use codewhale_paths::codewhale_home;
 use codewhale_secrets::Secrets;
 use serde::{Deserialize, Serialize};
+
+use crate::computer_meter::{
+    ComputerAdmission, ComputerMeterError, ComputerMeterReceipt, ProviderObservation,
+    issue_computer_meter_receipt,
+};
 
 const MAX_PROMPT_CHARS: usize = 4_000;
 const MAX_REMOTE_BYTES: usize = 4 * 1024;
@@ -652,9 +661,33 @@ pub trait DaytonaLauncher {
 }
 
 /// Provider receipt. `pr_url` is intentionally omitted from this slice.
+///
+/// This is the infrastructure id of a created sandbox. It is not Computer
+/// entitlement and must not be treated as provider-accepted active seconds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxReceipt {
     pub sandbox_id: String,
+}
+
+/// Meter one closed interval on a dispatched cloud job.
+///
+/// The job's sandbox id must match the provider observation. Wall-clock after
+/// create is not enough: the observation has to be provider-accepted active
+/// time bound to the immutable admission.
+pub fn meter_cloud_job(
+    job: &CloudJob,
+    admission: &ComputerAdmission,
+    observation: ProviderObservation,
+) -> Result<ComputerMeterReceipt, ComputerMeterError> {
+    match job.sandbox_id.as_deref() {
+        Some(sandbox_id) if sandbox_id == observation.provider_sandbox_id => {
+            issue_computer_meter_receipt(admission, observation)
+        }
+        _ => Err(ComputerMeterError::AllocationMismatch {
+            message: "Cloud job sandbox id does not match the provider allocation snapshot."
+                .to_string(),
+        }),
+    }
 }
 
 /// Real Daytona HTTP create. Fails closed; never invents a PR URL.
@@ -1111,5 +1144,89 @@ mod tests {
         assert!(!message.contains("DAYTONA"));
         assert!(!message.contains("sk-"));
         assert!(!message.contains("Bearer"));
+    }
+
+    #[test]
+    fn sandbox_create_is_not_computer_entitlement() {
+        use crate::computer_meter::{
+            ComputerAdmissionRequest, MeterBasis, bind_computer_admission,
+        };
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = CloudJobStore::from_path(temp.path().join("jobs"));
+        let plan = plan_dispatch(
+            &remotes(&[("github", "https://github.com/org/repo.git")]),
+            "meter honesty",
+            Some(Forge::Github),
+            Some("codewhale/cloud-meter"),
+        )
+        .unwrap();
+        let launcher = RecordingLauncher {
+            sandbox_id: "sbox_std8_a".to_string(),
+            fail: false,
+        };
+        let outcome = execute_dispatch(
+            &store,
+            plan,
+            true,
+            &CredentialState::Present {
+                source: CredentialSource::Keyring,
+            },
+            &launcher,
+        )
+        .unwrap();
+        let DispatchOutcome::Accepted(job) = outcome else {
+            panic!("expected accept");
+        };
+        let admission = bind_computer_admission(ComputerAdmissionRequest {
+            admission_id: "adm_dispatch".to_string(),
+            account_id: "acct_demo".to_string(),
+            computer_id: "cmp_dispatch".to_string(),
+            run_id: job.id.clone(),
+            provider: "daytona".to_string(),
+            profile_id: "standard-8".to_string(),
+            funding_authority: "coding_membership_included".to_string(),
+            quote_id: "quote_dispatch".to_string(),
+            expires_at: "2026-08-31T18:00:00.000Z".to_string(),
+            meter_revision: String::new(),
+            catalog_revision: String::new(),
+        })
+        .unwrap();
+        let idle = ProviderObservation {
+            provider: "daytona".to_string(),
+            provider_sandbox_id: "sbox_std8_a".to_string(),
+            provider_event_ref: "daytona:sbox_std8_a:idle".to_string(),
+            state: "running".to_string(),
+            idle: true,
+            provider_accepted: true,
+            meter_basis: MeterBasis::WallClock,
+            cpu: 2,
+            memory_gib: 8,
+            disk_gib: 8,
+            started_at: "2026-08-31T12:00:00.000Z".to_string(),
+            ended_at: "2026-08-31T13:00:00.000Z".to_string(),
+        };
+        assert_eq!(
+            meter_cloud_job(&job, &admission, idle).unwrap_err().code(),
+            "computer_meter_wall_clock_idle"
+        );
+        let accepted = ProviderObservation {
+            provider: "daytona".to_string(),
+            provider_sandbox_id: "sbox_std8_a".to_string(),
+            provider_event_ref: "daytona:sbox_std8_a:running".to_string(),
+            state: "running".to_string(),
+            idle: false,
+            provider_accepted: true,
+            meter_basis: MeterBasis::ProviderAcceptedActive,
+            cpu: 2,
+            memory_gib: 8,
+            disk_gib: 8,
+            started_at: "2026-08-31T12:00:00.000Z".to_string(),
+            ended_at: "2026-08-31T12:10:00.000Z".to_string(),
+        };
+        let receipt = meter_cloud_job(&job, &admission, accepted).unwrap();
+        assert_eq!(receipt.accepted_seconds, 600);
+        assert_eq!(receipt.standard_equivalent_seconds, 600);
+        assert_eq!(receipt.admission_id, admission.admission_id);
     }
 }

@@ -6480,11 +6480,14 @@ impl SubAgentManager {
             .map(str::trim)
             .filter(|name| !name.is_empty())
         {
-            if let Some(existing) = self
-                .agents
-                .values()
-                .find(|existing| existing.session_name == name)
-            {
+            // Names are scoped to the live session: a completed worker
+            // hydrated from a previous session's ledger is invisible to
+            // `status`/`peek`/`followup`, so it must not reserve the name
+            // either (cloud-agent e2e, 2026-08-30: a fresh `exec` in the same
+            // workspace could not spawn `worker-a` again).
+            if let Some(existing) = self.agents.values().find(|existing| {
+                existing.session_name == name && !self.is_from_prior_session(existing)
+            }) {
                 // #3020: Include elapsed time so the parent can distinguish a
                 // live worker from a stale/failed earlier spawn (#2656).
                 let elapsed = existing.started_at.elapsed();
