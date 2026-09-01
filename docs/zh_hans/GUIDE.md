@@ -104,7 +104,7 @@ codewhale doctor --json
 两种形式默认都是离线的。
 它们报告结构配置和字面上的未知/未探测凭证状态，不会加载工作区的 `.env` 凭据、打开 secret/OAuth 文件、探测密钥串、联系提供商或启动 MCP 服务器。只有有意需要该实时边界时，才使用 `--check-updates`、`--probe-api`、`--probe-local` 或 `--probe-mcp`。JSON 保持离线，不接受实时标志。
 
-JSON 把凭据的 `source`（来源）与字面的 `availability`（可用性）分开报告。配置的环境、外部认证、OAuth、consent 和 secret-store 来源仍为 `not_probed`；它们的声明本身并不会让 Setup 或 Fleet 就绪。只有结构上存在的字面配置值，或一条不需要凭据的路由，才能证明离线就绪。对于无法使用共享存储的路由上的旧版密钥存储哨兵（secret-store sentinel），会单独报告为 `secret_store_unavailable`/`unavailable`，而不是简单的"符合条件"或"未知"。
+JSON 把凭据的 `source`（来源）与字面的 `availability`（可用性）分开报告。配置的环境、外部认证、OAuth、consent 和 secret-store 来源仍为 `not_probed`；它们的声明本身并不会让 Setup 或 Pod 就绪。只有结构上存在的字面配置值，或一条不需要凭据的路由，才能证明离线就绪。对于无法使用共享存储的路由上的旧版密钥存储哨兵（secret-store sentinel），会单独报告为 `secret_store_unavailable`/`unavailable`，而不是简单的"符合条件"或"未知"。
 
 `doctor` 和 `doctor --json` 都还包含一项会话恢复诊断，它把旧会话文件名与当前存储对比，不读取会话内容，并报告以下之一： `isolated`、`no_legacy_sessions`、`migration_pending`、`migration_incomplete`、`migration_complete` 或 `scan_failed` 。
 使用 `migration_pending` 或 `migration_incomplete` 作为提示，完成把会话从 `~/.deepseek` 迁移到 `~/.codewhale` 的工作——就是上面提到的旧路径迁移。显式设置 `CODEWHALE_HOME` 会抑制此环境检查。
@@ -215,7 +215,7 @@ Plan 模式是在陌生仓库里开始的最安全位置。它用于检查和决
 
 Act 模式是大多数贡献工作的默认模式。它允许 Codewhale 读文件、跑检查、编辑文件，同时把有风险的动作留在审批门禁之后。
 
-Operate 保持直接的工具面及其审批、沙箱、shell、ask 规则和仓库保护。它的区别在于编排重点：Codewhale 优先把独立、并行、后台或长时间运行的工作交给 Fleet worker，而小型或紧密耦合的工作可以留在父进程中。
+Operate 保持直接的工具面及其审批、沙箱、shell、ask 规则和仓库保护。它的区别在于编排重点：Codewhale 优先把独立、并行、后台或长时间运行的工作交给 Pod worker，而小型或紧密耦合的工作可以留在父进程中。
 
 对于你信任的工作区，如果你确实希望动作不经审批提示就继续，可以用 `Shift+Tab` 选择 Full Access 权限姿态。不要在你不信任的仓库里使用 Full Access。
 
@@ -236,7 +236,8 @@ Operate 保持直接的工具面及其审批、沙箱、shell、ask 规则和仓
 | `/mode` | 打开模式选择器，或用 `/mode agent` 切换 |
 | `/model` | 选择模型，或用 `/model auto` |
 | `/provider` | 选择活动的 API 提供商|
-| `/fleet` | 配置 Fleet 角色或打开 worker 状态 |
+| `/pod` | 打开当前所选 Pod 的成员花名册；`/fleet` 仍作为兼容别名 |
+| `/pod pods` | 选择或切换已命名保存的 Pod；`/pod fleets` 仍作为兼容别名 |
 | `/goal` | 设置一个智能体跨回合持续追求的持久目标；裸 `/goal` 显示进度 |
 | `/workflow` | 把当前工作编排为 Workflow；`status`、`cancel`、`settings` 无需模型回合即可回答 |
 | `/workflows` | 打开实时 Workflow 运行仪表盘：该工作区日志记录的每一次运行，含阶段、子项、进度和主机侧取消 |
@@ -255,7 +256,7 @@ Operate 保持直接的工具面及其审批、沙箱、shell、ask 规则和仓
 
 软自动多智能体工作：[AUTOMATIC_WORKFLOWS.md](../AUTOMATIC_WORKFLOWS.md)。
 
-面向持久多 worker 工作的下一步：[FLEET_WORKFLOW_TUTORIAL.md](../FLEET_WORKFLOW_TUTORIAL.md) 带你走一遍 Fleet 任务规格、监控和 Workflow 编写。
+面向持久多 worker 工作的下一步：[FLEET_WORKFLOW_TUTORIAL.md](../FLEET_WORKFLOW_TUTORIAL.md) 带你走一遍 Pod 任务规格、监控和 Workflow 编写。
 
 想让 Codewhale 每回合自己选模型和思考级别时，用 `/model auto`。当 DeepSeek 路由模型可用时，Auto 可以在脱敏清单中选取任何可运行的 provider/模型组合。该分类会把最新请求（上限 4,000 字符）加上最多六条最近上下文行的有界摘要（每条 900 字符）发送到 `DeepSeek / deepseek-v4-flash`。凭据、端点和提供商错误文本不会包含在清单里。没有该路由器时，Auto 使用本地的、感知提供商的启发式方法，不发送任何路由请求。如果分类尝试未通过验证或出错，Auto 回退到该启发式方法，同时把尝试过的分类器数据路径保留在回合回执中。
 

@@ -331,7 +331,7 @@ fn classify_provider_route_preflight_next_step(identity_key: &str, reason: &str)
     }
     if lower.contains("fleet") || lower.contains("profile") || lower.contains("partial route") {
         return Some(
-            "Review Fleet profile provider/model overrides; keep route fields atomic (#5042)."
+            "Review Pod profile provider/model overrides; keep route fields atomic (#5042)."
                 .to_string(),
         );
     }

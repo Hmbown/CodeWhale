@@ -20,6 +20,14 @@ pub(super) fn event_owner_is_active(
     !owner_session_id.is_empty() && current_session_id == Some(owner_session_id)
 }
 
+fn current_session_pod_workers_status(locale: crate::localization::Locale, count: usize) -> String {
+    crate::localization::tr(
+        locale,
+        crate::localization::MessageId::SubagentsCurrentSessionPodWorkersStatus,
+    )
+    .replace("{count}", &count.to_string())
+}
+
 /// Bind the Runtime thread store to a session before the process-owner lock
 /// is taken, so a second Codewhale on the same machine does not collide on
 /// the default root (#5630). Resume reuses the loaded id; a fresh session
@@ -502,6 +510,7 @@ pub async fn run_tui(
         hook_executor: app.runtime_services.hook_executor.clone(),
         handle_store: app.runtime_services.handle_store.clone(),
         rlm_sessions: app.runtime_services.rlm_sessions.clone(),
+        media_originals_dir: crate::media_originals::default_store_dir(),
     };
     crate::startup_trace::mark("task_manager_ready");
     refresh_active_task_panel(&mut app, &task_manager).await;
@@ -860,6 +869,132 @@ async fn dispatch_launch_composer_submit(
             return Ok(true);
         }
     } else {
+        let (queued, recovery) = message_from_submitted_input(app, input);
+        dispatch_composer_message(app, config, engine_handle, queued, recovery, action).await?;
+    }
+    Ok(false)
+}
+
+/// Submit the live-session composer through the same branches Enter uses.
+///
+/// Mouse `[↑]` sets `pending_composer_submit`; this consumes that chord without
+/// duplicating draft consumption or opening transcript-only Enter shortcuts.
+/// Its own gates (`SendQueuedNow`, the paste-burst probe) run here; everything
+/// from slash-menu selection onward is the shared `submit_decided_composer_input`
+/// tail the keyboard Enter arm also uses, so the two surfaces cannot drift.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_session_composer_submit(
+    terminal: &mut AppTerminal,
+    app: &mut App,
+    engine_handle: &mut EngineHandle,
+    task_manager: &SharedTaskManager,
+    config: &mut Config,
+    web_config_session: &mut Option<WebConfigSession>,
+    chord: ComposerSubmitChord,
+) -> Result<bool> {
+    let action = app.decide_composer_submit(chord);
+    if matches!(action, ComposerSubmitAction::SendQueuedNow) {
+        let _ = send_next_queued_message_now(app, config, engine_handle).await?;
+        return Ok(false);
+    }
+    if !app.composer_enter_would_submit() {
+        return Ok(false);
+    }
+    submit_decided_composer_input(
+        terminal,
+        app,
+        engine_handle,
+        task_manager,
+        config,
+        web_config_session,
+        action,
+    )
+    .await
+}
+
+/// Shared tail of a decided composer submit: slash-menu selection, draft
+/// consumption, and the memory/`!`/`/`/message branches.
+///
+/// Keyboard Enter and the mouse `[↑]` dispatcher both end here. Each caller
+/// keeps its own gates — transcript-only shortcuts and forced-submit chords
+/// stay keyboard-only, `SendQueuedNow` and the paste-burst probe stay in the
+/// dispatcher — so this tail is the one place either surface can change.
+/// Returns `true` only when a command asked the event loop to exit.
+#[allow(clippy::too_many_arguments)]
+async fn submit_decided_composer_input(
+    terminal: &mut AppTerminal,
+    app: &mut App,
+    engine_handle: &mut EngineHandle,
+    task_manager: &SharedTaskManager,
+    config: &mut Config,
+    web_config_session: &mut Option<WebConfigSession>,
+    action: ComposerSubmitAction,
+) -> Result<bool> {
+    // #573: when the user typed a slash-command prefix that the popup is
+    // matching (e.g. `/mo` → `/model`), submit runs the *highlighted match*
+    // rather than sending the literal `/mo` text. Only kick in when the
+    // popup has at least one entry; otherwise fall through to the legacy
+    // submit path.
+    let slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
+    let slash_menu_open = !slash_menu_entries.is_empty();
+    let selecting_inline_skill = slash_menu_open
+        && partial_inline_skill_mention_at_cursor(&app.input, app.cursor_position).is_some();
+    if slash_menu_open && apply_slash_menu_selection(app, &slash_menu_entries, false) {
+        app.close_slash_menu();
+        if selecting_inline_skill {
+            return Ok(false);
+        }
+    }
+
+    let Some(input) = app.handle_composer_enter() else {
+        return Ok(false);
+    };
+    // `# foo` quick-add (#492) — when memory is enabled, a single line
+    // starting with `#` (but not `##` / `#!` shebangs / Markdown headings
+    // the user might be pasting in) is intercepted: the text is appended to
+    // the user memory file and the input is consumed without firing a turn.
+    // Disabled behaviour falls through to normal turn submit.
+    if should_intercept_memory_quick_add(config, &input) {
+        handle_memory_quick_add(app, &input, config);
+        return Ok(false);
+    }
+    if handle_bang_shell_input(app, engine_handle, &input).await? {
+        return Ok(false);
+    }
+    if looks_like_slash_command_input(&input) {
+        if execute_command_input(
+            terminal,
+            app,
+            engine_handle,
+            task_manager,
+            config,
+            web_config_session,
+            &input,
+        )
+        .await?
+        {
+            return Ok(true);
+        }
+    } else {
+        // #383: /edit — if the user invoked /edit to revise the last
+        // message, undo the last exchange before dispatching the
+        // replacement. Sync the engine session so it also drops the old
+        // exchange.
+        if app.edit_in_progress {
+            crate::commands::execute("/undo", app);
+            app.edit_in_progress = false;
+            let _ = engine_handle
+                .send(Op::SyncSession {
+                    session_id: app.current_session_id.clone(),
+                    messages: app.api_messages.clone(),
+                    system_prompt: app.system_prompt.clone(),
+                    system_prompt_override: false,
+                    model: app.model.clone(),
+                    workspace: app.workspace.clone(),
+                    mode: app.mode,
+                })
+                .await;
+        }
         let (queued, recovery) = message_from_submitted_input(app, input);
         dispatch_composer_message(app, config, engine_handle, queued, recovery, action).await?;
     }
@@ -2865,8 +3000,10 @@ pub(crate) async fn run_event_loop(
                         reconcile_subagent_activity_state(app);
                         let view_agents = subagent_view_agents(app, &app.subagent_cache);
                         if app.view_stack.update_subagents(&view_agents) {
-                            app.status_message =
-                                Some(format!("Fleet workers: {} total", view_agents.len()));
+                            app.status_message = Some(current_session_pod_workers_status(
+                                app.ui_locale,
+                                view_agents.len(),
+                            ));
                         }
                         // Individual spawn/complete events already log to history;
                         // full list available via /agents command.
@@ -4085,6 +4222,22 @@ pub(crate) async fn run_event_loop(
                     }
                     app.needs_redraw = true;
                 }
+                if let Some(chord) = app.pending_composer_submit.take() {
+                    if dispatch_session_composer_submit(
+                        terminal,
+                        app,
+                        &mut engine_handle,
+                        &task_manager,
+                        config,
+                        &mut web_config_session,
+                        chord,
+                    )
+                    .await?
+                    {
+                        return Ok(());
+                    }
+                    app.needs_redraw = true;
+                }
                 if let Some(slot) = app.pending_hotbar_slot.take()
                     && let Some(dispatch) = dispatch_hotbar_slot(app, config, slot)?
                 {
@@ -4147,7 +4300,7 @@ pub(crate) async fn run_event_loop(
             // A route change made in-session is temporary and stays that way
             // until the user EXPLICITLY persists it with a command
             // (/fleet save updates the selected Fleet, /fleet save-as saves a
-            // new Fleet, /model save-default remembers the startup default).
+            // new Pod, /model save-default remembers the startup default).
             // Nothing here intercepts keys: a scripted or automated terminal
             // types exactly what it types, and plain typing can never trigger
             // a fleet write by accident.
@@ -4402,6 +4555,29 @@ pub(crate) async fn run_event_loop(
                         return Ok(());
                     }
                     _ => {}
+                }
+                continue;
+            }
+
+            // F3 is the non-printable keyboard counterpart to the clickable
+            // route segment in the shared topbar. Route it through the same
+            // typed event as mouse input; `/provider` remains the portable
+            // direct command path for terminals that do not forward F-keys.
+            if crate::tui::shell_key_routing::is_provider_route_shortcut(&key)
+                && app.view_stack.is_empty()
+            {
+                if handle_view_events_boxed(
+                    terminal,
+                    app,
+                    config,
+                    &task_manager,
+                    &mut engine_handle,
+                    &mut web_config_session,
+                    vec![ViewEvent::TopbarRoutePickerRequested],
+                )
+                .await?
+                {
+                    return Ok(());
                 }
                 continue;
             }
@@ -5528,84 +5704,22 @@ pub(crate) async fn run_event_loop(
                     let action = app.decide_composer_submit(
                         portable_submit_chord.unwrap_or(ComposerSubmitChord::Enter),
                     );
-                    // #573: when the user typed a slash-command prefix that
-                    // the popup is matching (e.g. `/mo` → `/model`), Enter
-                    // should run the *highlighted match* rather than
-                    // sending the literal `/mo` text. Only kick in when the
-                    // popup has at least one entry; otherwise fall through
-                    // to the legacy submit path.
-                    let selecting_inline_skill = slash_menu_open
-                        && partial_inline_skill_mention_at_cursor(&app.input, app.cursor_position)
-                            .is_some();
-                    if slash_menu_open
-                        && !slash_menu_entries.is_empty()
-                        && apply_slash_menu_selection(app, &slash_menu_entries, false)
+                    // Slash-menu selection, draft consumption, and the
+                    // memory/`!`/`/`/message branches are the shared tail the
+                    // mouse `[↑]` dispatcher also runs, so keyboard and pointer
+                    // submit behavior cannot drift apart.
+                    if submit_decided_composer_input(
+                        terminal,
+                        app,
+                        &mut engine_handle,
+                        &task_manager,
+                        config,
+                        &mut web_config_session,
+                        action,
+                    )
+                    .await?
                     {
-                        app.close_slash_menu();
-                        if selecting_inline_skill {
-                            continue;
-                        }
-                    }
-                    if let Some(input) = app.handle_composer_enter() {
-                        // `# foo` quick-add (#492) — when memory is enabled,
-                        // a single line starting with `#` (but not `##` /
-                        // `#!` shebangs / Markdown headings the user might
-                        // be pasting in) is intercepted: the text is
-                        // appended to the user memory file and the input
-                        // is consumed without firing a turn. Disabled
-                        // behaviour falls through to normal turn submit.
-                        if should_intercept_memory_quick_add(config, &input) {
-                            handle_memory_quick_add(app, &input, config);
-                            continue;
-                        }
-                        if handle_bang_shell_input(app, &engine_handle, &input).await? {
-                            continue;
-                        }
-                        if looks_like_slash_command_input(&input) {
-                            if execute_command_input(
-                                terminal,
-                                app,
-                                &mut engine_handle,
-                                &task_manager,
-                                config,
-                                &mut web_config_session,
-                                &input,
-                            )
-                            .await?
-                            {
-                                return Ok(());
-                            }
-                        } else {
-                            let (queued, recovery) = message_from_submitted_input(app, input);
-                            // #383: /edit — if the user invoked /edit to revise
-                            // the last message, undo the last exchange before
-                            // dispatching the replacement. Sync the engine
-                            // session so it also drops the old exchange.
-                            if app.edit_in_progress {
-                                crate::commands::execute("/undo", app);
-                                app.edit_in_progress = false;
-                                let _ = engine_handle
-                                    .send(Op::SyncSession {
-                                        session_id: app.current_session_id.clone(),
-                                        messages: app.api_messages.clone(),
-                                        system_prompt: app.system_prompt.clone(),
-                                        system_prompt_override: false,
-                                        model: app.model.clone(),
-                                        workspace: app.workspace.clone(),
-                                        mode: app.mode,
-                                    })
-                                    .await;
-                            }
-                            dispatch_composer_message(
-                                app,
-                                config,
-                                &engine_handle,
-                                queued,
-                                recovery,
-                                action,
-                            )
-                            .await?;
-                        }
+                        return Ok(());
                     }
                 }
                 KeyCode::Backspace
@@ -6152,7 +6266,7 @@ async fn open_agents_register(app: &mut App, engine_handle: &EngineHandle) {
     if app.view_stack.top_kind() != Some(ModalKind::SubAgents) {
         let agents = subagent_view_agents(app, &app.subagent_cache);
         app.view_stack
-            .push(crate::tui::views::SubAgentsView::new(agents));
+            .push(crate::tui::views::SubAgentsView::for_app(app, agents));
     }
     let _ = engine_handle.send(Op::ListSubAgents).await;
     app.needs_redraw = true;
@@ -6213,7 +6327,8 @@ mod session_boot_event_tests {
         assert_eq!(app.mcp_configured_count, 2);
         let surface = crate::tui::session_boot::SessionBootSurface::from_app(&app);
         let chip = surface
-            .activity_chip(crate::localization::Locale::En, 80)
+            .activity_notice(crate::localization::Locale::En, 80)
+            .map(|notice| notice.text)
             .expect("chip");
         assert!(chip.contains("alpha"), "{chip}");
         assert!(chip.contains("beta"), "{chip}");
@@ -6278,6 +6393,20 @@ mod session_boot_event_tests {
                 .and_then(|snapshot| snapshot.servers.first())
                 .map(|server| server.name.as_str()),
             Some("fresh")
+        );
+    }
+}
+
+#[cfg(test)]
+mod pod_workers_status_tests {
+    use super::current_session_pod_workers_status;
+    use crate::localization::Locale;
+
+    #[test]
+    fn current_session_pod_worker_status_keeps_the_english_session_boundary() {
+        assert_eq!(
+            current_session_pod_workers_status(Locale::En, 3),
+            "Current-session Pod workers: 3 total"
         );
     }
 }

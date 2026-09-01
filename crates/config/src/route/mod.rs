@@ -25,6 +25,7 @@
 pub use crate::provider::WireFormat as RequestProtocol;
 
 pub mod auth;
+pub mod authority;
 pub mod candidate;
 pub mod capabilities;
 pub mod descriptor;
@@ -38,6 +39,9 @@ pub mod resolver;
 pub use auth::{
     AuthKind, AuthMethod, AuthMethodExport, Choice, ChoiceExport, Op, Prompt, PromptExport, When,
     WhenExport,
+};
+pub use authority::{
+    AuthorityResolution, CatalogOfferingReceipt, RouteAuthoritySnapshot, RouteCatalogScope,
 };
 pub use candidate::{
     LimitField, OverrideSource, PricingSku, ReadyRouteCandidate, ResolvedAuthSource,

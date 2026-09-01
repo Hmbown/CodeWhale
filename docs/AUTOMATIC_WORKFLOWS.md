@@ -10,7 +10,7 @@ described below.
 Related docs:
 
 - [Workflow Authoring](WORKFLOW_AUTHORING.md) — checked-in scripts and IR
-- [Fleet + Workflow Tutorial](FLEET_WORKFLOW_TUTORIAL.md) — manual Fleet paths
+- [Pod + Workflow Tutorial](FLEET_WORKFLOW_TUTORIAL.md) — manual Pod paths
 - [Configuration](CONFIGURATION.md) — `[workflow]` knobs
 - [Sandbox](SANDBOX.md) — what the Workflow VM cannot do
 
@@ -112,7 +112,7 @@ session (and across restarts when configured).
 
 The Workflow JS VM has **no** filesystem, shell, network, env, imports, clock, or
 randomness. Allowed host calls: `task`, `parallel`, `pipeline`, `phase`, `log`,
-`budget`, `args`. Real work happens in sub-agents / Fleet under normal tool and
+`budget`, `args`. Real work happens in sub-agents / Pod under normal tool and
 approval policy. See [Sandbox](SANDBOX.md).
 
 ## Synthesis and compatibility

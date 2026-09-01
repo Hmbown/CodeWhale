@@ -1,6 +1,6 @@
-# Agent Fleet dogfood smoke spec (#3166)
+# Agent Pod dogfood smoke spec (#3166)
 #
-# This spec exercises the fleet end-to-end: create a run with two local
+# This spec exercises the Pod end-to-end: create a run with two local
 # workers, run a workspace-check task and a protocol-review task, verify the
 # ledger records receipts, and confirm the status surfaces work. Each worker is
 # a headless `codewhale exec` run (see docs/AGENT_RUNTIME.md).
@@ -11,12 +11,12 @@
 # through the real host adapter and asserts terminal pass/fail outcomes.
 #
 # Manual run (drives real `codewhale exec` workers; needs provider creds):
-#   codewhale fleet run docs/examples/fleet-dogfood.toml --max-workers 2 --once
+#   codewhale pod run docs/examples/fleet-dogfood.toml --max-workers 2 --once
 #
 # Then check:
-#   codewhale fleet status
-#   codewhale fleet inspect <worker-id-from-status>
-#   codewhale fleet logs <worker-id-from-status>
+#   codewhale pod status
+#   codewhale pod inspect <worker-id-from-status>
+#   codewhale pod logs <worker-id-from-status>
 #
 # NOTE: this manual run path now drives real `codewhale exec` workers through
 # the FleetExecutor. Use `--once` when you only want to enqueue/lease once and

@@ -296,6 +296,7 @@ fn cjk_composer_cursor_and_mouse_geometry_agree_in_compact_and_wide_frames() {
         let mut app = create_test_app();
         app.onboarding = OnboardingState::None;
         app.launch.visible = false;
+        app.composer_border = true;
         app.input = "ab中文".to_string();
         app.cursor_position = app.input.chars().count();
         let config = Config::default();
@@ -317,6 +318,17 @@ fn cjk_composer_cursor_and_mouse_geometry_agree_in_compact_and_wide_frames() {
             .last_composer_content
             .expect("render records composer content geometry");
         let text_area = crate::tui::widgets::composer_content_geometry(inner, false).text_area;
+        let composer = app
+            .viewport
+            .last_composer_area
+            .expect("render records composer area");
+        let submit = crate::tui::widgets::active_composer_submit_rect(&app, composer)
+            .expect("enclosed composer exposes submit geometry");
+        assert_eq!(
+            text_area.right(),
+            submit.x.saturating_sub(1),
+            "{width}x{height}: frame must retain one blank cell before submit"
+        );
         assert_eq!(
             first_cursor.0,
             text_area.x + 6,
@@ -326,6 +338,12 @@ fn cjk_composer_cursor_and_mouse_geometry_agree_in_compact_and_wide_frames() {
             first_cursor.1 >= text_area.y
                 && first_cursor.1 < text_area.y.saturating_add(text_area.height),
             "{width}x{height}: cursor must remain inside composer content: {first_cursor:?}"
+        );
+        assert!(
+            first_cursor.0 < submit.x
+                || first_cursor.0 >= submit.right()
+                || first_cursor.1 != submit.y,
+            "{width}x{height}: cursor must stay outside submit: {first_cursor:?} vs {submit:?}"
         );
 
         frame::finish_frame_cursor(&mut terminal, Some(first_cursor)).unwrap();
@@ -4132,6 +4150,63 @@ fn wide_underwater_shell_aligns_transcript_and_composer_on_the_shared_canvas() {
     // Full host width (#5322) — transcript and composer share one canvas edge.
     assert_eq!((transcript.x, transcript.width), (0, 160));
     assert_eq!((composer.x, composer.width), (0, 160));
+}
+
+#[test]
+fn failed_mcp_is_a_footer_chip_not_multiline_chat_boot_output() {
+    fn app() -> App {
+        let mut app = create_test_app();
+        app.onboarding_workspace_trust_gate = false;
+        app.onboarding = OnboardingState::None;
+        app.launch.visible = false;
+        app
+    }
+
+    let mut baseline = app();
+    let _ = render_underwater_test_app(&mut baseline, 100, 30);
+    let baseline_composer = baseline
+        .viewport
+        .last_composer_area
+        .expect("baseline composer area");
+
+    let mut failed = app();
+    failed.mcp_snapshot = Some(crate::mcp::McpManagerSnapshot {
+        config_path: PathBuf::from("mcp.json"),
+        config_exists: true,
+        reload_required: false,
+        servers: vec![crate::mcp::McpServerSnapshot {
+            name: "alpha".to_string(),
+            enabled: true,
+            required: false,
+            transport: "stdio".to_string(),
+            command_or_url: "alpha-mcp".to_string(),
+            connect_timeout: 5,
+            execute_timeout: 5,
+            read_timeout: 5,
+            connected: false,
+            error: Some("protocol negotiation timed out".to_string()),
+            capability_metadata: crate::mcp::McpServerCapabilityMetadata::NotObserved,
+            tools: Vec::new(),
+            resources: Vec::new(),
+            prompts: Vec::new(),
+        }],
+    });
+    let rendered = render_underwater_test_app(&mut failed, 100, 30);
+
+    assert_eq!(
+        failed
+            .viewport
+            .last_composer_area
+            .expect("failed-MCP composer area"),
+        baseline_composer,
+        "MCP diagnostics must not reserve chat/composer rows"
+    );
+    assert!(
+        rendered.contains("MCP · 0 connected · 1 failed"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("alpha · failed"), "{rendered}");
+    assert!(!rendered.contains("/mcp retry alpha"), "{rendered}");
 }
 
 #[test]
@@ -23030,6 +23105,7 @@ mod work_surface {
 
     fn idle_rail_app(panel: RailPanel) -> App {
         let mut app = create_test_app();
+        app.ui_locale = crate::localization::Locale::En;
         // Pin the chrome the budget charges for: `App::new` reads the developer's
         // real settings.toml, and a host with `composer_border = false` would
         // shift every threshold below by a row.

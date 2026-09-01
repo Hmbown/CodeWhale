@@ -533,7 +533,7 @@ done
     const footer = text("web/components/footer.tsx");
 
     expect(matrix.product.terminology).toEqual({
-      Fleet: "who is in the roster and which member is selected",
+      Pod: "who is in the roster and which member is selected",
       Workflow: "what order the work follows",
       Lane: "one running Workflow instance",
       Runtime: "where, how, and with what authority selected work executes",
