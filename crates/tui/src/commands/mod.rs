@@ -2273,6 +2273,34 @@ mod tests {
     }
 
     #[test]
+    fn feat022_aliases_dispatch_through_public_seam() {
+        // All four aliases (jinengliebiao, jineng, shencha) resolve through the
+        // registry to the same portable handlers as the canonical names.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _home = feat022_scoped_home(&tmp);
+        let mut app = feat022_test_app(&tmp);
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        feat022_write_skill(&tmp.path().join("skills"), "demo");
+
+        let result = execute("/jinengliebiao", &mut app);
+        assert!(
+            matches!(
+                result.action,
+                Some(crate::tui::app::AppAction::OpenSkillsManager)
+            ),
+            "{result:?}"
+        );
+
+        let result = execute("/jineng demo", &mut app);
+        assert!(!result.is_error, "{result:?}");
+        assert!(result.message.unwrap().contains("Skill 'demo' activated."));
+
+        let result = execute("/shencha", &mut app);
+        assert!(result.is_error, "{result:?}");
+        assert!(result.message.unwrap().contains("Usage: /review"));
+    }
+
+    #[test]
     fn feat022_context_exposure_is_exact_per_d4() {
         // The envelope exposes every adapter (main's model); the handlers
         // consume exactly their declared facets. skills/restore consume only

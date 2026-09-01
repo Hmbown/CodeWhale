@@ -2583,6 +2583,7 @@ fn merge_usage_totals(into: &mut UsageTotals, from: &UsageTotals) {
     into.turns = into.turns.saturating_add(from.turns);
 }
 
+#[allow(clippy::too_many_arguments)] // pre-existing baseline signature; FEAT-022 gate repair
 fn accumulate_runtime_cost_coverage(
     audit: Option<&crate::pricing::TurnCostAudit>,
     priced_turns: &mut u64,

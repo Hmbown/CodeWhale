@@ -467,10 +467,12 @@ fn inspect_skills(group: &mut dyn CommandSkillGroupContext) -> CommandResult {
                 let _ = writeln!(output, "  - {} — {}", skill.name, skill.description);
             }
             let _ = writeln!(output, "    source: {}", skill_source_label(&skill.source));
-            if matches!(skill.source, SkillSourceKind::Native) {
-                if let Some(path) = &skill.path {
-                    let _ = writeln!(output, "    path: {}", path);
-                }
+            if let Some(path) = skill
+                .path
+                .as_ref()
+                .filter(|_| matches!(skill.source, SkillSourceKind::Native))
+            {
+                let _ = writeln!(output, "    path: {}", path);
             }
         }
     }

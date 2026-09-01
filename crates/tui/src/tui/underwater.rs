@@ -1222,6 +1222,7 @@ impl<'a> LaunchComposerDisplay<'a> {
 /// beneath. This is the same composer state the conversation view edits,
 /// not a second input system; only the geometry is the startup stage's
 /// dock.
+#[allow(clippy::too_many_arguments)] // pre-existing baseline signature; FEAT-022 gate repair
 fn render_launch_composer(
     area: Rect,
     buf: &mut Buffer,
