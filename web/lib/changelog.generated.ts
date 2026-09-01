@@ -47,6 +47,8 @@ export const CHANGELOG: ChangelogRelease[] = [
       {
         "heading": "Added",
         "items": [
+          "MCP servers and plugins can be connected self-serve from the session: a unified auth flow with rotation-safe token handling, a spoken authorization URL, and catalog refresh when stored credentials stop working (#5747).",
+          "/operate reads match the landed CWC OperateRecord contract: fetching an absent record returns a truthful not-found view instead of a fabricated operation, and an empty evidence path is rejected rather than resolving to the workspace directory (#5703).",
           "TUI: scheduled automations project into the top strip (⏱ N scheduled · M running, compact ⏱ N·M) with typed HistoryCell::Automation receipts when a run this session watched settle. /automation acknowledges failures. The merged footer does not carry the work fact (#5748).",
           "The app-server can listen on a unix domain socket and advertise a daemon/attach handshake, so a local client can attach to an already-running engine instead of spawning its own. The socket is created with owner-only permissions and stale sockets are reclaimed on start. Non-unix hosts return a typed unsupported-platform refusal; the Windows named-pipe endpoint is named but not yet implemented (#5749).",
           "The engine's internal Op/Event types and the wire protocol's Op/ EventMsg now carry a compile-enforced twin for every variant: adding an engine variant without a protocol counterpart fails the build instead of drifting silently. Internal durability work — no user-visible surface change yet (#5751).",
@@ -56,11 +58,9 @@ export const CHANGELOG: ChangelogRelease[] = [
           "Computer session records now count only time a provider actually accepted the session as active, at per-second granularity. Idle, queued, stopped, and teardown time are excluded, and a session whose allocation does not match a standard profile is refused rather than recorded approximately. Covered by hermetic fixtures; no live provider call and no deploy (#5781).",
           "Website: the public site moves to the Tideline deep-ocean design language (dark by default with an opt-in light documentation sheet, palette grounded in the TUI's WHALE_* tokens) and the new whale brand mark across the favicon, app icons, web manifest, nav wordmark, and social card (#5573).",
           "Add codewhale dispatch / /dispatch so a local session can propose a Codewhale cloud agent against an explicit github, cnb, or gitee remote. Confirmation is required; missing credentials fail closed; cloud jobs share the existing /jobs surface as kind=cloud. See DAYTONA_CLOUD_DISPATCH.md.",
-          "/login reports the Codewhale account session and provider-key next steps. The internal cloud-agent credential is not user surface: there is no auth set-slot/auth clear-slot command, no hint, and no completion entry for it — signing in with codewhale login is the only door.",
-          "Add the Tideline component family from the ratatui translation spec (#5698's screens, riding the #5699 work-strip layout): hero startup surface with quick actions and option strip, notifications inbox, merged footer band, pod ledger, receipt stream, theme list with motion toggles, live preview, settings rail, and the left rail — each a standalone render module pinned by 28 new byte-exact golden buffers. Frame wiring follows the Tideline acceptance gate; NO_COLOR is now…",
-          "Route Contract Phase 1: RouteResolver is the runtime path for resolve_runtime_options; codewhale providers export --json ships the owned descriptor catalog; CLI --provider accepts any catalog route id (the closed ProviderArg enum is deleted). Catalog layers are bundled → models.dev → provider /v1/models → config.toml → user, with policy DENY last and never overridden."
+          "/login reports the Codewhale account session and provider-key next steps. The internal cloud-agent credential is not user surface: there is no auth set-slot/auth clear-slot command, no hint, and no completion entry for it — signing in with codewhale login is the only door."
         ],
-        "itemCount": 35
+        "itemCount": 37
       },
       {
         "heading": "Changed",
