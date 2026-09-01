@@ -1123,6 +1123,25 @@ def check_source_frontier(topology: dict, frontier: list[str], root: Path = REPO
                 violations.extend(resolve_selector(selector, group_items))
             continue
 
+        # Validate retained host machinery declarations first so the tracking
+        # stays fail-closed even when the group has no other concrete-App
+        # handlers (e.g. every retained helper lost its signature at once).
+        retained_names: set[str] = set()
+        for selector in RETAINED_HOST_MACHINERY.get(group_name, []):
+            matches = [it for it in group_items if _selector_matches(selector, it)]
+            if not matches:
+                violations.append(SourceScanViolation(
+                    "retained-host", json.dumps(selector, sort_keys=True),
+                    f"retained host machinery selector resolves to no source item in {group_name!r}",
+                ))
+            for match in matches:
+                if not match.is_concrete_app:
+                    violations.append(SourceScanViolation(
+                        "retained-host", match.qual_path,
+                        "retained host machinery must keep its concrete-App signature until FEAT-042 extracts it",
+                    ))
+                retained_names.add(match.qual_path)
+
         if not handlers:
             continue
 
@@ -1156,26 +1175,7 @@ def check_source_frontier(topology: dict, frontier: list[str], root: Path = REPO
                 continue
 
         # Not pending and not split: every remaining handler is a stale removal,
-        # except declared retained host machinery (`retained_host` selectors —
-        # FEAT-042 dispatcher helpers that intentionally keep `&mut App` until
-        # the physical move). The declaration is fail-closed: each selector
-        # must resolve to a concrete-App item, so FEAT-042 tracking cannot
-        # silently go stale.
-        retained_names: set[str] = set()
-        for selector in RETAINED_HOST_MACHINERY.get(group_name, []):
-            matches = [it for it in group_items if _selector_matches(selector, it)]
-            if not matches:
-                violations.append(SourceScanViolation(
-                    "retained-host", json.dumps(selector, sort_keys=True),
-                    f"retained host machinery selector resolves to no source item in {group_name!r}",
-                ))
-            for match in matches:
-                if not match.is_concrete_app:
-                    violations.append(SourceScanViolation(
-                        "retained-host", match.qual_path,
-                        "retained host machinery must keep its concrete-App signature until FEAT-042 extracts it",
-                    ))
-                retained_names.add(match.qual_path)
+        # except the retained host machinery resolved above.
         stale = [h for h in handlers if h.qual_path not in retained_names]
         for handler in stale[:5]:
             violations.append(SourceScanViolation(
