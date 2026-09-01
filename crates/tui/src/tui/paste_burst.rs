@@ -77,24 +77,6 @@ impl PasteBurst {
         CharDecision::RetainFirstChar
     }
 
-    #[allow(dead_code)]
-    pub fn on_plain_char_no_hold(&mut self, now: Instant) -> Option<CharDecision> {
-        self.note_plain_char(now);
-
-        if self.active {
-            self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
-            return Some(CharDecision::BufferAppend);
-        }
-
-        if self.consecutive_plain_char_burst >= PASTE_BURST_MIN_CHARS {
-            return Some(CharDecision::BeginBuffer {
-                retro_chars: self.consecutive_plain_char_burst.saturating_sub(1),
-            });
-        }
-
-        None
-    }
-
     pub(crate) fn note_plain_char(&mut self, now: Instant) -> u16 {
         match self.last_plain_char_time {
             Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
@@ -184,16 +166,6 @@ impl PasteBurst {
     pub fn append_char_to_buffer(&mut self, ch: char, now: Instant) {
         self.buffer.push(ch);
         self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
-    }
-
-    #[allow(dead_code)]
-    pub fn try_append_char_if_active(&mut self, ch: char, now: Instant) -> bool {
-        if self.active || !self.buffer.is_empty() {
-            self.append_char_to_buffer(ch, now);
-            true
-        } else {
-            false
-        }
     }
 
     pub fn decide_begin_buffer(

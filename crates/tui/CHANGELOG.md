@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Dead-code sweep: delete proven-unreferenced helpers (unused builders,
+  wrappers, and leftover identifiers) and drop stale `#[allow(dead_code)]`
+  on items that production already calls. No runtime behavior change
+  (#5587).
+
 - Public roster language is Pod. `/pod` is the customer surface; fleet remains
   the internal wire, storage, and migration name (#5776).
 

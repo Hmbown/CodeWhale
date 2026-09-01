@@ -880,17 +880,6 @@ impl<'a> BackgroundRoute<'a> {
         self
     }
 
-    /// Attach the configured route label (`[providers.<name>]` key).
-    ///
-    /// Background helpers do not currently resolve one; the foreground turn path
-    /// supplies it through [`route_receipt`] directly.
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn with_identity(mut self, provider_identity: Option<&'a str>) -> Self {
-        self.provider_identity = provider_identity;
-        self
-    }
-
     /// Non-secret billing-surface classification for this endpoint.
     #[must_use]
     pub fn billing_surface(&self) -> Option<&'static str> {

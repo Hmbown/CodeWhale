@@ -3728,12 +3728,6 @@ impl McpPool {
         current == self.last_mtimes
     }
 
-    /// Disconnect all connections
-    #[allow(dead_code)] // Public API for MCP lifecycle management
-    pub fn disconnect_all(&mut self) {
-        self.drop_all_connections("disconnect all");
-    }
-
     /// Graceful shutdown of every connection in the pool: send SIGTERM to
     /// each stdio child and give them a short grace period before drop
     /// fires SIGKILL. Whalescale#420.
@@ -3742,7 +3736,6 @@ impl McpPool {
     /// MCP servers a chance to flush state. The fallback Drop on
     /// `StdioTransport` still sends SIGTERM if this never runs, so even
     /// abnormal exits avoid leaking PIDs without a signal.
-    #[allow(dead_code)] // Wired in by callers that want graceful shutdown
     pub async fn shutdown_all(&mut self) {
         let names: Vec<String> = self.connections.keys().cloned().collect();
         for name in names {
@@ -3751,12 +3744,6 @@ impl McpPool {
             }
         }
         self.connections.clear();
-    }
-
-    /// Get the underlying configuration
-    #[allow(dead_code)] // Public API for MCP consumers
-    pub fn config(&self) -> &McpConfig {
-        &self.config
     }
 
     /// Check if a tool name is an MCP tool

@@ -8,10 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
-use super::{CommandSpec, ExecEnv};
 use crate::command_safety::SafetyLevel;
 
 /// Determines execution restrictions for shell commands.
@@ -517,28 +515,6 @@ impl WritableRoot {
 
         true
     }
-}
-
-/// Unified trait for platform-specific sandbox executors (#2186).
-///
-/// Platform implementations can use this trait to convert a policy into
-/// wrapper-specific rules. The current `SandboxManager` command path does not
-/// dispatch through this trait yet.
-pub trait SandboxExecutor {
-    /// Prepare a sandboxed execution environment from a command spec.
-    ///
-    /// Returns the transformed command, environment, and sandbox metadata
-    /// needed to spawn the process.
-    fn prepare(&self, spec: &CommandSpec) -> io::Result<ExecEnv>;
-
-    /// Check if a command failure was caused by sandbox denial.
-    fn was_denied(&self, exit_code: i32, stderr: &str) -> bool;
-
-    /// Get a human-readable description of why the sandbox blocked the command.
-    fn denial_message(&self, stderr: &str) -> String;
-
-    /// Returns the type of sandbox this executor provides.
-    fn sandbox_type(&self) -> super::SandboxType;
 }
 
 /// Map a command safety classification to the appropriate sandbox policy (#2186).

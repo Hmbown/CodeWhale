@@ -1188,14 +1188,8 @@ impl TaskManager {
         Ok(manager)
     }
 
-    #[allow(dead_code)] // Public API for external callers (runtime API)
     pub fn shutdown(&self) {
         self.cancel_token.cancel();
-    }
-
-    #[allow(dead_code)] // Public API for external callers
-    pub fn is_shutdown(&self) -> bool {
-        self.cancel_token.is_cancelled()
     }
 
     pub async fn set_default_workspace(&self, workspace: PathBuf) {
