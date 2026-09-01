@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public roster language is Pod. `/pod` is the customer surface; fleet remains
   the internal wire, storage, and migration name (#5776).
 
+- Compaction replacement history keeps a bounded last user round (assistant +
+  tool results) instead of dropping them behind a summary. `/context` names
+  the compaction path and `/anchor` survival. Failed compact still does not
+  replace live history (#4394).
 - Provider catalogs: compatible hosts (Baseten, Groq, Cerebras, SenseNova,
   Command Code) no longer compile a frozen model roster. Descriptors name the
   wire, URL, and env; live `GET /v1/models` and a Codewhale-owned catalog
@@ -39,11 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- The engine's internal `Op`/`Event` types and the wire protocol's `Op`/
-  `EventMsg` now carry a compile-enforced twin for every variant: adding an
-  engine variant without a protocol counterpart fails the build instead of
-  drifting silently. Internal durability work — no user-visible surface
-  change yet (#5751).
+- Compaction publishes a structured survival contract for session-tree
+  journal entry types (`crates/tui/src/compaction/SURVIVAL_CONTRACT.md`) and
+  fails closed when the last user round, tool results, `/anchor` text, or
+  checkpoint receipt would vanish (#4394).
 - Internal: `codewhale-config` gains `RouteAuthoritySnapshot`, one immutable
   authority that owns a compiled provider catalog together with the route
   resolver projected from it, so a picker, a readiness view, and an execution
@@ -246,6 +249,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fresh interactive sessions no longer leave a phantom one-message duplicate
+  behind. The TUI claimed one session id (Runtime store lock, turn-start crash
+  checkpoint) while the engine minted a second one; the first `SessionUpdated`
+  re-keyed the App, the completion commit cleared only the engine id's
+  checkpoint, and `codewhale --continue` later "recovered" the orphaned
+  checkpoint as a duplicate session instead of the real one. The engine now
+  adopts the host-owned id at spawn (`EngineConfig::session_id`) and `/clear`
+  mints the next id in the App like `/new`. A non-TTY `--continue` no longer
+  promotes and consumes the crash checkpoint before failing the terminal
+  check, and the root `codewhale --resume <id>` / `--session-id <id>` flags
+  documented in the operations runbook now parse instead of being swallowed
+  as a prompt.
 - Website: `/signin`, `/signup`, and `/auth/callback` are locale-aware public
   routes instead of localized 404s. Sign-in and create-account send the person
   to the CWC app; OAuth callbacks hop to `app.codewhale.net` with the query
