@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Runtime API: a thread's persisted goal is rehydrated into the engine on load,
+  so the goal loop, prompt surface, and `update_goal` operate on the durable
+  record from the first turn instead of a reset one. Host-managed engines never
+  self-continue: the host settles each completed turn and arms the next pass
+  after the configured quiet period while the goal is still active (#5711).
+
 - Computer session records now count only time a provider actually accepted the
   session as active, at per-second granularity. Idle, queued, stopped, and
   teardown time are excluded, and a session whose allocation does not match a
