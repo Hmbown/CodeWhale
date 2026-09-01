@@ -61,6 +61,10 @@ pub enum TopbarSegmentId {
     Pod,
     /// Whale capacity `n/m` (work screen).
     Whales,
+    /// Scheduled automation work `⏱ N scheduled · M running` — the top
+    /// strip's work fact. The `AutomationPanelState` projection owns the
+    /// count; the topbar only reads it.
+    Automation,
     /// Effective model / route — click opens the provider inspector.
     Model,
     /// Theme name (startup).
@@ -82,7 +86,7 @@ impl TopbarSegmentId {
         match self {
             Self::Theme => 5,
             Self::Workspace => 4,
-            Self::Whales => 3,
+            Self::Whales | Self::Automation => 3,
             Self::Pod => 2,
             Self::Run | Self::SettingsPath => 1,
             Self::Model | Self::Brand => 0,

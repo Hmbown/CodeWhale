@@ -484,7 +484,9 @@ pub(crate) fn open_details_pager_for_cell(app: &mut App, cell_index: usize) -> b
         HistoryCell::Thinking { .. } => "Reasoning".to_string(),
         HistoryCell::Tool(_) => "Message".to_string(),
         HistoryCell::SubAgent(_) => "Sub-agent".to_string(),
-        HistoryCell::Automation(_) => "Automation".to_string(),
+        HistoryCell::Automation(_) => {
+            tr(app.ui_locale, MessageId::AutomationNoun).into_owned()
+        }
         HistoryCell::ArchivedContext { .. } => "Archived Context".to_string(),
     };
     let width = app
@@ -513,15 +515,17 @@ pub(crate) fn open_focused_cell_pager(app: &mut App) -> bool {
         return false;
     };
     let title = match cell {
-        HistoryCell::User { .. } => "You",
-        HistoryCell::Assistant { .. } => "Assistant",
-        HistoryCell::System { .. } => "Note",
-        HistoryCell::Error { .. } => "Error",
-        HistoryCell::Thinking { .. } => "Reasoning",
-        HistoryCell::Tool(_) => "Tool",
-        HistoryCell::SubAgent(_) => "Sub-agent",
-        HistoryCell::Automation(_) => "Automation",
-        HistoryCell::ArchivedContext { .. } => "Archived Context",
+        HistoryCell::User { .. } => "You".to_string(),
+        HistoryCell::Assistant { .. } => "Assistant".to_string(),
+        HistoryCell::System { .. } => "Note".to_string(),
+        HistoryCell::Error { .. } => "Error".to_string(),
+        HistoryCell::Thinking { .. } => "Reasoning".to_string(),
+        HistoryCell::Tool(_) => "Tool".to_string(),
+        HistoryCell::SubAgent(_) => "Sub-agent".to_string(),
+        HistoryCell::Automation(_) => {
+            tr(app.ui_locale, MessageId::AutomationNoun).into_owned()
+        }
+        HistoryCell::ArchivedContext { .. } => "Archived Context".to_string(),
     };
     let width = app
         .viewport

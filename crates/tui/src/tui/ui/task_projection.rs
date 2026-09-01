@@ -186,14 +186,28 @@ pub(super) async fn refresh_automation_panel(app: &mut App) -> bool {
             return false;
         }
     }
-    app.automation_scan = start_automation_scan(app);
+    app.automation_scan = start_automation_scan(app, false);
     changed
 }
 
 /// Startup variant: take one scan and wait for it, so the first frame
 /// already carries the band count (the task panel gets the same courtesy).
+/// The startup pass is FULL — every run file — so a long-running task that
+/// already sits behind more than a window of newer runs is visible from the
+/// first frame. The manager lock is retried briefly: the scheduler tick
+/// holds it only while persisting, and giving up here would blank the band
+/// on a contended startup.
 pub(super) async fn refresh_automation_panel_blocking(app: &mut App) -> bool {
-    let Some(scan) = start_automation_scan(app) else {
+    let scan = 'retry: {
+        for _ in 0..STARTUP_SCAN_LOCK_RETRIES {
+            if let Some(scan) = start_automation_scan(app, true) {
+                break 'retry Some(scan);
+            }
+            tokio::time::sleep(STARTUP_SCAN_LOCK_RETRY_DELAY).await;
+        }
+        None
+    };
+    let Some(scan) = scan else {
         return false;
     };
     match scan.await {
@@ -205,15 +219,31 @@ pub(super) async fn refresh_automation_panel_blocking(app: &mut App) -> bool {
     }
 }
 
+/// Startup lock-retry budget: the scheduler's persist phase is short; ten
+/// 50 ms attempts covers it without parking startup on a stuck lock.
+const STARTUP_SCAN_LOCK_RETRIES: usize = 10;
+const STARTUP_SCAN_LOCK_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Start one store scan on a blocking thread. The manager is cloned out
 /// from under its tokio Mutex (`try_lock`, same rule as the shell snapshot:
 /// the scheduler tick holds that lock while persisting, and the UI loop
 /// must not park behind it; on contention the next tick retries) so the
 /// scan holds no lock while it reads — the store's writes are atomic
 /// renames, so a concurrent read sees a whole file either way.
-fn start_automation_scan(app: &App) -> Option<tokio::task::JoinHandle<AutomationScan>> {
+///
+/// `full` reads every run file (startup only). The cadence scan reads the
+/// newest `AUTOMATION_PANEL_RUN_SCAN` runs per automation PLUS the runs
+/// this session already watched go live, wherever they sit in history — a
+/// frequent automation can stack newer runs behind a long-running task,
+/// and neither the live count nor the settle receipt may depend on the
+/// task staying inside the newest window.
+fn start_automation_scan(
+    app: &App,
+    full: bool,
+) -> Option<tokio::task::JoinHandle<AutomationScan>> {
     let automations = app.runtime_services.automations.as_ref()?;
     let manager = automations.try_lock().ok()?.clone();
+    let live_owners = app.automation_panel.live_run_owners();
     Some(tokio::task::spawn_blocking(move || {
         let records = match manager.list_automations() {
             Ok(records) => records,
@@ -224,13 +254,37 @@ fn start_automation_scan(app: &App) -> Option<tokio::task::JoinHandle<Automation
         };
         let mut runs = Vec::new();
         for record in &records {
-            match manager.list_runs(&record.id, Some(AUTOMATION_PANEL_RUN_SCAN)) {
+            let limit = if full {
+                None
+            } else {
+                Some(AUTOMATION_PANEL_RUN_SCAN)
+            };
+            match manager.list_runs(&record.id, limit) {
                 Ok(recent) => runs.extend(recent),
                 Err(err) => {
                     tracing::warn!(automation_id = %record.id, error = %err, "automation panel refresh could not list runs");
                 }
             }
+            if !full {
+                let wanted: std::collections::BTreeSet<String> = live_owners
+                    .iter()
+                    .filter(|(_, owner)| owner.as_str() == record.id.as_str())
+                    .map(|(run_id, _)| run_id.clone())
+                    .collect();
+                if !wanted.is_empty() {
+                    match manager.get_runs_by_ids(&record.id, &wanted) {
+                        Ok(found) => runs.extend(found),
+                        Err(err) => {
+                            tracing::warn!(automation_id = %record.id, error = %err, "automation panel refresh could not re-read live runs");
+                        }
+                    }
+                }
+            }
         }
+        // A re-read live run may also sit inside the newest window; the
+        // fold counts by id, so dedupe before handing the scan over.
+        let mut seen = std::collections::BTreeSet::new();
+        runs.retain(|run| seen.insert(run.id.clone()));
         AutomationScan { records, runs }
     }))
 }

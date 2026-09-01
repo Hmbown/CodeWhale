@@ -65,6 +65,26 @@ pub(crate) fn topbar_segments(app: &App, width: u16) -> Vec<TopbarSegment> {
         }
     }
 
+    // Scheduled automation work — the top strip's work fact (the merged
+    // footer owns phase/cost/detail only, per the TUI band contract). The
+    // projection (`AutomationPanelState`) stays the single owner; the
+    // topbar reads it. Compact keeps the abbreviated live count — chrome
+    // sheds before content.
+    let tier = crate::tui::underwater::ShellTier::for_chrome_width(width);
+    let automation_value = if tier == crate::tui::underwater::ShellTier::Compact {
+        app.automation_panel.activity_slot_compact()
+    } else {
+        app.automation_panel.activity_slot(app.ui_locale)
+    };
+    if let Some(value) = automation_value {
+        segments.push(TopbarSegment::new(
+            TopbarSegmentId::Automation,
+            "automation",
+            value,
+            app.automation_panel.activity_ink(),
+        ));
+    }
+
     // Route identity — the old identity band's fact, same shed discipline:
     // provider first, then effort, whole names or none. When no model is
     // configured the segment says so and waits.
@@ -1772,8 +1792,49 @@ pub(crate) fn workflow_tool_is_running(app: &App) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{register_topbar_interaction_targets, render_topbar_row, short_title_truncate};
+    use super::{
+        register_topbar_interaction_targets, render_topbar_row, short_title_truncate, topbar_segments,
+    };
     use ratatui::{Terminal, backend::TestBackend};
+
+    /// AUTOMATION-VISIBILITY §2.1 lands in the TOP strip (TUI band
+    /// contract: work in the top strip; the merged footer owns phase/cost/
+    /// detail). The `AutomationPanelState` projection stays the single
+    /// owner; `topbar_segments` reads it: full text at Normal/Wide, the
+    /// abbreviated `⏱ N·M` at Compact (chrome sheds before content), never
+    /// at zero.
+    #[test]
+    fn topbar_automation_segment_reads_the_projection() {
+        let mut app =
+            crate::test_support::test_app_with_options(crate::test_support::test_tui_options("."));
+        app.ui_locale = crate::localization::Locale::En;
+        app.automation_panel.active_automations = 2;
+        app.automation_panel.live_runs = 1;
+
+        let wide = topbar_segments(&app, 120);
+        let segment = wide
+            .iter()
+            .find(|segment| segment.id == crate::tui::topbar::TopbarSegmentId::Automation)
+            .expect("automation work rides the top strip");
+        assert_eq!(segment.value, "⏱ 2 scheduled · 1 running");
+        assert_eq!(segment.ink, crate::palette::ChromeInk::Active);
+
+        let compact = topbar_segments(&app, 48);
+        let segment = compact
+            .iter()
+            .find(|segment| segment.id == crate::tui::topbar::TopbarSegmentId::Automation)
+            .expect("Compact keeps the abbreviated live-work indicator");
+        assert_eq!(segment.value, "⏱ 2·1");
+
+        app.automation_panel.active_automations = 0;
+        app.automation_panel.live_runs = 0;
+        let none = topbar_segments(&app, 120);
+        assert!(
+            none.iter()
+                .all(|segment| segment.id != crate::tui::topbar::TopbarSegmentId::Automation),
+            "zero counts suppress the segment"
+        );
+    }
 
     #[test]
     fn topbar_route_segment_registers_interaction_target() {

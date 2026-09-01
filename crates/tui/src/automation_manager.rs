@@ -1198,6 +1198,42 @@ impl AutomationManager {
         Ok(out)
     }
 
+    /// Re-read specific runs by id without a full history pass. Run file
+    /// names end in `-{run_id}.json` (or are legacy `{run_id}.json`), so a
+    /// directory listing locates them and only those files are read. Used
+    /// by the activity-band scan to keep watching runs this session saw go
+    /// live even after newer runs push them past the newest-run window.
+    pub fn get_runs_by_ids(
+        &self,
+        automation_id: &str,
+        run_ids: &std::collections::BTreeSet<String>,
+    ) -> Result<Vec<AutomationRunRecord>> {
+        if run_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let dir = self.runs_dir_for(automation_id)?;
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for entry in
+            fs::read_dir(&dir).with_context(|| format!("Failed to read {}", dir.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let matches = run_ids
+                .iter()
+                .any(|id| stem == id.as_str() || stem.ends_with(&format!("-{id}")));
+            if matches {
+                out.push(read_run_file(&path)?);
+            }
+        }
+        Ok(out)
+    }
+
     fn save_run(&self, run: &AutomationRunRecord) -> Result<()> {
         let dir = self.runs_dir_for(&run.automation_id)?;
         fs::create_dir_all(&dir).with_context(|| format!("Failed to create {}", dir.display()))?;
@@ -2886,6 +2922,46 @@ mod tests {
                 .expect("later tick")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn get_runs_by_ids_finds_live_runs_past_the_newest_window() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let manager = AutomationManager::open(tempdir.path().to_path_buf()).expect("manager");
+        let automation = automation_record_with_settings(None, None, None, None);
+        let base = Utc::now();
+
+        // The OLDEST run is the long-running task; 25 newer runs stack on
+        // top of it while it is still Running.
+        let long_running = run_created_at(&automation, base - Duration::minutes(60));
+        let mut long_running = long_running;
+        long_running.status = AutomationRunStatus::Running;
+        long_running.started_at = Some(base - Duration::minutes(60));
+        manager.save_run(&long_running).expect("save live run");
+        for i in 0..25 {
+            let mut newer =
+                run_created_at(&automation, base - Duration::minutes(30 - i as i64));
+            newer.status = AutomationRunStatus::Completed;
+            newer.ended_at = Some(base - Duration::minutes(29 - i as i64));
+            manager.save_run(&newer).expect("save newer settled run");
+        }
+
+        let window = manager
+            .list_runs(&automation.id, Some(25))
+            .expect("windowed list");
+        assert!(
+            window.iter().all(|run| run.id != long_running.id),
+            "the live run sits past the newest-25 window"
+        );
+
+        let wanted: std::collections::BTreeSet<String> =
+            [long_running.id.clone()].into_iter().collect();
+        let found = manager
+            .get_runs_by_ids(&automation.id, &wanted)
+            .expect("re-read live run");
+        assert_eq!(found.len(), 1, "the run is found wherever it sits");
+        assert_eq!(found[0].id, long_running.id);
+        assert_eq!(found[0].status, AutomationRunStatus::Running);
     }
 
     #[test]

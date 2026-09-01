@@ -444,38 +444,35 @@ mod tests {
         );
     }
 
-    /// The activity band's automation slot (AUTOMATION-VISIBILITY §2.1)
-    /// reads the `AutomationPanelState` projection verbatim: `⏱ N scheduled`
-    /// plus `· M running`, zero-suppressed, dropped at Compact like every
-    /// other optional segment.
+    /// The merged footer owns phase/cost/detail only: scheduled automation
+    /// work is the TOP strip's fact (TUI band contract), so the footer facts
+    /// must never carry an automation slot. The topbar-side rendering is
+    /// pinned by `ui/frame.rs` tests (`topbar_segments` reads the same
+    /// `AutomationPanelState` projection).
     #[test]
-    fn the_automation_slot_reads_the_projection_and_drops_at_compact() {
+    fn the_footer_does_not_carry_automation_work() {
         let mut app = test_app();
         app.ui_locale = crate::localization::Locale::En;
         app.automation_panel.active_automations = 2;
         app.automation_panel.live_runs = 1;
 
-        let facts = tideline_footer_from_app(&mut app, 120);
-        let (slot, ink) = facts.automation_slot.expect("slot rides a Normal row");
-        assert_eq!(slot, "⏱ 2 scheduled · 1 running");
-        assert_eq!(ink, crate::palette::ChromeInk::Active);
-
-        // Compact: the slot sheds with the other optional segments.
-        let facts = tideline_footer_from_app(&mut app, 48);
-        assert!(
-            facts.automation_slot.is_none(),
-            "Compact drops the slot: {:?}",
-            facts.automation_slot
+        // The projection still speaks; the footer just does not own it.
+        assert_eq!(
+            app.automation_panel.activity_slot(crate::localization::Locale::En),
+            Some("⏱ 2 scheduled · 1 running".to_string())
+        );
+        assert_eq!(
+            app.automation_panel.activity_slot_compact(),
+            Some("⏱ 2·1".to_string())
         );
 
         // Zero-suppressed: no Active automations, no slot — the count never
         // becomes permanent furniture.
         app.automation_panel.active_automations = 0;
         app.automation_panel.live_runs = 0;
-        let facts = tideline_footer_from_app(&mut app, 120);
-        assert!(
-            facts.automation_slot.is_none(),
-            "zero counts suppress the slot"
+        assert_eq!(
+            app.automation_panel.activity_slot(crate::localization::Locale::En),
+            None
         );
     }
 
@@ -645,13 +642,6 @@ pub struct TidelineFooter<'a> {
     /// Urgent session notice (status toast / boot activity chip) that owns the
     /// right-hand keys slot while it is live.
     pub notice: Option<(&'a str, crate::palette::ChromeInk)>,
-    /// Scheduled-work count from `AutomationPanelState` (spec §2.1):
-    /// `⏱ N scheduled · M running`, zero-suppressed, dropped at Compact.
-    /// Painted between the live detail and the cost ledger, whole or not at
-    /// all, and only when the ledger and posture chips still fit whole
-    /// behind it; it outranks only the key chorus. Never Failure ink — a
-    /// failed report job is not a product failure.
-    pub automation_slot: Option<(&'a str, crate::palette::ChromeInk)>,
     pub ascii_safe: bool,
 }
 
@@ -676,7 +666,6 @@ impl<'a> TidelineFooter<'a> {
             mode_chip: None,
             permission_chip: None,
             notice: None,
-            automation_slot: None,
             ascii_safe: false,
         }
     }
@@ -702,12 +691,6 @@ impl<'a> TidelineFooter<'a> {
     #[must_use]
     pub fn notice(mut self, notice: Option<(&'a str, crate::palette::ChromeInk)>) -> Self {
         self.notice = notice;
-        self
-    }
-
-    #[must_use]
-    pub fn automation_slot(mut self, slot: Option<(&'a str, crate::palette::ChromeInk)>) -> Self {
-        self.automation_slot = slot;
         self
     }
 
@@ -856,19 +839,6 @@ pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFoo
             tchrome(theme, crate::palette::ChromeInk::Metadata),
         );
         x += detail.width() as u16 + 1;
-    }
-    // The scheduled-work slot ranks below the standing furniture it sits in
-    // front of: it paints only when the divider, the whole cost ledger and
-    // every posture chip still fit behind it, else it stands down whole — a
-    // clipped count is worse than none, and a count that clips the ledger to
-    // `$0` is worse still (spec §7.2's width budget).
-    if let Some((slot, ink)) = footer.automation_slot {
-        let slot = footer.sym(slot);
-        let standing = 2 + cost.width() + posture_chips_width(footer);
-        if x as usize + slot.width() + 1 + standing <= left_edge_end as usize {
-            tput(buf, x, area.y, &slot, tchrome(theme, ink));
-            x += slot.width() as u16 + 1;
-        }
     }
     if x + 2 <= left_edge_end {
         tput(
@@ -1066,16 +1036,6 @@ fn trailing_extra_width(footer: &TidelineFooter<'_>, area_width: u16) -> usize {
     trailing_extra(footer, area_width, right_base_w).width(footer)
 }
 
-/// Columns the posture chips (`· mode · permission`) claim after the cost
-/// ledger, separators included.
-fn posture_chips_width(footer: &TidelineFooter<'_>) -> usize {
-    [footer.mode_chip, footer.permission_chip]
-        .into_iter()
-        .flatten()
-        .map(|(text, _)| ITEM_SEPARATOR_WIDTH + footer.sym(text).width())
-        .sum()
-}
-
 /// Depth-segment hitbox → context inspector (spec §6). Returns the rect
 /// covering the painted depth line + percentage.
 #[must_use]
@@ -1114,8 +1074,6 @@ pub fn tideline_footer_depth_hitbox(area: Rect, footer: &TidelineFooter<'_>) -> 
 /// - `notice` — the activity band's status toast, or the compact MCP/plugin
 ///   boot chip when no toast is live; it owns the trailing right slot while
 ///   present.
-/// - `automation_slot` — the scheduled-work count owned by
-///   `AutomationPanelState` (spec §2.1); zero-suppressed, dropped at Compact.
 ///
 /// Session metrics (turns/steps/TTFT/cache) move behind `/cost` per spec §3.
 pub(crate) struct TidelineFooterFacts {
@@ -1128,7 +1086,6 @@ pub(crate) struct TidelineFooterFacts {
     pub mode_chip: Option<(String, crate::palette::ChromeInk)>,
     pub permission_chip: Option<(String, crate::palette::ChromeInk)>,
     pub notice: Option<(String, crate::palette::ChromeInk)>,
-    pub automation_slot: Option<(String, crate::palette::ChromeInk)>,
 }
 
 impl TidelineFooterFacts {
@@ -1159,11 +1116,6 @@ impl TidelineFooterFacts {
         )
         .notice(
             self.notice
-                .as_ref()
-                .map(|(text, ink)| (text.as_str(), *ink)),
-        )
-        .automation_slot(
-            self.automation_slot
                 .as_ref()
                 .map(|(text, ink)| (text.as_str(), *ink)),
         )
@@ -1219,16 +1171,9 @@ pub(crate) fn tideline_footer_from_app(app: &mut App, width: u16) -> TidelineFoo
         chip.map(|(text, ink)| (text.into_owned(), ink))
     };
 
-    // The scheduled-work slot reads the single projection
-    // (`AutomationPanelState`, spec §2.1): zero-suppressed, and dropped at
-    // Compact like every other optional segment.
-    let automation_slot = if tier == ShellTier::Compact {
-        None
-    } else {
-        app.automation_panel
-            .activity_slot(app.ui_locale)
-            .map(|text| (text, app.automation_panel.activity_ink()))
-    };
+    // Scheduled automation work is NOT a footer fact: the TUI band contract
+    // puts work in the top strip, so `topbar_segments` reads the
+    // `AutomationPanelState` projection directly.
 
     // The notice: the live status toast if one is owed, else the compact MCP
     // or plugin boot chip. A slow optional server must not look like a hung
@@ -1255,7 +1200,6 @@ pub(crate) fn tideline_footer_from_app(app: &mut App, width: u16) -> TidelineFoo
         mode_chip: map_chip(mode_chip),
         permission_chip: map_chip(permission_chip),
         notice,
-        automation_slot,
     }
 }
 

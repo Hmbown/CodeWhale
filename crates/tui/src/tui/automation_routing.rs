@@ -372,23 +372,45 @@ async fn run_now(
         .map(|record| display_text(&record.name));
     match run_now_shared(automations, id, task_manager).await {
         Ok(run) => {
+            // The run record can come back already settled: a refused
+            // enqueue returns Ok with status Failed, and a "started in
+            // background" receipt would then be a lie. Branch the receipt
+            // on the record's own status. Running/Queued are the live
+            // states; Completed/Canceled cannot occur this soon after
+            // enqueue, but if one ever does, "started" would be false —
+            // report the settled verb instead.
+            let kind = match run.status {
+                AutomationRunStatus::Failed => AutomationCellKind::Failed,
+                AutomationRunStatus::Queued | AutomationRunStatus::Running => {
+                    AutomationCellKind::Started
+                }
+                AutomationRunStatus::Completed => AutomationCellKind::Completed,
+                AutomationRunStatus::Canceled => AutomationCellKind::Mutated,
+            };
             // The operator asked for this run by hand: echo its full id so
             // it can be copied straight from the receipt.
-            let detail = format!(
+            let mut detail = format!(
                 "{} {} · {} {}",
                 tr(locale, MessageId::AutomationRunLabel),
                 run.id,
                 tr(locale, MessageId::AutomationTaskLabel),
                 run.task_id.as_deref().map(short_id).unwrap_or("-")
             );
-            HistoryCell::Automation(
-                AutomationCell::event(
-                    AutomationCellKind::Started,
-                    name.unwrap_or_else(|| id.to_string()),
-                    locale,
+            if let Some(error) = run.error.as_deref() {
+                detail.push_str(" · ");
+                detail.push_str(&display_text(error));
+            }
+            let name = name.unwrap_or_else(|| id.to_string());
+            let cell = if run.status == AutomationRunStatus::Canceled {
+                AutomationCell::mutated(
+                    name,
+                    tr(locale, MessageId::AutomationRunStatusCanceled).into_owned(),
                 )
-                .with_detail(Some(detail)),
-            )
+                .with_detail(Some(detail))
+            } else {
+                AutomationCell::event(kind, name, locale).with_detail(Some(detail))
+            };
+            HistoryCell::Automation(cell)
         }
         Err(error) => system(action_failed(
             locale,

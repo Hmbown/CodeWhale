@@ -52,11 +52,20 @@ pub struct AutomationPanelState {
     /// Ids of the runs behind `live_runs`, so the next fold can tell which
     /// of them settled (a settle is reported once, then forgotten).
     live_run_ids: BTreeSet<String>,
+    /// Which automation owns each live run (`run_id -> automation_id`), so
+    /// the next scan can re-fetch runs this session watched go live even
+    /// after newer runs push them past the newest-run window.
+    live_run_owners: BTreeMap<String, String>,
     /// Failed runs (`{automation_id}/{run_id}`) observed this session and not
     /// yet acknowledged by an automation-surface interaction. A failure, once
     /// seen, stays unacknowledged even after it ages out of the scan window —
     /// that is the point of the acknowledgement contract.
     unacknowledged_failures: BTreeSet<String>,
+    /// Failures the operator already acknowledged. The ~2.5s fold re-sees
+    /// every persisted Failed run, so without this watermark it would
+    /// re-light an acknowledged failure forever. An acknowledgement lasts
+    /// until the run leaves the records (automation deleted).
+    acknowledged_failures: BTreeSet<String>,
 }
 
 /// How a run the session watched go live ended up.
@@ -119,6 +128,11 @@ impl AutomationPanelState {
             })
             .map(|run| run.id.clone())
             .collect();
+        self.live_run_owners = runs
+            .iter()
+            .filter(|run| self.live_run_ids.contains(&run.id))
+            .map(|run| (run.id.clone(), run.automation_id.clone()))
+            .collect();
         self.live_runs = self.live_run_ids.len();
         let names: BTreeMap<&str, &str> = records
             .iter()
@@ -150,7 +164,9 @@ impl AutomationPanelState {
                 })
                 .collect();
         // Runs of deleted automations drop out; the surviving ids keep their
-        // acknowledgement demand.
+        // acknowledgement demand. The acknowledged watermark sheds deleted
+        // automations the same way so it cannot grow unbounded across a
+        // long session.
         let automation_ids: BTreeSet<&str> =
             records.iter().map(|record| record.id.as_str()).collect();
         let mut unacknowledged: BTreeSet<String> = previous
@@ -162,12 +178,25 @@ impl AutomationPanelState {
             })
             .cloned()
             .collect();
+        let acknowledged: BTreeSet<String> = previous
+            .acknowledged_failures
+            .iter()
+            .filter(|key| {
+                key.split_once('/')
+                    .is_some_and(|(automation_id, _)| automation_ids.contains(automation_id))
+            })
+            .cloned()
+            .collect();
+        self.acknowledged_failures = acknowledged;
         for run in runs {
             let finished_at = run.ended_at.unwrap_or(run.created_at);
             if matches!(run.status, AutomationRunStatus::Failed)
                 && finished_at >= session_started_at
             {
-                unacknowledged.insert(format!("{}/{}", run.automation_id, run.id));
+                let key = format!("{}/{}", run.automation_id, run.id);
+                if !self.acknowledged_failures.contains(&key) {
+                    unacknowledged.insert(key);
+                }
             }
         }
         self.unacknowledged_failures = unacknowledged;
@@ -179,8 +208,12 @@ impl AutomationPanelState {
 
     /// The operator engaged with the automation surface (`/automation …`;
     /// the Slice-2 panel hooks the same call): every failure observed so far
-    /// is acknowledged and the band ink settles.
+    /// is acknowledged and the band ink settles. The acknowledgement rides
+    /// the watermark — the next fold re-sees the same persisted Failed runs
+    /// and must not re-light them.
     pub fn acknowledge_failures(&mut self) {
+        self.acknowledged_failures
+            .extend(self.unacknowledged_failures.iter().cloned());
         self.unacknowledged_failures.clear();
     }
 
@@ -189,14 +222,31 @@ impl AutomationPanelState {
         !self.unacknowledged_failures.is_empty()
     }
 
+    /// Live runs this session is watching (`run_id -> automation_id`), so
+    /// the next scan can re-fetch them even after newer runs push them
+    /// past the newest-run window.
+    pub(crate) fn live_run_owners(&self) -> BTreeMap<String, String> {
+        self.live_run_owners.clone()
+    }
+
     /// Activity-band slot text: `⏱ N scheduled` while any automation is
-    /// Active, plus `· M running` while runs are Queued|Running.
-    /// Zero-suppressed — the slot vanishes at 0 so it never becomes
-    /// permanent furniture (spec §7.2).
+    /// Active, plus `· M running` while runs are Queued|Running. Pausing an
+    /// automation does not cancel its already-enqueued runs, so the slot
+    /// stays up while either count is nonzero and vanishes only at zero —
+    /// it never becomes permanent furniture (spec §7.2).
     #[must_use]
     pub fn activity_slot(&self, locale: Locale) -> Option<String> {
-        if self.active_automations == 0 {
+        if self.active_automations == 0 && self.live_runs == 0 {
             return None;
+        }
+        if self.active_automations == 0 {
+            // Runs outlive their paused automation: show the live work,
+            // not the (zero) scheduled count.
+            return Some(format!(
+                "{SLOT_GLYPH} {} {}",
+                self.live_runs,
+                tr(locale, MessageId::AutomationRunStatusRunning)
+            ));
         }
         let mut slot = format!(
             "{SLOT_GLYPH} {} {}",
@@ -211,6 +261,29 @@ impl AutomationPanelState {
             ));
         }
         Some(slot)
+    }
+
+    /// Compact-tier form of the same fact: `⏱ 2·1` (scheduled·running).
+    /// Chrome sheds before content on narrow terminals, so the live-work
+    /// count abbreviates instead of vanishing; still zero-suppressed on
+    /// both counts.
+    #[must_use]
+    pub fn activity_slot_compact(&self) -> Option<String> {
+        if self.active_automations == 0 && self.live_runs == 0 {
+            return None;
+        }
+        Some(if self.live_runs > 0 {
+            if self.active_automations == 0 {
+                format!("{SLOT_GLYPH} ·{}", self.live_runs)
+            } else {
+                format!(
+                    "{SLOT_GLYPH} {}·{}",
+                    self.active_automations, self.live_runs
+                )
+            }
+        } else {
+            format!("{SLOT_GLYPH} {}", self.active_automations)
+        })
     }
 
     /// Slot ink, the grammar table's existing Goal-chip rule: `Info` idle,
@@ -349,6 +422,65 @@ mod tests {
 
         panel.acknowledge_failures();
         assert_eq!(panel.activity_ink(), ChromeInk::Info);
+
+        // The next fold re-sees the same persisted Failed run and must not
+        // re-light the acknowledged failure.
+        panel.fold_scan(
+            &[record("a1", AutomationStatus::Active)],
+            &[run(
+                "a1",
+                "r1",
+                AutomationRunStatus::Failed,
+                Some(Utc::now()),
+            )],
+            session_started_at,
+        );
+        assert!(
+            !panel.has_unacknowledged_failure(),
+            "an acknowledged failure must not re-light on the next scan"
+        );
+        assert_eq!(panel.activity_ink(), ChromeInk::Info);
+
+        // A NEW failed run is still a fresh acknowledgement demand.
+        panel.fold_scan(
+            &[record("a1", AutomationStatus::Active)],
+            &[run(
+                "a1",
+                "r2",
+                AutomationRunStatus::Failed,
+                Some(Utc::now()),
+            )],
+            session_started_at,
+        );
+        assert!(panel.has_unacknowledged_failure());
+    }
+
+    #[test]
+    fn live_runs_stay_visible_when_their_automation_is_paused() {
+        // Pausing prevents future scheduling; it does not cancel the
+        // already-enqueued run. The projection must stay up while either
+        // count is nonzero.
+        let session_started_at = Utc::now();
+        let mut panel = AutomationPanelState::default();
+        panel.fold_scan(
+            &[record("a1", AutomationStatus::Paused)],
+            &[run("a1", "r1", AutomationRunStatus::Running, None)],
+            session_started_at,
+        );
+        assert_eq!(panel.active_automations, 0);
+        assert_eq!(panel.live_runs, 1);
+        assert_eq!(
+            panel.activity_slot(Locale::En).as_deref(),
+            Some("⏱ 1 running"),
+            "a paused automation's live run stays visible"
+        );
+        assert_eq!(panel.activity_slot_compact().as_deref(), Some("⏱ ·1"));
+        assert_eq!(panel.activity_ink(), ChromeInk::Active);
+
+        // Both counts at zero: the slot vanishes.
+        panel.fold_scan(&[record("a1", AutomationStatus::Paused)], &[], session_started_at);
+        assert_eq!(panel.activity_slot(Locale::En), None);
+        assert_eq!(panel.activity_slot_compact(), None);
     }
 
     #[test]
