@@ -26,7 +26,7 @@ they do not cost context on machines that will never hit them.
 
 ## Running the agent without provider API keys
 
-Point CodeWhale at any local OpenAI-compatible endpoint via the keyless
+Point Codewhale at any local OpenAI-compatible endpoint via the keyless
 `vllm`/`ollama`/`sglang` providers:
 
 ```sh

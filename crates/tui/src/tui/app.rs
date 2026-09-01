@@ -250,11 +250,9 @@ fn initial_onboarding_state(
     } else if was_onboarded && needs_workspace_trust {
         OnboardingState::TrustDirectory
     } else {
-        // First run always starts at Welcome. Enter then routes to language,
-        // provider setup, trust, or ready depending on what this run needs.
-        // Skipping Welcome to land on the provider list was an over-correction:
-        // new users never saw a start screen or the calm API-key explanation.
-        OnboardingState::Welcome
+        // First paint is the composer. Language, provider, and trust stay in
+        // /setup. A 5-gate wizard must not block the first keystroke.
+        OnboardingState::None
     }
 }
 
@@ -1973,6 +1971,9 @@ pub struct App {
     /// compaction rewrites history, since the receipt describes the
     /// pre-compaction context.
     pub last_billed_input_tokens: Option<u32>,
+    /// Last successful compaction, so `/context` and the inspector can name
+    /// the path and the last-round floor instead of looking empty.
+    pub last_compaction: Option<crate::compaction::LastCompactionSnapshot>,
     /// Accumulated reasoning text
     pub reasoning_buffer: String,
     /// Live reasoning header extracted from bold text

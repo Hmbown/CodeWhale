@@ -1392,7 +1392,7 @@ fn coordination_handover_within_this_process_does_not_toast() {
     assert!(
         toast
             .text
-            .starts_with("Another CodeWhale session in this workspace"),
+            .starts_with("Another Codewhale session in this workspace"),
         "the toast must lead with the fact that explains the state: {}",
         toast.text
     );
@@ -5107,8 +5107,8 @@ async fn session_denied_cache_auto_deny_explains_the_cached_rejection() {
     assert_eq!(toast.level, StatusToastLevel::Warning);
     assert_eq!(toast.ttl_ms, Some(12_000));
     assert!(toast.text.contains("matching request was denied earlier"));
-    assert!(toast.text.contains("during this CodeWhale run"));
-    assert!(toast.text.contains("Restart CodeWhale"));
+    assert!(toast.text.contains("during this Codewhale run"));
+    assert!(toast.text.contains("Restart Codewhale"));
     assert!(toast.text.contains("exec_shell"));
     let history_notice = app
         .history
@@ -5134,7 +5134,7 @@ async fn session_denied_cache_auto_deny_explains_the_cached_rejection() {
     let rendered = render_underwater_test_app(&mut app, 40, 12);
     assert!(rendered.contains("Auto-denied"), "{rendered:?}");
     assert!(
-        rendered.contains("Restart") && rendered.contains("CodeWhale"),
+        rendered.contains("Restart") && rendered.contains("Codewhale"),
         "{rendered:?}"
     );
 }
@@ -5361,7 +5361,7 @@ async fn session_denied_cache_notice_renders_host_scope_in_zh_hans() {
             _ => None,
         })
         .expect("localized persistent auto-deny explanation");
-    assert!(notice.contains("本次 CodeWhale 运行期间"));
+    assert!(notice.contains("本次 Codewhale 运行期间"));
     assert!(notice.contains("匹配请求"));
     assert!(!notice.contains("example.com"));
 
@@ -5373,7 +5373,7 @@ async fn session_denied_cache_notice_renders_host_scope_in_zh_hans() {
     assert!(rendered_compact.contains("已自动拒绝"), "{rendered:?}");
     assert!(rendered_compact.contains("匹配请求"), "{rendered:?}");
     assert!(
-        rendered_compact.contains("重启") && rendered_compact.contains("CodeWhale"),
+        rendered_compact.contains("重启") && rendered_compact.contains("Codewhale"),
         "{rendered:?}"
     );
 }
@@ -5385,8 +5385,8 @@ fn session_denied_notice_explains_cached_decision_and_recovery() {
 
     assert!(notice.contains("exec_shell"));
     assert!(notice.contains("matching request was denied earlier"));
-    assert!(notice.contains("during this CodeWhale run"));
-    assert!(notice.contains("Restart CodeWhale"));
+    assert!(notice.contains("during this Codewhale run"));
+    assert!(notice.contains("Restart Codewhale"));
 }
 
 #[tokio::test]
@@ -5455,7 +5455,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
                 cell,
                 HistoryCell::System { content }
                     if content.contains("Auto-denied exec_shell")
-                        && content.contains("Restart CodeWhale")
+                        && content.contains("Restart Codewhale")
             )
         })
         .expect("cached denial must leave a durable recovery receipt");
@@ -5492,7 +5492,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
         "cached-decision explanation disappeared after completion:\n{rendered}"
     );
     assert!(
-        rendered.contains("Restart CodeWhale"),
+        rendered.contains("Restart Codewhale"),
         "cached-denial recovery path disappeared after completion:\n{rendered}"
     );
     assert_eq!(
@@ -9379,6 +9379,9 @@ fn deferred_manual_compaction_is_superseded_by_a_live_pass() {
         "compact-x",
         true,
         "Auto-compaction complete".to_string(),
+        None,
+        None,
+        None,
     );
     assert!(app.deferred_manual_compaction.is_none());
     assert!(!app.manual_compaction_queued);
@@ -9422,6 +9425,9 @@ fn compaction_lifecycle_keeps_truthful_auto_label_until_matching_completion() {
         "compact-stale",
         true,
         "stale completion".to_string(),
+        None,
+        None,
+        None,
     );
     assert!(app.is_compacting, "stale id must not clear newer activity");
     assert_eq!(
@@ -9434,6 +9440,9 @@ fn compaction_lifecycle_keeps_truthful_auto_label_until_matching_completion() {
         "compact-new",
         true,
         "Auto-compaction complete: 126 → 12 messages".to_string(),
+        None,
+        None,
+        None,
     );
     assert!(!app.is_compacting);
     assert!(app.active_compaction.is_none());
@@ -24003,4 +24012,129 @@ fn focused_agent_transcript_receives_wheel_scroll_through_the_frame() {
         app.viewport.transcript_scroll.is_at_tail(),
         "the invisible main transcript must not consume the focused pane's scroll"
     );
+}
+
+#[test]
+fn fresh_launch_engine_adopts_the_app_session_id() {
+    // Regression for phantom duplicate sessions: a fresh interactive launch
+    // claimed session id A in the App (Runtime store lock, turn-start crash
+    // checkpoint) while the engine minted its own id B. The first
+    // `SessionUpdated` re-keyed the App to B, the completion commit cleared
+    // only `checkpoints/<B>.json`, and `--continue` later "recovered" the
+    // orphaned `checkpoints/<A>.json` (one user message, no reply) instead of
+    // the real session. The engine must adopt the App's id at spawn.
+    let mut app = create_test_app();
+    app.current_session_id = None;
+    let config = Config::default();
+
+    let session_id = super::event_loop::ensure_runtime_session_id(&mut app);
+    assert_eq!(app.current_session_id.as_deref(), Some(session_id.as_str()));
+    assert!(
+        uuid::Uuid::parse_str(&session_id).is_ok(),
+        "fresh launch claims a uuid, got {session_id:?}"
+    );
+
+    let engine_config = build_engine_config(&app, &config);
+    assert_eq!(
+        engine_config.session_id.as_deref(),
+        Some(session_id.as_str()),
+        "the engine config must carry the App session id"
+    );
+    let (engine, _handle) = crate::core::engine::Engine::new(engine_config, &config);
+    assert_eq!(
+        engine.session_id(),
+        session_id,
+        "the engine must run the conversation the App persists"
+    );
+}
+
+#[test]
+fn fresh_session_turn_lifecycle_leaves_no_orphan_checkpoint() {
+    // Store-level regression for the phantom duplicate sessions: walk the
+    // persistence lifecycle of one fresh interactive turn against an
+    // isolated session store and require that the turn-start checkpoint and
+    // the completion commit are keyed by the same id. Before the fix the
+    // engine minted its own id, `SessionUpdated` re-keyed the App to it, and
+    // `checkpoints/<app id>.json` survived every completed turn; `--continue`
+    // then "recovered" that one-message orphan as a duplicate session.
+    //
+    // `build_session_snapshot` calls `set_live_session`, which writes the
+    // process-global LIVE_SESSIONS registry. Without this lock the test races
+    // the other live-session tests under the default multi-thread runner.
+    let _lock = crate::test_support::lock_test_env();
+    let mut app = create_test_app();
+    app.current_session_id = None;
+    app.current_session_metadata = None;
+    let config = Config::default();
+    let store = TempDir::new().expect("sessions tempdir");
+    let manager = crate::session_manager::SessionManager::new(store.path().join("sessions"))
+        .expect("manager");
+
+    // Fresh launch (event_loop::run_tui): the App claims the id, the engine
+    // adopts it.
+    let app_session_id = super::event_loop::ensure_runtime_session_id(&mut app);
+    let (engine, _handle) =
+        crate::core::engine::Engine::new(build_engine_config(&app, &config), &config);
+
+    // Turn start (dispatch.rs): crash checkpoint under the App id.
+    app.api_messages.push(crate::models::Message {
+        role: Role::User,
+        content: vec![crate::models::ContentBlock::Text {
+            text: "please answer".to_string(),
+            cache_control: None,
+        }],
+    });
+    let checkpoint = build_session_snapshot(&mut app, &manager).expect("turn-start snapshot");
+    assert_eq!(checkpoint.metadata.id, app_session_id);
+    manager
+        .save_checkpoint(&checkpoint)
+        .expect("save turn-start checkpoint");
+
+    // The engine reports its conversation id (`SessionUpdated` handler).
+    app.current_session_id = Some(engine.session_id().to_string());
+
+    // Turn completion (`PersistRequest::CompletedCommit`): save the session,
+    // then clear the checkpoint of the id the snapshot carries.
+    app.api_messages.push(crate::models::Message {
+        role: Role::Assistant,
+        content: vec![crate::models::ContentBlock::Text {
+            text: "answer".to_string(),
+            cache_control: None,
+        }],
+    });
+    let completed = build_session_snapshot(&mut app, &manager).expect("completed snapshot");
+    manager.save_session(&completed).expect("save session");
+    manager
+        .clear_session_checkpoint(&completed.metadata.id)
+        .expect("clear checkpoint");
+
+    assert_eq!(
+        completed.metadata.id, app_session_id,
+        "the completed turn must commit under the id the checkpoint was written with"
+    );
+    let orphans = manager.list_checkpoints().expect("list checkpoints");
+    assert!(
+        orphans.is_empty(),
+        "a completed turn must leave no checkpoint behind, found {:?}",
+        orphans.iter().map(|c| c.path.clone()).collect::<Vec<_>>()
+    );
+    let sessions = manager.list_sessions().expect("list sessions");
+    assert_eq!(sessions.len(), 1, "exactly one session file: {sessions:?}");
+    assert_eq!(sessions[0].id, app_session_id);
+    assert_eq!(sessions[0].message_count, 2);
+    crate::session_manager::set_live_session(None);
+}
+
+#[test]
+fn resumed_launch_keeps_the_loaded_session_id_for_the_engine() {
+    let mut app = create_test_app();
+    app.current_session_id = Some("800596e6-56fd-477c-9a0f-13ada7846194".to_string());
+    let config = Config::default();
+
+    let session_id = super::event_loop::ensure_runtime_session_id(&mut app);
+    assert_eq!(session_id, "800596e6-56fd-477c-9a0f-13ada7846194");
+
+    let (engine, _handle) =
+        crate::core::engine::Engine::new(build_engine_config(&app, &config), &config);
+    assert_eq!(engine.session_id(), "800596e6-56fd-477c-9a0f-13ada7846194");
 }

@@ -1,6 +1,6 @@
 # Third-party notices
 
-CodeWhale is MIT licensed (see [`LICENSE`](../LICENSE)). Portions of it are
+Codewhale is MIT licensed (see [`LICENSE`](../LICENSE)). Portions of it are
 adapted from other open-source projects. Their copyright and permission
 notices are reproduced here, and each adapted file carries an attribution
 header pointing back to its origin.
@@ -22,7 +22,7 @@ the licence obligation travels with the code rather than with a package.
   credential per provider, `modify` as the only serialized write path, a single
   stated precedence rule enforced in one place, an injectable auth context, and
   a resolution result that names its source. This is a design port into
-  idiomatic synchronous Rust over CodeWhale's existing stores, not a
+  idiomatic synchronous Rust over Codewhale's existing stores, not a
   line-for-line copy; several doc comments are adapted closely.
 
 ```
@@ -58,7 +58,7 @@ the adapting file; they are listed here so the set is discoverable from one
 place. Their licence text has not been reproduced below — that is a gap, not a
 claim that none is required.
 
-| CodeWhale file | Adapted from |
+| Codewhale file | Adapted from |
 | --- | --- |
 | `crates/tui/src/tui/frame_rate_limiter.rs` | `codex-rs/tui/src/tui/frame_rate_limiter.rs`, [openai/codex](https://github.com/openai/codex) |
 | `crates/tui/src/tui/display_refresh.rs` | Grok CLI's host display-refresh probe |

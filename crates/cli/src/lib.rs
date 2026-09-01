@@ -17,6 +17,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use codewhale_agent::ModelRegistry;
+use codewhale_app_server::daemon_socket::{DaemonSocketOptions, run_daemon_socket};
 use codewhale_app_server::{
     AppServerOptions, run as run_app_server, run_stdio as run_app_server_stdio,
 };
@@ -129,6 +130,21 @@ struct Cli {
     /// Continue the most recent interactive session for this workspace.
     #[arg(short = 'c', long = "continue")]
     continue_session: bool,
+    /// Resume a saved interactive session by id or unique id prefix.
+    #[arg(
+        short = 'r',
+        long = "resume",
+        value_name = "SESSION_ID",
+        conflicts_with_all = ["continue_session", "session_id"]
+    )]
+    resume: Option<String>,
+    /// Alias of `--resume` matching `codewhale exec --session-id`.
+    #[arg(
+        long = "session-id",
+        value_name = "SESSION_ID",
+        conflicts_with_all = ["continue_session", "resume"]
+    )]
+    session_id: Option<String>,
     #[arg(short = 'p', long = "prompt", value_name = "PROMPT")]
     prompt_flag: Option<String>,
     #[arg(
@@ -1685,6 +1701,18 @@ struct AppServerArgs {
     /// Used by local SDKs and JSON-RPC integrations.
     #[arg(long, default_value_t = false)]
     stdio: bool,
+    /// Run as the desktop daemon: the same JSON-RPC control transport as
+    /// `--stdio`, served on a user-private unix domain socket under the
+    /// Codewhale runtime directory. Clients must `daemon/attach` first.
+    /// Not yet supported on Windows (fails with a typed error).
+    #[arg(long, default_value_t = false, conflicts_with_all = ["stdio", "http", "mobile"])]
+    socket: bool,
+    /// Socket path override for --socket. Defaults to
+    /// `$CODEWHALE_HOME/run/daemon.sock`, else `$XDG_RUNTIME_DIR/codewhale/daemon.sock`,
+    /// else `~/Library/Application Support/codewhale/daemon.sock` (macOS) or
+    /// `~/.codewhale/run/daemon.sock`.
+    #[arg(long = "socket-path", requires = "socket")]
+    socket_path: Option<PathBuf>,
     /// Show a QR code for the mobile URL in the terminal (requires --mobile).
     #[arg(long, requires = "mobile")]
     qr: bool,
@@ -1856,6 +1884,20 @@ fn run() -> Result<()> {
             error
         }
     })?;
+    // Root session flags only reach the TUI through the `None` branch below;
+    // no subcommand handler reads them. Accepting them silently resumes
+    // nothing -- `codewhale --resume abc exec "..."` would start a fresh
+    // session while looking like it continued one.
+    if command.is_some()
+        && (cli.continue_session || cli.resume.is_some() || cli.session_id.is_some())
+    {
+        anyhow::bail!(
+            "--continue/--resume/--session-id apply to the interactive session and \
+             cannot be combined with a subcommand. Run them without a subcommand, or \
+             use the subcommand's own flag (for example `codewhale exec --session-id <id>`)."
+        );
+    }
+
     match command {
         Some(Commands::Run(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
@@ -2140,6 +2182,26 @@ fn root_tui_passthrough(cli: &Cli) -> Result<Vec<String>> {
     if cli.continue_session {
         forwarded.push("--continue".to_string());
     }
+    let resume_session_id = cli
+        .resume
+        .as_deref()
+        .or(cli.session_id.as_deref())
+        .map(str::trim);
+    if resume_session_id.is_some_and(str::is_empty) {
+        // A shell expanding an unset variable -- `codewhale --resume
+        // "$SESSION_ID"` -- must not quietly become a fresh session. The user
+        // asked to resume; starting new loses the session they meant, and the
+        // mistake is invisible until the history is gone.
+        bail!(
+            "--resume/--session-id needs a session id, but got an empty value \
+             (an unset shell variable?). Use `codewhale --continue` to resume \
+             the most recent session."
+        );
+    }
+    if let Some(session_id) = resume_session_id {
+        forwarded.push("--resume".to_string());
+        forwarded.push(session_id.to_string());
+    }
 
     let prompt =
         cli.prompt_flag
@@ -2156,6 +2218,11 @@ fn root_tui_passthrough(cli: &Cli) -> Result<Vec<String>> {
         if cli.continue_session {
             bail!(
                 "`codewhale --continue` resumes the interactive TUI. Use `codewhale exec --continue <PROMPT>` to continue a session non-interactively."
+            );
+        }
+        if let Some(session_id) = resume_session_id {
+            bail!(
+                "`codewhale --resume {session_id}` resumes the interactive TUI. Use `codewhale exec --resume {session_id} <PROMPT>` to continue a session non-interactively."
             );
         }
         forwarded.push("--prompt".to_string());
@@ -4685,6 +4752,14 @@ fn run_app_server_command(
         finish_cli_telemetry(session, &outcome);
         return outcome;
     }
+    if args.socket {
+        let outcome = runtime.block_on(run_daemon_socket(DaemonSocketOptions {
+            socket_path: args.socket_path,
+            config_path: args.config,
+        }));
+        finish_cli_telemetry(session, &outcome);
+        return outcome;
+    }
     // Legacy in-process app-server HTTP transport (`/healthz`, `/thread`, `/app`,
     // `/prompt`, `/tool`, `/jobs`). Kept for backward compatibility; defaults to
     // 127.0.0.1:8787 to avoid colliding with the runtime API default of :7878.
@@ -6168,13 +6243,51 @@ verbosity = "project-imported"
             }))
         ));
 
+        assert!(matches!(
+            parse_ok(&["deepseek", "app-server", "--socket"]).command,
+            Some(Commands::AppServer(AppServerArgs {
+                socket: true,
+                socket_path: None,
+                http: false,
+                mobile: false,
+                stdio: false,
+                ..
+            }))
+        ));
+
         for argv in [
             ["deepseek", "app-server", "--http", "--mobile"].as_slice(),
             ["deepseek", "app-server", "--http", "--stdio"].as_slice(),
             ["deepseek", "app-server", "--mobile", "--stdio"].as_slice(),
+            ["deepseek", "app-server", "--socket", "--stdio"].as_slice(),
+            ["deepseek", "app-server", "--socket", "--http"].as_slice(),
+            ["deepseek", "app-server", "--socket", "--mobile"].as_slice(),
         ] {
             let err = Cli::try_parse_from(argv).expect_err("conflicting transports must fail");
             assert_eq!(err.kind(), ErrorKind::ArgumentConflict, "argv={argv:?}");
+        }
+    }
+
+    #[test]
+    fn app_server_socket_path_requires_socket() {
+        let err = Cli::try_parse_from(["deepseek", "app-server", "--socket-path", "/tmp/d.sock"])
+            .expect_err("--socket-path without --socket must fail");
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+        match parse_ok(&[
+            "deepseek",
+            "app-server",
+            "--socket",
+            "--socket-path",
+            "/tmp/d.sock",
+        ])
+        .command
+        {
+            Some(Commands::AppServer(AppServerArgs {
+                socket: true,
+                socket_path: Some(path),
+                ..
+            })) => assert_eq!(path, PathBuf::from("/tmp/d.sock")),
+            other => panic!("unexpected parse: {other:?}"),
         }
     }
 
@@ -6199,6 +6312,8 @@ verbosity = "project-imported"
             http: true,
             mobile: false,
             stdio: false,
+            socket: false,
+            socket_path: None,
             qr: false,
             host: Some("127.0.0.1".to_string()),
             port: Some(9000),
@@ -6237,6 +6352,8 @@ verbosity = "project-imported"
             http: false,
             mobile: true,
             stdio: false,
+            socket: false,
+            socket_path: None,
             qr: true,
             host: None,
             port: None,
@@ -9378,6 +9495,69 @@ verbosity = "project-imported"
         assert!(cli.prompt_flag.is_none());
         assert!(cli.prompt.is_empty());
         assert_eq!(root_tui_passthrough(&cli).unwrap(), vec!["--continue"]);
+    }
+
+    #[test]
+    fn parses_top_level_resume_flags_for_interactive_resume() {
+        // The operations runbook advertises `codewhale --resume <id>`. Before
+        // the root flag existed, the trailing prompt positional swallowed it
+        // and forwarded `--prompt "--resume <id>"` to the TUI (exit 2).
+        for argv in [
+            &["codewhale", "--resume", "800596e6"][..],
+            &["codewhale", "--resume=800596e6"][..],
+            &["codewhale", "-r", "800596e6"][..],
+            &["codewhale", "--session-id", "800596e6"][..],
+            &["codewhale", "--session-id=800596e6"][..],
+        ] {
+            let cli = parse_ok(argv);
+            assert!(
+                cli.prompt.is_empty(),
+                "{argv:?} must not be swallowed as a prompt: {:?}",
+                cli.prompt
+            );
+            assert!(cli.prompt_flag.is_none(), "{argv:?}");
+            assert!(cli.command.is_none(), "{argv:?}");
+            assert_eq!(
+                root_tui_passthrough(&cli).unwrap(),
+                vec!["--resume".to_string(), "800596e6".to_string()],
+                "{argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_resume_identifier_is_rejected_rather_than_starting_fresh() {
+        // `codewhale --resume "$SESSION_ID"` with the variable unset used to
+        // trim to empty, filter to None, and start a brand-new session while
+        // looking like it resumed one. Losing the session the user asked for
+        // must be loud.
+        for argv in [
+            &["codewhale", "--resume", ""][..],
+            &["codewhale", "--session-id", "   "][..],
+        ] {
+            let cli = parse_ok(argv);
+            let err = root_tui_passthrough(&cli)
+                .expect_err("an empty resume id must not silently start a fresh session");
+            assert!(
+                err.to_string().contains("needs a session id"),
+                "{argv:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn top_level_resume_rejects_startup_prompt_and_conflicting_flags() {
+        let cli = parse_ok(&["codewhale", "--resume", "800596e6", "-p", "follow up"]);
+        let err = root_tui_passthrough(&cli).expect_err("prompted resume should be rejected");
+        assert!(
+            err.to_string()
+                .contains("codewhale exec --resume 800596e6 <PROMPT>"),
+            "{err}"
+        );
+
+        assert!(Cli::try_parse_from(["codewhale", "--resume", "800596e6", "--continue"]).is_err());
+        assert!(Cli::try_parse_from(["codewhale", "--resume", "a", "--session-id", "b"]).is_err());
+        assert!(Cli::try_parse_from(["codewhale", "--session-id", "b", "-c"]).is_err());
     }
 
     #[test]

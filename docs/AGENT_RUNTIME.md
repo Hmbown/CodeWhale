@@ -1,4 +1,4 @@
-# The CodeWhale Agent Runtime — one durable substrate, familiar launchers
+# The Codewhale Agent Runtime — one durable substrate, familiar launchers
 
 > 阅读简体中文版：[zh_hans/AGENT_RUNTIME.md](zh_hans/AGENT_RUNTIME.md)
 
@@ -20,22 +20,23 @@ through the same lifecycle. Everything else is a way to select, launch, or
 observe that one Runtime.
 
 ```
-                         ┌───────────────────────────────┐
-                         │       headless Runtime         │
-                         │ (execution + authority +       │
-                         │  lifecycle; can sub-spawn)     │
-                         └───────────────────────────────┘
-                            ▲             ▲             ▲
-            launches │              │              │ launches
-                     │              │              │
-        ┌────────────┴───┐  ┌───────┴────────┐  ┌──┴───────────────────┐
-        │   TUI turn     │  │ `codewhale     │  │   Agent Pod           │
-        │  (interactive, │  │   exec`        │  │  (identity, member-   │
-        │   in-process)  │  │  (headless CLI,│  │   ship, selection) —  │
-        │                │  │   anyone/any-  │  │   requests Runtime    │
-        │                │  │   time)        │  │   execution for a     │
-        └────────────────┘  └────────────────┘  │   selected Agent      │
-                                                 └───────────────────────┘
+                 ┌──────────────────────────────────────┐
+                 │          headless Runtime             │
+                 │ execution · authority · lifecycle     │
+                 │       can spawn child workers         │
+                 └───────────────┬──────────────────────┘
+                                 │
+                 ┌───────────────┴──────────────────────┐
+                 │      one durable execution substrate  │
+                 └───────┬───────────────┬──────────────┘
+                         │ launches      │ launches
+          ┌──────────────┴──────┐  ┌─────┴────────────────┐  ┌──────────────────────┐
+          │       TUI turn       │  │   `codewhale exec`  │  │      Agent Pod        │
+          │ interactive, in-proc │  │    headless CLI     │  │ identity · membership │
+          │                      │  │ full tools · stream │  │     · selection       │
+          └─────────────────────┘  └──────────────────────┘  └──────────┬───────────┘
+                                                                          │
+                                                                          └─ selects a Runtime worker
 ```
 
 - A **sub-agent** is the user-facing name for a *nested assignment* with a role
@@ -182,13 +183,13 @@ request (turn-step) when the provider reported usage for that call:
 
 ## Convergence with Claude Code (#2972)
 
-CodeWhale should converge with Claude Code on **shape**, not on branding:
+Codewhale should converge with Claude Code on **shape**, not on branding:
 
 - **Adopt**: a headless runtime with a real CLI/SDK front door; sub-agents as
   isolated runs that return summaries (not transcripts); a compact, event-driven
   fanout projection; capability/role tool profiles; the skills ecosystem
   (#2743); structured run receipts.
-- **Keep distinct**: CodeWhale branding and first-class DeepSeek/GLM/MiniMax/
+- **Keep distinct**: Codewhale branding and first-class DeepSeek/GLM/MiniMax/
   multi-provider support; the local-first **Agent Pod** as the identity,
   membership, and selection layer; durable local/SSH execution and authority in
   Runtime; Workflow as the ordering overlay.
@@ -241,11 +242,11 @@ probing (needs a product decision).
 ## Public launch contract for an external harness (#4641)
 
 An external evaluation harness (for example a future Verifiers v1 built-in
-harness) embeds CodeWhale by launching the public `codewhale exec` front door
-against an interception endpoint it owns. CodeWhale owns only its **launch
+harness) embeds Codewhale by launching the public `codewhale exec` front door
+against an interception endpoint it owns. Codewhale owns only its **launch
 contract**; the harness owns interception, traces, model-call timing, token
 accounting, retries, rollout limits, and runtime orchestration. Do not add a
-harness runtime, trace parser, or receipt schema to CodeWhale.
+harness runtime, trace parser, or receipt schema to Codewhale.
 
 A reproducible headless launch uses only existing generic surfaces:
 
@@ -311,8 +312,8 @@ is the provider-free acceptance lock for this contract.
 
 ### Future upstream checklist (out of scope here — do not run)
 
-Actually adding CodeWhale as a built-in harness lives in the external Verifiers
-repository; the public, immutable CodeWhale GitHub Releases with checksum
+Actually adding Codewhale as a built-in harness lives in the external Verifiers
+repository; the public, immutable Codewhale GitHub Releases with checksum
 manifests it needs have existed since v0.9.1 (latest published release is
 v0.9.10; the workspace source candidate is v0.9.11).
 That upstream change is expected to be limited to a new
@@ -322,7 +323,7 @@ registration, with `CodewhaleHarnessConfig` pinning the target release,
 writing the temporary route/MCP files above and calling `runtime.run_program(...)`.
 
 Holdouts, explicitly **not** performed by this contract work: tagging,
-publishing, or creating a CodeWhale release; opening or submitting the upstream
+publishing, or creating a Codewhale release; opening or submitting the upstream
 Verifiers PR; running its credentialed E2E matrix; or claiming
 runtime/architecture support before the exact released archive has run in that
 upstream runtime.

@@ -187,10 +187,19 @@ Report commands actually run and distinguish source, local tests, packaged
 artifacts, CI, and public release state. Describe the evidence actually needed
 for the claim; a test count is not a proxy for product quality.
 
-Community reports, PRs, logs, and reviews are evidence. Canonical human
-identities come from `.github/AUTHOR_MAP`; `Co-authored-by` credit is for
-humans and for recognized agent contributors (the exact identities listed in
-`AGENT_CONTRIBUTOR_IDENTITIES` in `scripts/check-coauthor-trailers.py`, such as
-`Codewhale Agent`); unknown bot/tool trailers are still rejected.
+Community reports, PRs, logs, and reviews are evidence.
+
+**Harvested contributor credit is still a rule.** When a contributor's work
+lands as our commit, that commit carries `Harvested from PR #N by @handle` and a
+`Co-authored-by` naming them at their GitHub-linked address, so
+`auto-close-harvested.yml` closes their PR with credit and the contribution
+graph reflects reality. Canonical human identities come from
+`.github/AUTHOR_MAP`.
+
+**Whether a bot or agent also appears in a trailer no longer matters.** The CI
+check that policed trailer identities was removed: it rejected ordinary agent
+commits and cost more than the tidiness it bought. Give humans their credit; do
+not spend time scrubbing tool trailers.
+
 Leave unrelated work intact and keep new enforcement dry-run unless explicitly
 approved.

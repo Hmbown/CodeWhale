@@ -94,7 +94,7 @@ pub(crate) fn apply_coordination_detail_projection(
         let message = if note.contains(crate::tools::subagent::COORDINATION_LOCK_TIMEOUT_MARKER) {
             "Timed out claiming delegated coordination for this workspace — job rows still settle locally.".to_string()
         } else {
-            "Another CodeWhale session in this workspace owns delegated coordination — job rows still settle locally.".to_string()
+            "Another Codewhale session in this workspace owns delegated coordination — job rows still settle locally.".to_string()
         };
         // Demoted from sticky 30s to transient 5s — two sessions in same workspace
         // should not feel broken; job rows still settle locally. The detail view

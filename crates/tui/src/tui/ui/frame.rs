@@ -454,6 +454,10 @@ pub(crate) fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         model: app.model.clone(),
         active_route_limits: app.active_route_limits,
         workspace: app.workspace.clone(),
+        // The App owns the session id (claimed before the Runtime store lock
+        // and used for every checkpoint/autosave); the engine adopts it so the
+        // engine conversation and the persisted session are the same record.
+        session_id: app.current_session_id.clone(),
         subagent_state_root: None,
         allow_shell: app.allow_shell,
         trust_mode: app.trust_mode,

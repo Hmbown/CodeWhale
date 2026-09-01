@@ -72,7 +72,7 @@ impl ToolSpec for TuiHelpTool {
     }
 
     fn description(&self) -> &'static str {
-        "Look up CodeWhale slash commands and keyboard shortcuts. Pass a query to scope the answer; omit it for a compact cheatsheet."
+        "Look up Codewhale slash commands and keyboard shortcuts. Pass a query to scope the answer; omit it for a compact cheatsheet."
     }
 
     fn input_schema(&self) -> Value {
