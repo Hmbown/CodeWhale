@@ -492,11 +492,27 @@ fn wait_for_callback(listeners: &[TcpListener], expected_state: &str) -> Result<
 
 fn handle_callback_stream(mut stream: TcpStream, expected_state: &str) -> Result<String> {
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    // One read is not one request: TCP may deliver the callback in
+    // fragments, and a truncated query parses as a missing parameter.
+    // Read until the blank line that ends the HTTP headers.
     let mut buf = [0u8; 4096];
-    let n = stream
-        .read(&mut buf)
-        .context("reading ChatGPT OAuth callback request")?;
-    let request = String::from_utf8_lossy(&buf[..n]);
+    let mut len = 0usize;
+    loop {
+        if len == buf.len() {
+            break;
+        }
+        let n = stream
+            .read(&mut buf[len..])
+            .context("reading ChatGPT OAuth callback request")?;
+        if n == 0 {
+            break;
+        }
+        len += n;
+        if buf[..len].windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    let request = String::from_utf8_lossy(&buf[..len]);
     let request_line = request.lines().next().unwrap_or_default();
     let result = (|| {
         let target = parse_http_request_target(request_line)?;
