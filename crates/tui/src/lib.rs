@@ -2557,8 +2557,10 @@ async fn run_async_main_dispatch(
     let mut startup_notice = None;
     let resume_session_id = if cli.continue_session {
         let workspace = resolve_workspace(&cli);
-        recover_interrupted_checkpoint_for_resume(&workspace)
-            .or_else(|| latest_session_id_for_workspace(&workspace).ok().flatten())
+        resolve_continue_session_id(
+            &workspace,
+            io::stdin().is_terminal() && io::stdout().is_terminal(),
+        )
     } else if let Some(id) = cli.resume.clone() {
         Some(id)
     } else if !cli.fresh {
@@ -10216,6 +10218,28 @@ fn checkpoint_age_label(age: std::time::Duration) -> String {
 /// matches, a one-line notice points at `codewhale sessions`, and nothing is
 /// auto-loaded: another workspace's checkpoint file is never touched (it may
 /// belong to a live session there).
+/// Resolve the session `--continue` attaches to.
+///
+/// Recovery promotes the newest same-workspace checkpoint to a session file
+/// and clears the checkpoint. That is only correct when the TUI can actually
+/// start: a non-TTY launch fails `require_interactive_terminal` later and must
+/// not consume the crash record on the way out, or the next real `--continue`
+/// has nothing left to recover. Without a terminal, only the latest saved
+/// session is considered (and the launch still fails the TTY check).
+fn resolve_continue_session_id(launch_workspace: &Path, interactive: bool) -> Option<String> {
+    if interactive {
+        recover_interrupted_checkpoint_for_resume(launch_workspace).or_else(|| {
+            latest_session_id_for_workspace(launch_workspace)
+                .ok()
+                .flatten()
+        })
+    } else {
+        latest_session_id_for_workspace(launch_workspace)
+            .ok()
+            .flatten()
+    }
+}
+
 fn recover_interrupted_checkpoint_for_resume(launch_workspace: &Path) -> Option<String> {
     let manager = session_manager::SessionManager::default_location().ok()?;
     let candidates = load_recent_checkpoints(&manager);
@@ -18763,6 +18787,60 @@ mod setup_helper_tests {
                     .expect("load checkpoint")
                     .is_none(),
                 "--continue should consume the per-session checkpoint"
+            );
+            assert!(manager.load_session(&session_id).is_ok());
+        });
+    }
+
+    #[test]
+    fn continue_without_interactive_terminal_leaves_checkpoint_for_a_real_launch() {
+        // `codewhale --continue </dev/null` (and `run --continue`) used to
+        // promote and clear the in-flight checkpoint before the TTY check
+        // failed, so the crash record was consumed by a launch that never
+        // started and the next real `--continue` found nothing.
+        let _guard = crate::test_support::lock_test_env();
+        let tmp = TempDir::new().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        with_home(tmp.path(), || {
+            let manager = SessionManager::default_location().expect("manager");
+            let messages = vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "continue me".to_string(),
+                    cache_control: None,
+                }],
+            }];
+            let session = create_saved_session(&messages, "test-model", &workspace, 0, None);
+            let session_id = session.metadata.id.clone();
+            manager.save_checkpoint(&session).expect("save checkpoint");
+
+            let non_interactive = resolve_continue_session_id(&workspace, false);
+            assert_eq!(
+                non_interactive, None,
+                "no saved session exists yet, so a non-TTY launch resolves nothing"
+            );
+            assert!(
+                manager
+                    .load_session_checkpoint(&session_id)
+                    .expect("load checkpoint")
+                    .is_some(),
+                "a non-TTY --continue must not consume the checkpoint"
+            );
+            assert!(
+                manager.load_session(&session_id).is_err(),
+                "a non-TTY --continue must not promote the checkpoint to a session"
+            );
+
+            let interactive = resolve_continue_session_id(&workspace, true);
+            assert_eq!(interactive.as_deref(), Some(session_id.as_str()));
+            assert!(
+                manager
+                    .load_session_checkpoint(&session_id)
+                    .expect("load checkpoint")
+                    .is_none(),
+                "an interactive --continue consumes the checkpoint"
             );
             assert!(manager.load_session(&session_id).is_ok());
         });

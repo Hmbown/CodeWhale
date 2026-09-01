@@ -1,8 +1,29 @@
 //! Provider-accepted Computer active-second receipts.
 //!
-//! Codewhale is the billing authority. Daytona (or a future adapter) supplies
-//! infrastructure only. Entitlement moves solely for provider-accepted *active*
-//! seconds, per second, multiplied by the selected profile's 1x/2x/4x rate.
+//! **Scope: this module is not billing input.** The control plane in
+//! codewhale-apps is the billing authority. It writes sandbox state intervals
+//! itself and derives receipts server-side from them; it never accepts a
+//! receipt from a client, correctly, because the CLI runs on the customer's
+//! machine. Anything issued here is a local display or self-check.
+//!
+//! "Codewhale is the billing authority" below is a statement about *what is
+//! billable*, not about which service decides: entitlement moves for
+//! provider-accepted **active** seconds rather than Daytona's provisioned wall
+//! clock. An audit read it as core-versus-control-plane and carried that
+//! misreading into codewhale-apps, where it shaped a PR before it was caught.
+//!
+//! Codewhale is the billing authority over the *measure*. Daytona (or a future
+//! adapter) supplies infrastructure only. Entitlement moves solely for
+//! provider-accepted *active* seconds, per second, multiplied by the selected
+//! profile's 1x/2x/4x rate.
+//!
+//! **Unwired as of 2026-09-01.** The only consumer, `cloud_dispatch::
+//! meter_cloud_job`, is itself called only from `#[cfg(test)] mod tests`
+//! (cloud_dispatch.rs:1210 and :1227, inside the module opening at :917). No
+//! `ComputerMeterReceipt` is transmitted anywhere. This is a complete
+//! implementation that was never connected; it must be deliberately wired as a
+//! local self-check or deleted, because a dead module that reads as
+//! authoritative is exactly how the drift above happened.
 //!
 //! Wall-clock-if-idle, requested, queued, rejected, stopped, suspended,
 //! archived, failed-before-acceptance, and teardown-tail time cannot mint a

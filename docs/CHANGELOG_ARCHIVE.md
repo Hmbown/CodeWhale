@@ -1,6 +1,6 @@
 # Changelog Archive
 
-Older releases of CodeWhale (v0.8.39 and earlier). Recent releases live in [CHANGELOG.md](../CHANGELOG.md).
+Older releases of Codewhale (v0.8.39 and earlier). Recent releases live in [CHANGELOG.md](../CHANGELOG.md).
 
 ## [0.8.39] - 2026-05-17
 

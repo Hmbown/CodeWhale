@@ -1,8 +1,8 @@
-# CodeWhale 简体中文文档阅读指南
+# Codewhale 简体中文文档阅读指南
 
-> 这里是简体中文用户阅读 CodeWhale 文档的入口。英文原版文档在文档根目录 [`docs/`](../)下。
+> 这里是简体中文用户阅读 Codewhale 文档的入口。英文原版文档在文档根目录 [`docs/`](../)下。
 > 本文档按经验水平组织阅读路径，并跟踪各文档的翻译状态。
-> 下文建议仅表文档维护者本人观点，与 CodeWhale 官方立场无关
+> 下文建议仅表文档维护者本人观点，与 Codewhale 官方立场无关
 
 ---
 
@@ -16,16 +16,16 @@
 
 ## 二、入门用户（已经装好程序、但仍然对 harness 不够了解）
 
-阅读以下文档，能够帮助您快速入门，掌握 CodeWhale 这个软件的使用方法
+阅读以下文档，能够帮助您快速入门，掌握 Codewhale 这个软件的使用方法
 
 1. [GUIDE.md](../GUIDE.md) —— 最基础的入门教程，一个小时就能读完、实践完，适用于所有平台
-2. [KEYBINDINGS.md](../KEYBINDINGS.md) —— TUI 页面的快捷键列表，在此可以了解到 CodeWhale 的食用方法
-3. [MODES.md](../MODES.md) —— 各个模式的使用说明（强烈建议每个 CodeWhale 用户都阅读此项）
-4. [PROVIDERS.md](../PROVIDERS.md) —— 查询您所用的模型的供应商是否在 CodeWhale 官方支持的列表之中
+2. [KEYBINDINGS.md](../KEYBINDINGS.md) —— TUI 页面的快捷键列表，在此可以了解到 Codewhale 的食用方法
+3. [MODES.md](../MODES.md) —— 各个模式的使用说明（强烈建议每个 Codewhale 用户都阅读此项）
+4. [PROVIDERS.md](../PROVIDERS.md) —— 查询您所用的模型的供应商是否在 Codewhale 官方支持的列表之中
 
 ## 三、进阶用户（已经有充足了解，追求效率、安全与定制）
 
-把 CodeWhale 配置成最顺手的样子。
+把 Codewhale 配置成最顺手的样子。
 
 1. [CONFIGURATION.md](../CONFIGURATION.md) —— 完整配置参考（最大的文档，可分章节阅读）
 2. [Pod](../FLEET.md) —— Pod 角色与多模型编排
@@ -36,16 +36,16 @@
 7. [TOOL_SURFACE.md](../TOOL_SURFACE.md) —— 工具面：AI 当前可用的工具契约
 8. [AGENT_RUNTIME.md](../AGENT_RUNTIME.md) —— Agent 运行时：子智能体、exec 与 Pod 的关系
 
-## 四、开发者（阅读源码或为 CodeWhale 贡献）
+## 四、开发者（阅读源码或为 Codewhale 贡献）
 
-为 CodeWhale 贡献代码或做集成开发。
+为 Codewhale 贡献代码或做集成开发。
 
 1. [ARCHITECTURE.md](../ARCHITECTURE.md) —— 架构总览
 2. [CONTRIBUTING.md](CONTRIBUTING.md) —— 贡献指南：如何提交 Issue 与 PR、代码约定与验证门禁
 3. [CODE_OF_CONDUCT.md](../../CODE_OF_CONDUCT.md) —— 社区行为准则
 4. [RUNTIME_API.md](../RUNTIME_API.md) —— Runtime API 与集成契约（供集成与二次开发）
 
-> 我们强烈建议，成为 CodeWhale 贡献者之前，您需要具备一定的英语阅读能力。如果您在英语方面较为薄弱，当然可以使用 LLM 来翻译。但是在 LLM 翻译完原文之后，建议您强忍着看不懂外文的不适，即使皱着眉头，也要审查一遍 LLM 翻译后的语义是否与你的原文语义相同。LLM 幻觉是会把事情搞砸的。
+> 我们强烈建议，成为 Codewhale 贡献者之前，您需要具备一定的英语阅读能力。如果您在英语方面较为薄弱，当然可以使用 LLM 来翻译。但是在 LLM 翻译完原文之后，建议您强忍着看不懂外文的不适，即使皱着眉头，也要审查一遍 LLM 翻译后的语义是否与你的原文语义相同。LLM 幻觉是会把事情搞砸的。
 
 ---
 

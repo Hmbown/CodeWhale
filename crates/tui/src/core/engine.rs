@@ -260,6 +260,16 @@ pub struct EngineConfig {
     pub active_route_limits: Option<codewhale_config::route::RouteLimits>,
     /// Workspace root for tool execution and file operations.
     pub workspace: PathBuf,
+    /// Host-owned conversation id the engine adopts at construction.
+    ///
+    /// Interactive hosts claim a session id before the engine exists: the
+    /// per-session Runtime store lock and the first crash checkpoint are both
+    /// keyed by it. The engine must run the conversation the host persists,
+    /// so it adopts this id instead of minting a second one that the host
+    /// only learns about from the first `SessionUpdated` event (which left
+    /// the turn-start checkpoint orphaned under the host id). `None`
+    /// (headless/embed callers) keeps the generated id.
+    pub session_id: Option<String>,
     /// Optional host-owned root for delegated-agent runtime state.
     ///
     /// When unset, the worker ledger, complete transcript artifacts and
@@ -492,6 +502,7 @@ impl Default for EngineConfig {
             model: DEFAULT_TEXT_MODEL.to_string(),
             active_route_limits: None,
             workspace: PathBuf::from("."),
+            session_id: None,
             subagent_state_root: None,
             allow_shell: true,
             trust_mode: false,
@@ -1456,6 +1467,14 @@ impl Engine {
             config.notes_path.clone(),
             config.mcp_config_path.clone(),
         );
+        if let Some(session_id) = config
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            session.id = session_id.to_string();
+        }
         // Set up stable system prompt with project context (default to agent mode).
         // Per-turn working-set metadata is injected into the latest user
         // message at request time so file churn does not rewrite this prefix.
@@ -2115,6 +2134,13 @@ impl Engine {
     /// process-local capabilities that must never cross that boundary. The
     /// returned id is the conversation being closed; callers use it to scope
     /// asynchronous fleet finalization before loading the new history.
+    /// Conversation id this engine persists and reports in `SessionUpdated`.
+    /// Test-only observation point for the host/engine id contract.
+    #[cfg(test)]
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session.id
+    }
+
     fn install_synced_session_id(&mut self, next_session_id: String) -> Option<String> {
         let previous_session_id = self.session.id.clone();
         if next_session_id == previous_session_id {
@@ -2958,6 +2984,7 @@ impl Engine {
                         // history revision was current before the sync — a
                         // stale number can flow into capacity checkpoints.
                         self.session.bump_messages_revision();
+                        self.session.latest_parent_input_tokens = None;
                         self.session.compaction_summary_prompt = compaction_checkpoint;
                         self.session.system_prompt =
                             crate::compaction::strip_compaction_summaries(system_prompt.as_ref());
@@ -5375,6 +5402,7 @@ impl Engine {
                     }
                     let messages_after = result.messages.len();
                     let retries_used = result.retries_used;
+                    let coverage_clause = result.coverage.receipt_clause();
                     self.session.replace_messages(result.messages);
                     if let Some(pm) = self.session.prefix_stability.as_mut() {
                         pm.note_history_reset("compaction");
@@ -5385,11 +5413,11 @@ impl Engine {
                     let tokens_after = self.estimated_input_tokens();
                     let message = if retries_used > 0 {
                         format!(
-                            "Compaction complete: {messages_before} → {messages_after} messages ({removed} removed, {retries_used} retries), ~{tokens_before} → ~{tokens_after} tokens"
+                            "Compaction complete: {messages_before} → {messages_after} messages ({removed} removed, {retries_used} retries), ~{tokens_before} → ~{tokens_after} tokens ({coverage_clause})"
                         )
                     } else {
                         format!(
-                            "Compaction complete: {messages_before} → {messages_after} messages ({removed} removed), ~{tokens_before} → ~{tokens_after} tokens"
+                            "Compaction complete: {messages_before} → {messages_after} messages ({removed} removed), ~{tokens_before} → ~{tokens_after} tokens ({coverage_clause})"
                         )
                     };
                     self.emit_compaction_completed(
@@ -5700,7 +5728,10 @@ impl Engine {
         }
         self.commit_compaction_checkpoint(summary_prompt);
 
-        let trimmed = self.trim_oldest_messages_to_budget(target_budget);
+        // Trim with hysteresis: landing exactly on the input budget leaves the
+        // session a few hundred tokens under the preflight line, so the next
+        // step's output re-crosses it and recovery runs again.
+        let trimmed = self.trim_oldest_messages_to_budget(emergency_trim_budget(target_budget));
         self.emit_session_updated().await;
         let after_tokens = self.estimated_input_tokens();
         let after_count = self.session.messages.len();
@@ -5731,10 +5762,24 @@ impl Engine {
             return true;
         }
 
-        let message = format!(
-            "Emergency context compaction failed to reduce request below model limit \
-             (estimate ~{after_tokens} tokens, budget ~{target_budget})."
-        );
+        // Two distinct failures were previously conflated into one banner.
+        // When the provider rejected the request (its bill counts framing we
+        // cannot see), our estimate may already sit within the budget while
+        // the pass removed nothing — reporting that as "failed to reduce
+        // below model limit" with an estimate printed *under* the budget
+        // reads as self-contradictory. Name the actual outcome instead.
+        let message = if after_tokens > target_budget {
+            format!(
+                "Emergency context compaction failed to reduce request below model limit \
+                 (estimate ~{after_tokens} tokens, budget ~{target_budget})."
+            )
+        } else {
+            format!(
+                "Emergency context compaction made no progress (estimate ~{after_tokens} tokens \
+                 is already within the ~{target_budget} budget; the provider may count the \
+                 request differently). Run /compact or /clear."
+            )
+        };
         self.emit_compaction_failed(id.clone(), true, message.clone())
             .await;
         let _ = self.tx_event.send(Event::status(message)).await;
@@ -7580,8 +7625,9 @@ pub use context::context_input_budget_for_route;
 use context::route_context_budget_for_provider;
 use context::{
     MAX_CONTEXT_RECOVERY_ATTEMPTS, MIN_RECENT_MESSAGES_TO_KEEP,
-    effective_max_output_tokens_for_route, extract_compaction_summary_prompt,
-    is_context_length_error_message, route_context_budget_for_route, summarize_text,
+    effective_max_output_tokens_for_route, emergency_trim_budget,
+    extract_compaction_summary_prompt, is_context_length_error_message,
+    route_context_budget_for_route, summarize_text,
 };
 #[cfg(test)]
 use context::{context_input_budget_for_provider, effective_max_output_tokens};

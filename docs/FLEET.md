@@ -350,7 +350,7 @@ choose a different member or route. See
 
 Reasoning receipts record the requested tier *and* the tier the provider was
 actually asked for. Those differ whenever a route cannot express the requested
-one — CodeWhale's route normalizer sends `high` for a requested `low` on most
+one — Codewhale's route normalizer sends `high` for a requested `low` on most
 routes, and Z.AI's GLM routes express only thinking on/off — so the receipt
 reports the real request rather than the label that was selected. The value a
 call actually carries is spelled by that route's own normalizer, not by the tier
