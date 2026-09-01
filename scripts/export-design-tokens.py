@@ -3,18 +3,10 @@
 
 `crates/tui/src/palette/tokens.rs` is the single source for the whale colors.
 This script parses its `WHALE_*_RGB` consts (aliases included) and writes the
-same values as CSS custom properties and as a Compose `WhaleTokens` object, so
-the web app, the desktop shell, and the Android app stop hand-copying hexes.
+same values as CSS custom properties so the web app stops hand-copying hexes.
 
-Targets:
-
-  <repo>/web/app/tokens.css                      (always)
-  <apps>/clients/desktop/src/whale-tokens.css    (when the apps repo is present)
-  <apps>/.../ui/theme/WhaleTokens.kt             (when the apps repo is present)
-
-`<apps>` defaults to a `codewhale-apps` checkout beside this repository and is
-skipped silently when absent, so CI that only checks out `codewhale` still
-verifies the web token file.
+Target: <repo>/web/app/tokens.css. This script writes nothing outside this
+repository.
 
 Usage:
     scripts/export-design-tokens.py            # write
@@ -38,9 +30,6 @@ CONST_RE = re.compile(
     re.MULTILINE,
 )
 
-ANDROID_THEME_DIR = (
-    "clients/desktop/whalescale-android/app/src/main/kotlin/dev/codew/whalescale/ui/theme"
-)
 
 
 def parse_tokens(text: str) -> list[tuple[str, tuple[int, int, int] | str]]:
@@ -66,10 +55,6 @@ def css_name(name: str) -> str:
     return "--whale-" + name.removeprefix("WHALE_").lower().replace("_", "-")
 
 
-def kotlin_name(name: str) -> str:
-    return "".join(p.capitalize() for p in name.removeprefix("WHALE_").split("_"))
-
-
 def render_css(tokens) -> str:
     lines = [
         f"/* generated from {SOURCE_LABEL} — do not edit */",
@@ -90,49 +75,15 @@ def render_css(tokens) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_kotlin(tokens) -> str:
-    lines = [
-        "package dev.codew.whalescale.ui.theme",
-        "",
-        f"// generated from {SOURCE_LABEL} — do not edit",
-        "// regenerate: scripts/export-design-tokens.py (in the codewhale repo)",
-        "",
-        "import androidx.compose.ui.graphics.Color",
-        "",
-        "object WhaleTokens {",
-    ]
-    for name, value in tokens:
-        prop = kotlin_name(name)
-        if isinstance(value, str):
-            lines.append(f"    val {prop} = {kotlin_name(value)}")
-        else:
-            r, g, b = value
-            lines.append(f"    val {prop} = Color(0xFF{r:02X}{g:02X}{b:02X})")
-    lines.append("}")
-    return "\n".join(lines) + "\n"
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true", help="verify instead of write")
-    ap.add_argument(
-        "--apps-root",
-        type=Path,
-        default=REPO.parent / "codewhale-apps",
-        help="codewhale-apps checkout (skipped when missing)",
-    )
     args = ap.parse_args()
 
     tokens = parse_tokens(TOKENS_RS.read_text(encoding="utf-8"))
     css = render_css(tokens)
 
     targets: list[tuple[Path, str]] = [(REPO / "web/app/tokens.css", css)]
-    apps = args.apps_root
-    if apps.is_dir():
-        targets.append((apps / "clients/desktop/src/whale-tokens.css", css))
-        targets.append((apps / ANDROID_THEME_DIR / "WhaleTokens.kt", render_kotlin(tokens)))
-    else:
-        print(f"note: {apps} not present — web target only", file=sys.stderr)
 
     stale = []
     for path, content in targets:
