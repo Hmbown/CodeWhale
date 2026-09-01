@@ -269,7 +269,7 @@ fn mcp_snapshot_to_wire(snapshot: &McpManagerSnapshot) -> wire::McpManagerSnapsh
                 enabled: server.enabled,
                 required: server.required,
                 transport: server.transport.clone(),
-                command_or_url: server.command_or_url.clone(),
+                command_or_url: redacted_command_or_url(&server.command_or_url),
                 connect_timeout: server.connect_timeout,
                 execute_timeout: server.execute_timeout,
                 read_timeout: server.read_timeout,
@@ -283,6 +283,35 @@ fn mcp_snapshot_to_wire(snapshot: &McpManagerSnapshot) -> wire::McpManagerSnapsh
             })
             .collect(),
     }
+}
+
+/// Sanitize an MCP server's configured target before it goes on the wire.
+///
+/// `command_or_url` is the raw configuration: either the configured URL, which
+/// can carry userinfo (`https://user:token@host`) or query credentials, or a
+/// stdio command line built as `command + " " + args.join(" ")`, whose args can
+/// carry a token. That is acceptable in the local picker, where the only reader
+/// is the person who configured it. This projection is not local -- it feeds
+/// `EventMsg::McpSessionBoot`, which every SSE and stream-JSON consumer
+/// receives and any frame-retaining log keeps.
+///
+/// URLs reuse the existing masking in `client::redact_url_for_display`. Stdio
+/// keeps the program name and elides the arguments, because a secret there can
+/// be positional and is not reliably recognizable by key.
+fn redacted_command_or_url(raw: &str) -> String {
+    if raw.contains("://") {
+        return crate::client::redact_url_for_display(raw);
+    }
+    // No `match` here on purpose: `projections_have_no_wildcard_arms` scans
+    // this whole file for wildcard arms, and a `_ =>` would trip it even in a
+    // helper that projects no engine variant.
+    let trimmed = raw.trim();
+    if let Some((program, rest)) = trimmed.split_once(char::is_whitespace)
+        && !rest.trim().is_empty()
+    {
+        return format!("{program} …");
+    }
+    trimmed.to_string()
 }
 
 fn roster_row_to_wire(row: &AgentRosterRow) -> wire::AgentRosterRow {
@@ -1103,6 +1132,26 @@ impl Op {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mcp_command_or_url_is_redacted_before_it_reaches_the_wire() {
+        // Local display may show the configured value; this projection feeds
+        // EventMsg::McpSessionBoot, which every SSE/stream-JSON consumer sees.
+        assert_eq!(
+            redacted_command_or_url("https://user:tok@mcp.example.com/sse"),
+            "https://***:***@mcp.example.com/sse"
+        );
+        let masked = redacted_command_or_url("https://mcp.example.com/sse?api_key=SECRET");
+        assert!(!masked.contains("SECRET"), "{masked}");
+        // stdio: keep the program, drop the args -- a token there can be
+        // positional, so key-based masking is not enough.
+        assert_eq!(
+            redacted_command_or_url("npx -y server --token SECRET"),
+            "npx …"
+        );
+        // Nothing to hide, nothing changed.
+        assert_eq!(redacted_command_or_url("npx"), "npx");
+    }
+
     use super::*;
     use crate::error_taxonomy::{ErrorCategory, ErrorEnvelope, ErrorSeverity};
     use crate::tools::goal::GoalStatus;

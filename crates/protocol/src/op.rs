@@ -36,6 +36,21 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Accept `engine_schedule_id` on the wire for compatibility, then discard it.
+///
+/// Deserialization is the out-of-process boundary: the engine's own
+/// `Op::ContinueGoal` travels an in-process channel and never reaches here, so
+/// anything this sees was supplied by a caller who must not be able to set it.
+/// Returning `None` sends such a request down the ordinary host-injected path
+/// instead of letting it consume a pending engine schedule.
+fn drop_engine_owned_schedule_id<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<u64>::deserialize(deserializer)?;
+    Ok(None)
+}
+
 use crate::ids::{SessionId, ThreadId};
 use crate::runtime::DynamicToolSpec;
 
@@ -166,7 +181,19 @@ pub enum Op {
         #[serde(default)]
         dynamic_tools: Vec<DynamicToolSpec>,
         /// Engine-owned coalescing token; direct callers send `None`.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ///
+        /// Enforced, not merely documented: the engine mints these on an
+        /// in-process channel (`tx_op.try_send`) and they never cross serde,
+        /// so any value arriving through deserialization came from outside.
+        /// The IDs are predictable per-session counters, and a matching guess
+        /// is treated as an already-delayed internal token -- it would consume
+        /// the pending schedule and skip the host-injected quiet period. Wire
+        /// input is therefore always dropped to `None`.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "drop_engine_owned_schedule_id"
+        )]
         engine_schedule_id: Option<u64>,
     },
 
@@ -520,7 +547,9 @@ mod tests {
             },
             Op::ContinueGoal {
                 dynamic_tools: vec![],
-                engine_schedule_id: Some(3),
+                // Engine-owned: deliberately not round-trippable. See
+                // `wire_supplied_engine_schedule_id_is_dropped`.
+                engine_schedule_id: None,
             },
             Op::RunShellCommand {
                 command: "ls".into(),
@@ -639,6 +668,29 @@ mod tests {
     fn every_variant_is_listed_once() {
         let kinds: Vec<&str> = every_variant().iter().map(Op::kind_str).collect();
         assert_eq!(kinds, OP_KINDS, "OP_KINDS must list every variant in order");
+    }
+
+    #[test]
+    fn wire_supplied_engine_schedule_id_is_dropped() {
+        // The engine mints these on an in-process channel, so a value arriving
+        // through serde came from an out-of-process caller. Honouring it would
+        // let a guessed counter consume the pending schedule and skip the
+        // host-injected quiet period.
+        let op: Op = serde_json::from_value(json!({
+            "kind": "continue_goal",
+            "dynamic_tools": [],
+            "engine_schedule_id": 3,
+        }))
+        .expect("continue_goal with a wire-supplied schedule id still parses");
+        match op {
+            Op::ContinueGoal {
+                engine_schedule_id, ..
+            } => assert_eq!(
+                engine_schedule_id, None,
+                "engine_schedule_id must never be settable from the wire"
+            ),
+            other => panic!("expected ContinueGoal, got {other:?}"),
+        }
     }
 
     #[test]
