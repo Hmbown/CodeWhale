@@ -300,7 +300,14 @@ fn kill_process_group(pid: i32) {
 }
 
 fn wait_for_pid_file(path: &Path) -> i32 {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // Staging latency is setup, not the assertion under test, and 30s was
+    // tuned against a lightly loaded host. On a machine running the whole
+    // 14k-test suite at once, staging a real child process past 30s is
+    // ordinary, and the suite reported it as "service pid file never
+    // appeared" -- a product failure that was not one. Bound it to the same
+    // budget the run itself uses so a service that genuinely never starts is
+    // still a failure, and load alone is not.
+    let deadline = Instant::now() + RUN_TIMEOUT;
     loop {
         if let Ok(contents) = std::fs::read_to_string(path)
             && let Ok(pid) = contents.trim().parse::<i32>()
