@@ -2227,6 +2227,13 @@ async fn inspect_fleet_run_receipt_evidence(
         })?;
     // Receipt artifacts are workspace-relative paths recorded by the verifier;
     // reject absolute paths and `..` escapes before joining onto the workspace.
+    // An EMPTY recorded path is not a path at all: joining it would resolve
+    // to the workspace directory itself and read it as a file.
+    if receipt_artifact.path.as_os_str().is_empty() {
+        return Err(ApiError::not_found(format!(
+            "no verifier evidence file recorded for run '{run_id}' task '{task_id}'"
+        )));
+    }
     if !receipt_evidence_path_is_confined(&receipt_artifact.path) {
         return Err(ApiError::bad_request(format!(
             "evidence path for run '{run_id}' task '{task_id}' escapes the workspace"
@@ -3829,7 +3836,9 @@ struct KeepAliveOperateRequest {
 
 #[derive(Debug, Serialize)]
 struct OperateView {
-    operation: crate::operate::Operation,
+    /// `None` until an operation is actually started — a GET before that
+    /// must not fabricate an identity the client can never mutate.
+    operation: Option<crate::operate::Operation>,
     board: String,
 }
 
@@ -3845,7 +3854,7 @@ fn operate_credentials_present(config: &Config) -> bool {
 fn operate_view(operation: crate::operate::Operation) -> Json<OperateView> {
     Json(OperateView {
         board: crate::operate::render_plan_board(&operation),
-        operation,
+        operation: Some(operation),
     })
 }
 
@@ -3863,19 +3872,19 @@ fn parse_request_burn_rate(value: Option<&serde_json::Value>) -> Result<Option<f
         .map(|rate| rate.amount_usd_per_hour))
 }
 
-async fn get_operate(State(state): State<RuntimeApiState>) -> Result<Json<OperateView>, ApiError> {
+async fn get_operate(State(_state): State<RuntimeApiState>) -> Result<Json<OperateView>, ApiError> {
     let store = operate_store()?;
-    let operation = match load_operate(&store)? {
-        Some(operation) => operation,
-        None => {
-            let config = state.config.read();
-            let mut operation = crate::operate::Operation::new(String::new(), None);
-            operation.credentials_present = operate_credentials_present(&config);
-            operation.project();
-            operation
-        }
-    };
-    Ok(operate_view(operation))
+    match load_operate(&store)? {
+        Some(operation) => Ok(operate_view(operation)),
+        // No operation has been started: a fabricated `Operation::new` would
+        // mint a fresh id and timestamps on every poll — phantom records the
+        // client can neither patch nor cancel. `operation: null` is the
+        // stable no-operation answer.
+        None => Ok(Json(OperateView {
+            operation: None,
+            board: String::new(),
+        })),
+    }
 }
 
 async fn start_operate(
