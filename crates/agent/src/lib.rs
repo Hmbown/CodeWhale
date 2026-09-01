@@ -2690,13 +2690,23 @@ mod tests {
     }
 
     #[test]
-    fn ollama_default_uses_small_local_model_id() {
+    fn ollama_default_is_unavailable_until_the_local_catalog_answers() {
+        // Y-2: `DEFAULT_OLLAMA_MODEL` is deliberately "unknown". The real
+        // default comes from the live local catalog, so the header never names
+        // a model the session cannot reach; without that catalog the registry
+        // must say so instead of resolving a costume.
         let registry = ModelRegistry::default();
-        let resolved = registry.resolve_ok(None, Some(ProviderKind::Ollama));
+        let error = registry
+            .resolve(None, Some(ProviderKind::Ollama))
+            .expect_err("the placeholder default must not resolve");
 
-        assert_eq!(resolved.resolved.provider, ProviderKind::Ollama);
-        assert_eq!(resolved.resolved.id, "deepseek-v4-flash");
-        assert!(resolved.resolved.supports_reasoning);
+        assert!(matches!(
+            error,
+            ModelResolutionError::ProviderDefaultUnavailable {
+                provider: ProviderKind::Ollama,
+                ref default_model,
+            } if default_model == "unknown"
+        ));
     }
 
     #[test]

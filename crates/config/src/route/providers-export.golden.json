@@ -688,7 +688,7 @@
       "label": "Ollama",
       "endpoint": "http://localhost:11434/v1",
       "wire": "chat-completions",
-      "defaultModel": "deepseek-v4-flash",
+      "defaultModel": "unknown",
       "envVars": [
         "OLLAMA_API_KEY"
       ],
