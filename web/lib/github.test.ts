@@ -15,7 +15,11 @@ describe("production-build fallback", () => {
       expect(await fetchFeed(undefined, 10)).toEqual([]);
       // A page that is the feed needs to know nothing was asked for, so
       // the prerender does not pass as an honest empty record.
-      expect(await loadFeed(undefined, 10)).toEqual({ items: [], status: "skipped" });
+      expect(await loadFeed(undefined, 10)).toEqual({
+        items: [],
+        issuesStatus: "skipped",
+        pullsStatus: "skipped",
+      });
       expect(await fetchRepoStats()).toMatchObject({
         stars: 0,
         forks: 0,
@@ -337,7 +341,11 @@ describe("fetchFeed", () => {
       "fetch",
       vi.fn(async () => new Response("rate limited", { status: 403 })),
     );
-    expect(await loadFeed(undefined, 10)).toEqual({ items: [], status: "unavailable" });
+    expect(await loadFeed(undefined, 10)).toEqual({
+      items: [],
+      issuesStatus: "unavailable",
+      pullsStatus: "unavailable",
+    });
   });
 
   it("keeps what arrived and still flags the load when one list call fails", async () => {
@@ -350,13 +358,20 @@ describe("fetchFeed", () => {
       }),
     );
     const load = await loadFeed(undefined, 10);
-    expect(load.status).toBe("unavailable");
+    // Each column answers for itself: the issues list answered, so the
+    // issues column must not be told "the source did not answer".
+    expect(load.issuesStatus).toBe("ok");
+    expect(load.pullsStatus).toBe("unavailable");
     expect(load.items.map((i) => i.number)).toEqual([4901, 4880]);
   });
 
   it("reports ok — so an empty list means empty — when every list call answered", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => json([])));
-    expect(await loadFeed(undefined, 10)).toEqual({ items: [], status: "ok" });
+    expect(await loadFeed(undefined, 10)).toEqual({
+      items: [],
+      issuesStatus: "ok",
+      pullsStatus: "ok",
+    });
   });
 });
 

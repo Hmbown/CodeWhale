@@ -30,6 +30,13 @@ describe("connection state", () => {
     expect(still.status).toBe("offline");
     expect(still.attempt).toBe(0);
     expect(still.lastCheckedAt).toBe(5);
+    // The same for a probe that was already in flight when the browser went
+    // offline and lands successfully afterward: the browser may emit no
+    // second event, so a late success must not hide the banner.
+    const staleOk = nextConnectionState(offline, { type: "probe-ok", at: 6 });
+    expect(staleOk.status).toBe("offline");
+    expect(staleOk.attempt).toBe(0);
+    expect(staleOk.lastCheckedAt).toBe(6);
   });
 
   it("reconnects through the server, not on the browser's word alone", () => {

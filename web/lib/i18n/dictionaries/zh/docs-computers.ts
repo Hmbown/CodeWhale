@@ -41,7 +41,7 @@ export const docsComputers: DocsComputersDict = {
   ],
   membershipTitle: "谁可以派发",
   membershipLead:
-    "Codewhale Agent 的每个界面都使用同一个 Codewhale 会员身份认证——即 {login} 的账户会话。会员资格决定能否使用云端 Agent；提供商品牌保持内部不可见。安装和运行本地 Runtime 完全不需要账户。",
+    "托管 Agent 界面使用同一个 Codewhale 会员身份认证——即 {login} 的账户会话。会员资格决定云端 Agent，而不是本地派发：只要有 Daytona 与托管平台凭证，`codewhale dispatch` 无需账户即可运行。提供商品牌保持内部不可见，安装和运行本地 Runtime 完全不需要账户。",
   leftoverTitle: "尚未实现",
   leftover: [
     ["实时查看", "正在运行的沙箱的日志跟随。"],

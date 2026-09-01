@@ -82,6 +82,7 @@ export default async function AdminPage({
         <ErrorState
           locale={locale}
           title={isZh ? "未配置" : "Not configured"}
+          titleAs="h1"
           body={
             isZh
               ? "MAINTAINER_TOKEN 未设置。请在部署前配置此环境变量。"

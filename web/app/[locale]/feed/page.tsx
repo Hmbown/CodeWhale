@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Seal } from "@/components/seal";
 import { FeedCard } from "@/components/feed-card";
-import { RetryAction } from "@/components/retry-action";
+import { FeedRetry } from "@/components/feed-retry";
 import { EmptyState, ErrorState, UnavailableState } from "@/components/surface-state";
 import { loadFeed, type FeedLoadStatus } from "@/lib/github";
 import { getEnv } from "@/lib/kv";
@@ -33,25 +33,30 @@ export default async function FeedPage({ params }: { params: Promise<{ locale: s
   // Four honest answers for an empty column: GitHub answered and had nothing
   // (`ok` → empty), GitHub was not asked or refused (`skipped` / `unavailable`
   // → not loaded, retry), or the fetch itself threw (`failed` → error, retry).
-  let status: FeedLoadStatus | "failed" = "ok";
+  // Each column answers for itself: one refused endpoint must not tell the
+  // other column that its source did not answer.
+  let issuesStatus: FeedLoadStatus | "failed" = "ok";
+  let pullsStatus: FeedLoadStatus | "failed" = "ok";
   try {
     const load = await loadFeed(env.GITHUB_TOKEN, 50);
     feed = load.items;
-    status = load.status;
+    issuesStatus = load.issuesStatus;
+    pullsStatus = load.pullsStatus;
   } catch (e) {
-    status = "failed";
+    issuesStatus = "failed";
+    pullsStatus = "failed";
     console.error("feed fetch failed", e);
   }
 
   const issues = feed.filter((f) => f.kind === "issue");
   const pulls = feed.filter((f) => f.kind === "pull");
   const eyebrow = isZh ? "动态" : "Activity";
-  // One shared state per empty column, chosen by what actually happened.
-  // `RetryAction` without a handler re-runs this server render, which on an
-  // ISR page picks up the next revalidation — the real fix for "not loaded".
   const states = getStates(locale);
-  const retry = <RetryAction label={states.retry} />;
-  const feedState =
+  // FeedRetry first busts this route's ISR entry, because a bare server
+  // re-render would serve the same cached `skipped`/`unavailable` record for
+  // up to ten minutes.
+  const retry = <FeedRetry label={states.retry} />;
+  const columnState = (status: FeedLoadStatus | "failed") =>
     status === "failed" ? (
       <ErrorState locale={locale} compact action={retry} />
     ) : status === "ok" ? (
@@ -90,7 +95,7 @@ export default async function FeedPage({ params }: { params: Promise<{ locale: s
                   {pulls.length > 0 ? (
                     pulls.map((p) => <FeedCard key={p.url} item={p} />)
                   ) : (
-                    <div className="py-4">{feedState}</div>
+                    <div className="py-4">{columnState(pullsStatus)}</div>
                   )}
                 </div>
               </div>
@@ -106,7 +111,7 @@ export default async function FeedPage({ params }: { params: Promise<{ locale: s
                   {issues.length > 0 ? (
                     issues.map((i) => <FeedCard key={i.url} item={i} />)
                   ) : (
-                    <div className="py-4">{feedState}</div>
+                    <div className="py-4">{columnState(issuesStatus)}</div>
                   )}
                 </div>
               </div>
@@ -158,7 +163,7 @@ export default async function FeedPage({ params }: { params: Promise<{ locale: s
                   {pulls.length > 0 ? (
                     pulls.map((p) => <FeedCard key={p.url} item={p} />)
                   ) : (
-                    <div className="py-4">{feedState}</div>
+                    <div className="py-4">{columnState(pullsStatus)}</div>
                   )}
                 </div>
               </div>
@@ -174,7 +179,7 @@ export default async function FeedPage({ params }: { params: Promise<{ locale: s
                   {issues.length > 0 ? (
                     issues.map((i) => <FeedCard key={i.url} item={i} />)
                   ) : (
-                    <div className="py-4">{feedState}</div>
+                    <div className="py-4">{columnState(issuesStatus)}</div>
                   )}
                 </div>
               </div>

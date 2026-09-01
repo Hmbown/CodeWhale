@@ -4,7 +4,7 @@ import { DocsHelp } from "@/components/docs-help";
 import { DocsSidebar } from "@/components/docs-sidebar";
 import { ReleaseTruth } from "@/components/release-truth";
 import { Whale } from "@/components/whale";
-import { getFacts } from "@/lib/facts";
+import { BUILD_FACTS, getFactsWithProvenance } from "@/lib/facts";
 import { getDocsShell } from "@/lib/i18n/dictionaries";
 
 /* ------------------------------------------------------------------ */
@@ -26,7 +26,15 @@ export default async function DocsLayout({
 }) {
   const { locale } = await params;
   const t = getDocsShell(locale);
-  const facts = await getFacts();
+  // These pages describe THIS build: pin the documented facts to the build
+  // snapshot even when the KV snapshot was written by a newer source (a
+  // rollback, or any deployment sharing it). Only the latest published
+  // release is the KV snapshot's to speak for.
+  const resolution = await getFactsWithProvenance();
+  const facts = {
+    ...BUILD_FACTS,
+    latestPublishedRelease: resolution.facts.latestPublishedRelease,
+  };
 
   return (
     <div className="docs-theme docs-portal min-h-screen">

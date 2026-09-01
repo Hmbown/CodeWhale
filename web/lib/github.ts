@@ -186,20 +186,25 @@ export async function fetchFeed(token?: string, limit = 30): Promise<FeedItem[]>
  * asked" or "GitHub refused" must render differently, or a rate limit and a
  * build-time prerender both masquerade as an honest empty record.
  *
- *  - `ok`          — every list endpoint answered; an empty list is real.
+ *  - `ok`          — that list endpoint answered; an empty list is real.
  *  - `skipped`     — static generation; nothing was fetched.
- *  - `unavailable` — an issues/pulls call came back non-ok (rate limit,
- *                    outage); `items` holds whatever did arrive.
+ *  - `unavailable` — that call came back non-ok (rate limit, outage);
+ *                    `items` holds whatever did arrive.
+ *
+ * Availability is tracked per list: when exactly one endpoint refuses, the
+ * other column must not be told that "the source did not answer".
  */
 export type FeedLoadStatus = "ok" | "skipped" | "unavailable";
 
 export interface FeedLoad {
   items: FeedItem[];
-  status: FeedLoadStatus;
+  issuesStatus: FeedLoadStatus;
+  pullsStatus: FeedLoadStatus;
 }
 
 export async function loadFeed(token?: string, limit = 30): Promise<FeedLoad> {
-  if (isProductionBuild()) return { items: [], status: "skipped" };
+  if (isProductionBuild())
+    return { items: [], issuesStatus: "skipped", pullsStatus: "skipped" };
 
   const [issuesRes, pullsRes, releasesRes] = await Promise.all([
     fetch(
@@ -216,8 +221,10 @@ export async function loadFeed(token?: string, limit = 30): Promise<FeedLoad> {
     }),
   ]);
 
-  // Releases are a garnish on the feed; the two list calls are the record.
-  const status: FeedLoadStatus = issuesRes.ok && pullsRes.ok ? "ok" : "unavailable";
+  // Releases are a garnish on the feed; the two list calls are the record,
+  // and each answers for itself.
+  const issuesStatus: FeedLoadStatus = issuesRes.ok ? "ok" : "unavailable";
+  const pullsStatus: FeedLoadStatus = pullsRes.ok ? "ok" : "unavailable";
   const issues = await responseArray<RawIssue>(issuesRes);
   const pulls = await responseArray<RawIssue & { merged_at?: string | null }>(pullsRes);
   const releases = await responseArray<RawRelease>(releasesRes);
@@ -315,7 +322,7 @@ export async function loadFeed(token?: string, limit = 30): Promise<FeedLoad> {
     kept[kept.length - 1] = newestRelease;
   }
 
-  return { items: kept, status };
+  return { items: kept, issuesStatus, pullsStatus };
 }
 
 async function responseArray<T>(res: Response): Promise<T[]> {

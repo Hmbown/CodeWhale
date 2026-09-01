@@ -1,6 +1,6 @@
 import { RefRows, withCodeSpans } from "@/components/code-spans";
 import { getChrome, getDocsTrust } from "@/lib/i18n/dictionaries";
-import { buildPageMetadata } from "@/lib/page-meta";
+import { buildPageMetadata, SITE_SECURITY_EMAIL } from "@/lib/page-meta";
 
 /** Code-owned literals from docs/SANDBOX.md and docs/TELEMETRY.md. Not copy. */
 const SPANS: Record<string, string> = {
@@ -17,8 +17,8 @@ const SPANS: Record<string, string> = {
   auditLog: "$CODEWHALE_HOME/audit.log",
 };
 
-/** The same security contact the footer publishes (components/footer.tsx). */
-const SECURITY_MAILTO = "mailto:hunter@codewhale.net";
+/** The one security contact the spine publishes (lib/page-meta.ts). */
+const SECURITY_MAILTO = `mailto:${SITE_SECURITY_EMAIL}`;
 
 export async function generateMetadata({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params;

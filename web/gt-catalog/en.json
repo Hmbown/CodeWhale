@@ -598,7 +598,7 @@
       ]
     ],
     "membershipTitle": "Who can dispatch",
-    "membershipLead": "Every Codewhale Agent surface authenticates to the same Codewhale membership — the {login} account session. Membership gates cloud agents; provider brands stay internal. Installing and running the local runtime needs no account at all.",
+    "membershipLead": "Managed Agent surfaces authenticate to the same Codewhale membership — the {login} account session. Membership gates cloud agents, not local dispatch: `codewhale dispatch` with Daytona and forge credentials needs no account. Provider brands stay internal, and installing or running the local runtime needs no account at all.",
     "leftoverTitle": "Not built yet",
     "leftover": [
       [

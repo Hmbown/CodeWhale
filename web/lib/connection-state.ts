@@ -79,6 +79,13 @@ export function nextConnectionState(
       };
 
     case "probe-ok": {
+      // A success that lands after the browser went `offline` belongs to a
+      // stale probe: the browser emits no second event, so honoring it would
+      // hide the banner with no network to back it. Record the check, keep
+      // the banner.
+      if (state.status === "offline") {
+        return { ...state, lastCheckedAt: event.at };
+      }
       const wasDown = state.status !== "online";
       return {
         status: "online",

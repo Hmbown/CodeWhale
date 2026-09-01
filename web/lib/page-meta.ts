@@ -6,6 +6,13 @@ export const SITE_URL = "https://codewhale.net";
 
 export const SITE_NAME = "Codewhale";
 
+/**
+ * The project's public mailboxes, in one copy: the footer renders them and
+ * the trust page links the security one, so the two surfaces cannot drift.
+ */
+export const SITE_CONTACT_EMAIL = "help@codewhale.net";
+export const SITE_SECURITY_EMAIL = "hunter@codewhale.net";
+
 /** The one-line product identity, used as the default OG image alt text. */
 export const IDENTITY_PHRASE = "Codewhale dives into the deep so you don't have to.";
 
