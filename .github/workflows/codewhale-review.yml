@@ -71,11 +71,16 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      # `gh api .../issues/comments/{id}` PATCH/DELETE below is the issue-comment
+      # endpoint. Every call is `|| true` or `|| echo ::warning::`, so a missing
+      # permission would fail silently — the exact "non-run passes for a clean
+      # review" failure this workflow exists to close.
+      issues: write
     steps:
       - name: Skip when no review key is configured
         if: env.HAS_ANY_KEY != 'true'
         run: |
-          echo "::notice::No Codewhale review key is set — skipping. Add repository secret CODEWHALE_API_KEY (or a provider key: ZAI_API_KEY / DEEPSEEK_API_KEY / OPENROUTER_API_KEY / ANTHROPIC_API_KEY) to enable it."
+          echo "::notice::No Codewhale review key is set — skipping. Add repository secret CODEWHALE_API_KEY (or a provider key: ZAI_API_KEY / MODELSTUDIO_API_KEY / DEEPSEEK_API_KEY / OPENROUTER_API_KEY / ANTHROPIC_API_KEY) to enable it."
 
       - name: Checkout repository
         if: env.HAS_ANY_KEY == 'true'
@@ -237,7 +242,7 @@ jobs:
           # rate limit, upstream 5xx) must not block the PR. Real review
           # failures still fail the job with the original exit status.
           if echo "$OUTPUT" | grep -qE 'LLM error: HTTP (401|402|403|408|429|5[0-9][0-9])'; then
-            REASON=$(echo "$OUTPUT" | grep -oE 'LLM error: HTTP [0-9]{3}[^"]{0,80}' | head -1)
+            REASON=$(echo "$OUTPUT" | grep -oE 'LLM error: HTTP (401|402|403|408|429|5[0-9][0-9])[^"]{0,80}' | head -1)
             echo "::warning::Codewhale review could not run (${REASON}). The PR is not blocked — provider funding/config is founder-gated."
             # Silence is not success: leave one visible, idempotent note on the
             # PR so a non-run never passes for a clean review. Only the HTTP
