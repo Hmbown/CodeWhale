@@ -7600,6 +7600,8 @@ impl RuntimeThreadManager {
                 trust_mode: thread.trust_mode,
                 notes_path: cfg.notes_path(),
                 mcp_config_path: cfg.mcp_config_path(),
+                mcp_oauth_callback_port: cfg.mcp_oauth_callback_port,
+                mcp_oauth_callback_url: cfg.mcp_oauth_callback_url.clone(),
                 skills_dir: cfg.skills_dir(),
                 skills_scan_codewhale_only: cfg.skills_config().scan_codewhale_only(),
                 instructions: if isolated_chat {

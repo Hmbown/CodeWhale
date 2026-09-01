@@ -103,9 +103,9 @@ fn show_cloud_job(id: &str) -> CommandResult {
 }
 
 fn cancel_cloud_job(id: &str) -> CommandResult {
-    match crate::cloud_dispatch::CloudJobStore::from_env()
-        .and_then(|store| crate::cloud_dispatch::cancel_job(&store, id))
-    {
+    match crate::cloud_dispatch::CloudJobStore::from_env().and_then(|store| {
+        crate::cloud_dispatch::cancel_job(&store, id, &crate::cloud_dispatch::LiveDaytonaLauncher)
+    }) {
         Ok(job) => CommandResult::message(crate::cloud_dispatch::format_job(&job)),
         Err(error) => CommandResult::error(error.to_string()),
     }

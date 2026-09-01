@@ -23,7 +23,9 @@ use uuid::Uuid;
 use crate::task_manager::{NewTaskRequest, SharedTaskManager, TaskStatus};
 use crate::utils::spawn_supervised;
 
-const CURRENT_AUTOMATION_SCHEMA_VERSION: u32 = 1;
+/// Current automation record schema. `pub(crate)` so the Operate keepalive
+/// can build a fixed-id record directly (no create/delete id swap).
+pub(crate) const CURRENT_AUTOMATION_SCHEMA_VERSION: u32 = 1;
 const CURRENT_RUN_SCHEMA_VERSION: u32 = 1;
 const CURRENT_TRIGGER_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_AUTOMATION_MODE: &str = "agent";
@@ -2982,7 +2984,10 @@ mod tests {
             .map(|entry| entry.path())
             .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
             .expect("json run file");
-        let stem = json.file_stem().and_then(|stem| stem.to_str()).expect("stem");
+        let stem = json
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("stem");
         fs::write(dir.join(format!("{stem}.tmp")), "not-json").expect("write tmp noise");
         fs::write(dir.join(format!("{stem}.json.bak")), "not-json").expect("write bak noise");
 

@@ -231,15 +231,77 @@ fn emit_tool_audit_to_path(path: &Path, event: serde_json::Value) {
 impl Engine {
     pub(super) async fn execute_mcp_tool_with_pool(
         pool: Arc<AsyncMutex<McpPool>>,
+        tx_event: &mpsc::Sender<Event>,
         name: &str,
         input: serde_json::Value,
     ) -> Result<RichToolResult, ToolError> {
-        let mut pool = pool.lock().await;
-        let result = pool
-            .call_tool(name, input)
+        // A synthetic `mcp_<server>_authenticate` call runs the shared OAuth
+        // login flow with the pool lock released during the browser wait, so
+        // parallel MCP tools and the `/mcp` manager keep working while the
+        // user signs in. On success it changes the callable MCP surface (the
+        // server's real tools replace the synthetic one); flag that so the
+        // turn loop merges the refreshed catalog before the next model
+        // request instead of leaving the model with names it cannot legally
+        // call yet.
+        let auth_target = pool.lock().await.authenticate_tool_target(name);
+        if let Some(server) = auth_target {
+            let result = crate::mcp::authenticate_tool_via_pool(&pool, &server, |url| {
+                // The model cannot relay the URL until the call returns, and
+                // the call returns only after the sign-in completes — so the
+                // user must see it now. This status is the only copy of the
+                // URL: `try_send` drops it on a full channel, so the send
+                // waits for room on its own task instead of failing the
+                // login.
+                let server = server.clone();
+                let url = url.to_string();
+                let tx = tx_event.clone();
+                tokio::spawn(async move {
+                    let _ = tx
+                        .send(Event::status(format!(
+                            "◆ auth required: sign in to MCP server '{server}' in your browser — {url}"
+                        )))
+                        .await;
+                });
+            })
             .await
             .map_err(|e| ToolError::execution_failed(format!("MCP tool failed: {e}")))?;
-        Ok(crate::tools::registry::mcp_result_to_bounded_rich_tool_result(result))
+            let mut rich = crate::tools::registry::mcp_result_to_bounded_rich_tool_result(result);
+            if rich.result.success {
+                rich.result.metadata = Some(serde_json::json!({ "mcp_catalog_changed": true }));
+            }
+            return Ok(rich);
+        }
+        let needs_auth_generation_before = pool.lock().await.needs_auth_generation();
+        let result = pool.lock().await.call_tool(name, input).await;
+        match result {
+            Ok(result) => {
+                Ok(crate::tools::registry::mcp_result_to_bounded_rich_tool_result(result))
+            }
+            Err(error) => {
+                // A credential the server stopped accepting mid-session
+                // flips it into the typed needs-auth state and drops its
+                // connection — the callable surface changed. For THAT
+                // transition only, return the failure as a result (not an
+                // Err) carrying `mcp_catalog_changed`, so the turn loop
+                // replaces the pool's catalog slice: dead tools leave, the
+                // synthetic login tool arrives, and the error's own hint
+                // stays model-readable. Every other failure keeps the Err
+                // contract.
+                let auth_surface_changed = {
+                    let pool = pool.lock().await;
+                    pool.needs_auth_generation() != needs_auth_generation_before
+                };
+                if !auth_surface_changed {
+                    return Err(ToolError::execution_failed(format!(
+                        "MCP tool failed: {error}"
+                    )));
+                }
+                let tool_result =
+                    crate::tools::spec::ToolResult::error(format!("MCP tool failed: {error}"))
+                        .with_metadata(serde_json::json!({ "mcp_catalog_changed": true }));
+                Ok(RichToolResult::plain(tool_result))
+            }
+        }
     }
 
     pub(super) async fn execute_parallel_tool(
@@ -445,7 +507,7 @@ impl Engine {
         // `InteractiveTerminalGuard` doc-comment for the regression this
         // closes (parent terminal scrollback hijacking the TUI after a
         // cancelled interactive tool).
-        let _terminal = InteractiveTerminalGuard::engage(tx_event, interactive).await?;
+        let _terminal = InteractiveTerminalGuard::engage(tx_event.clone(), interactive).await?;
 
         if cancel_token
             .as_ref()
@@ -482,7 +544,7 @@ impl Engine {
 
         let outcome: Result<RichToolResult, ToolError> = if McpPool::is_mcp_tool(&tool_name) {
             if let Some(pool) = mcp_pool {
-                Engine::execute_mcp_tool_with_pool(pool, &tool_name, tool_input).await
+                Engine::execute_mcp_tool_with_pool(pool, &tx_event, &tool_name, tool_input).await
             } else {
                 Err(ToolError::not_available(format!(
                     "tool '{tool_name}' is not registered"

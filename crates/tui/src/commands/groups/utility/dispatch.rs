@@ -6,10 +6,11 @@ use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::cloud_dispatch::{
     CloudJobStore, DispatchOutcome, Forge, LiveDaytonaLauncher, cancel_job, confirm_job,
-    discover_credentials, discover_remotes, execute_dispatch, format_job, format_job_list,
-    format_status, plan_dispatch,
+    discover_credentials, discover_machine_token, discover_remotes, execute_dispatch, format_job,
+    format_job_list, format_status, plan_dispatch,
 };
 use crate::commands::CommandResult;
+use crate::dispatch_runner::spawn_confirmed_runner;
 
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "dispatch",
@@ -43,9 +44,12 @@ fn dispatch(workspace: &mut dyn CommandWorkspaceContext, args: Option<&str>) -> 
         Err(error) => return CommandResult::error(error.to_string()),
     };
     if raw.is_empty() {
+        let recent = store.list().unwrap_or_default();
+        let recent: Vec<_> = recent.into_iter().take(5).collect();
         return CommandResult::message(format_status(
             &discover_remotes(&workspace.workspace()),
             &discover_credentials(),
+            &recent,
         ));
     }
 
@@ -71,8 +75,21 @@ fn dispatch(workspace: &mut dyn CommandWorkspaceContext, args: Option<&str>) -> 
             if rest.is_empty() {
                 return CommandResult::error("Usage: /dispatch confirm <id>");
             }
-            match confirm_job(&store, rest, &discover_credentials(), &LiveDaytonaLauncher) {
-                Ok(outcome) => CommandResult::message(outcome_message(&outcome)),
+            match confirm_job(
+                &store,
+                rest,
+                &discover_credentials(),
+                &discover_machine_token(),
+            ) {
+                Ok(outcome) => {
+                    if let DispatchOutcome::Accepted(job) = &outcome {
+                        // Detached: the TUI stays responsive and the job
+                        // record streams progress; `/dispatch cancel` tears
+                        // the sandbox down at any time.
+                        spawn_confirmed_runner(store.clone(), job.id.clone());
+                    }
+                    CommandResult::message(outcome_message(&outcome))
+                }
                 Err(error) => CommandResult::error(error.to_string()),
             }
         }
@@ -80,7 +97,7 @@ fn dispatch(workspace: &mut dyn CommandWorkspaceContext, args: Option<&str>) -> 
             if rest.is_empty() {
                 return CommandResult::error("Usage: /dispatch cancel <id>");
             }
-            match cancel_job(&store, rest) {
+            match cancel_job(&store, rest, &LiveDaytonaLauncher) {
                 Ok(job) => CommandResult::message(format_job(&job)),
                 Err(error) => CommandResult::error(error.to_string()),
             }
@@ -109,9 +126,14 @@ fn propose_or_run(
         plan,
         confirm,
         &discover_credentials(),
-        &LiveDaytonaLauncher,
+        &discover_machine_token(),
     ) {
-        Ok(outcome) => CommandResult::message(outcome_message(&outcome)),
+        Ok(outcome) => {
+            if let DispatchOutcome::Accepted(job) = &outcome {
+                spawn_confirmed_runner(store.clone(), job.id.clone());
+            }
+            CommandResult::message(outcome_message(&outcome))
+        }
         Err(error) => CommandResult::error(error.to_string()),
     }
 }

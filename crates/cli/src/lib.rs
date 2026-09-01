@@ -309,7 +309,7 @@ New integrations should prefer `codewhale app-server`.")]
     /// Sign in to your Codewhale account and manage account-scoped provider keys.
     #[command(visible_alias = "cloud")]
     Account(cloud::CloudArgs),
-    /// Offload a coding agent to Daytona. Never spends or pushes without --confirm.
+    /// Offload a coding agent to the Codewhale cloud. Never spends or pushes without --confirm.
     #[command(visible_alias = "cloud-agent")]
     Dispatch(dispatch::DispatchArgs),
     /// Run MCP server mode over stdio.
