@@ -2468,6 +2468,16 @@ pub struct McpPool {
     /// instead of dead-ending on the error item. BTreeSet keeps catalog
     /// construction deterministic.
     needs_auth_servers: BTreeSet<String>,
+    /// Configured OAuth callback overrides, so the synthetic self-serve
+    /// login tool honors the same pre-registered redirect URI `/mcp login`
+    /// uses (`mcp_oauth_callback_port` / `mcp_oauth_callback_url`).
+    oauth_callback_port: Option<u16>,
+    oauth_callback_url: Option<String>,
+    /// Bumped on every `needs_auth_servers` mutation. The engine reads it
+    /// around a tool call so a live 401 that flips the auth surface can
+    /// flag `mcp_catalog_changed` on the failed result and the turn loop
+    /// replaces the pool's catalog slice before the next model request.
+    needs_auth_generation: u64,
 }
 
 type McpPendingConnect = (String, McpServerConfig);
@@ -2481,6 +2491,8 @@ impl McpPool {
             connections: HashMap::new(),
             config,
             network_policy: None,
+            oauth_callback_port: None,
+            oauth_callback_url: None,
             config_sources: Vec::new(),
             workspace: None,
             plugin_registry: None,
@@ -2489,6 +2501,7 @@ impl McpPool {
             last_mtimes: Vec::new(),
             dynamic_servers: Arc::new(RwLock::new(HashMap::new())),
             needs_auth_servers: BTreeSet::new(),
+            needs_auth_generation: 0,
         }
     }
 
@@ -2579,6 +2592,21 @@ impl McpPool {
         self
     }
 
+    /// Configure the OAuth callback overrides (`mcp_oauth_callback_port` /
+    /// `mcp_oauth_callback_url`) for installations whose OAuth client has a
+    /// pre-registered redirect URI. The synthetic self-serve login tool must
+    /// use the same overrides as `/mcp login`, or the provider rejects its
+    /// ephemeral loopback redirect.
+    pub fn with_oauth_callback(
+        mut self,
+        port: Option<u16>,
+        url: Option<String>,
+    ) -> Self {
+        self.oauth_callback_port = port;
+        self.oauth_callback_url = url;
+        self
+    }
+
     pub(crate) fn connect_timeouts(&self) -> McpTimeouts {
         self.config.timeouts
     }
@@ -2607,6 +2635,7 @@ impl McpPool {
         // connection is dropped (config reload, source switch, shutdown) the
         // next attempt re-derives it.
         self.needs_auth_servers.clear();
+        self.needs_auth_generation = self.needs_auth_generation.wrapping_add(1);
         if self.connections.is_empty() {
             return;
         }
@@ -2873,18 +2902,35 @@ impl McpPool {
     pub(crate) fn store_ready_connection(&mut self, name: String, mut connection: McpConnection) {
         connection.catalog_generation = self.catalog_generation.load(Ordering::SeqCst);
         // A successful connect settles the auth question for this server.
-        self.needs_auth_servers.remove(&name);
+        if self.needs_auth_servers.remove(&name) {
+            self.needs_auth_generation = self.needs_auth_generation.wrapping_add(1);
+        }
         self.connections.insert(name, connection);
     }
 
     /// Record a connect failure's auth classification. When the failure looks
     /// like a missing/expired OAuth login, the next model catalog offers the
     /// synthetic `mcp_<server>_authenticate` tool so the model can self-serve
-    /// the login instead of dead-ending on the error item.
+    /// the login instead of dead-ending on the error item. A non-auth
+    /// failure replaces the verdict — the state is "the most recent connect
+    /// failed auth-required", not "some connect once did".
     pub(crate) fn note_connect_failure(&mut self, name: &str, error: &anyhow::Error) {
-        if oauth::error_looks_auth_required(error) {
-            self.needs_auth_servers.insert(name.to_string());
+        let changed = if oauth::error_looks_auth_required(error) {
+            self.needs_auth_servers.insert(name.to_string())
+        } else {
+            self.needs_auth_servers.remove(name)
+        };
+        if changed {
+            self.needs_auth_generation = self.needs_auth_generation.wrapping_add(1);
         }
+    }
+
+    /// Current needs-auth surface generation. Compare across a tool call to
+    /// learn whether the call flipped a server into or out of the
+    /// `◆ auth required` state (a live 401, or a login that landed).
+    #[must_use]
+    pub fn needs_auth_generation(&self) -> u64 {
+        self.needs_auth_generation
     }
 
     /// Whether the server's most recent connect attempt failed auth-required
@@ -3073,6 +3119,7 @@ impl McpPool {
         // server whose fresh connect attempt still fails auth-required.
         {
             let dynamic = self.dynamic_servers.read();
+            let before = self.needs_auth_servers.len();
             self.needs_auth_servers.retain(|name| {
                 self.config
                     .servers
@@ -3080,6 +3127,9 @@ impl McpPool {
                     .is_some_and(|server| server.is_enabled())
                     || dynamic.get(name).is_some_and(|server| server.is_enabled())
             });
+            if self.needs_auth_servers.len() != before {
+                self.needs_auth_generation = self.needs_auth_generation.wrapping_add(1);
+            }
         }
 
         for _pass in 0..2 {
@@ -3220,7 +3270,13 @@ impl McpPool {
         if ready || oauth::has_usable_stored_tokens(server_name, &server) {
             return Ok(AuthenticateToolStart::AlreadyAuthorized);
         }
-        let login = oauth::begin_oauth_login_for_server_tool(server_name, &server).await?;
+        let login = oauth::begin_oauth_login_for_server_tool(
+            server_name,
+            &server,
+            self.oauth_callback_port,
+            self.oauth_callback_url.as_deref(),
+        )
+        .await?;
         Ok(AuthenticateToolStart::Login(Box::new(login)))
     }
 
@@ -3267,9 +3323,36 @@ impl McpPool {
                 }
                 Ok(result)
             }
-            Err(error) => Err(error).with_context(|| {
-                format!("MCP server '{server_name}' completed OAuth login but the reconnect failed")
-            }),
+            Err(error) => {
+                // A stored token the server just rejected must not feed the
+                // loop again: `begin_authenticate_tool` short-circuits to
+                // AlreadyAuthorized whenever usable-looking tokens exist, so
+                // keeping them means the model re-calls the synthetic tool
+                // forever while every reconnect fails auth-required. Drop
+                // the durable copy so the next begin starts a real login.
+                if matches!(outcome, AuthenticateToolOutcome::AlreadyAuthorized)
+                    && oauth::error_looks_auth_required(&error)
+                    && let Some(server) = self.server_config(server_name)
+                {
+                    match oauth::delete_oauth_tokens_for_server(server_name, &server) {
+                        Ok(true) => tracing::info!(
+                            target: "mcp",
+                            server = %server_name,
+                            "rejected stored OAuth token removed after failed AlreadyAuthorized reconnect"
+                        ),
+                        Ok(false) => {}
+                        Err(delete_err) => tracing::warn!(
+                            target: "mcp",
+                            server = %server_name,
+                            error = %delete_err,
+                            "could not remove rejected stored OAuth token"
+                        ),
+                    }
+                }
+                Err(error).with_context(|| {
+                    format!("MCP server '{server_name}' completed OAuth login but the reconnect failed")
+                })
+            }
         }
     }
 
@@ -3694,10 +3777,28 @@ impl McpPool {
         })
     }
 
+    /// Every model-facing tool name the runtime MCP pool can own right now:
+    /// the current `to_api_tools` output plus the synthetic
+    /// `mcp_<server>_authenticate` name for every enabled OAuth-servable
+    /// server, whether or not it is currently needs-auth. The turn loop
+    /// uses this universe to REPLACE the pool's slice of the tool catalog
+    /// instead of additively merging it — the synthetic entry must leave
+    /// after a login, and dead real tools must leave after a live 401.
+    pub fn model_tool_names(&self) -> std::collections::HashSet<String> {
+        let mut names: std::collections::HashSet<String> =
+            self.to_api_tools().into_iter().map(|tool| tool.name).collect();
+        let dynamic = self.dynamic_servers.read();
+        for (server, config) in self.config.servers.iter().chain(dynamic.iter()) {
+            if config.is_enabled() && oauth::server_supports_oauth_login(config) {
+                names.insert(Self::mcp_model_tool_name(server, AUTHENTICATE_TOOL_NAME));
+            }
+        }
+        names
+    }
+
     /// Convert discovered tools to API Tool format
     pub fn to_api_tools(&self) -> Vec<crate::models::Tool> {
         let mut api_tools = Vec::new();
-
         // Add regular tools
         for (name, tool) in self.all_tools() {
             api_tools.push(crate::models::Tool {

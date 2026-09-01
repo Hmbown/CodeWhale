@@ -6287,7 +6287,7 @@ async fn selfserve_auth_flow_persists_tokens_and_swaps_real_tools_back() {
 
     // A declined browser flow must surface a truthful error the model can
     // relay, and leave the server in needs-auth.
-    let login = oauth::begin_oauth_login_for_server_tool("wikiserver", &config)
+    let login = oauth::begin_oauth_login_for_server_tool("wikiserver", &config, None, None)
         .await
         .unwrap();
     let auth_url = reqwest::Url::parse(login.authorization_url()).unwrap();
@@ -6317,7 +6317,7 @@ async fn selfserve_auth_flow_persists_tokens_and_swaps_real_tools_back() {
     );
 
     // The approved flow: drive the loopback callback in-test.
-    let login = oauth::begin_oauth_login_for_server_tool("wikiserver", &config)
+    let login = oauth::begin_oauth_login_for_server_tool("wikiserver", &config, None, None)
         .await
         .unwrap();
     let auth_url = reqwest::Url::parse(login.authorization_url()).unwrap();

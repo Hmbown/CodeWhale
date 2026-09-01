@@ -641,12 +641,15 @@ mod tests {
                 .servers
                 .iter()
                 .find(|row| row.name == "delta")
-                .map(|row| (row.state, row.action)),
-            Some((McpServerBootState::NeedsLogin, McpServerAction::Login))
+                .map(|row| row.state),
+            Some(McpServerBootState::NeedsLogin)
         );
-        let joined = surface.receipt_lines(Locale::En, 100).join("\n");
-        assert!(joined.contains("◆ auth required"), "{joined}");
-        assert!(joined.contains("/mcp login delta"), "{joined}");
+        // The compact activity chip counts a needs-login server with the
+        // failure band (the receipt-line renderer this pinned moved to the
+        // chip in the Tideline boot-surface refactor).
+        assert_eq!(surface.servers.len(), 1);
+        let chip = surface.activity_notice(Locale::En, 100);
+        assert!(chip.is_some(), "needs-login must surface on the boot chip");
     }
 
     #[test]

@@ -67,12 +67,19 @@ fn error_is_invalid_grant(error: &anyhow::Error) -> bool {
 /// fresh login recovers it.
 pub fn error_text_looks_auth_required(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
+    // `auth required` and `requires oauth` are anchored to the shapes this
+    // product and the Codex-compatible managers actually emit (`◆ auth
+    // required`, `requires OAuth login/authentication/reauthentication`) —
+    // bare substrings would misclassify incidental server errors like
+    // "auth required parameter is missing".
     text.contains("401")
         || text.contains("unauthorized")
         || text.contains("authentication_required")
         || text.contains("invalid_grant")
-        || text.contains("auth required")
-        || text.contains("requires oauth")
+        || text.contains("◆ auth required")
+        || text.contains("requires oauth login")
+        || text.contains("requires oauth authentication")
+        || text.contains("requires oauth reauthentication")
         || text.contains("not logged in")
         || text.contains("not-logged-in")
         || text.contains("re-authorize")
@@ -459,13 +466,16 @@ impl McpOAuthRuntime {
     /// definitively rejected it. Never deletes a newer durable winner: when
     /// the on-disk credential no longer matches the one we hold, another
     /// process rotated it after our copy loaded, and that credential — not
-    /// ours — is the one the next connect must try.
+    /// ours — is the one the next connect must try. The manager is rebuilt
+    /// around that winner exactly like initial construction; remembering
+    /// the rotated token while keeping our dead grant would make the next
+    /// `invalid_grant` compare an "unchanged" store and delete the newer
+    /// valid credential.
     async fn clear_stored_tokens(&self, reason: &str) -> Result<()> {
-        let mut last = self.inner.last_tokens.lock().await;
-        let Some(held) = last.take() else {
+        let held = { self.inner.last_tokens.lock().await.take() };
+        let Some(held) = held else {
             return Ok(());
         };
-        let mut rejection = self.inner.rejection.lock().await;
         match load_oauth_tokens(&self.inner.server_name, &self.inner.url)? {
             Some(stored) if stored != held => {
                 tracing::debug!(
@@ -473,12 +483,19 @@ impl McpOAuthRuntime {
                     server = %self.inner.server_name,
                     "MCP OAuth credential was rotated by another process; keeping the on-disk winner"
                 );
-                *last = Some(stored);
-                *rejection = None;
+                let manager = manager_from_stored_tokens(
+                    &self.inner.url,
+                    &stored,
+                    &self.inner.default_headers,
+                )
+                .await?;
+                *self.inner.manager.lock().await = manager;
+                *self.inner.last_tokens.lock().await = Some(stored);
+                *self.inner.rejection.lock().await = None;
             }
             _ => {
                 delete_oauth_tokens(&self.inner.server_name, &self.inner.url)?;
-                *rejection = Some(reason.to_string());
+                *self.inner.rejection.lock().await = Some(reason.to_string());
             }
         }
         Ok(())
@@ -875,6 +892,8 @@ impl McpOAuthToolLogin {
 pub async fn begin_oauth_login_for_server_tool(
     name: &str,
     server: &McpServerConfig,
+    callback_port: Option<u16>,
+    callback_url: Option<&str>,
 ) -> Result<McpOAuthToolLogin> {
     if server.reviewed_plugin.is_some() {
         bail!(
@@ -890,8 +909,8 @@ pub async fn begin_oauth_login_for_server_tool(
         &resolved_scopes.scopes,
         server.oauth_client_id(),
         server.oauth_resource.as_deref(),
-        None,
-        None,
+        callback_port,
+        callback_url,
     )
     .await?;
     Ok(McpOAuthToolLogin {
@@ -939,7 +958,7 @@ This server requires an OAuth login that has not yet been completed, so its \
 real tools are currently unavailable. Calling this tool starts the \
 authorization flow:\n\n\
 1. A browser window is opened for the user to sign in and approve the \
-CodeWhale client, and the exact authorization URL is shown to the user in \
+Codewhale client, and the exact authorization URL is shown to the user in \
 the session status while this call waits. The same URL is returned in this \
 call's result; if the user reports the browser did not open, show that URL \
 to the user verbatim and ask them to complete the sign-in there.\n\
@@ -1324,7 +1343,7 @@ async fn start_authorization(
     let Some(client_id) = oauth_client_id.filter(|client_id| !client_id.trim().is_empty()) else {
         let mut oauth_state = OAuthState::new(server_url, Some(client)).await?;
         oauth_state
-            .start_authorization(scopes, redirect_uri, Some("CodeWhale"))
+            .start_authorization(scopes, redirect_uri, Some("Codewhale"))
             .await?;
         return Ok(oauth_state);
     };

@@ -248,11 +248,20 @@ impl Engine {
             let result = crate::mcp::authenticate_tool_via_pool(&pool, &server, |url| {
                 // The model cannot relay the URL until the call returns, and
                 // the call returns only after the sign-in completes — so the
-                // user must see it now. Status is best-effort: a full channel
-                // never blocks or fails the login.
-                let _ = tx_event.try_send(Event::status(format!(
-                    "◆ auth required: sign in to MCP server '{server}' in your browser — {url}"
-                )));
+                // user must see it now. This status is the only copy of the
+                // URL: `try_send` drops it on a full channel, so the send
+                // waits for room on its own task instead of failing the
+                // login.
+                let server = server.clone();
+                let url = url.to_string();
+                let tx = tx_event.clone();
+                tokio::spawn(async move {
+                    let _ = tx
+                        .send(Event::status(format!(
+                            "◆ auth required: sign in to MCP server '{server}' in your browser — {url}"
+                        )))
+                        .await;
+                });
             })
             .await
             .map_err(|e| ToolError::execution_failed(format!("MCP tool failed: {e}")))?;
@@ -262,13 +271,42 @@ impl Engine {
             }
             return Ok(rich);
         }
+        let needs_auth_generation_before = pool.lock().await.needs_auth_generation();
         let result = pool
             .lock()
             .await
             .call_tool(name, input)
-            .await
-            .map_err(|e| ToolError::execution_failed(format!("MCP tool failed: {e}")))?;
-        Ok(crate::tools::registry::mcp_result_to_bounded_rich_tool_result(result))
+            .await;
+        match result {
+            Ok(result) => {
+                Ok(crate::tools::registry::mcp_result_to_bounded_rich_tool_result(result))
+            }
+            Err(error) => {
+                // A credential the server stopped accepting mid-session
+                // flips it into the typed needs-auth state and drops its
+                // connection — the callable surface changed. For THAT
+                // transition only, return the failure as a result (not an
+                // Err) carrying `mcp_catalog_changed`, so the turn loop
+                // replaces the pool's catalog slice: dead tools leave, the
+                // synthetic login tool arrives, and the error's own hint
+                // stays model-readable. Every other failure keeps the Err
+                // contract.
+                let auth_surface_changed = {
+                    let pool = pool.lock().await;
+                    pool.needs_auth_generation() != needs_auth_generation_before
+                };
+                if !auth_surface_changed {
+                    return Err(ToolError::execution_failed(format!(
+                        "MCP tool failed: {error}"
+                    )));
+                }
+                let tool_result = crate::tools::spec::ToolResult::error(format!(
+                    "MCP tool failed: {error}"
+                ))
+                .with_metadata(serde_json::json!({ "mcp_catalog_changed": true }));
+                Ok(RichToolResult::plain(tool_result))
+            }
+        }
     }
 
     pub(super) async fn execute_parallel_tool(

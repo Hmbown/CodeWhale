@@ -4179,6 +4179,7 @@ fn failed_mcp_is_a_footer_chip_not_multiline_chat_boot_output() {
             name: "alpha".to_string(),
             enabled: true,
             required: false,
+            auth_required: false,
             transport: "stdio".to_string(),
             command_or_url: "alpha-mcp".to_string(),
             connect_timeout: 5,
