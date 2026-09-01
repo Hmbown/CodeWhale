@@ -589,20 +589,92 @@ pub(crate) fn apply_goal_snapshot_to_app(app: &mut App, snapshot: &GoalSnapshot)
 /// Apply an explicit mode selection from a user shortcut (Alt+A/P/Y).
 ///
 /// Uses `select_mode`, not `set_mode`, so an explicitly chosen mode is also the
-/// startup default next launch — matching the Tab cycle and hotbar paths.
+/// startup default next launch – matching the Tab cycle and hotbar paths.
 pub(crate) async fn apply_mode_update(
     app: &mut App,
     engine_handle: &EngineHandle,
+    config: &Config,
     mode: AppMode,
 ) -> bool {
     let outcome = app.select_mode(mode);
     app.report_mode_selection(mode, outcome);
+    if mode == AppMode::Operate {
+        present_operate_board(app, config).await;
+    }
     if outcome.changed_live_state() {
         sync_mode_update(app, engine_handle).await;
         true
     } else {
         false
     }
+}
+
+/// Entering Operate attaches to the recorded operation (a fresh one only
+/// when none exists or the last was cancelled), shows the localized lead
+/// plan, and keeps always-on mode durable by reinstalling the hourly lead
+/// keepalive bound to this workspace. Burn rate is optional; default is
+/// unbounded.
+async fn present_operate_board(app: &mut App, config: &Config) {
+    let store = match crate::operate::OperationStore::open(crate::operate::default_operate_dir()) {
+        Ok(store) => store,
+        Err(error) => {
+            app.add_message(crate::tui::history::HistoryCell::System {
+                content: format!("Operate store unavailable: {error}"),
+            });
+            return;
+        }
+    };
+    let credentials = crate::operate::operate_credentials_present(config);
+    let operation = match crate::operate::attach_or_start_operation(
+        &store,
+        &app.workspace,
+        None,
+        None,
+        credentials,
+    ) {
+        Ok(mut operation) => {
+            if credentials && !operation.direction.is_empty() && operation.lead_plan.is_none() {
+                operation.plan_from_direction();
+                if let Err(error) = store.save(&operation) {
+                    app.add_message(crate::tui::history::HistoryCell::System {
+                        content: format!("Operate plan not saved: {error}"),
+                    });
+                }
+            }
+            operation
+        }
+        Err(error) => {
+            app.add_message(crate::tui::history::HistoryCell::System {
+                content: format!("Operate did not start: {error}"),
+            });
+            return;
+        }
+    };
+    // Always-on is durable only if the keepalive automation exists: entering
+    // Operate (re)installs it for this workspace, kicking an immediate
+    // lead-plan step when the attached operation still needs one.
+    let needs_lead_plan = !operation
+        .lead_plan
+        .as_ref()
+        .is_some_and(|plan| !plan.slices.is_empty());
+    if let Some(automations) = app
+        .runtime_services
+        .automations
+        .as_ref()
+        .map(std::sync::Arc::clone)
+    {
+        let manager = automations.lock().await;
+        if let Err(error) =
+            crate::operate::upsert_keepalive(&manager, &app.workspace, needs_lead_plan)
+        {
+            app.add_message(crate::tui::history::HistoryCell::System {
+                content: format!("Operate keep-alive not installed: {error}"),
+            });
+        }
+    }
+    app.add_message(crate::tui::history::HistoryCell::System {
+        content: crate::operate::render_plan_board_locale(&operation, app.ui_locale),
+    });
 }
 
 pub(crate) async fn apply_model_and_compaction_update(

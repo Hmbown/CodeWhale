@@ -49,11 +49,37 @@ pub fn error_looks_auth_required(error: &anyhow::Error) -> bool {
     error_text_looks_auth_required(&format!("{error:#}"))
 }
 
+/// Whether the error chain carries the OAuth `invalid_grant` code: the
+/// authorization server definitively rejected the presented grant (typically
+/// a stale or already-rotated refresh token).
+fn error_is_invalid_grant(error: &anyhow::Error) -> bool {
+    format!("{error:#}")
+        .to_ascii_lowercase()
+        .contains("invalid_grant")
+}
+
+/// The one auth-required classifier every surface consults: the pool's
+/// `◆ auth required` state, the session-boot row, the `/mcp` manager
+/// recovery verb, and the synthetic `mcp_<server>_authenticate` tool all
+/// derive from this predicate so a failure is never "needs login" on one
+/// surface and "failed" on another. `invalid_grant` belongs here because the
+/// authorization server has definitively rejected the stored grant — only a
+/// fresh login recovers it.
 pub fn error_text_looks_auth_required(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
+    // `auth required` and `requires oauth` are anchored to the shapes this
+    // product and the Codex-compatible managers actually emit (`◆ auth
+    // required`, `requires OAuth login/authentication/reauthentication`) —
+    // bare substrings would misclassify incidental server errors like
+    // "auth required parameter is missing".
     text.contains("401")
         || text.contains("unauthorized")
         || text.contains("authentication_required")
+        || text.contains("invalid_grant")
+        || text.contains("◆ auth required")
+        || text.contains("requires oauth login")
+        || text.contains("requires oauth authentication")
+        || text.contains("requires oauth reauthentication")
         || text.contains("not logged in")
         || text.contains("not-logged-in")
         || text.contains("re-authorize")
@@ -65,6 +91,46 @@ pub fn auth_required_login_hint(server_name: &str) -> String {
     format!(
         "MCP server '{server_name}' requires OAuth authentication. Run `codewhale mcp login {server_name}` to authenticate."
     )
+}
+
+/// The one recovery sentence for a server in the `◆ auth required` state,
+/// chosen by how that server is allowed to authenticate. OAuth-servable
+/// servers get the login command; plugin-contributed servers (OAuth is
+/// disabled for them by review policy) and servers with a manual
+/// Authorization configuration are told which environment-backed
+/// credential to supply instead, so `/mcp login` is never named for a
+/// server it would refuse. Environment variable *names* are not secrets;
+/// their values never appear here.
+pub(crate) fn auth_required_recovery_hint(server_name: &str, server: &McpServerConfig) -> String {
+    let mut env_vars: Vec<&str> = server
+        .env_headers
+        .values()
+        .map(String::as_str)
+        .chain(server.bearer_token_env_var.as_deref())
+        .collect();
+    env_vars.sort_unstable();
+    env_vars.dedup();
+    let credential_source = if env_vars.is_empty() {
+        "its configured Authorization header".to_string()
+    } else {
+        format!(
+            "the environment variable{} {}",
+            if env_vars.len() == 1 { "" } else { "s" },
+            env_vars.join(", ")
+        )
+    };
+    if let Some(source) = server.reviewed_plugin.as_ref() {
+        return format!(
+            "MCP server '{server_name}' is contributed by plugin '{}' and its credential comes from {credential_source} (OAuth login is disabled for plugin-contributed servers). Set the credential, then run `/mcp reload`.",
+            source.authority.plugin_name
+        );
+    }
+    if server_has_manual_authorization(server) {
+        return format!(
+            "MCP server '{server_name}' authenticates with {credential_source}; the server rejected that credential. Correct it, then run `/mcp reload`."
+        );
+    }
+    auth_required_login_hint(server_name)
 }
 
 /// TUI recovery for a stale Streamable HTTP OAuth session. `/mcp auth` is not a
@@ -109,6 +175,14 @@ struct McpOAuthRuntimeInner {
     url: String,
     manager: Arc<Mutex<AuthorizationManager>>,
     last_tokens: Mutex<Option<StoredMcpOAuthTokens>>,
+    /// Why the held credential was invalidated (the provider's error code,
+    /// e.g. `invalid_grant`), so every later failure names the cause even
+    /// though the rejected grant is never replayed. `None` while a
+    /// credential is held.
+    rejection: Mutex<Option<String>>,
+    /// Default headers the runtime was built with, retained so an adopted
+    /// on-disk rotation can rebuild the manager with identical HTTP shape.
+    default_headers: HeaderMap,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,6 +234,29 @@ impl std::fmt::Display for OAuthProviderError {
 
 impl std::error::Error for OAuthProviderError {}
 
+/// Build an `AuthorizationManager` preloaded with stored credentials, the
+/// shared construction step for initial load and for adopting a credential
+/// that another process rotated on disk.
+async fn manager_from_stored_tokens(
+    url: &str,
+    tokens: &StoredMcpOAuthTokens,
+    default_headers: &HeaderMap,
+) -> Result<AuthorizationManager> {
+    let client = apply_default_headers(crate::tls::reqwest_client_builder(), default_headers)
+        .build()
+        .context("building MCP OAuth metadata client")?;
+    let mut state = OAuthState::new(url.to_string(), Some(client)).await?;
+    state
+        .set_credentials(&tokens.client_id, tokens.token_response.0.clone())
+        .await
+        .context("installing stored MCP OAuth credentials")?;
+
+    match state {
+        OAuthState::Authorized(manager) | OAuthState::Unauthorized(manager) => Ok(manager),
+        _ => bail!("unexpected MCP OAuth state while preparing stored credentials"),
+    }
+}
+
 impl McpOAuthRuntime {
     pub async fn from_server_config(
         server_name: &str,
@@ -190,19 +287,7 @@ impl McpOAuthRuntime {
         default_headers: HeaderMap,
     ) -> Result<Self> {
         refresh_expires_in_from_timestamp(&mut tokens);
-        let client = apply_default_headers(crate::tls::reqwest_client_builder(), &default_headers)
-            .build()
-            .context("building MCP OAuth metadata client")?;
-        let mut state = OAuthState::new(url.to_string(), Some(client)).await?;
-        state
-            .set_credentials(&tokens.client_id, tokens.token_response.0.clone())
-            .await
-            .context("installing stored MCP OAuth credentials")?;
-
-        let manager = match state {
-            OAuthState::Authorized(manager) | OAuthState::Unauthorized(manager) => manager,
-            _ => bail!("unexpected MCP OAuth state while preparing stored credentials"),
-        };
+        let manager = manager_from_stored_tokens(url, &tokens, &default_headers).await?;
 
         Ok(Self {
             inner: Arc::new(McpOAuthRuntimeInner {
@@ -210,12 +295,20 @@ impl McpOAuthRuntime {
                 url: url.to_string(),
                 manager: Arc::new(Mutex::new(manager)),
                 last_tokens: Mutex::new(Some(tokens)),
+                rejection: Mutex::new(None),
+                default_headers,
             }),
         })
     }
 
     pub async fn authorization_header(&self) -> Result<Option<String>> {
         self.refresh_if_needed().await?;
+        // Never send a credential the provider already rejected; the request
+        // goes out unauthenticated and the server's 401 drives the reactive
+        // refresh, which adopts a peer's login or reports auth-required.
+        if self.is_invalidated().await {
+            return Ok(None);
+        }
         let credentials = {
             let guard = self.inner.manager.lock().await;
             let (_client_id, credentials) = guard
@@ -254,30 +347,156 @@ impl McpOAuthRuntime {
         self.refresh_and_persist().await
     }
 
+    /// Whether this runtime's credential was definitively rejected by the
+    /// provider and invalidated. `last_tokens` is `Some` from construction
+    /// and after every persisted refresh; only [`Self::clear_stored_tokens`]
+    /// empties it.
+    async fn is_invalidated(&self) -> bool {
+        self.inner.last_tokens.lock().await.is_none()
+    }
+
     async fn refresh_and_persist(&self) -> Result<()> {
+        // A credential the provider definitively rejected is never replayed:
+        // the `AuthorizationManager` still holds it, but every later refresh
+        // with that grant is a guaranteed `invalid_grant`. The only way back
+        // is a credential another process stored since (a completed login),
+        // so adopt that when present and otherwise report auth-required
+        // without touching the token endpoint.
+        if self.is_invalidated().await {
+            if !self.adopt_rotated_on_disk_tokens().await? {
+                let reason = self
+                    .inner
+                    .rejection
+                    .lock()
+                    .await
+                    .clone()
+                    .unwrap_or_else(|| "unauthorized".to_string());
+                bail!(
+                    "stored MCP OAuth credential for server {} was rejected by the provider ({reason}) and removed; the server requires OAuth login again",
+                    self.inner.server_name
+                );
+            }
+            let adopted_needs_refresh = {
+                let last = self.inner.last_tokens.lock().await;
+                token_needs_refresh(last.as_ref().and_then(|tokens| tokens.expires_at))
+            };
+            if !adopted_needs_refresh {
+                return Ok(());
+            }
+        }
+        let mut err = match self.try_refresh_and_persist().await {
+            Ok(()) => return Ok(()),
+            Err(err) => err,
+        };
+        // Refresh-race tolerance: another codewhale process sharing this token
+        // store (a concurrent `mcp login`, or a peer session's refresh) may
+        // have rotated the credential after this runtime loaded its copy, and
+        // single-use refresh tokens then fail here with `invalid_grant`.
+        // Re-read the store once; when the on-disk credential changed, adopt
+        // it — using it directly while fresh, or retrying the refresh exactly
+        // once with the rotated grant — before surfacing failure. When the
+        // store is unchanged the grant is simply dead: the auth-required
+        // branch below invalidates it so the server flips to `◆ auth
+        // required` and the self-serve login tool appears, instead of every
+        // later connect replaying the same rejected refresh.
+        if error_is_invalid_grant(&err) && self.adopt_rotated_on_disk_tokens().await? {
+            let adopted_needs_refresh = {
+                let last = self.inner.last_tokens.lock().await;
+                token_needs_refresh(last.as_ref().and_then(|tokens| tokens.expires_at))
+            };
+            if !adopted_needs_refresh {
+                return Ok(());
+            }
+            match self.try_refresh_and_persist().await {
+                Ok(()) => return Ok(()),
+                Err(retry_err) => err = retry_err,
+            }
+        }
+        if error_looks_auth_required(&err) {
+            let reason = if error_is_invalid_grant(&err) {
+                "invalid_grant"
+            } else {
+                "unauthorized"
+            };
+            self.clear_stored_tokens(reason).await?;
+        }
+        Err(err).with_context(|| {
+            format!(
+                "refreshing MCP OAuth token for server {}",
+                self.inner.server_name
+            )
+        })
+    }
+
+    async fn try_refresh_and_persist(&self) -> Result<()> {
         let refresh_result = {
             let guard = self.inner.manager.lock().await;
             guard.refresh_token().await
         };
-        if let Err(err) = refresh_result {
-            let err = anyhow!(err);
-            if error_looks_auth_required(&err) {
-                self.clear_stored_tokens().await?;
-            }
-            return Err(err).with_context(|| {
-                format!(
-                    "refreshing MCP OAuth token for server {}",
-                    self.inner.server_name
-                )
-            });
-        }
+        refresh_result.map_err(|err| anyhow!(err))?;
         self.persist_if_needed().await
     }
 
-    async fn clear_stored_tokens(&self) -> Result<()> {
-        let mut last = self.inner.last_tokens.lock().await;
-        if last.take().is_some() {
-            delete_oauth_tokens(&self.inner.server_name, &self.inner.url)?;
+    /// Re-read the on-disk credential after an `invalid_grant` refresh
+    /// failure and, when another process rotated it, rebuild the manager
+    /// around the rotated token exactly like initial construction. Returns
+    /// `true` only when the stored credential actually changed; an unchanged
+    /// store means the failure is ours to report.
+    async fn adopt_rotated_on_disk_tokens(&self) -> Result<bool> {
+        let Some(stored) = load_oauth_tokens(&self.inner.server_name, &self.inner.url)? else {
+            return Ok(false);
+        };
+        let changed = {
+            let last = self.inner.last_tokens.lock().await;
+            last.as_ref() != Some(&stored)
+        };
+        if !changed {
+            return Ok(false);
+        }
+        let manager =
+            manager_from_stored_tokens(&self.inner.url, &stored, &self.inner.default_headers)
+                .await?;
+        *self.inner.manager.lock().await = manager;
+        *self.inner.last_tokens.lock().await = Some(stored);
+        *self.inner.rejection.lock().await = None;
+        Ok(true)
+    }
+
+    /// Invalidate the credential this runtime holds after the provider
+    /// definitively rejected it. Never deletes a newer durable winner: when
+    /// the on-disk credential no longer matches the one we hold, another
+    /// process rotated it after our copy loaded, and that credential — not
+    /// ours — is the one the next connect must try. The manager is rebuilt
+    /// around that winner exactly like initial construction; remembering
+    /// the rotated token while keeping our dead grant would make the next
+    /// `invalid_grant` compare an "unchanged" store and delete the newer
+    /// valid credential.
+    async fn clear_stored_tokens(&self, reason: &str) -> Result<()> {
+        let held = { self.inner.last_tokens.lock().await.take() };
+        let Some(held) = held else {
+            return Ok(());
+        };
+        match load_oauth_tokens(&self.inner.server_name, &self.inner.url)? {
+            Some(stored) if stored != held => {
+                tracing::debug!(
+                    target: "mcp",
+                    server = %self.inner.server_name,
+                    "MCP OAuth credential was rotated by another process; keeping the on-disk winner"
+                );
+                let manager = manager_from_stored_tokens(
+                    &self.inner.url,
+                    &stored,
+                    &self.inner.default_headers,
+                )
+                .await?;
+                *self.inner.manager.lock().await = manager;
+                *self.inner.last_tokens.lock().await = Some(stored);
+                *self.inner.rejection.lock().await = None;
+            }
+            _ => {
+                delete_oauth_tokens(&self.inner.server_name, &self.inner.url)?;
+                *self.inner.rejection.lock().await = Some(reason.to_string());
+            }
         }
         Ok(())
     }
@@ -492,13 +711,14 @@ where
     }
 }
 
-async fn perform_oauth_login_for_server_inner(
+/// Shared gate + scope resolution for `/mcp login` and the model-driven
+/// authenticate tool: URL-based servers only, no manual Authorization config,
+/// scopes from explicit argument, config, or discovery (in that order).
+async fn resolve_oauth_login(
     name: &str,
     server: &McpServerConfig,
     explicit_scopes: Option<Vec<String>>,
-    callback_port: Option<u16>,
-    callback_url: Option<&str>,
-) -> Result<()> {
+) -> Result<(String, ResolvedMcpOAuthScopes)> {
     let Some(url) = server.url.as_deref() else {
         bail!("OAuth login is only supported for URL-based MCP servers");
     };
@@ -516,10 +736,21 @@ async fn perform_oauth_login_for_server_inner(
         server.scopes.clone(),
         discovery.and_then(|discovery| discovery.scopes_supported),
     );
+    Ok((url.to_string(), resolved_scopes))
+}
+
+async fn perform_oauth_login_for_server_inner(
+    name: &str,
+    server: &McpServerConfig,
+    explicit_scopes: Option<Vec<String>>,
+    callback_port: Option<u16>,
+    callback_url: Option<&str>,
+) -> Result<()> {
+    let (url, resolved_scopes) = resolve_oauth_login(name, server, explicit_scopes).await?;
 
     match perform_oauth_login(
         name,
-        url,
+        &url,
         server.headers.clone(),
         server.env_headers.clone(),
         &resolved_scopes.scopes,
@@ -538,7 +769,7 @@ async fn perform_oauth_login_for_server_inner(
             println!("OAuth provider rejected discovered scopes. Retrying without scopes...");
             perform_oauth_login(
                 name,
-                url,
+                &url,
                 server.headers.clone(),
                 server.env_headers.clone(),
                 &[],
@@ -581,6 +812,169 @@ async fn perform_oauth_login(
     .await
 }
 
+/// How an OAuth login announces its authorization URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OAuthLoginAnnounce {
+    /// `/mcp login` in a terminal: print the URL and open a browser.
+    Terminal,
+    /// Model-driven `mcp_<server>_authenticate` tool: never write to stdout
+    /// (a tool call inside a running session is not a terminal); the result
+    /// carries the URL for the model to relay to the user verbatim.
+    Tool { open_browser: bool },
+}
+
+/// An in-flight OAuth login started by the model-driven authenticate tool.
+///
+/// The authorization URL is available immediately so the model can relay it
+/// to the user verbatim; [`McpOAuthToolLogin::finish`] then blocks on the
+/// loopback callback (up to 5 minutes, same as `/mcp login`) and persists
+/// the issued tokens to the shared store on success.
+pub struct McpOAuthToolLogin {
+    server_name: String,
+    server: McpServerConfig,
+    scopes_source: McpOAuthScopesSource,
+    flow: OauthLoginFlow,
+    open_browser: bool,
+}
+
+impl McpOAuthToolLogin {
+    /// The exact authorization URL the user must visit. Treat it as
+    /// sensitive: never modify it or strip query parameters.
+    #[must_use]
+    pub fn authorization_url(&self) -> &str {
+        &self.flow.auth_url
+    }
+
+    /// Block on the browser callback and persist the issued tokens. Mirrors
+    /// the `/mcp login` retry: when the provider rejects scopes that came
+    /// from discovery (rather than explicit config), restart once without
+    /// scopes.
+    pub async fn finish(self) -> Result<()> {
+        let announce = OAuthLoginAnnounce::Tool {
+            open_browser: self.open_browser,
+        };
+        let retry_without_scopes = self.scopes_source == McpOAuthScopesSource::Discovered;
+        match self.flow.finish_with_announce(announce).await {
+            Ok(()) => Ok(()),
+            Err(err)
+                if retry_without_scopes && err.downcast_ref::<OAuthProviderError>().is_some() =>
+            {
+                let server = &self.server;
+                let url = server
+                    .url
+                    .as_deref()
+                    .expect("tool login is gated to URL-based servers at begin");
+                OauthLoginFlow::new(
+                    &self.server_name,
+                    url,
+                    server.headers.clone(),
+                    server.env_headers.clone(),
+                    &[],
+                    server.oauth_client_id(),
+                    server.oauth_resource.as_deref(),
+                    None,
+                    None,
+                )
+                .await?
+                .finish_with_announce(announce)
+                .await
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
+/// Begin the same OAuth login flow `/mcp login` runs, for the model-driven
+/// `mcp_<server>_authenticate` tool. The callback listener binds an
+/// ephemeral loopback port; callers needing a pre-registered redirect URI
+/// keep the terminal `/mcp login <name>` path, which honors the configured
+/// callback overrides.
+pub async fn begin_oauth_login_for_server_tool(
+    name: &str,
+    server: &McpServerConfig,
+    callback_port: Option<u16>,
+    callback_url: Option<&str>,
+) -> Result<McpOAuthToolLogin> {
+    if server.reviewed_plugin.is_some() {
+        bail!(
+            "OAuth is disabled for plugin-contributed MCP servers; use a reviewed environment-backed header or bearer token"
+        );
+    }
+    let (url, resolved_scopes) = resolve_oauth_login(name, server, None).await?;
+    let flow = OauthLoginFlow::new(
+        name,
+        &url,
+        server.headers.clone(),
+        server.env_headers.clone(),
+        &resolved_scopes.scopes,
+        server.oauth_client_id(),
+        server.oauth_resource.as_deref(),
+        callback_port,
+        callback_url,
+    )
+    .await?;
+    Ok(McpOAuthToolLogin {
+        server_name: name.to_string(),
+        server: server.clone(),
+        scopes_source: resolved_scopes.source,
+        flow,
+        // The test build drives the loopback callback itself; a real browser
+        // launch from a unit test would hijack the developer's desktop.
+        open_browser: !cfg!(test),
+    })
+}
+
+/// Whether the self-serve OAuth login flow can run for this server at all:
+/// URL-based, not plugin-contributed (plugin servers authenticate through
+/// reviewed environment-backed headers, and OAuth storage is disabled for
+/// them), and without a manual Authorization configuration that an OAuth
+/// login would conflict with.
+pub(crate) fn server_supports_oauth_login(server: &McpServerConfig) -> bool {
+    server.reviewed_plugin.is_none()
+        && server.url.is_some()
+        && !server_has_manual_authorization(server)
+}
+
+/// Whether the shared token store already holds a usable credential for this
+/// server — i.e. a login completed in another process since the caller last
+/// checked. Used by the authenticate tool's already-authorized branch.
+pub(crate) fn has_usable_stored_tokens(name: &str, server: &McpServerConfig) -> bool {
+    let Some(url) = server.url.as_deref() else {
+        return false;
+    };
+    load_oauth_tokens(name, url)
+        .ok()
+        .flatten()
+        .is_some_and(|tokens| oauth_tokens_are_usable(&tokens))
+}
+
+/// Model-facing description for the synthetic `mcp_<server>_authenticate`
+/// tool. The coaching contract (show the URL verbatim, the call blocks, real
+/// tools replace this one on success) is pinned by tests.
+pub(crate) fn authenticate_tool_description(server_name: &str) -> String {
+    format!(
+        "Authenticate with MCP server \"{server_name}\" via OAuth.\n\n\
+This server requires an OAuth login that has not yet been completed, so its \
+real tools are currently unavailable. Calling this tool starts the \
+authorization flow:\n\n\
+1. A browser window is opened for the user to sign in and approve the \
+Codewhale client, and the exact authorization URL is shown to the user in \
+the session status while this call waits. The same URL is returned in this \
+call's result; if the user reports the browser did not open, show that URL \
+to the user verbatim and ask them to complete the sign-in there.\n\
+2. The call blocks (up to 5 minutes) until the browser flow completes on the \
+local callback listener, is declined, or times out. Do not assume success \
+before the call returns.\n\
+3. On success the server reconnects and its real MCP tools replace this \
+synthetic authenticate tool, becoming callable from the next model request \
+in this session.\n\n\
+Treat the URL as sensitive — do not modify it or strip query parameters. If \
+the flow is declined, cancelled, or times out, the call returns an error; \
+relay it truthfully and suggest `/mcp login {server_name}` in the TUI or \
+`codewhale mcp login {server_name}` from a terminal."
+    )
+}
+
 pub fn delete_oauth_tokens_for_server(name: &str, server: &McpServerConfig) -> Result<bool> {
     if server.reviewed_plugin.is_some() {
         bail!("OAuth storage is disabled for plugin-contributed MCP servers");
@@ -591,7 +985,7 @@ pub fn delete_oauth_tokens_for_server(name: &str, server: &McpServerConfig) -> R
     delete_oauth_tokens(name, url)
 }
 
-fn server_has_manual_authorization(server: &McpServerConfig) -> bool {
+pub(crate) fn server_has_manual_authorization(server: &McpServerConfig) -> bool {
     server.bearer_token_env_var.is_some()
         || contains_authorization_header(&server.headers)
         || contains_authorization_header(&server.env_headers)
@@ -659,7 +1053,10 @@ fn normalize_scopes(scopes_supported: Option<Vec<String>>) -> Option<Vec<String>
     (!normalized.is_empty()).then_some(normalized)
 }
 
-fn load_oauth_tokens(server_name: &str, url: &str) -> Result<Option<StoredMcpOAuthTokens>> {
+pub(crate) fn load_oauth_tokens(
+    server_name: &str,
+    url: &str,
+) -> Result<Option<StoredMcpOAuthTokens>> {
     let secrets = codewhale_secrets::Secrets::auto_detect();
     let key = store_key(server_name, url);
     let Some(serialized) = secrets
@@ -681,7 +1078,7 @@ fn parse_stored_oauth_tokens(serialized: &str, server_name: &str) -> Result<Stor
     })
 }
 
-fn save_oauth_tokens(tokens: &StoredMcpOAuthTokens) -> Result<()> {
+pub(crate) fn save_oauth_tokens(tokens: &StoredMcpOAuthTokens) -> Result<()> {
     let secrets = codewhale_secrets::Secrets::auto_detect();
     let key = store_key(&tokens.server_name, &tokens.url);
     let serialized = serde_json::to_string(tokens).context("serializing MCP OAuth token")?;
@@ -856,25 +1253,49 @@ impl OauthLoginFlow {
         })
     }
 
-    async fn finish(mut self) -> Result<()> {
-        println!(
-            "Authorize `{}` by opening this URL in your browser:\n{}\n",
-            self.server_name, self.auth_url
-        );
-        if webbrowser::open(&self.auth_url).is_err() {
-            eprintln!("Browser launch failed; copy the URL above manually.");
+    async fn finish(self) -> Result<()> {
+        self.finish_with_announce(OAuthLoginAnnounce::Terminal)
+            .await
+    }
+
+    async fn finish_with_announce(mut self, announce: OAuthLoginAnnounce) -> Result<()> {
+        match announce {
+            OAuthLoginAnnounce::Terminal => {
+                println!(
+                    "Authorize `{}` by opening this URL in your browser:\n{}\n",
+                    self.server_name, self.auth_url
+                );
+                if webbrowser::open(&self.auth_url).is_err() {
+                    eprintln!("Browser launch failed; copy the URL above manually.");
+                }
+                println!(
+                    "Waiting for browser authorization for MCP server '{}'...",
+                    self.server_name
+                );
+            }
+            OAuthLoginAnnounce::Tool { open_browser } => {
+                // A tool call is not a terminal: nothing goes to stdout. The
+                // tool result carries the URL for the model to relay; the
+                // browser open is a best-effort convenience on top.
+                if open_browser {
+                    let _ = webbrowser::open(&self.auth_url);
+                }
+            }
         }
-        println!(
-            "Waiting for browser authorization for MCP server '{}'...",
-            self.server_name
-        );
 
         let result = async {
             let callback = timeout(Duration::from_secs(300), &mut self.rx)
                 .await
                 .with_context(|| {
+                    let retry_hint = match announce {
+                        OAuthLoginAnnounce::Terminal => "Retry from a terminal, or use task_shell_start/background shell if an agent is running the login flow.".to_string(),
+                        OAuthLoginAnnounce::Tool { .. } => format!(
+                            "The user can complete the sign-in directly via `/mcp login {}` or `codewhale mcp login {}`, then this tool can be called again.",
+                            self.server_name, self.server_name
+                        ),
+                    };
                     format!(
-                        "timed out waiting for OAuth callback for MCP server '{}'. Retry from a terminal, or use task_shell_start/background shell if an agent is running the login flow.",
+                        "timed out waiting for OAuth callback for MCP server '{}'. {retry_hint}",
                         self.server_name
                     )
                 })?
@@ -922,7 +1343,7 @@ async fn start_authorization(
     let Some(client_id) = oauth_client_id.filter(|client_id| !client_id.trim().is_empty()) else {
         let mut oauth_state = OAuthState::new(server_url, Some(client)).await?;
         oauth_state
-            .start_authorization(scopes, redirect_uri, Some("CodeWhale"))
+            .start_authorization(scopes, redirect_uri, Some("Codewhale"))
             .await?;
         return Ok(oauth_state);
     };
@@ -1239,6 +1660,22 @@ mod tests {
 
         let err = anyhow!("connection refused");
         assert!(!error_looks_auth_required(&err));
+    }
+
+    #[test]
+    fn auth_required_classifier_treats_rejected_grants_as_auth_required() {
+        // A definitively rejected refresh grant is recoverable only by a
+        // fresh login, so it must classify like a 401 on every surface.
+        let err = anyhow!("refreshing MCP OAuth token for server wiki")
+            .context("Server returned error response: invalid_grant: stale grant");
+        assert!(error_looks_auth_required(&err));
+        assert!(error_text_looks_auth_required(
+            "wiki requires OAuth — run /mcp login wiki"
+        ));
+        assert!(error_text_looks_auth_required("wiki: ◆ auth required"));
+        assert!(!error_text_looks_auth_required(
+            "invalid_request: missing parameter"
+        ));
     }
 
     #[test]

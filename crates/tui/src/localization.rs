@@ -1908,11 +1908,19 @@ pub enum MessageId {
     AutomationNoRuns,
     AutomationRunsUnavailable,
     AutomationTaskLabel,
-    AutomationMutationReceipt,
-    AutomationRunEnqueued,
     AutomationDeletePreview,
     AutomationDeleteConfirmationStale,
-    AutomationDeleted,
+    // Activity-band slot and typed receipt cards (AUTOMATION-VISIBILITY §2).
+    AutomationBandScheduled,
+    AutomationReceiptFired,
+    AutomationReceiptStarted,
+    AutomationReceiptCompleted,
+    AutomationReceiptCoalesced,
+    AutomationReceiptMissed,
+    AutomationReceiptExpired,
+    AutomationReceiptDeleted,
+    AutomationRunLabel,
+    AutomationDeletedRunsDetail,
     /// Whale Teams state words, species, and jobs (crates/tui/src/tui/whales.rs).
     WhaleStateResting,
     WhaleStateThinking,
@@ -2013,6 +2021,15 @@ pub enum MessageId {
     ToastCouldNotSendIntoTurn,
     ToastHookBlockedFollowUp,
     ToastOfflineQueuedCount,
+    // Operate plan board chrome (contract tokens stay untranslated).
+    OperateBoardHeader,
+    OperateBoardBurnObserved,
+    OperateBoardBurnNoCap,
+    OperateBoardDirectionEmpty,
+    OperateBoardDirectionLine,
+    OperateBoardPlanMissing,
+    OperateBoardPlanHeader,
+    OperateBoardGantt,
     // Tideline settings shell: categories, detail facts, sources, apply
     // semantics, editor kinds, and navigation copy.
     ConfigCategoryAppearance,
@@ -3883,11 +3900,18 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::AutomationNoRuns,
     MessageId::AutomationRunsUnavailable,
     MessageId::AutomationTaskLabel,
-    MessageId::AutomationMutationReceipt,
-    MessageId::AutomationRunEnqueued,
     MessageId::AutomationDeletePreview,
     MessageId::AutomationDeleteConfirmationStale,
-    MessageId::AutomationDeleted,
+    MessageId::AutomationBandScheduled,
+    MessageId::AutomationReceiptFired,
+    MessageId::AutomationReceiptStarted,
+    MessageId::AutomationReceiptCompleted,
+    MessageId::AutomationReceiptCoalesced,
+    MessageId::AutomationReceiptMissed,
+    MessageId::AutomationReceiptExpired,
+    MessageId::AutomationReceiptDeleted,
+    MessageId::AutomationRunLabel,
+    MessageId::AutomationDeletedRunsDetail,
     MessageId::WhaleStateResting,
     MessageId::WhaleStateThinking,
     MessageId::WhaleStateWorking,
@@ -3987,6 +4011,14 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::ToastCouldNotSendIntoTurn,
     MessageId::ToastHookBlockedFollowUp,
     MessageId::ToastOfflineQueuedCount,
+    MessageId::OperateBoardHeader,
+    MessageId::OperateBoardBurnObserved,
+    MessageId::OperateBoardBurnNoCap,
+    MessageId::OperateBoardDirectionEmpty,
+    MessageId::OperateBoardDirectionLine,
+    MessageId::OperateBoardPlanMissing,
+    MessageId::OperateBoardPlanHeader,
+    MessageId::OperateBoardGantt,
     MessageId::ConfigCategoryAppearance,
     MessageId::ConfigCategoryModelsProviders,
     MessageId::ConfigCategoryPod,
@@ -4612,7 +4644,9 @@ mod tests {
             .keys()
             .filter(|key| key.starts_with("Automation"))
             .collect::<Vec<_>>();
-        assert_eq!(automation_keys.len(), 42);
+        // AUTOMATION-VISIBILITY §2: the band slot and typed receipt cards
+        // added 10 keys and retired 3 bare-prose receipts (42 → 49).
+        assert_eq!(automation_keys.len(), 49);
 
         for locale in Locale::shipped_complete() {
             let pack = raw_locale_messages(*locale);

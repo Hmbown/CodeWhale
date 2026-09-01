@@ -795,9 +795,14 @@ fn streamable_http_transport_stores_headers() {
 
 #[test]
 fn mcp_auth_required_error_item_is_model_visible() {
-    let item = McpPool::mcp_auth_required_error_item("nordic-mcp");
+    let pool = McpPool::new(McpConfig::default());
+    let item = pool.mcp_auth_required_error_item("nordic-mcp");
     assert_eq!(item["error"], "authentication_required");
     assert_eq!(item["server"], "nordic-mcp");
+    assert!(
+        item.get("authenticate_tool").is_none(),
+        "an OAuth-servable synthetic tool is only named for a configured needs-auth server: {item}"
+    );
     assert!(
         item["message"]
             .as_str()
@@ -5779,4 +5784,1109 @@ fn mcp_recovery_kind_names_real_login_and_reload_commands() {
     );
     assert!(mcp_name_is_command_safe("github"));
     assert!(!mcp_name_is_command_safe("github mcp"));
+}
+
+// === Synthetic self-serve OAuth authenticate tool (agent self-serve auth) ===
+//
+// One loopback origin serving both the MCP endpoint and the OAuth
+// authorization-server APIs the login/refresh flows need:
+// `/.well-known/oauth-authorization-server*` metadata, RFC 7591 `/register`,
+// and a `/token` endpoint that rejects the `rt-stale` refresh token with
+// `invalid_grant` and accepts everything else. The MCP endpoint 401s until
+// the request carries `Authorization: Bearer cw-test-access`.
+
+struct OAuthMcpMock {
+    addr: std::net::SocketAddr,
+    token_requests: Arc<AtomicUsize>,
+    /// When set, the provider has revoked every grant: `/mcp` 401s even with
+    /// the previously accepted bearer and `/token` rejects every refresh
+    /// with `invalid_grant` — a mid-session revocation.
+    revoked: Arc<std::sync::atomic::AtomicBool>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl OAuthMcpMock {
+    fn url(&self) -> String {
+        format!("http://{}/mcp", self.addr)
+    }
+
+    fn revoke_all_grants(&self) {
+        self.revoked.store(true, AtomicOrdering::SeqCst);
+    }
+
+    async fn spawn() -> Self {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::{TcpListener, TcpStream};
+
+        async fn read_request(socket: &mut TcpStream) -> String {
+            let mut request = Vec::new();
+            let mut buf = [0; 2048];
+            let header_end = loop {
+                let n = socket.read(&mut buf).await.unwrap();
+                assert!(n > 0, "client closed before headers completed");
+                request.extend_from_slice(&buf[..n]);
+                if let Some(pos) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                    break pos + 4;
+                }
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or(0);
+            let total_len = header_end + content_length;
+            while request.len() < total_len {
+                let n = socket.read(&mut buf).await.unwrap();
+                assert!(n > 0, "client closed before body completed");
+                request.extend_from_slice(&buf[..n]);
+            }
+            String::from_utf8(request).unwrap()
+        }
+
+        async fn write_json(socket: &mut TcpStream, status: &str, body: &str) {
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        }
+
+        async fn write_empty(socket: &mut TcpStream, status: &str) {
+            socket
+                .write_all(
+                    format!("HTTP/1.1 {status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+                        .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+
+        async fn write_mcp_sse(
+            socket: &mut TcpStream,
+            id: serde_json::Value,
+            result: serde_json::Value,
+        ) {
+            let payload = serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result});
+            let body = format!("event: message\ndata: {payload}\n\n");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let token_requests = Arc::new(AtomicUsize::new(0));
+        let server_token_requests = Arc::clone(&token_requests);
+        let revoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let server_revoked = Arc::clone(&revoked);
+        let task = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let token_requests = Arc::clone(&server_token_requests);
+                let revoked = Arc::clone(&server_revoked);
+                tokio::spawn(async move {
+                    let request = read_request(&mut socket).await;
+                    let first_line = request.lines().next().unwrap_or("").to_string();
+                    let mut parts = first_line.split_whitespace();
+                    let method = parts.next().unwrap_or("").to_string();
+                    let path = parts.next().unwrap_or("").to_string();
+                    let path_only = path.split('?').next().unwrap_or("").to_string();
+                    let body = request.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+                    let revoked = revoked.load(AtomicOrdering::SeqCst);
+                    let authorized = !revoked
+                        && request
+                            .to_ascii_lowercase()
+                            .contains("authorization: bearer cw-test-access");
+
+                    if method == "GET"
+                        && path_only.starts_with("/.well-known/oauth-authorization-server")
+                    {
+                        let metadata = serde_json::json!({
+                            "issuer": format!("http://{addr}"),
+                            "authorization_endpoint": format!("http://{addr}/authorize"),
+                            "token_endpoint": format!("http://{addr}/token"),
+                            "registration_endpoint": format!("http://{addr}/register"),
+                            "response_types_supported": ["code"],
+                        });
+                        write_json(&mut socket, "200 OK", &metadata.to_string()).await;
+                    } else if method == "GET" && path_only.starts_with("/.well-known/") {
+                        write_empty(&mut socket, "404 Not Found").await;
+                    } else if method == "POST" && path_only == "/register" {
+                        write_json(
+                            &mut socket,
+                            "200 OK",
+                            r#"{"client_id":"cw-test-client","redirect_uris":[]}"#,
+                        )
+                        .await;
+                    } else if method == "POST" && path_only == "/token" {
+                        token_requests.fetch_add(1, AtomicOrdering::SeqCst);
+                        if revoked || body.contains("refresh_token=rt-stale") {
+                            write_json(
+                                &mut socket,
+                                "400 Bad Request",
+                                r#"{"error":"invalid_grant","error_description":"stale grant"}"#,
+                            )
+                            .await;
+                        } else if body.contains("refresh_token=rt-rotated") {
+                            write_json(
+                                &mut socket,
+                                "200 OK",
+                                r#"{"access_token":"cw-rotated-access-2","token_type":"Bearer","expires_in":3600,"refresh_token":"rt-rotated-2"}"#,
+                            )
+                            .await;
+                        } else {
+                            write_json(
+                                &mut socket,
+                                "200 OK",
+                                r#"{"access_token":"cw-test-access","token_type":"Bearer","expires_in":3600,"refresh_token":"rt-fresh"}"#,
+                            )
+                            .await;
+                        }
+                    } else if path_only == "/mcp" {
+                        // The Streamable HTTP session preflight is a bodyless
+                        // GET; the real protocol starts at POST. 405 is the
+                        // spec-shaped refusal and never reaches the parser.
+                        if method == "GET" {
+                            write_empty(&mut socket, "405 Method Not Allowed").await;
+                            return;
+                        }
+                        if !authorized {
+                            write_empty(&mut socket, "401 Unauthorized").await;
+                            return;
+                        }
+                        let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+                        let rpc_method = value["method"].as_str().unwrap_or("");
+                        if rpc_method == "notifications/initialized" {
+                            write_empty(&mut socket, "202 Accepted").await;
+                            return;
+                        }
+                        let id = value["id"].clone();
+                        let result = match rpc_method {
+                            "initialize" => serde_json::json!({
+                                "protocolVersion": "2024-11-05",
+                                "serverInfo": {"name": "mock-oauth", "version": "1.0.0"},
+                                "capabilities": {"tools": {}}
+                            }),
+                            "tools/list" => serde_json::json!({
+                                "tools": [{
+                                    "name": "wiki_lookup",
+                                    "description": "Look up a wiki page",
+                                    "inputSchema": {"type": "object"}
+                                }]
+                            }),
+                            _ => serde_json::json!({}),
+                        };
+                        write_mcp_sse(&mut socket, id, result).await;
+                    } else {
+                        write_empty(&mut socket, "404 Not Found").await;
+                    }
+                });
+            }
+        });
+        OAuthMcpMock {
+            addr,
+            token_requests,
+            revoked,
+            task,
+        }
+    }
+}
+
+fn mock_oauth_server_config(addr: std::net::SocketAddr) -> McpServerConfig {
+    let mut config = test_server_config();
+    config.command = None;
+    config.url = Some(format!("http://{addr}/mcp"));
+    config
+}
+
+fn seed_oauth_tokens(
+    server_name: &str,
+    url: &str,
+    access_token: &str,
+    refresh_token: &str,
+    expires_at: Option<u64>,
+) {
+    let tokens: oauth::StoredMcpOAuthTokens = serde_json::from_value(serde_json::json!({
+        "server_name": server_name,
+        "url": url,
+        "client_id": "cw-test-client",
+        "token_response": {
+            "access_token": access_token,
+            "token_type": "Bearer",
+            "refresh_token": refresh_token,
+            "expires_in": 3600
+        },
+        "expires_at": expires_at
+    }))
+    .unwrap();
+    oauth::save_oauth_tokens(&tokens).unwrap();
+}
+
+fn millis_from_now(offset_ms: u64) -> u64 {
+    (std::time::SystemTime::now() + Duration::from_millis(offset_ms))
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+#[tokio::test]
+async fn needs_auth_server_advertises_synthetic_authenticate_tool() {
+    let _env = crate::test_support::lock_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", dir.path());
+    let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _loopback = lock_mcp_loopback_tests().await;
+    let mock = OAuthMcpMock::spawn().await;
+
+    let mut mcp_config = McpConfig::default();
+    mcp_config.servers.insert(
+        "wikiserver".to_string(),
+        mock_oauth_server_config(mock.addr),
+    );
+    // A server carrying manual bearer configuration that also 401s must not
+    // get the OAuth tool: the flow is gated to servers OAuth can serve.
+    let mut bearer_config = mock_oauth_server_config(mock.addr);
+    bearer_config.bearer_token_env_var = Some("CW_TEST_UNSET_BEARER".to_string());
+    mcp_config
+        .servers
+        .insert("beareronly".to_string(), bearer_config);
+    let mut pool = McpPool::new(mcp_config);
+
+    let errors = pool.connect_all().await;
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    for (name, err) in &errors {
+        assert!(
+            oauth::error_looks_auth_required(err),
+            "{name} should fail auth-required: {err:#}"
+        );
+    }
+    assert!(
+        pool.all_tools().is_empty(),
+        "needs-auth servers advertise no real tools"
+    );
+
+    let tools = pool.to_api_tools();
+    let auth_tool = tools
+        .iter()
+        .find(|tool| tool.name == "mcp_wikiserver_authenticate")
+        .expect("needs-auth server must expose the synthetic authenticate tool");
+    // The coaching contract: show the URL verbatim, the call blocks, real
+    // tools replace the synthetic one on success.
+    assert!(
+        auth_tool
+            .description
+            .contains("shown to the user in the session status while this call waits"),
+        "{}",
+        auth_tool.description
+    );
+    assert!(
+        auth_tool.description.contains("blocks (up to 5 minutes)"),
+        "{}",
+        auth_tool.description
+    );
+    assert!(
+        auth_tool
+            .description
+            .contains("replace this synthetic authenticate tool"),
+        "{}",
+        auth_tool.description
+    );
+    assert!(
+        auth_tool.description.contains("/mcp login wikiserver"),
+        "{}",
+        auth_tool.description
+    );
+    assert!(
+        tools
+            .iter()
+            .all(|tool| !tool.name.starts_with("mcp_wikiserver_")
+                || tool.name == "mcp_wikiserver_authenticate"),
+        "no real wikiserver tools while needs-auth: {tools:?}"
+    );
+    assert!(
+        tools
+            .iter()
+            .all(|tool| !tool.name.starts_with("mcp_beareronly_")),
+        "a bearer-configured server must not get the OAuth tool: {tools:?}"
+    );
+
+    // The execution predicate the engine consults: only the needs-auth
+    // server's exact synthetic name resolves.
+    assert_eq!(
+        pool.authenticate_tool_target("mcp_wikiserver_authenticate")
+            .as_deref(),
+        Some("wikiserver")
+    );
+    assert_eq!(
+        pool.authenticate_tool_target("mcp_beareronly_authenticate"),
+        None,
+        "manual bearer auth is not OAuth-servable"
+    );
+    assert_eq!(
+        pool.authenticate_tool_target("mcp_wikiserver_wiki_lookup"),
+        None
+    );
+    assert_eq!(
+        pool.authenticate_tool_target("mcp_unknown_authenticate"),
+        None
+    );
+
+    // The typed `◆ auth required` state the TUI surfaces derive from the
+    // same pool state: both 401 servers carry it, and the OAuth-servable one
+    // routes to `/mcp login`.
+    assert!(pool.server_needs_auth("wikiserver"));
+    assert!(pool.server_needs_auth("beareronly"));
+    let error_map: HashMap<String, String> = errors
+        .iter()
+        .map(|(name, err)| (name.clone(), format_mcp_error_for_display(err)))
+        .collect();
+    let snapshot = pool.manager_snapshot(&dir.path().join("mcp.json"), false, &error_map);
+    let wiki = snapshot
+        .servers
+        .iter()
+        .find(|server| server.name == "wikiserver")
+        .expect("wikiserver in snapshot");
+    assert!(wiki.auth_required, "{wiki:?}");
+    assert!(!wiki.connected);
+    assert_eq!(wiki.recovery_kind(false), McpRecoveryKind::Reauth);
+    assert_eq!(
+        wiki.recovery_kind(false).slash_command("wikiserver"),
+        "/mcp login wikiserver"
+    );
+
+    // A real tool name from a catalog built before the login lapsed must
+    // not dead-end: the error names the synthetic tool that recovers it.
+    let err = pool
+        .call_tool("mcp_wikiserver_wiki_lookup", serde_json::json!({}))
+        .await
+        .expect_err("a needs-auth server cannot serve real tools");
+    let text = format!("{err:#}");
+    assert!(text.contains("mcp_wikiserver_authenticate"), "{text}");
+    assert!(text.contains("◆ auth required"), "{text}");
+    assert!(text.contains("/mcp login wikiserver"), "{text}");
+    // Still needs-auth after the failed real call (no state churn).
+    assert!(pool.server_needs_auth("wikiserver"));
+
+    mock.task.abort();
+}
+
+#[tokio::test]
+async fn dead_refresh_grant_flips_server_to_auth_required_and_offers_login_tool() {
+    use oauth2::TokenResponse as _;
+
+    let _env = crate::test_support::lock_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", dir.path());
+    let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _loopback = lock_mcp_loopback_tests().await;
+
+    let mock = OAuthMcpMock::spawn().await;
+    let url = mock.url();
+    let config = mock_oauth_server_config(mock.addr);
+
+    // A stored credential whose refresh grant the provider now rejects
+    // (`invalid_grant`, nobody rotated it): the login has definitively
+    // lapsed. Before this slice the server showed as a plain failure and
+    // every reconnect replayed the same rejected refresh.
+    seed_oauth_tokens("wikiserver", &url, "cw-stale-access", "rt-stale", Some(1));
+    let stored = oauth::load_oauth_tokens("wikiserver", &url)
+        .unwrap()
+        .expect("seeded tokens");
+    assert_eq!(
+        stored.token_response.0.access_token().secret(),
+        "cw-stale-access"
+    );
+
+    let mut mcp_config = McpConfig::default();
+    mcp_config.servers.insert("wikiserver".to_string(), config);
+    let mut pool = McpPool::new(mcp_config);
+    let errors = pool.connect_all().await;
+    let (_, err) = errors
+        .iter()
+        .find(|(name, _)| name == "wikiserver")
+        .expect("connect fails");
+    assert!(
+        oauth::error_looks_auth_required(err),
+        "a dead grant classifies auth-required: {err:#}"
+    );
+    assert!(format!("{err:#}").contains("invalid_grant"), "{err:#}");
+
+    // The dead credential is invalidated so auth status no longer claims
+    // "logged in", the typed state flips, and the model gets the login tool.
+    assert!(
+        oauth::load_oauth_tokens("wikiserver", &url)
+            .unwrap()
+            .is_none(),
+        "a definitively rejected grant is removed from the store"
+    );
+    assert!(pool.server_needs_auth("wikiserver"));
+    assert_eq!(
+        pool.authenticate_tool_target("mcp_wikiserver_authenticate")
+            .as_deref(),
+        Some("wikiserver")
+    );
+    assert!(
+        pool.to_api_tools()
+            .iter()
+            .any(|tool| tool.name == "mcp_wikiserver_authenticate"),
+        "dead grant must offer the self-serve login tool"
+    );
+    assert_eq!(
+        mock.token_requests.load(AtomicOrdering::SeqCst),
+        1,
+        "one rejected refresh; no retry against an unchanged store"
+    );
+
+    mock.task.abort();
+}
+
+#[tokio::test]
+async fn selfserve_auth_flow_persists_tokens_and_swaps_real_tools_back() {
+    use oauth2::TokenResponse as _;
+
+    let _env = crate::test_support::lock_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", dir.path());
+    let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _loopback = lock_mcp_loopback_tests().await;
+
+    let mock = OAuthMcpMock::spawn().await;
+    let url = mock.url();
+    let config = mock_oauth_server_config(mock.addr);
+
+    // Before any login, the pool's connect fails auth-required and the model
+    // catalog exposes the synthetic tool in place of the unavailable real
+    // tools.
+    let mut mcp_config = McpConfig::default();
+    mcp_config
+        .servers
+        .insert("wikiserver".to_string(), config.clone());
+    let mut pool = McpPool::new(mcp_config);
+    let errors = pool.connect_all().await;
+    assert!(
+        errors
+            .iter()
+            .any(|(name, err)| name == "wikiserver" && oauth::error_looks_auth_required(err)),
+        "{errors:?}"
+    );
+    assert!(pool.all_tools().is_empty());
+    assert!(
+        pool.to_api_tools()
+            .iter()
+            .any(|tool| tool.name == "mcp_wikiserver_authenticate")
+    );
+
+    // A declined browser flow must surface a truthful error the model can
+    // relay, and leave the server in needs-auth.
+    let login = oauth::begin_oauth_login_for_server_tool("wikiserver", &config, None, None)
+        .await
+        .unwrap();
+    let auth_url = reqwest::Url::parse(login.authorization_url()).unwrap();
+    let redirect_uri = auth_url
+        .query_pairs()
+        .find(|(key, _)| key == "redirect_uri")
+        .map(|(_, value)| value.into_owned())
+        .expect("authorization URL carries redirect_uri");
+    let flow = tokio::spawn(login.finish());
+    test_http_client()
+        .get(format!(
+            "{redirect_uri}?error=access_denied&error_description=not-today"
+        ))
+        .send()
+        .await
+        .unwrap();
+    let err = flow
+        .await
+        .unwrap()
+        .expect_err("a declined flow must error, not silently succeed");
+    assert!(format!("{err:#}").contains("access_denied"), "{err:#}");
+    assert!(
+        oauth::load_oauth_tokens("wikiserver", &url)
+            .unwrap()
+            .is_none(),
+        "a declined flow persists no tokens"
+    );
+
+    // The approved flow: drive the loopback callback in-test.
+    let login = oauth::begin_oauth_login_for_server_tool("wikiserver", &config, None, None)
+        .await
+        .unwrap();
+    let auth_url = reqwest::Url::parse(login.authorization_url()).unwrap();
+    let state = auth_url
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .map(|(_, value)| value.into_owned())
+        .expect("authorization URL carries state");
+    let redirect_uri = auth_url
+        .query_pairs()
+        .find(|(key, _)| key == "redirect_uri")
+        .map(|(_, value)| value.into_owned())
+        .expect("authorization URL carries redirect_uri");
+    let flow = tokio::spawn(login.finish());
+    test_http_client()
+        .get(format!("{redirect_uri}?code=cw-test-code&state={state}"))
+        .send()
+        .await
+        .unwrap();
+    flow.await.unwrap().expect("approved flow completes");
+
+    let stored = oauth::load_oauth_tokens("wikiserver", &url)
+        .unwrap()
+        .expect("successful flow persists tokens");
+    assert_eq!(
+        stored.token_response.0.access_token().secret(),
+        "cw-test-access"
+    );
+
+    // The synthetic tool now adopts the completed login and swaps the real
+    // tools back through call_tool (the already-authorized branch, since the
+    // flow above persisted tokens to the shared store).
+    let result = pool
+        .call_tool("mcp_wikiserver_authenticate", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(result["status"], "already_authorized", "{result}");
+    assert!(
+        result["tools"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("mcp_wikiserver_wiki_lookup")),
+        "{result}"
+    );
+
+    let real_names: Vec<String> = pool
+        .all_tools()
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    assert_eq!(real_names, vec!["mcp_wikiserver_wiki_lookup".to_string()]);
+    let catalog = pool.to_api_tools();
+    assert!(
+        catalog
+            .iter()
+            .any(|tool| tool.name == "mcp_wikiserver_wiki_lookup"),
+        "real tools must be in the catalog after auth: {catalog:?}"
+    );
+    assert!(
+        catalog
+            .iter()
+            .all(|tool| tool.name != "mcp_wikiserver_authenticate"),
+        "a connected server no longer advertises the synthetic tool: {catalog:?}"
+    );
+
+    mock.task.abort();
+}
+
+#[tokio::test]
+async fn invalid_grant_refresh_adopts_rotated_on_disk_token() {
+    let _env = crate::test_support::lock_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", dir.path());
+    let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _loopback = lock_mcp_loopback_tests().await;
+
+    let mock = OAuthMcpMock::spawn().await;
+    let url = mock.url();
+    let config = mock_oauth_server_config(mock.addr);
+
+    // This runtime loaded a stale credential; its refresh grant fails.
+    seed_oauth_tokens("wikiserver", &url, "cw-stale-access", "rt-stale", Some(1));
+    let runtime = oauth::McpOAuthRuntime::from_server_config(
+        "wikiserver",
+        &config,
+        reqwest::header::HeaderMap::new(),
+    )
+    .await
+    .unwrap()
+    .expect("stored tokens produce a runtime");
+    // Another process rotates the on-disk credential before our refresh runs.
+    seed_oauth_tokens(
+        "wikiserver",
+        &url,
+        "cw-rotated-access",
+        "rt-rotated",
+        Some(millis_from_now(3_600_000)),
+    );
+
+    let header = runtime
+        .authorization_header()
+        .await
+        .unwrap()
+        .expect("adopted token produces a header");
+    assert_eq!(header, "Bearer cw-rotated-access");
+    assert_eq!(
+        mock.token_requests.load(AtomicOrdering::SeqCst),
+        1,
+        "a fresh rotated token is adopted without burning a second refresh"
+    );
+
+    mock.task.abort();
+}
+
+#[tokio::test]
+async fn invalid_grant_refresh_retries_once_with_rotated_grant() {
+    use oauth2::TokenResponse as _;
+
+    let _env = crate::test_support::lock_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", dir.path());
+    let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _loopback = lock_mcp_loopback_tests().await;
+
+    let mock = OAuthMcpMock::spawn().await;
+    let url = mock.url();
+    let config = mock_oauth_server_config(mock.addr);
+
+    seed_oauth_tokens("wikiserver", &url, "cw-stale-access", "rt-stale", Some(1));
+    let runtime = oauth::McpOAuthRuntime::from_server_config(
+        "wikiserver",
+        &config,
+        reqwest::header::HeaderMap::new(),
+    )
+    .await
+    .unwrap()
+    .expect("stored tokens produce a runtime");
+    // The rotated credential is itself expired, so the refresh must be
+    // retried once with the rotated grant.
+    seed_oauth_tokens(
+        "wikiserver",
+        &url,
+        "cw-rotated-stale",
+        "rt-rotated",
+        Some(1),
+    );
+
+    let header = runtime
+        .authorization_header()
+        .await
+        .unwrap()
+        .expect("retry with the rotated grant succeeds");
+    assert_eq!(header, "Bearer cw-rotated-access-2");
+    assert_eq!(
+        mock.token_requests.load(AtomicOrdering::SeqCst),
+        2,
+        "stale grant failed once, rotated grant retried once"
+    );
+    let stored = oauth::load_oauth_tokens("wikiserver", &url)
+        .unwrap()
+        .expect("refreshed tokens persisted");
+    assert_eq!(
+        stored.token_response.0.access_token().secret(),
+        "cw-rotated-access-2"
+    );
+
+    mock.task.abort();
+}
+
+#[tokio::test]
+async fn invalid_grant_refresh_with_unchanged_store_invalidates_dead_grant() {
+    let _env = crate::test_support::lock_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", dir.path());
+    let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _loopback = lock_mcp_loopback_tests().await;
+
+    let mock = OAuthMcpMock::spawn().await;
+    let url = mock.url();
+    let config = mock_oauth_server_config(mock.addr);
+
+    seed_oauth_tokens("wikiserver", &url, "cw-stale-access", "rt-stale", Some(1));
+    let runtime = oauth::McpOAuthRuntime::from_server_config(
+        "wikiserver",
+        &config,
+        reqwest::header::HeaderMap::new(),
+    )
+    .await
+    .unwrap()
+    .expect("stored tokens produce a runtime");
+
+    let err = runtime
+        .authorization_header()
+        .await
+        .expect_err("an unchanged store must surface the provider error");
+    assert!(format!("{err:#}").contains("invalid_grant"), "{err:#}");
+    assert!(
+        oauth::error_looks_auth_required(&err),
+        "a dead grant is an auth-required failure: {err:#}"
+    );
+    assert!(
+        oauth::load_oauth_tokens("wikiserver", &url)
+            .unwrap()
+            .is_none(),
+        "a grant the provider definitively rejected, that nobody rotated, is invalidated"
+    );
+    assert_eq!(
+        mock.token_requests.load(AtomicOrdering::SeqCst),
+        1,
+        "no retry when the on-disk credential is unchanged"
+    );
+
+    mock.task.abort();
+}
+
+#[tokio::test]
+async fn invalidation_never_deletes_a_credential_rotated_after_the_re_read() {
+    use oauth2::TokenResponse as _;
+
+    let _env = crate::test_support::lock_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", dir.path());
+    let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _loopback = lock_mcp_loopback_tests().await;
+
+    let mock = OAuthMcpMock::spawn().await;
+    let url = mock.url();
+    let config = mock_oauth_server_config(mock.addr);
+
+    // Both the held and the rotated credential are dead grants, so the
+    // rotated one is adopted, retried, and rejected too. The runtime then
+    // invalidates — but a peer that wrote a third credential in between
+    // owns the durable winner, which must survive.
+    seed_oauth_tokens("wikiserver", &url, "cw-stale-access", "rt-stale", Some(1));
+    let runtime = oauth::McpOAuthRuntime::from_server_config(
+        "wikiserver",
+        &config,
+        reqwest::header::HeaderMap::new(),
+    )
+    .await
+    .unwrap()
+    .expect("stored tokens produce a runtime");
+    let err = runtime
+        .authorization_header()
+        .await
+        .expect_err("dead grant fails");
+    assert!(format!("{err:#}").contains("invalid_grant"), "{err:#}");
+    assert!(
+        oauth::load_oauth_tokens("wikiserver", &url)
+            .unwrap()
+            .is_none(),
+        "unchanged store: invalidated"
+    );
+
+    // Now the peer-wins case: a different credential lands on disk before
+    // the (second) runtime invalidates its own stale copy.
+    seed_oauth_tokens("wikiserver", &url, "cw-stale-access", "rt-stale", Some(1));
+    let runtime = oauth::McpOAuthRuntime::from_server_config(
+        "wikiserver",
+        &config,
+        reqwest::header::HeaderMap::new(),
+    )
+    .await
+    .unwrap()
+    .expect("stored tokens produce a runtime");
+    // Peer rotates to a fresh, non-expired credential the mock accepts.
+    seed_oauth_tokens(
+        "wikiserver",
+        &url,
+        "cw-peer-access",
+        "rt-fresh",
+        Some(millis_from_now(3_600_000)),
+    );
+    let header = runtime
+        .authorization_header()
+        .await
+        .unwrap()
+        .expect("adopts the peer's fresh credential");
+    assert_eq!(header, "Bearer cw-peer-access");
+    let stored = oauth::load_oauth_tokens("wikiserver", &url)
+        .unwrap()
+        .expect("the peer's credential is still on disk");
+    assert_eq!(
+        stored
+            .token_response
+            .0
+            .refresh_token()
+            .map(|t| t.secret().as_str()),
+        Some("rt-fresh")
+    );
+
+    mock.task.abort();
+}
+
+#[tokio::test]
+async fn mid_session_revocation_lands_in_the_same_auth_required_state() {
+    let _env = crate::test_support::lock_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", dir.path());
+    let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _loopback = lock_mcp_loopback_tests().await;
+
+    let mock = OAuthMcpMock::spawn().await;
+    let url = mock.url();
+    let config = mock_oauth_server_config(mock.addr);
+
+    // A healthy session: stored credential accepted, real tools advertised.
+    seed_oauth_tokens(
+        "wikiserver",
+        &url,
+        "cw-test-access",
+        "rt-fresh",
+        Some(millis_from_now(3_600_000)),
+    );
+    let mut mcp_config = McpConfig::default();
+    mcp_config.servers.insert("wikiserver".to_string(), config);
+    let mut pool = McpPool::new(mcp_config);
+    let errors = pool.connect_all().await;
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(!pool.server_needs_auth("wikiserver"));
+    assert!(
+        pool.to_api_tools()
+            .iter()
+            .any(|tool| tool.name == "mcp_wikiserver_wiki_lookup")
+    );
+
+    // The provider revokes every grant mid-session: the live call 401s, the
+    // reactive refresh is rejected with invalid_grant, and the failure must
+    // land in the same typed state a failed connect produces — not a dead
+    // transport error on a connection the pool still calls "ready".
+    mock.revoke_all_grants();
+    let err = pool
+        .call_tool("mcp_wikiserver_wiki_lookup", serde_json::json!({}))
+        .await
+        .expect_err("a revoked credential cannot serve real tools");
+    let text = format!("{err:#}");
+    assert!(text.contains("◆ auth required"), "{text}");
+    assert!(text.contains("mcp_wikiserver_authenticate"), "{text}");
+    assert!(pool.server_needs_auth("wikiserver"));
+    assert!(
+        oauth::load_oauth_tokens("wikiserver", &url)
+            .unwrap()
+            .is_none(),
+        "the definitively rejected credential is invalidated"
+    );
+    let catalog = pool.to_api_tools();
+    assert!(
+        catalog
+            .iter()
+            .any(|tool| tool.name == "mcp_wikiserver_authenticate"),
+        "{catalog:?}"
+    );
+    assert!(
+        catalog
+            .iter()
+            .all(|tool| tool.name != "mcp_wikiserver_wiki_lookup"),
+        "a dropped connection advertises no real tools: {catalog:?}"
+    );
+
+    // Listing surfaces carry the same recovery, naming the synthetic tool.
+    let resources = pool.list_resources(None).await.unwrap();
+    let item = resources
+        .iter()
+        .find(|item| item["error"] == "authentication_required")
+        .expect("needs-auth server yields an auth-required listing item");
+    assert_eq!(item["server"], "wikiserver");
+    assert_eq!(item["authenticate_tool"], "mcp_wikiserver_authenticate");
+    assert!(
+        item["message"]
+            .as_str()
+            .unwrap()
+            .contains("mcp_wikiserver_authenticate"),
+        "{item}"
+    );
+
+    // Every TUI surface derives from the same typed state.
+    let snapshot = pool.manager_snapshot(&dir.path().join("mcp.json"), false, &HashMap::new());
+    let wiki = snapshot
+        .servers
+        .iter()
+        .find(|server| server.name == "wikiserver")
+        .expect("wikiserver in snapshot");
+    assert!(wiki.auth_required, "{wiki:?}");
+    assert!(!wiki.connected);
+    assert_eq!(wiki.recovery_kind(false), McpRecoveryKind::Reauth);
+
+    mock.task.abort();
+}
+
+#[tokio::test]
+async fn authenticate_tool_via_pool_releases_the_lock_during_the_browser_wait() {
+    let _env = crate::test_support::lock_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", dir.path());
+    let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _loopback = lock_mcp_loopback_tests().await;
+
+    let mock = OAuthMcpMock::spawn().await;
+    let mut mcp_config = McpConfig::default();
+    mcp_config.servers.insert(
+        "wikiserver".to_string(),
+        mock_oauth_server_config(mock.addr),
+    );
+    let pool = Arc::new(tokio::sync::Mutex::new(McpPool::new(mcp_config)));
+    let errors = pool.lock().await.connect_all().await;
+    assert!(
+        errors
+            .iter()
+            .any(|(name, err)| name == "wikiserver" && oauth::error_looks_auth_required(err)),
+        "{errors:?}"
+    );
+
+    // The engine path: the URL reaches the runtime before the wait, and the
+    // pool lock is free while the user signs in.
+    let (url_tx, url_rx) = tokio::sync::oneshot::channel();
+    let flow = tokio::spawn({
+        let pool = Arc::clone(&pool);
+        async move {
+            authenticate_tool_via_pool(&pool, "wikiserver", |url| {
+                let _ = url_tx.send(url.to_string());
+            })
+            .await
+        }
+    });
+    let auth_url = url_rx
+        .await
+        .expect("authorization URL announced before the wait");
+    {
+        let guard = tokio::time::timeout(Duration::from_secs(5), pool.lock())
+            .await
+            .expect("pool lock must not be held during the browser wait");
+        assert!(guard.server_needs_auth("wikiserver"));
+        assert!(
+            guard
+                .to_api_tools()
+                .iter()
+                .any(|tool| tool.name == "mcp_wikiserver_authenticate"),
+            "still needs-auth until the flow completes"
+        );
+    }
+
+    let parsed = reqwest::Url::parse(&auth_url).unwrap();
+    let state = parsed
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .map(|(_, value)| value.into_owned())
+        .expect("authorization URL carries state");
+    let redirect_uri = parsed
+        .query_pairs()
+        .find(|(key, _)| key == "redirect_uri")
+        .map(|(_, value)| value.into_owned())
+        .expect("authorization URL carries redirect_uri");
+    test_http_client()
+        .get(format!("{redirect_uri}?code=cw-test-code&state={state}"))
+        .send()
+        .await
+        .unwrap();
+    let result = flow
+        .await
+        .unwrap()
+        .expect("approved flow reconnects the server");
+    assert_eq!(result["status"], "authenticated", "{result}");
+    assert_eq!(result["authorization_url"], auth_url, "{result}");
+    assert!(
+        result["tools"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("mcp_wikiserver_wiki_lookup")),
+        "{result}"
+    );
+
+    let guard = pool.lock().await;
+    assert!(!guard.server_needs_auth("wikiserver"));
+    let catalog = guard.to_api_tools();
+    assert!(
+        catalog
+            .iter()
+            .any(|tool| tool.name == "mcp_wikiserver_wiki_lookup"),
+        "{catalog:?}"
+    );
+    assert!(
+        catalog
+            .iter()
+            .all(|tool| tool.name != "mcp_wikiserver_authenticate"),
+        "{catalog:?}"
+    );
+    drop(guard);
+
+    mock.task.abort();
+}
+
+#[tokio::test]
+async fn plugin_contributed_server_auth_required_names_its_env_credential_not_oauth_login() {
+    let _env = crate::test_support::lock_test_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", dir.path());
+    let _backend = crate::test_support::EnvVarGuard::set("CODEWHALE_SECRET_BACKEND", "file");
+    let _loopback = lock_mcp_loopback_tests().await;
+
+    let plugin_base = dir.path().join("plugins/wiki-plugin");
+    fs::create_dir_all(&plugin_base).unwrap();
+    fs::write(
+        plugin_base.join("plugin.toml"),
+        "schema_version = 1\n[plugin]\nname = \"wiki-plugin\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    let (_, authority) = active_plugin_fixture(&plugin_base);
+
+    // A plugin-contributed server whose reviewed environment-backed header is
+    // absent, against an endpoint that 401s without it.
+    let mock = OAuthMcpMock::spawn().await;
+    let endpoint = mock.url();
+    let mut server = mock_oauth_server_config(mock.addr);
+    server.env_headers.insert(
+        "Authorization".to_string(),
+        "CW_TEST_WIKI_PLUGIN_TOKEN".to_string(),
+    );
+    server.reviewed_plugin = Some(
+        ReviewedPluginMcpSource::from_authority(
+            authority,
+            Some(&endpoint),
+            Arc::new(crate::plugins::HostEnvironment::default()),
+        )
+        .unwrap(),
+    );
+    let mut mcp_config = McpConfig::default();
+    mcp_config.servers.insert("wikiplugin".to_string(), server);
+    let mut pool = McpPool::new(mcp_config);
+
+    let errors = pool.connect_all().await;
+    let (_, err) = errors
+        .iter()
+        .find(|(name, _)| name == "wikiplugin")
+        .expect("plugin server fails to connect");
+    assert!(oauth::error_looks_auth_required(err), "{err:#}");
+
+    // Same typed state as an OAuth server, but never the OAuth tool: plugin
+    // servers authenticate through their reviewed environment header.
+    assert!(pool.server_needs_auth("wikiplugin"));
+    assert_eq!(
+        pool.authenticate_tool_target("mcp_wikiplugin_authenticate"),
+        None
+    );
+    assert!(
+        pool.to_api_tools()
+            .iter()
+            .all(|tool| !tool.name.starts_with("mcp_wikiplugin_")),
+        "no synthetic OAuth tool for a plugin-contributed server"
+    );
+
+    let err = pool
+        .call_tool("mcp_wikiplugin_wiki_lookup", serde_json::json!({}))
+        .await
+        .expect_err("needs-auth plugin server cannot serve real tools");
+    let text = format!("{err:#}");
+    assert!(text.contains("◆ auth required"), "{text}");
+    assert!(text.contains("plugin 'wiki-plugin'"), "{text}");
+    assert!(text.contains("CW_TEST_WIKI_PLUGIN_TOKEN"), "{text}");
+    assert!(text.contains("/mcp reload"), "{text}");
+    assert!(!text.contains("/mcp login"), "{text}");
+    assert!(!text.contains("mcp_wikiplugin_authenticate"), "{text}");
+
+    let snapshot = pool.manager_snapshot(&dir.path().join("mcp.json"), false, &HashMap::new());
+    let plugin = snapshot
+        .servers
+        .iter()
+        .find(|server| server.name == "wikiplugin")
+        .expect("plugin server in snapshot");
+    assert!(plugin.auth_required, "{plugin:?}");
+
+    mock.task.abort();
 }

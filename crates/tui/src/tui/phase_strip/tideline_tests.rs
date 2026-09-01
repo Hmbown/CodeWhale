@@ -76,6 +76,11 @@ fn footer_matches_goldens_at_blocker_sizes() {
     }
 }
 
+// The scheduled-work slot moved to the topbar (TUI band contract: work in
+// the top strip; the merged footer owns phase/cost/detail). Its topbar
+// rendering is pinned by `ui/frame.rs` tests reading the same
+// `AutomationPanelState` projection.
+
 #[test]
 fn footer_merges_phase_cost_left_and_depth_keys_right() {
     let footer = thinking_footer().widget(&UI_THEME);

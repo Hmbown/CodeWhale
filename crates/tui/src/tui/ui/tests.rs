@@ -1812,6 +1812,7 @@ async fn mcp_enable_persists_and_applies_the_live_tool_pool_in_one_action() {
             read_timeout: 5,
             connected: true,
             error: None,
+            auth_required: false,
             capability_metadata: crate::mcp::McpServerCapabilityMetadata::LegacyFallback,
             tools: Vec::new(),
             resources: Vec::new(),
@@ -4178,6 +4179,7 @@ fn failed_mcp_is_a_footer_chip_not_multiline_chat_boot_output() {
             name: "alpha".to_string(),
             enabled: true,
             required: false,
+            auth_required: false,
             transport: "stdio".to_string(),
             command_or_url: "alpha-mcp".to_string(),
             connect_timeout: 5,
@@ -7482,7 +7484,15 @@ async fn mode_change_update_notifies_engine() {
     let _ = app.set_mode(crate::tui::app::AppMode::Plan);
     let mut engine = crate::core::engine::mock_engine_handle();
 
-    assert!(apply_mode_update(&mut app, &engine.handle, crate::tui::app::AppMode::Yolo).await);
+    assert!(
+        apply_mode_update(
+            &mut app,
+            &engine.handle,
+            &crate::config::Config::default(),
+            crate::tui::app::AppMode::Yolo
+        )
+        .await
+    );
 
     match engine.rx_op.recv().await.expect("change mode op") {
         crate::core::ops::Op::ChangeMode {
@@ -7515,7 +7525,15 @@ async fn mode_change_update_sends_restored_agent_policy() {
     let _ = app.set_mode(crate::tui::app::AppMode::Plan);
     let mut engine = crate::core::engine::mock_engine_handle();
 
-    assert!(apply_mode_update(&mut app, &engine.handle, crate::tui::app::AppMode::Agent).await);
+    assert!(
+        apply_mode_update(
+            &mut app,
+            &engine.handle,
+            &crate::config::Config::default(),
+            crate::tui::app::AppMode::Agent
+        )
+        .await
+    );
 
     match engine.rx_op.recv().await.expect("change mode op") {
         crate::core::ops::Op::ChangeMode {
@@ -7535,6 +7553,52 @@ async fn mode_change_update_sends_restored_agent_policy() {
         }
         other => panic!("expected ChangeMode, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn operate_mode_entry_attaches_to_recorded_operation() {
+    let _lock = crate::test_support::lock_test_env();
+    let dir = tempfile::TempDir::new().expect("temp");
+    let _operate_dir = crate::test_support::EnvVarGuard::set("CODEWHALE_OPERATE_DIR", dir.path());
+    // Pre-record a planned operation: entering Operate must attach to it
+    // (same id) instead of minting a fresh record that resets spend and plan.
+    let store = crate::operate::OperationStore::open(dir.path()).expect("store");
+    let recorded =
+        crate::operate::start_operation(&store, dir.path(), Some("Steady ops".into()), None, true)
+            .expect("start");
+    let mut planned = recorded.clone();
+    planned.plan_from_direction();
+    store.save(&planned).expect("save planned");
+
+    let mut app = create_test_app();
+    let engine = crate::core::engine::mock_engine_handle();
+    assert!(
+        apply_mode_update(
+            &mut app,
+            &engine.handle,
+            &Config::default(),
+            crate::tui::app::AppMode::Operate
+        )
+        .await
+    );
+
+    let board = app
+        .history
+        .iter()
+        .rev()
+        .find_map(|cell| match cell {
+            crate::tui::history::HistoryCell::System { content } => Some(content.clone()),
+            _ => None,
+        })
+        .expect("operate board message");
+    assert!(
+        board.contains(&planned.id),
+        "re-entry must show the recorded operation, saw: {board}"
+    );
+    assert!(
+        board.contains("slice-1"),
+        "board shows the kept plan: {board}"
+    );
 }
 
 #[test]
@@ -13642,6 +13706,41 @@ fn ctrl_c_disposition_loading_beats_armed_quit() {
     app.arm_quit();
     app.is_loading = true;
     assert_eq!(ctrl_c_disposition(&app), CtrlCDisposition::CancelTurn);
+}
+
+#[test]
+fn ctrl_c_disposition_launch_screen_arms_exit_prompt() {
+    // The pre-session launch menu has no transcript selection and no turn in
+    // flight, so Ctrl+C there must follow the same two-tap contract as the
+    // session shell: arm first, confirm inside the window.
+    let mut app = create_test_app();
+    app.launch.visible = true;
+    assert!(!app.is_loading);
+    assert_eq!(ctrl_c_disposition(&app), CtrlCDisposition::ArmExit);
+    app.arm_quit();
+    assert_eq!(ctrl_c_disposition(&app), CtrlCDisposition::ConfirmExit);
+}
+
+#[test]
+fn arm_quit_shows_press_again_hint() {
+    // The armed state must be visible: the first Ctrl+C surfaces the
+    // localized "Press Ctrl+C again to quit" hint as a typed toast (not the
+    // legacy status_message sink, not a silent redraw), living exactly as
+    // long as the confirmation window.
+    let mut app = create_test_app();
+    app.arm_quit();
+    let hint = app.tr(MessageId::FooterPressCtrlCAgain).into_owned();
+    assert!(
+        app.status_toasts
+            .iter()
+            .any(|toast| toast.text == hint && toast.level == StatusToastLevel::Info),
+        "arming the quit prompt must toast the press-again hint: {:?}",
+        app.status_toasts
+    );
+    assert!(
+        app.status_message.is_none(),
+        "the quit hint must not write the legacy status sink"
+    );
 }
 
 #[test]

@@ -56,27 +56,6 @@ impl fmt::Display for Stage {
     }
 }
 
-impl Feature {
-    pub fn key(self) -> &'static str {
-        self.info().key
-    }
-
-    pub fn stage(self) -> Stage {
-        self.info().stage
-    }
-
-    pub fn default_enabled(self) -> bool {
-        self.info().default_enabled
-    }
-
-    fn info(self) -> &'static FeatureSpec {
-        FEATURES
-            .iter()
-            .find(|spec| spec.id == self)
-            .unwrap_or_else(|| unreachable!("missing FeatureSpec for {:?}", self))
-    }
-}
-
 /// Holds the effective set of enabled features.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Features {
@@ -119,12 +98,6 @@ impl Features {
                 }
             }
         }
-    }
-
-    pub fn enabled_features(&self) -> Vec<Feature> {
-        let mut list: Vec<_> = self.enabled.iter().copied().collect();
-        list.sort();
-        list
     }
 }
 

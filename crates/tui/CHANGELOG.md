@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- First run paints the composer immediately: the Welcome/language/provider/
+  trust gates no longer precede the first keystroke. Missing-key and
+  workspace-trust recovery stay for returning users; language and provider
+  remain in `/setup`.
+- The canonical whale-tile mark propagates beyond web to the exact-raster
+  surfaces that can carry it (#5738).
+- Dead-code sweep: delete proven-unreferenced helpers (unused builders,
+  wrappers, and leftover identifiers) and drop stale `#[allow(dead_code)]`
+  where the item is production-called or test-exercised. No runtime behavior
+  change (#5791, #5587).
 - Remote-control recovery gives every fresh pre-dispatch attempt a new lease
   generation while preserving that generation across its typed start (#5605).
 
@@ -43,6 +53,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MCP servers and plugins can be connected self-serve from the session: a
+  unified auth flow with rotation-safe token handling, a spoken authorization
+  URL, and catalog refresh when stored credentials stop working (#5747).
+- `/operate` reads match the landed CWC `OperateRecord` contract: fetching an
+  absent record returns a truthful not-found view instead of a fabricated
+  operation, and an empty evidence path is rejected rather than resolving to
+  the workspace directory (#5703).
+- TUI: scheduled automations project into the top strip
+  (`⏱ N scheduled · M running`, compact `⏱ N·M`) with typed
+  `HistoryCell::Automation` receipts when a run this session watched settle.
+  `/automation` acknowledges failures. The merged footer does not carry the
+  work fact (#5748).
+- The app-server can listen on a unix domain socket and advertise a
+  `daemon/attach` handshake, so a local client can attach to an already-running
+  engine instead of spawning its own. The socket is created with
+  owner-only permissions and stale sockets are reclaimed on start. Non-unix
+  hosts return a typed unsupported-platform refusal; the Windows named-pipe
+  endpoint is named but not yet implemented (#5749).
+- The engine's internal `Op`/`Event` types and the wire protocol's `Op`/
+  `EventMsg` now carry a compile-enforced twin for every variant: adding an
+  engine variant without a protocol counterpart fails the build instead of
+  drifting silently. Internal durability work — no user-visible surface
+  change yet (#5751).
+- Machine tokens: with `CODEWHALE_API_KEY` set, the CLI authenticates as the
+  Codewhale account with no local session file and no browser — the CI
+  authentication path, with a typed token shape and redaction (#5721).
 - Compaction publishes a structured survival contract for session-tree
   journal entry types (`crates/tui/src/compaction/SURVIVAL_CONTRACT.md`) and
   fails closed when the last user round, tool results, `/anchor` text, or
@@ -249,6 +285,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fast typing no longer corrupts the composer. The paste-burst heuristic ran
+  on every session until a real bracketed paste arrived, holding, buffering,
+  retro-grabbing, and absorbing Enter on timing guesses; it is now
+  fallback-only (gated off when the terminal provides bracketed paste), the
+  retro-grab is deleted, and Enter on held command text flushes and submits.
+- Ctrl+C works on the pre-session launch menu and speaks everywhere: the
+  first press arms the two-second exit window with a visible localized
+  "Press Ctrl+C again to quit" hint (previously silent), the second exits.
+  The worktree name input keeps Ctrl+C as cancel-input.
 - Fresh interactive sessions no longer leave a phantom one-message duplicate
   behind. The TUI claimed one session id (Runtime store lock, turn-start crash
   checkpoint) while the engine minted a second one; the first `SessionUpdated`
