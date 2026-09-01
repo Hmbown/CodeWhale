@@ -67,10 +67,10 @@ impl Theme {
             tool_title_color: palette::TEXT_SOFT,
             tool_value_color: palette::TEXT_MUTED,
             tool_label_color: palette::TEXT_DIM,
-            tool_running_accent: palette::ACCENT_TOOL_LIVE,
-            tool_success_accent: palette::STATUS_SUCCESS,
-            tool_warning_accent: palette::STATUS_WARNING,
-            tool_failed_accent: palette::STATUS_ERROR,
+            tool_running_accent: palette::WHALE_ACTION,
+            tool_success_accent: palette::TEXT_MUTED,
+            tool_warning_accent: palette::WHALE_HUMAN,
+            tool_failed_accent: palette::WHALE_ERROR,
         }
     }
 
@@ -88,8 +88,8 @@ impl Theme {
             tool_title_color: palette::LIGHT_TEXT_SOFT,
             tool_value_color: palette::LIGHT_TEXT_MUTED,
             tool_label_color: palette::LIGHT_TEXT_HINT,
-            tool_running_accent: palette::LIGHT_LIVE,
-            tool_success_accent: palette::LIGHT_SUCCESS_FG,
+            tool_running_accent: palette::LIGHT_ACTION,
+            tool_success_accent: palette::LIGHT_TEXT_MUTED,
             tool_warning_accent: palette::LIGHT_WARNING,
             tool_failed_accent: palette::LIGHT_DANGER,
         }
@@ -110,7 +110,7 @@ impl Theme {
             tool_value_color: palette::SOLARIZED_TEXT_MUTED,
             tool_label_color: palette::SOLARIZED_TEXT_DIM,
             tool_running_accent: palette::SOLARIZED_BLUE,
-            tool_success_accent: palette::SOLARIZED_CYAN,
+            tool_success_accent: palette::SOLARIZED_TEXT_MUTED,
             tool_warning_accent: palette::SOLARIZED_YELLOW,
             tool_failed_accent: palette::SOLARIZED_RED,
         }
@@ -147,13 +147,24 @@ impl Theme {
         }
     }
 
-    /// Pick the right tool accent for a given [`ToolStatus`].
+    /// The one place a tool cell's lifecycle state becomes ink.
+    ///
+    /// Every surface that paints a tool cell — the header glyph, the family
+    /// glyph, the state word, the card rail, and the exploring fan-out dots —
+    /// reads its colour from here, so a running tool reads as running and a
+    /// failed one as failed without any neighbouring row narrating it.
+    /// Modelled on OMP's `output-block.ts`, where a block's `state` drives its
+    /// border colour: in-flight takes the action accent, a settled success
+    /// recedes into muted text, and only warning and failure keep a loud
+    /// colour of their own. `Hydrated` is a stalled "tool loaded — retry
+    /// required", not live work, so it takes the hint colour rather than
+    /// borrowing the running accent and reading as in-flight.
     #[must_use]
     pub const fn tool_status_color(self, status: ToolStatus) -> Color {
         match status {
             ToolStatus::Running => self.tool_running_accent,
             ToolStatus::Success => self.tool_success_accent,
-            ToolStatus::Hydrated => self.tool_running_accent,
+            ToolStatus::Hydrated => self.tool_label_color,
             ToolStatus::Warning => self.tool_warning_accent,
             ToolStatus::Failed => self.tool_failed_accent,
         }
@@ -213,9 +224,9 @@ mod tests {
         assert_eq!(theme.tool_title_color, palette::TEXT_SOFT);
         assert_eq!(theme.tool_value_color, palette::TEXT_MUTED);
         assert_eq!(theme.tool_label_color, palette::TEXT_DIM);
-        assert_eq!(theme.tool_running_accent, palette::ACCENT_TOOL_LIVE);
-        assert_eq!(theme.tool_success_accent, palette::STATUS_SUCCESS);
-        assert_eq!(theme.tool_failed_accent, palette::STATUS_ERROR);
+        assert_eq!(theme.tool_running_accent, palette::WHALE_ACTION);
+        assert_eq!(theme.tool_success_accent, palette::TEXT_MUTED);
+        assert_eq!(theme.tool_failed_accent, palette::WHALE_ERROR);
     }
 
     #[test]
@@ -227,8 +238,8 @@ mod tests {
         assert_eq!(theme.tool_title_color, palette::LIGHT_TEXT_SOFT);
         assert_eq!(theme.tool_value_color, palette::LIGHT_TEXT_MUTED);
         assert_eq!(theme.section_title_color, palette::LIGHT_ACTION);
-        assert_eq!(theme.tool_running_accent, palette::LIGHT_LIVE);
-        assert_eq!(theme.tool_success_accent, palette::LIGHT_SUCCESS_FG);
+        assert_eq!(theme.tool_running_accent, palette::LIGHT_ACTION);
+        assert_eq!(theme.tool_success_accent, palette::LIGHT_TEXT_MUTED);
     }
 
     #[test]
@@ -241,28 +252,70 @@ mod tests {
         assert_eq!(theme.tool_failed_accent, palette::GRAYSCALE_TEXT_BODY);
     }
 
+    /// The whole point of "tool cells carry their own state": every variant
+    /// maps to a distinct WHALE token, so a running card, a failed one and a
+    /// settled one are told apart by ink alone. Asserted against the tokens
+    /// rather than the theme's own fields — a field-to-field assertion passes
+    /// no matter what the fields hold, which is how `Hydrated` sat on the
+    /// running accent and read as live work.
     #[test]
     fn tool_status_color_maps_each_status() {
         let theme = Theme::dark();
-        assert_eq!(
-            theme.tool_status_color(ToolStatus::Running),
-            theme.tool_running_accent
-        );
-        assert_eq!(
-            theme.tool_status_color(ToolStatus::Success),
-            theme.tool_success_accent
-        );
-        assert_eq!(
-            theme.tool_status_color(ToolStatus::Hydrated),
-            theme.tool_running_accent
-        );
-        assert_eq!(
-            theme.tool_status_color(ToolStatus::Warning),
-            theme.tool_warning_accent
-        );
-        assert_eq!(
-            theme.tool_status_color(ToolStatus::Failed),
-            theme.tool_failed_accent
-        );
+        let table = [
+            (ToolStatus::Running, palette::WHALE_ACTION),
+            (ToolStatus::Success, palette::TEXT_MUTED),
+            (ToolStatus::Hydrated, palette::TEXT_DIM),
+            (ToolStatus::Warning, palette::WHALE_HUMAN),
+            (ToolStatus::Failed, palette::WHALE_ERROR),
+        ];
+        for (status, expected) in table {
+            assert_eq!(
+                theme.tool_status_color(status),
+                expected,
+                "dark theme paints {status:?} with the wrong token"
+            );
+        }
+
+        // Nothing in the table may collide: two statuses sharing a colour is
+        // the failure this mapping exists to prevent.
+        for (i, (status, color)) in table.iter().enumerate() {
+            for (other_status, other_color) in &table[i + 1..] {
+                assert_ne!(
+                    color, other_color,
+                    "{status:?} and {other_status:?} paint the same colour"
+                );
+            }
+        }
+    }
+
+    /// The load-bearing separations hold in every palette, not just the active
+    /// one. Grayscale has four greys for five statuses, so full distinctness is
+    /// a dark-theme claim; running / failed / success being told apart is not
+    /// negotiable anywhere.
+    #[test]
+    fn every_palette_separates_running_failed_and_success() {
+        for mode in [
+            crate::palette::PaletteMode::Dark,
+            crate::palette::PaletteMode::Light,
+            crate::palette::PaletteMode::Grayscale,
+            crate::palette::PaletteMode::SolarizedLight,
+        ] {
+            let theme = Theme::for_palette_mode(mode);
+            assert_ne!(
+                theme.tool_status_color(ToolStatus::Running),
+                theme.tool_status_color(ToolStatus::Failed),
+                "{mode:?} paints running and failed alike"
+            );
+            assert_ne!(
+                theme.tool_status_color(ToolStatus::Running),
+                theme.tool_status_color(ToolStatus::Success),
+                "{mode:?} paints running and success alike"
+            );
+            assert_ne!(
+                theme.tool_status_color(ToolStatus::Failed),
+                theme.tool_status_color(ToolStatus::Success),
+                "{mode:?} paints failed and success alike"
+            );
+        }
     }
 }
