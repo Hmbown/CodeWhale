@@ -554,7 +554,8 @@ fn looks_like_network_remote(url: &str) -> bool {
 }
 
 fn remote_branch_exists(remote_url: &str, branch: &str) -> Result<bool> {
-    let listing = git(None, &["ls-remote", "--heads", "--", remote_url, branch]).unwrap_or_default();
+    let listing =
+        git(None, &["ls-remote", "--heads", "--", remote_url, branch]).unwrap_or_default();
     Ok(listing
         .lines()
         .any(|line| line.contains(&format!("refs/heads/{branch}"))))
@@ -1474,17 +1475,9 @@ mod tests {
 
     #[test]
     fn push_branch_refuses_forge_default_branch_names() {
-        let error = push_branch(
-            Path::new("."),
-            "https://github.com/org/repo.git",
-            "main",
-        )
-        .unwrap_err();
-        assert!(
-            error.to_string().contains("default branch"),
-            "{}",
-            error
-        );
+        let error =
+            push_branch(Path::new("."), "https://github.com/org/repo.git", "main").unwrap_err();
+        assert!(error.to_string().contains("default branch"), "{}", error);
     }
 
     #[test]

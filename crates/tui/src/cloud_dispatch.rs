@@ -2253,10 +2253,7 @@ mod tests {
         );
         assert_eq!(
             plan_dispatch(
-                &remotes(&[(
-                    "github",
-                    "https://user:token@github.com/org/repo.git"
-                )]),
+                &remotes(&[("github", "https://user:token@github.com/org/repo.git")]),
                 "fix flake",
                 Some(Forge::Github),
                 None,
@@ -2264,9 +2261,7 @@ mod tests {
             .unwrap_err(),
             DispatchError::UnsafeRemote
         );
-        assert!(
-            validate_git_remote_url("https://github.com/org/repo.git").is_ok()
-        );
+        assert!(validate_git_remote_url("https://github.com/org/repo.git").is_ok());
         assert!(validate_git_remote_url("--upload-pack=evil").is_err());
         assert!(validate_git_remote_url("https://user:ghp_x@github.com/org/repo.git").is_err());
     }
