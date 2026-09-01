@@ -286,7 +286,7 @@ image with the Rust toolchain, Git, `pkg-config`, and the DBus development heade
 required by the workspace. The first open runs `cargo build --locked` and installs
 rust-analyzer and the other editor extensions.
 
-The source checkout remains mounted from the host. CodeWhale state and Cargo build
+The source checkout remains mounted from the host. Codewhale state and Cargo build
 artifacts use Docker named volumes instead, so the configuration works when VS Code
 cannot provide a POSIX-style `HOME` variable (notably on Windows), and builds do not
 write thousands of small files through a Windows bind mount. Rebuild the container

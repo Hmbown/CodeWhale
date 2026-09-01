@@ -1,9 +1,15 @@
-# Whale Teams TUI — art translation
+# Whale Teams TUI — archived portrait-art reference
 
-How the Signal Cut mascots become terminal glyph art. The runtime contract
-(role → species, state → evidence, inks) is [`WHALE_TEAMS_TUI.md`](WHALE_TEAMS_TUI.md);
-this file is the *drawing* decision record for the empty-state hero and the
-roster art it must match.
+> **Status — retired reference, not current brand authority.** This record
+> preserves the removed hand-drawn portrait/crown treatment for historical
+> comparison. Do not use its `▚△▞` treatment as a Codewhale mark or infer that
+> `underwater.rs` renders it. The canonical mark is a raster asset and has no
+> approved ASCII or block-glyph substitute.
+
+How the former Signal Cut mascots became terminal glyph art. The remaining
+live runtime contract (role → species, state → evidence, inks) is
+[`WHALE_TEAMS_TUI.md`](WHALE_TEAMS_TUI.md); this file is historical drawing
+evidence only, not a specification for the startup hero or roster.
 
 Source of truth (CWC repo, read-only from here):
 `docs/design/whale-teams/VISUAL-BRIEF.md`, the Signal Cut concept boards and
@@ -24,11 +30,11 @@ Read off the matrix and the working keyframes:
 - **Working** adds bounded cyan wake dots *behind* the tail — never a change
   of pose, expression, or scale.
 
-## (a) The empty-state hero
+## (a) Historical empty-state portrait
 
-`crates/tui/src/tui/underwater.rs` — `IDLE_WHALE_SPOUT_ROW` / `IDLE_WHALE_ROWS`.
-Four rows, 17 columns (uwu: 16), so it stays quiet inside the 60-column empty
-state.
+Former `crates/tui/src/tui/underwater.rs` idle-art constants. The current
+startup hero no longer uses this artwork and does not approximate the canonical
+raster mark.
 
 ```
     ˚

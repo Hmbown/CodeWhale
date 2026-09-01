@@ -6,6 +6,8 @@
 //! panel, or modal (TUI-DOG-002). Details/output fires only on
 //! Option+V / Alt+V, and macOS renders the label as `⌥V`, never `Alt`/`Cmd`.
 //! Help is `F1` (with `/help`); `Ctrl+/` stays as a secondary fallback.
+//! Provider/route is `F3` (with `/provider`); it is non-printable so it can
+//! remain available while the composer owns ordinary text input.
 //! `Alt+?` and `Alt+C` are still accepted where terminals deliver them but
 //! are never advertised until proven in real terminals (TUI-DOG-003);
 //! `/context` is the guaranteed context path.
@@ -23,6 +25,7 @@ use crate::tui::key_shortcuts;
 pub enum ShellBindingId {
     ToolDetails,
     ContextInspector,
+    ProviderRoute,
     Help,
 }
 
@@ -50,6 +53,12 @@ pub const SHELL_BINDINGS: &[ShellBinding] = &[
         // handler until proven in Cursor/Terminal.app/iTerm2/tmux/PTY.
         catalog_chord: "/context",
         footer_chord: "/context",
+    },
+    ShellBinding {
+        id: ShellBindingId::ProviderRoute,
+        // `/provider` remains the portable, explicit command path.
+        catalog_chord: "F3 / /provider",
+        footer_chord: "F3",
     },
     ShellBinding {
         id: ShellBindingId::Help,
@@ -166,6 +175,14 @@ pub fn is_tool_details_shortcut(key: &KeyEvent) -> bool {
 pub fn is_context_inspector_shortcut(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
         && key_shortcuts::alt_nav_modifiers(key.modifiers)
+}
+
+/// Route entry stays on a non-printable function key so it never steals a
+/// model/provider name from the composer. `/provider` remains available in
+/// terminals that do not forward function keys.
+#[must_use]
+pub fn is_provider_route_shortcut(key: &KeyEvent) -> bool {
+    matches!(key.code, KeyCode::F(3)) && key.modifiers.is_empty()
 }
 
 #[must_use]
@@ -347,6 +364,22 @@ mod tests {
     }
 
     #[test]
+    fn topbar_route_f3_requires_a_plain_function_key() {
+        assert!(is_provider_route_shortcut(&KeyEvent::new(
+            KeyCode::F(3),
+            KeyModifiers::NONE
+        )));
+        assert!(!is_provider_route_shortcut(&KeyEvent::new(
+            KeyCode::F(3),
+            KeyModifiers::ALT
+        )));
+        assert!(!is_provider_route_shortcut(&KeyEvent::new(
+            KeyCode::Char('3'),
+            KeyModifiers::NONE
+        )));
+    }
+
+    #[test]
     fn catalog_chords_match_final_contract() {
         assert_eq!(binding(ShellBindingId::Help).catalog_chord, "F1 / Ctrl+/");
         assert_eq!(
@@ -354,6 +387,10 @@ mod tests {
             "/context"
         );
         assert_eq!(binding(ShellBindingId::ToolDetails).catalog_chord, "Alt+V");
+        assert_eq!(
+            binding(ShellBindingId::ProviderRoute).catalog_chord,
+            "F3 / /provider"
+        );
         for binding in SHELL_BINDINGS {
             assert!(!binding.catalog_chord.contains("Alt+?"));
             assert_ne!(binding.catalog_chord, "v");

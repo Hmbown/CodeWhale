@@ -8,7 +8,7 @@ import type { HomeDict } from "../types";
  * Product vocabulary stays fixed: modes Plan / Work / Operate, permission
  * postures Ask / Auto-Review / Full Access, and the product name Codewhale —
  * exactly as the TUI locale pack (`crates/tui/locales/id.json`) renders them.
- * Commands, package names, and surface names (`codewhale exec`, Fleet,
+ * Commands, package names, and surface names (`codewhale exec`, Pod,
  * Runtime API + MCP) stay literal; only the prose around them is translated.
  *
  * Section seals (法 行 起 界 面 众) are the paper's marks, shared across
@@ -72,7 +72,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "Baru mengenal Codewhale? Empat langkah dari awal sampai akhir.",
   startLede:
-    "Instal → sesi pertama tanpa kunci → hubungkan penyedia → workflow Fleet pertama. Istilah didefinisikan di halaman kosakata.",
+    "Instal → sesi pertama tanpa kunci → hubungkan penyedia → workflow Pod pertama. Istilah didefinisikan di halaman kosakata.",
   startGuideLink: "Baca panduan memulai →",
   startVocabularyLink: "Lihat kosakata produk →",
 
@@ -93,7 +93,7 @@ export const home: HomeDict = {
     ["codewhale exec", "Skrip dan CI"],
     ["Klien Web", "Klien peramban khusus loopback"],
     ["Runtime API + MCP", "Integrasi lokal"],
-    ["Fleet", "Kerja multi-agen yang tahan lama"],
+    ["Pod", "Kerja multi-agen yang tahan lama"],
   ],
   runtimeLink: "Lihat antarmuka runtime dan catatan stabilitas →",
 

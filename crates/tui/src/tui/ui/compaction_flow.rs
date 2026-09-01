@@ -280,12 +280,46 @@ pub(crate) fn add_compaction_receipt(app: &mut App, message: &str) {
     });
 }
 
-pub(crate) fn apply_compaction_completed(app: &mut App, id: &str, auto: bool, message: String) {
+pub(crate) fn apply_compaction_completed(
+    app: &mut App,
+    id: &str,
+    auto: bool,
+    message: String,
+    messages_before: Option<usize>,
+    messages_after: Option<usize>,
+    summary_prompt: Option<String>,
+) {
     if settle_compaction(app, id, auto) {
         // The billed prompt receipt described the pre-compaction context;
         // after the rewrite the local estimate is the honest signal until
         // the next model call bills the new, smaller prompt (#5577).
         app.last_billed_input_tokens = None;
+        let keep = crate::compaction::inspect_compaction_keep(&app.api_messages);
+        let path = if summary_prompt
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
+        {
+            crate::compaction::CompactionPath::Summary
+        } else {
+            crate::compaction::CompactionPath::PruneOnly
+        };
+        let after = messages_after.unwrap_or(app.api_messages.len());
+        let before = messages_before.unwrap_or(after);
+        app.last_compaction = Some(crate::compaction::LastCompactionSnapshot {
+            auto,
+            coverage: crate::compaction::CompactionCoverage {
+                path,
+                last_round_messages: keep.last_round_messages,
+                last_round_tool_results: keep.last_round_tool_results,
+                last_round_assistant: keep.last_round_assistant,
+                dropped_messages: before.saturating_sub(after),
+                anchors_chars: crate::compaction::pinned_anchors_text(Some(&app.workspace))
+                    .map(|text| text.chars().count())
+                    .unwrap_or(0),
+            },
+            messages_before: before,
+            messages_after: after,
+        });
         add_compaction_receipt(app, &message);
         set_explicit_compaction_status(app, message, StatusToastLevel::Success, false);
     }

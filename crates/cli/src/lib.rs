@@ -17,6 +17,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use codewhale_agent::ModelRegistry;
+use codewhale_app_server::daemon_socket::{DaemonSocketOptions, run_daemon_socket};
 use codewhale_app_server::{
     AppServerOptions, run as run_app_server, run_stdio as run_app_server_stdio,
 };
@@ -79,7 +80,7 @@ struct Cli {
         long,
         value_name = "PROVIDER",
         value_parser = parse_provider_identifier,
-        help = "Provider selector; exec/fleet also accept configured custom provider identifiers"
+        help = "Provider selector; exec/pod also accept configured custom provider identifiers"
     )]
     provider: Option<String>,
     #[arg(long)]
@@ -129,6 +130,21 @@ struct Cli {
     /// Continue the most recent interactive session for this workspace.
     #[arg(short = 'c', long = "continue")]
     continue_session: bool,
+    /// Resume a saved interactive session by id or unique id prefix.
+    #[arg(
+        short = 'r',
+        long = "resume",
+        value_name = "SESSION_ID",
+        conflicts_with_all = ["continue_session", "session_id"]
+    )]
+    resume: Option<String>,
+    /// Alias of `--resume` matching `codewhale exec --session-id`.
+    #[arg(
+        long = "session-id",
+        value_name = "SESSION_ID",
+        conflicts_with_all = ["continue_session", "resume"]
+    )]
+    session_id: Option<String>,
     #[arg(short = 'p', long = "prompt", value_name = "PROMPT")]
     prompt_flag: Option<String>,
     #[arg(
@@ -186,7 +202,27 @@ non-interactive filesystem/shell tool use, matching the supported automation
 path used by stream-json wrappers.
 ")]
     Exec(TuiPassthroughArgs),
-    /// Manage durable Agent Fleet runs.
+    /// Manage durable Agent Pod runs.
+    ///
+    /// `pod` is the canonical spelling. `codewhale fleet` remains accepted as
+    /// a compatibility alias for the identical command: the durable ledger,
+    /// receipts, config tables, and `--fleet` workflow flag keep the Fleet
+    /// serialization name.
+    #[command(
+        name = "pod",
+        alias = "fleet",
+        after_help = "\
+Examples:
+  codewhale pod init
+  codewhale pod run tasks.json --max-workers 4
+  codewhale pod status
+
+`codewhale fleet` is a compatibility alias for this command and dispatches
+identically, as `/fleet` does for the `/pod` slash command. What keeps the
+Fleet name is everything that has to stay readable across versions: the
+durable ledger `.codewhale/fleet.jsonl`, saved rosters `fleets/<name>.toml`,
+the `[fleet]` and `[fleets.*]` config tables, and `workflow run --fleet`."
+    )]
     Fleet(TuiPassthroughArgs),
     /// Internal model-free Workflow tool dispatcher used by Lane Runtime.
     #[command(name = "workflow-tool", hide = true)]
@@ -460,7 +496,7 @@ fn top_level_provider_override(
 
     let expected = ProviderKind::names_hint();
     bail!(
-        "invalid value '{provider}' for '--provider <PROVIDER>': expected one of {expected}; configured custom providers are accepted only by exec and fleet"
+        "invalid value '{provider}' for '--provider <PROVIDER>': expected one of {expected}; configured custom providers are accepted only by exec and pod"
     )
 }
 
@@ -481,8 +517,8 @@ fn prepare_raw_provider_tui_dispatch(
             reject_exec_global_flags(&args.args)?;
             tui_args("exec", args.clone())
         }
-        Some(Commands::Fleet(args)) => tui_args("fleet", args.clone()),
-        _ => unreachable!("raw provider validation only permits Exec and Fleet"),
+        Some(Commands::Fleet(args)) => tui_args("pod", args.clone()),
+        _ => unreachable!("raw provider validation only permits Exec and Pod"),
     };
 
     // Dynamic provider config belongs to the TUI schema. Do not parse it
@@ -624,7 +660,7 @@ enum LaneCommand {
         /// Workflow name (e.g. `stopship`).
         #[arg(long)]
         workflow: Option<String>,
-        /// Fleet roster name (e.g. `stopship`).
+        /// Pod roster name (e.g. `stopship`); the flag keeps its compatibility spelling.
         #[arg(long)]
         fleet: Option<String>,
         /// Issue id binding.
@@ -667,8 +703,9 @@ enum WorkflowCommand {
     Run {
         /// Workflow name or path. `stopship` maps to workflows/stopship.workflow.js.
         workflow: String,
-        /// Named Fleet roster (e.g. stopship). Optional: without one, roles
-        /// resolve against the built-in roster and the session route.
+        /// Named Pod roster (e.g. stopship). The flag keeps its compatibility
+        /// spelling. Without one, roles resolve against the built-in roster
+        /// and the session route.
         #[arg(long)]
         fleet: Option<String>,
         /// Issue id binding recorded on the Lane and passed into workflow args.
@@ -1039,14 +1076,12 @@ fn run_workflow_command(
             // loaded and validated before the run starts.
             if let Some(name) = fleet.as_deref() {
                 let roots = named_fleet_search_roots(&workspace);
-                let loaded =
-                    codewhale_workflow::load_named_fleet(name, &roots).with_context(|| {
-                        format!("load fleet `{name}` from {}", display_roots(&roots))
-                    })?;
+                let loaded = codewhale_workflow::load_named_fleet(name, &roots)
+                    .with_context(|| format!("load Pod `{name}` from {}", display_roots(&roots)))?;
                 if workflow == "stopship" || name == "stopship" {
                     loaded
                         .validate_stopship_roles()
-                        .with_context(|| format!("validate stopship roles in fleet `{name}`"))?;
+                        .with_context(|| format!("validate stopship roles in Pod `{name}`"))?;
                 }
             }
 
@@ -1660,6 +1695,18 @@ struct AppServerArgs {
     /// Used by local SDKs and JSON-RPC integrations.
     #[arg(long, default_value_t = false)]
     stdio: bool,
+    /// Run as the desktop daemon: the same JSON-RPC control transport as
+    /// `--stdio`, served on a user-private unix domain socket under the
+    /// Codewhale runtime directory. Clients must `daemon/attach` first.
+    /// Not yet supported on Windows (fails with a typed error).
+    #[arg(long, default_value_t = false, conflicts_with_all = ["stdio", "http", "mobile"])]
+    socket: bool,
+    /// Socket path override for --socket. Defaults to
+    /// `$CODEWHALE_HOME/run/daemon.sock`, else `$XDG_RUNTIME_DIR/codewhale/daemon.sock`,
+    /// else `~/Library/Application Support/codewhale/daemon.sock` (macOS) or
+    /// `~/.codewhale/run/daemon.sock`.
+    #[arg(long = "socket-path", requires = "socket")]
+    socket_path: Option<PathBuf>,
     /// Show a QR code for the mobile URL in the terminal (requires --mobile).
     #[arg(long, requires = "mobile")]
     qr: bool,
@@ -1706,6 +1753,19 @@ pub fn run_cli() -> std::process::ExitCode {
             eprintln!("error: {err}");
             for cause in err.chain().skip(1) {
                 eprintln!("  caused by: {cause}");
+            }
+            // A Codewhale account failure carries a class: CI logs must be
+            // able to tell a bad credential from an unconfigured agent model
+            // without parsing English, and the machine-readable code beside
+            // it names the control-plane branch that was taken.
+            if let Some(machine) = err.downcast_ref::<cloud::machine::MachineError>() {
+                eprintln!(
+                    "  codewhale: code={} status={}",
+                    machine.code, machine.status
+                );
+                if let Ok(code) = u8::try_from(machine.exit_code) {
+                    return std::process::ExitCode::from(code);
+                }
             }
             std::process::ExitCode::FAILURE
         }
@@ -1818,6 +1878,20 @@ fn run() -> Result<()> {
             error
         }
     })?;
+    // Root session flags only reach the TUI through the `None` branch below;
+    // no subcommand handler reads them. Accepting them silently resumes
+    // nothing -- `codewhale --resume abc exec "..."` would start a fresh
+    // session while looking like it continued one.
+    if command.is_some()
+        && (cli.continue_session || cli.resume.is_some() || cli.session_id.is_some())
+    {
+        anyhow::bail!(
+            "--continue/--resume/--session-id apply to the interactive session and \
+             cannot be combined with a subcommand. Run them without a subcommand, or \
+             use the subcommand's own flag (for example `codewhale exec --session-id <id>`)."
+        );
+    }
+
     match command {
         Some(Commands::Run(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
@@ -1877,7 +1951,7 @@ fn run() -> Result<()> {
         }
         Some(Commands::Fleet(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
-            run_tui_in_process(&cli, &resolved_runtime, tui_args("fleet", args))
+            run_tui_in_process(&cli, &resolved_runtime, tui_args("pod", args))
         }
         Some(Commands::WorkflowTool(args)) => {
             let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
@@ -1891,7 +1965,17 @@ fn run() -> Result<()> {
         }
         Some(Commands::Lane(args)) => run_lane_command(args),
         Some(Commands::Review(args)) => {
-            let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
+            // CI path: a machine token authenticates as the account with no
+            // local session and no browser. The account's own configured
+            // provider then disambiguates a model that maps to several
+            // configured routes, which review otherwise hard-errors on.
+            let mut overrides = runtime_overrides.clone();
+            if overrides.provider.is_none()
+                && let Some(provider) = cloud::machine_review_provider()?
+            {
+                overrides.provider = Some(provider);
+            }
+            let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &overrides);
             run_tui_in_process(&cli, &resolved_runtime, tui_args("review", args))
         }
         Some(Commands::Apply(args)) => {
@@ -2076,6 +2160,26 @@ fn root_tui_passthrough(cli: &Cli) -> Result<Vec<String>> {
     if cli.continue_session {
         forwarded.push("--continue".to_string());
     }
+    let resume_session_id = cli
+        .resume
+        .as_deref()
+        .or(cli.session_id.as_deref())
+        .map(str::trim);
+    if resume_session_id.is_some_and(str::is_empty) {
+        // A shell expanding an unset variable -- `codewhale --resume
+        // "$SESSION_ID"` -- must not quietly become a fresh session. The user
+        // asked to resume; starting new loses the session they meant, and the
+        // mistake is invisible until the history is gone.
+        bail!(
+            "--resume/--session-id needs a session id, but got an empty value \
+             (an unset shell variable?). Use `codewhale --continue` to resume \
+             the most recent session."
+        );
+    }
+    if let Some(session_id) = resume_session_id {
+        forwarded.push("--resume".to_string());
+        forwarded.push(session_id.to_string());
+    }
 
     let prompt =
         cli.prompt_flag
@@ -2092,6 +2196,11 @@ fn root_tui_passthrough(cli: &Cli) -> Result<Vec<String>> {
         if cli.continue_session {
             bail!(
                 "`codewhale --continue` resumes the interactive TUI. Use `codewhale exec --continue <PROMPT>` to continue a session non-interactively."
+            );
+        }
+        if let Some(session_id) = resume_session_id {
+            bail!(
+                "`codewhale --resume {session_id}` resumes the interactive TUI. Use `codewhale exec --resume {session_id} <PROMPT>` to continue a session non-interactively."
             );
         }
         forwarded.push("--prompt".to_string());
@@ -3425,14 +3534,23 @@ fn auth_list_lines_with_runtime(
     let mut lines = Vec::new();
     lines.push("provider     config store env  route".to_string());
     for provider in ProviderKind::ALL {
-        let slot = provider_slot(provider);
+        // Label the row by the provider, not by its credential slot. This
+        // table has one row per ProviderKind, but several kinds share a slot
+        // (ProviderKind::secret_store_slot): SiliconflowCN shares
+        // `siliconflow`, and the four Model Studio variants share
+        // `modelstudio-token-plan`. Labelling by slot printed `siliconflow`
+        // twice and `modelstudio-token-plan` four times, so the reader could
+        // not tell which row was which provider. The status columns still
+        // read the shared slot, which is what makes one saved key light up
+        // the whole family.
+        let label = provider.as_str();
         if provider == ProviderKind::Xai {
             let diagnostics = xai_auth_diagnostics(store, runtime_overrides);
             let api_key = diagnostics
                 .evaluates_runtime_api_key()
                 .then(|| xai_runtime_api_key(store, secrets, runtime_overrides));
             lines.push(format!(
-                "{slot:<12}  {}     {}      {}   {}",
+                "{label:<12}  {}     {}      {}   {}",
                 xai_list_storage_status(api_key.as_ref(), RuntimeApiKeySource::ConfigFile),
                 xai_list_storage_status(api_key.as_ref(), RuntimeApiKeySource::Keyring),
                 xai_list_storage_status(api_key.as_ref(), RuntimeApiKeySource::Env),
@@ -3465,7 +3583,7 @@ fn auth_list_lines_with_runtime(
             "missing"
         };
         lines.push(format!(
-            "{slot:<12}  {}     {}      {}   {active}",
+            "{label:<12}  {}     {}      {}   {active}",
             yes_no(file),
             keyring_status_short(keyring),
             yes_no(env)
@@ -4559,6 +4677,14 @@ fn run_app_server_command(
     };
     if args.stdio {
         let outcome = runtime.block_on(run_app_server_stdio(args.config));
+        finish_cli_telemetry(session, &outcome);
+        return outcome;
+    }
+    if args.socket {
+        let outcome = runtime.block_on(run_daemon_socket(DaemonSocketOptions {
+            socket_path: args.socket_path,
+            config_path: args.config,
+        }));
         finish_cli_telemetry(session, &outcome);
         return outcome;
     }
@@ -6045,13 +6171,51 @@ verbosity = "project-imported"
             }))
         ));
 
+        assert!(matches!(
+            parse_ok(&["deepseek", "app-server", "--socket"]).command,
+            Some(Commands::AppServer(AppServerArgs {
+                socket: true,
+                socket_path: None,
+                http: false,
+                mobile: false,
+                stdio: false,
+                ..
+            }))
+        ));
+
         for argv in [
             ["deepseek", "app-server", "--http", "--mobile"].as_slice(),
             ["deepseek", "app-server", "--http", "--stdio"].as_slice(),
             ["deepseek", "app-server", "--mobile", "--stdio"].as_slice(),
+            ["deepseek", "app-server", "--socket", "--stdio"].as_slice(),
+            ["deepseek", "app-server", "--socket", "--http"].as_slice(),
+            ["deepseek", "app-server", "--socket", "--mobile"].as_slice(),
         ] {
             let err = Cli::try_parse_from(argv).expect_err("conflicting transports must fail");
             assert_eq!(err.kind(), ErrorKind::ArgumentConflict, "argv={argv:?}");
+        }
+    }
+
+    #[test]
+    fn app_server_socket_path_requires_socket() {
+        let err = Cli::try_parse_from(["deepseek", "app-server", "--socket-path", "/tmp/d.sock"])
+            .expect_err("--socket-path without --socket must fail");
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+        match parse_ok(&[
+            "deepseek",
+            "app-server",
+            "--socket",
+            "--socket-path",
+            "/tmp/d.sock",
+        ])
+        .command
+        {
+            Some(Commands::AppServer(AppServerArgs {
+                socket: true,
+                socket_path: Some(path),
+                ..
+            })) => assert_eq!(path, PathBuf::from("/tmp/d.sock")),
+            other => panic!("unexpected parse: {other:?}"),
         }
     }
 
@@ -6076,6 +6240,8 @@ verbosity = "project-imported"
             http: true,
             mobile: false,
             stdio: false,
+            socket: false,
+            socket_path: None,
             qr: false,
             host: Some("127.0.0.1".to_string()),
             port: Some(9000),
@@ -6114,6 +6280,8 @@ verbosity = "project-imported"
             http: false,
             mobile: true,
             stdio: false,
+            socket: false,
+            socket_path: None,
             qr: true,
             host: None,
             port: None,
@@ -6246,8 +6414,81 @@ verbosity = "project-imported"
         ));
     }
 
+    /// Pod is the canonical customer-facing top-level command; `fleet` is a
+    /// compatibility alias that must keep dispatching to the same code path.
+    /// The Fleet spelling survives on purpose in the durable ledger, saved
+    /// roster files, config tables, and the `workflow --fleet` flag.
     #[test]
-    fn exec_and_fleet_accept_builtin_and_raw_provider_identifiers() {
+    fn pod_is_the_canonical_top_level_command_and_fleet_stays_a_compatibility_alias() {
+        for tail in [
+            vec!["init"],
+            vec!["status"],
+            vec!["run", "tasks.json", "--max-workers", "2"],
+        ] {
+            let pod = parse_ok(
+                &std::iter::once("codewhale")
+                    .chain(["pod"])
+                    .chain(tail.iter().copied())
+                    .collect::<Vec<_>>(),
+            );
+            let fleet = parse_ok(
+                &std::iter::once("codewhale")
+                    .chain(["fleet"])
+                    .chain(tail.iter().copied())
+                    .collect::<Vec<_>>(),
+            );
+            let (Some(Commands::Fleet(pod_args)), Some(Commands::Fleet(fleet_args))) =
+                (&pod.command, &fleet.command)
+            else {
+                panic!("both spellings must parse into the same command: {tail:?}");
+            };
+            assert_eq!(pod_args.args, tail, "{tail:?}");
+            assert_eq!(pod_args.args, fleet_args.args, "{tail:?}");
+            assert!(pod.prompt.is_empty() && fleet.prompt.is_empty(), "{tail:?}");
+        }
+
+        // Help advertises Pod. The alias still resolves, but discovery has one
+        // canonical answer, so `fleet` must not be listed as its own command.
+        let help = help_for(&["codewhale", "--help"]);
+        let commands = help
+            .lines()
+            .map(str::trim_start)
+            .filter(|line| line.starts_with("pod") || line.starts_with("fleet"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            commands.len(),
+            1,
+            "expected exactly one entry: {commands:?}"
+        );
+        assert!(commands[0].starts_with("pod"), "{commands:?}");
+        assert!(
+            commands[0].contains("Pod"),
+            "help summary should name Pod: {commands:?}"
+        );
+        assert!(
+            !help.contains("Manage durable Agent Fleet runs"),
+            "the old Fleet-led summary must be gone from top-level help"
+        );
+
+        let pod_help = help_for(&["codewhale", "pod", "--help"]);
+        assert!(pod_help.contains("Manage durable Agent Pod runs"));
+        assert!(pod_help.contains("codewhale pod run tasks.json --max-workers 4"));
+        assert!(pod_help.contains("codewhale fleet` is a compatibility alias"));
+
+        // Both spellings normalize to the canonical inner command so receipts
+        // and any echoed invocation never regress to the compatibility name.
+        let args = TuiPassthroughArgs {
+            args: vec!["status".into()],
+        };
+        assert_eq!(
+            tui_args("pod", args.clone()),
+            vec!["pod".to_string(), "status".to_string()]
+        );
+        assert!(command_accepts_raw_provider(Some(&Commands::Fleet(args))));
+    }
+
+    #[test]
+    fn exec_and_pod_accept_builtin_and_raw_provider_identifiers() {
         let builtin = parse_ok(&["codewhale", "--provider", "openrouter", "exec", "Reply OK"]);
         assert_eq!(builtin.provider.as_deref(), Some("openrouter"));
         assert_eq!(
@@ -6269,6 +6510,7 @@ verbosity = "project-imported"
 
         for (provider, command) in [
             ("lm-studio", vec!["exec", "Reply OK"]),
+            ("lm-studio", vec!["pod", "status"]),
             ("lm-studio", vec!["fleet", "status"]),
         ] {
             let argv = std::iter::once("codewhale")
@@ -6352,13 +6594,13 @@ verbosity = "project-imported"
     }
 
     #[test]
-    fn raw_provider_ids_remain_restricted_to_exec_and_fleet() {
+    fn raw_provider_ids_remain_restricted_to_exec_and_pod() {
         let cli = parse_ok(&["codewhale", "--provider", "lm-studio", "model", "list"]);
         let err = top_level_provider_override(cli.provider.as_deref(), cli.command.as_ref())
             .expect_err("model registry commands still require a built-in provider");
         assert!(
             err.to_string()
-                .contains("configured custom providers are accepted only by exec and fleet")
+                .contains("configured custom providers are accepted only by exec and pod")
         );
 
         let err = Cli::try_parse_from(["codewhale", "auth", "set", "--provider", "lm-studio"])
@@ -8249,6 +8491,42 @@ verbosity = "project-imported"
     }
 
     #[test]
+    fn auth_list_labels_each_row_by_its_own_provider() {
+        // ProviderKind::secret_store_slot collapses families onto one durable
+        // slot -- SiliconflowCN onto `siliconflow`, the four Model Studio
+        // variants onto `modelstudio-token-plan` -- but this table has one row
+        // per kind. Labelling rows by slot printed `siliconflow` twice and
+        // `modelstudio-token-plan` four times, so a reader could not tell which
+        // row belonged to which provider.
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let store =
+            ConfigStore::load(Some(dir.path().join("config.toml"))).expect("store should load");
+        let secrets = Secrets::new(std::sync::Arc::new(
+            codewhale_secrets::InMemoryKeyringStore::new(),
+        ));
+
+        let lines = auth_list_lines(&store, &secrets);
+        let labels: Vec<&str> = lines
+            .iter()
+            .skip(1)
+            .filter_map(|line| line.split_whitespace().next())
+            .collect();
+
+        assert_eq!(
+            labels.len(),
+            ProviderKind::ALL.len(),
+            "one row per provider kind: {labels:?}"
+        );
+        let unique: std::collections::BTreeSet<&&str> = labels.iter().collect();
+        assert_eq!(
+            unique.len(),
+            labels.len(),
+            "every row must name its own provider, not a shared slot: {labels:?}"
+        );
+    }
+
+    #[test]
     fn external_consent_persists_exact_scope_and_api_key_or_revoke_disables_it() {
         let _lock = env_lock();
         let dir = tempfile::TempDir::new().expect("tempdir");
@@ -9127,6 +9405,69 @@ verbosity = "project-imported"
         assert!(cli.prompt_flag.is_none());
         assert!(cli.prompt.is_empty());
         assert_eq!(root_tui_passthrough(&cli).unwrap(), vec!["--continue"]);
+    }
+
+    #[test]
+    fn parses_top_level_resume_flags_for_interactive_resume() {
+        // The operations runbook advertises `codewhale --resume <id>`. Before
+        // the root flag existed, the trailing prompt positional swallowed it
+        // and forwarded `--prompt "--resume <id>"` to the TUI (exit 2).
+        for argv in [
+            &["codewhale", "--resume", "800596e6"][..],
+            &["codewhale", "--resume=800596e6"][..],
+            &["codewhale", "-r", "800596e6"][..],
+            &["codewhale", "--session-id", "800596e6"][..],
+            &["codewhale", "--session-id=800596e6"][..],
+        ] {
+            let cli = parse_ok(argv);
+            assert!(
+                cli.prompt.is_empty(),
+                "{argv:?} must not be swallowed as a prompt: {:?}",
+                cli.prompt
+            );
+            assert!(cli.prompt_flag.is_none(), "{argv:?}");
+            assert!(cli.command.is_none(), "{argv:?}");
+            assert_eq!(
+                root_tui_passthrough(&cli).unwrap(),
+                vec!["--resume".to_string(), "800596e6".to_string()],
+                "{argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_resume_identifier_is_rejected_rather_than_starting_fresh() {
+        // `codewhale --resume "$SESSION_ID"` with the variable unset used to
+        // trim to empty, filter to None, and start a brand-new session while
+        // looking like it resumed one. Losing the session the user asked for
+        // must be loud.
+        for argv in [
+            &["codewhale", "--resume", ""][..],
+            &["codewhale", "--session-id", "   "][..],
+        ] {
+            let cli = parse_ok(argv);
+            let err = root_tui_passthrough(&cli)
+                .expect_err("an empty resume id must not silently start a fresh session");
+            assert!(
+                err.to_string().contains("needs a session id"),
+                "{argv:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn top_level_resume_rejects_startup_prompt_and_conflicting_flags() {
+        let cli = parse_ok(&["codewhale", "--resume", "800596e6", "-p", "follow up"]);
+        let err = root_tui_passthrough(&cli).expect_err("prompted resume should be rejected");
+        assert!(
+            err.to_string()
+                .contains("codewhale exec --resume 800596e6 <PROMPT>"),
+            "{err}"
+        );
+
+        assert!(Cli::try_parse_from(["codewhale", "--resume", "800596e6", "--continue"]).is_err());
+        assert!(Cli::try_parse_from(["codewhale", "--resume", "a", "--session-id", "b"]).is_err());
+        assert!(Cli::try_parse_from(["codewhale", "--session-id", "b", "-c"]).is_err());
     }
 
     #[test]

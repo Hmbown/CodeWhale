@@ -78,3 +78,126 @@ pub(crate) fn golden_path(name: &str) -> std::path::PathBuf {
         .join("src/tui/goldens")
         .join(format!("{name}.txt"))
 }
+
+// ---------------------------------------------------------------------------
+// Ink plane — the colour half of the design contract.
+//
+// `render_golden_text` dumps cell *symbols*. That is only half a render: a
+// screen can go from a gold mark over a blue gradient to uniform grey without
+// moving a single glyph, and the symbol golden would not notice. The founder's
+// standing complaint about the startup screen ("everything in the same dim
+// gray") was, mechanically, invisible to this suite.
+//
+// The ink plane closes that hole. Each painted cell becomes one character
+// keyed to its (fg, bg, modifier) triple, with a legend resolving those keys
+// to concrete values, so a contrast change shows up as a golden diff.
+// ---------------------------------------------------------------------------
+
+/// Stable key alphabet for the ink plane. Keys are assigned in paint order
+/// (row-major), so a legend diff reads as "what changed, where it first
+/// appears" rather than as an unrelated reshuffle.
+const INK_KEYS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+/// One distinct paint style seen in a rendered buffer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct InkEntry {
+    pub key: char,
+    /// Human-readable style, e.g. `#F6C453 on reset BOLD`.
+    pub description: String,
+    /// How many cells carry this style.
+    pub cells: usize,
+    /// How many *non-blank* cells carry it (blank = space symbol).
+    pub glyph_cells: usize,
+}
+
+/// Render once and describe every distinct paint style in the buffer.
+///
+/// Deterministic by the same contract as [`render_golden_text`]: the caller
+/// injects every fact, so the entries and their order are reproducible.
+pub(crate) fn render_ink_entries(
+    width: u16,
+    height: u16,
+    draw: impl FnOnce(&mut ratatui::buffer::Buffer),
+) -> (String, Vec<InkEntry>) {
+    let (w, h) = (width.max(1), height.max(1));
+    let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, w, h));
+    draw(&mut buf);
+
+    let mut order: Vec<(
+        ratatui::style::Color,
+        ratatui::style::Color,
+        ratatui::style::Modifier,
+    )> = Vec::new();
+    let mut entries: Vec<InkEntry> = Vec::new();
+    let mut plane = String::with_capacity(usize::from(w) * usize::from(h) + usize::from(h));
+
+    let content = buf.content();
+    for y in 0..usize::from(h) {
+        for x in 0..usize::from(w) {
+            let cell = &content[y * usize::from(w) + x];
+            let triple = (cell.fg, cell.bg, cell.modifier);
+            let index = match order.iter().position(|seen| *seen == triple) {
+                Some(index) => index,
+                None => {
+                    order.push(triple);
+                    entries.push(InkEntry {
+                        // Beyond the alphabet the plane stops being readable;
+                        // '?' marks the overflow honestly rather than aliasing
+                        // two distinct styles onto one key.
+                        key: INK_KEYS
+                            .get(order.len() - 1)
+                            .map_or('?', |byte| char::from(*byte)),
+                        description: describe_ink(triple.0, triple.1, triple.2),
+                        cells: 0,
+                        glyph_cells: 0,
+                    });
+                    order.len() - 1
+                }
+            };
+            entries[index].cells += 1;
+            if cell.symbol() != " " {
+                entries[index].glyph_cells += 1;
+            }
+            plane.push(entries[index].key);
+        }
+        plane.push('\n');
+    }
+    (plane, entries)
+}
+
+/// Dump the ink plane and its legend in the golden text format.
+pub(crate) fn render_golden_ink(
+    width: u16,
+    height: u16,
+    draw: impl FnOnce(&mut ratatui::buffer::Buffer),
+) -> String {
+    let (plane, entries) = render_ink_entries(width, height, draw);
+    let mut out = plane;
+    out.push_str("--\n");
+    for entry in &entries {
+        out.push_str(&format!("{} {}\n", entry.key, entry.description));
+    }
+    out
+}
+
+fn describe_ink(
+    fg: ratatui::style::Color,
+    bg: ratatui::style::Color,
+    modifier: ratatui::style::Modifier,
+) -> String {
+    let mut out = format!("{} on {}", describe_color(fg), describe_color(bg));
+    if !modifier.is_empty() {
+        // `Modifier`'s Debug is a stable bitflags list (`BOLD | DIM`), which is
+        // exactly the shape we want in a legend line.
+        out.push_str(&format!(" {modifier:?}"));
+    }
+    out
+}
+
+fn describe_color(value: ratatui::style::Color) -> String {
+    match value {
+        ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02X}{g:02X}{b:02X}"),
+        ratatui::style::Color::Reset => "reset".to_string(),
+        other => format!("{other:?}").to_lowercase(),
+    }
+}

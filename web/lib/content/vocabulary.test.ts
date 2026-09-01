@@ -31,7 +31,7 @@ const BANNED_COPY = /\bAgent mode\b|Agent 模式|\bYOLO\b|approval_mode|first-cl
 
 describe("shared product vocabulary", () => {
   it("keeps the execution nouns verbatim with the public fact matrix", () => {
-    expect(PRODUCT_TERMS.map((t) => t.term)).toEqual(["Fleet", "Workflow", "Lane", "Runtime"]);
+    expect(PRODUCT_TERMS.map((t) => t.term)).toEqual(["Pod", "Workflow", "Lane", "Runtime"]);
     for (const term of PRODUCT_TERMS) {
       expect(term.short.en, term.term).toBe(matrix.product.terminology[term.term]);
     }
@@ -90,12 +90,12 @@ describe("shared product vocabulary", () => {
 });
 
 describe("shared getting-started path", () => {
-  it("keeps the four-step order: install → offline session → provider → fleet", () => {
+  it("keeps the four-step order: install → offline session → provider → pod", () => {
     expect(GETTING_STARTED_STEPS.map((s) => s.id)).toEqual([
       "install",
       "first-session",
       "connect-provider",
-      "fleet-workflow",
+      "pod-workflow",
     ]);
   });
 
@@ -106,7 +106,7 @@ describe("shared getting-started path", () => {
       "/docs",
       "/docs/guide",
       "/docs/vocabulary",
-      "/docs/fleet",
+      "/docs/pod",
       "/docs/hooks",
       "/docs/modes",
     ];
@@ -144,16 +144,18 @@ describe("shared getting-started path", () => {
 
   it("uses only documented commands", () => {
     const guide = repoText("docs/GUIDE.md");
-    const fleetDoc = repoText("docs/FLEET.md");
+    // docs/FLEET.md keeps its filename (published links, receipts) while
+    // leading with the Pod noun; see its naming/compatibility section.
+    const podDoc = repoText("docs/FLEET.md");
     const install = GETTING_STARTED_STEPS.find((s) => s.id === "install")!;
     expect(install.commands).toContain("npm install -g codewhale");
     expect(guide).toContain("codewhale doctor");
     const provider = GETTING_STARTED_STEPS.find((s) => s.id === "connect-provider")!;
     expect(provider.commands).toContain("codewhale auth set --provider deepseek");
     expect(guide).toContain("codewhale auth set --provider deepseek");
-    const fleet = GETTING_STARTED_STEPS.find((s) => s.id === "fleet-workflow")!;
-    for (const command of fleet.commands) {
-      expect(`${fleetDoc}\n${guide}`, command).toContain(command);
+    const pod = GETTING_STARTED_STEPS.find((s) => s.id === "pod-workflow")!;
+    for (const command of pod.commands) {
+      expect(`${podDoc}\n${guide}`, command).toContain(command);
     }
   });
 

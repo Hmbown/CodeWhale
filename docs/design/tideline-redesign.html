@@ -208,7 +208,6 @@
     /* Startup: a quiet first choice, not a blank terminal. */
     .startup { min-height: 650px; display: grid; grid-template-rows: 1fr auto; padding: 0 10%; }
     .startup-center { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 72px 0 38px; }
-    .startup-mark { min-height: 50px; color: var(--gold); border: 0; background: transparent; cursor: pointer; font: inherit; font-size: 37px; letter-spacing: .18em; }
     .startup h2 { margin: 20px 0 7px; font-size: 23px; letter-spacing: -.025em; font-weight: 650; }
     .startup p { margin: 0; color: var(--t-dim); }
     .quick-actions { border-top: 1px solid var(--t-faint); padding: 13px 0 0; }
@@ -276,7 +275,7 @@
     .doc-section { margin-top: 70px; }.doc-section h2 { margin: 0 0 7px; font-size: 24px; letter-spacing: -.025em; }.doc-section > p { max-width: 870px; margin: 0; color: var(--page-dim); }.rule-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; margin-top: 17px; }.rule { padding: 14px; border: 1px solid var(--card-edge); border-radius: 10px; background: var(--card); }.rule b { color: var(--accent); }.rule p { margin: 6px 0 0; color: var(--page-dim); font-size: 13px; }
     .spec-table { width: 100%; margin-top: 17px; border-collapse: collapse; font-size: 12px; }.spec-table th, .spec-table td { padding: 9px 10px; border-bottom: 1px solid var(--card-edge); text-align: left; vertical-align: top; }.spec-table th { color: var(--page-dim); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }.spec-table code { color: var(--accent); font-size: 11px; }.status-existing { color: var(--ok); }.status-proposed { color: var(--gold); }.status-guard { color: var(--warn); }
     .manifest-note { margin-top: 13px; padding: 12px 14px; border-left: 2px solid var(--accent2); background: color-mix(in srgb, var(--accent) 5%, var(--card)); color: var(--page-dim); font-size: 13px; }.manifest-note b { color: var(--page-fg); }
-    .glyph-grid { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 10px; margin-top: 17px; }.glyph-card { padding: 12px; border: 1px solid var(--card-edge); background: var(--card); }.glyph-sample { color: var(--accent2); font: 700 20px/1 var(--mono); }.glyph-card:nth-child(2) .glyph-sample { color: var(--gold); }.glyph-card:nth-child(3) .glyph-sample { color: var(--accent); }.glyph-card:nth-child(4) .glyph-sample { color: var(--reason); }.glyph-card:nth-child(5) .glyph-sample { color: var(--ok); }.glyph-card b { display: block; margin-top: 8px; }.glyph-card p { margin: 3px 0 0; color: var(--page-dim); font-size: 12px; }
+    .glyph-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 10px; margin-top: 17px; }.glyph-card { padding: 12px; border: 1px solid var(--card-edge); background: var(--card); }.glyph-sample { color: var(--accent2); font: 700 20px/1 var(--mono); }.glyph-card:nth-child(2) .glyph-sample { color: var(--gold); }.glyph-card:nth-child(3) .glyph-sample { color: var(--accent); }.glyph-card:nth-child(4) .glyph-sample { color: var(--reason); }.glyph-card b { display: block; margin-top: 8px; }.glyph-card p { margin: 3px 0 0; color: var(--page-dim); font-size: 12px; }
     .acceptance { margin-top: 15px; columns: 2; column-gap: 32px; }.acceptance label { display: block; break-inside: avoid; margin: 0 0 9px; color: var(--page-dim); font-size: 13px; }.acceptance input { margin-right: 8px; accent-color: var(--accent); }
 
     .hidden { display: none !important; }
@@ -332,7 +331,7 @@
 
         <div class="terminal" id="terminal" data-background="Color::Reset">
           <div class="topbar">
-            <button class="brand-lockup" type="button" data-target="brand.primary" title="Codewhale identity"><span class="brand-cell" aria-hidden="true">▚△▞</span>CODEWHALE</button>
+            <button class="brand-lockup" type="button" data-target="brand.primary" title="Codewhale identity">CODEWHALE</button>
             <span class="divider"></span>
             <button type="button" data-target="header.workspace"><span class="label">folder</span> <span class="path">~/codewhale</span></button>
             <span class="divider collapse-on-small"></span>
@@ -375,7 +374,7 @@
                     <div class="turn-copy">Make release 0.9.12 ready.</div>
                   </article>
                   <article class="turn assistant">
-                    <span class="turn-marker" aria-hidden="true">▚△▞</span>
+                    <span class="turn-marker" aria-hidden="true">◌</span>
                     <div class="turn-head"><strong>CODEWHALE</strong><time>14:41:02</time></div>
                     <div class="turn-copy">I’ll prepare release 0.9.12. Spawning a pod to run checks in parallel.<br><span class="dim">Plan: fix CI, audit contributor ancestry, draft release notes.</span></div>
 
@@ -420,7 +419,6 @@
           <div class="screen" id="screen-startup">
             <div class="startup">
               <div class="startup-center">
-                <button type="button" class="startup-mark" data-target="brand.startup" aria-label="Codewhale fluke asset slot">▚△▞</button>
                 <h2>What are we working on?</h2>
                 <p>Folder and tool access are asked when needed.</p>
               </div>
@@ -537,7 +535,7 @@
 
     <section class="doc-section" id="principles">
       <h2>What makes it Codewhale</h2>
-      <p>It should feel as legible as Codex, Claude Code, or a sober native workbench before it feels branded. The brand arrives through timing, language, a small current of cyan, and the fluke at moments of authorship or return.</p>
+      <p>It should feel as legible as Codex, Claude Code, or a sober native workbench before it feels branded. The terminal uses timing, language, a small current of cyan, and a restrained wordmark; surfaces that can render the canonical raster use that exact asset.</p>
       <div class="rule-grid">
         <article class="rule"><b>Host first</b><p>Match Terminal, Dark, and Light use <code>Color::Reset</code> for the background. Their foreground palette adapts; the user’s terminal remains the surface.</p></article>
         <article class="rule"><b>Conversation first</b><p>The transcript is the default lens. The rail and ledger can fold; receipts are quiet until a person asks for evidence.</p></article>
@@ -550,9 +548,8 @@
 
     <section class="doc-section" id="glyphs">
       <h2>Small whale grammar</h2>
-      <p>The fluke is the new mark. It appears at the wordmark, startup, a Codewhale turn, and a settled resurface—not in every button or table row. The rest of the glyphs are working notation. All retain an ASCII fallback in the terminal projection.</p>
+      <p>The canonical raster mark has no approved terminal-glyph substitute. These glyphs are working notation rather than brand assets, and all retain an ASCII fallback.</p>
       <div class="glyph-grid">
-        <article class="glyph-card"><div class="glyph-sample">▚△▞</div><b>Fluke</b><p>Identity and a successful resurface. Source is an approved asset; the terminal gets a cell projection.</p></article>
         <article class="glyph-card"><div class="glyph-sample">⌁</div><b>Pod formation</b><p>Parallel work beginning. Never a generic button icon.</p></article>
         <article class="glyph-card"><div class="glyph-sample">◌</div><b>Wake / live work</b><p>Active receipt or a running worker. Static in low-motion and ANSI.</p></article>
         <article class="glyph-card"><div class="glyph-sample">◆</div><b>Spout / attention</b><p>A real user decision is needed. Gold and words; not an error.</p></article>
@@ -580,7 +577,7 @@
           <tr><td>Prompt</td><td><code>crates/tui/src/prompts/text.rs</code></td><td><code>BASE_PROMPT</code> untouched</td><td class="status-guard">out of scope</td></tr>
         </tbody>
       </table>
-      <div class="manifest-note"><b>CWC parity:</b> the web app shares the information architecture, terms, state grammar, typed notification facts, provider truth, and fluke asset manifest. It does not imitate a terminal. Web controls render as normal app controls; the TUI renders the same contracts as cells.</div>
+      <div class="manifest-note"><b>CWC parity:</b> the web app shares the information architecture, terms, state grammar, typed notification facts, provider truth, and current-mark asset manifest. It does not imitate a terminal. Web controls render as normal app controls; the TUI renders the same contracts as cells.</div>
     </section>
 
     <section class="doc-section" id="acceptance">
@@ -596,7 +593,7 @@
         <label><input type="checkbox"> Settings show current Z.ai / GLM-5.3 separately from saved startup defaults.</label>
         <label><input type="checkbox"> Banner, in-app history, and audio settings do not masquerade as one switch.</label>
         <label><input type="checkbox"> low_motion and fancy_animations both settle immediately and preserve the final state.</label>
-        <label><input type="checkbox"> Fluke reads as an attached whale tail at all approved sizes; no speculative SVG ships.</label>
+        <label><input type="checkbox"> No ASCII, block-glyph, or hand-drawn substitute is presented as the canonical raster mark.</label>
       </div>
     </section>
   </main>
@@ -611,8 +608,8 @@
       "deepsea": "explicit OceanTreatment::Deepsea surface"
     },
     "targets": {
-      "brand.primary": {"title":"Primary fluke mark","owner":"glyphs.rs + underwater.rs","state":"BrandMark::Primary","action":"open product menu","hitbox":"header brand Rect","notes":"Approved asset manifest; terminal uses cell projection."},
-      "brand.startup": {"title":"Startup fluke","owner":"underwater.rs + onboarding/mod.rs","state":"OnboardingState","action":"open identity/help","hitbox":"startup mark Rect","notes":"One of the sparse identity placements."},
+      "brand.primary": {"title":"Primary Codewhale wordmark","owner":"glyphs.rs + underwater.rs","state":"BrandMark::Primary","action":"open product menu","hitbox":"header brand Rect","notes":"One-row terminal wordmark; it is not a substitute for the canonical raster mark."},
+      "brand.startup": {"title":"Startup prompt","owner":"underwater.rs","state":"OnboardingState","action":"none","hitbox":"none","notes":"Direct heading and subtitle; no approximate brand asset."},
       "header.workspace": {"title":"Workspace identity","owner":"underwater.rs","state":"GitStatusSnapshot","action":"open workspace details","hitbox":"header workspace Rect","notes":"Metadata family; truncate before wrapping."},
       "header.route": {"title":"Route","owner":"underwater.rs","state":"route identity","action":"open provider/route inspector","hitbox":"header route Rect","notes":"Identity-blue, not a status light."},
       "header.model": {"title":"Effective model","owner":"underwater.rs + App","state":"effective provider/model route","action":"open provider inspector","hitbox":"header model Rect","notes":"Must come from current App route, not persisted config."},

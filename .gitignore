@@ -60,6 +60,7 @@ docs/*.pdf
 *.cmd
 !scripts/**
 !.github/scripts/**
+!.buildkite/**
 !web/public/install.sh
 !packaging/winget/**
 test.txt

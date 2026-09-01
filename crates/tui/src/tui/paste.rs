@@ -36,12 +36,23 @@ pub fn handle_paste_burst_key(app: &mut App, key: &KeyEvent, now: Instant) -> bo
 
     match key.code {
         KeyCode::Enter => {
-            if !in_command_context(app) && app.paste_burst.append_newline_if_active(now) {
+            if in_command_context(app) {
+                // The burst buffer can hold the text the user is actually
+                // entering (fast-typed or raw paste). Command context must
+                // be judged on that text, not the composer alone, or Enter
+                // glues the lines into one multiline slash argument
+                // ("Invalid model 'qwen2.5:0.5b\n/status\n…'" — Y-7,
+                // 2026-08-31 QA). Flush what is held onto the composer line
+                // and let Enter take the ordinary submit path.
+                if let Some(pending) = app.paste_burst.flush_before_modified_input() {
+                    app.insert_str(&pending);
+                }
+                return false;
+            }
+            if app.paste_burst.append_newline_if_active(now) {
                 return true;
             }
-            if !in_command_context(app)
-                && app.paste_burst.newline_should_insert_instead_of_submit(now)
-            {
+            if app.paste_burst.newline_should_insert_instead_of_submit(now) {
                 app.insert_char('\n');
                 // Deliberately no `extend_window` here. This Enter arrived
                 // with no burst being assembled, so it is only *maybe* a
@@ -94,10 +105,11 @@ pub fn handle_paste_burst_key(app: &mut App, key: &KeyEvent, now: Instant) -> bo
     false
 }
 
-/// Apply a paste-burst decision to the composer buffer. Some decisions
-/// retroactively grab the last few chars from the input back into the
-/// pending paste buffer (when the heuristic decides the recent typing was
-/// actually a paste).
+/// Apply a paste-burst decision to the composer buffer. The burst never
+/// rewrites text the user already has on the composer line: chars before
+/// the burst stay exactly as typed, and buffering starts from the current
+/// char (Y-7 — the old retro-grab deleted and reinserted typed text on a
+/// timing guess and scrambled fast input).
 pub fn handle_paste_burst_decision(
     app: &mut App,
     decision: CharDecision,
@@ -110,42 +122,17 @@ pub fn handle_paste_burst_decision(
             app.paste_burst.append_char_to_buffer(c, now);
             true
         }
-        CharDecision::BeginBuffer { retro_chars } => {
-            if apply_paste_burst_retro_capture(app, retro_chars as usize, c, now) {
-                return true;
-            }
-            app.insert_char(c);
+        CharDecision::BeginBuffer => {
+            app.paste_burst.begin_buffer_from_now(c, now);
             true
         }
     }
 }
 
-fn apply_paste_burst_retro_capture(
-    app: &mut App,
-    retro_chars: usize,
-    c: char,
-    now: Instant,
-) -> bool {
-    let cursor_byte = app.cursor_byte_index();
-    let before = &app.composer.input[..cursor_byte];
-    let Some(grab) = app
-        .composer
-        .paste_burst
-        .decide_begin_buffer(now, before, retro_chars)
-    else {
-        return false;
-    };
-    if !grab.grabbed.is_empty() {
-        app.input.replace_range(grab.start_byte..cursor_byte, "");
-        let removed = grab.grabbed.chars().count();
-        app.cursor_position = app.cursor_position.saturating_sub(removed);
-    }
-    app.paste_burst.append_char_to_buffer(c, now);
-    true
-}
-
 fn in_command_context(app: &App) -> bool {
-    looks_like_slash_command_input(&app.input)
+    let mut composite = app.input.clone();
+    composite.push_str(&app.paste_burst.held_text());
+    looks_like_slash_command_input(&composite)
 }
 
 #[cfg(test)]
@@ -168,6 +155,59 @@ mod tests {
 
     fn plain(ch: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)
+    }
+
+    /// Y-7 regression (2026-08-31 QA, `tui-swarm-head`): a scripted driver
+    /// or fast typist enters `/model …` faster than the burst heuristic's
+    /// windows. The text sat in the burst buffer, `in_command_context`
+    /// judged the empty composer, and every Enter was absorbed as a pasted
+    /// newline — gluing `/model qwen2.5:0.5b`, `/status`, and the prompt
+    /// into one multiline argument ("Invalid model
+    /// 'qwen2.5:0.5b\n/status\n…'"). Enter must flush buffered command text
+    /// to the composer and reach the submit path.
+    #[test]
+    fn enter_on_buffered_slash_command_flushes_and_submits() {
+        let mut app = test_app();
+        let t0 = Instant::now();
+
+        for (i, ch) in "/model qwen2.5:0.5b".chars().enumerate() {
+            assert!(handle_paste_burst_key(
+                &mut app,
+                &plain(ch),
+                t0 + Duration::from_millis(2 * i as u64)
+            ));
+        }
+        assert!(
+            !handle_paste_burst_key(
+                &mut app,
+                &KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                t0 + Duration::from_millis(60),
+            ),
+            "Enter on a buffered slash command is a submit, not a pasted newline"
+        );
+        assert_eq!(app.input, "/model qwen2.5:0.5b");
+    }
+
+    /// The same burst stream ending in a normal prompt must still absorb
+    /// its Enter on terminals without bracketed paste — that absorption is
+    /// the heuristic's whole job for real multi-line pastes (#1073).
+    #[test]
+    fn enter_on_buffered_plain_text_is_still_absorbed() {
+        let mut app = test_app();
+        let t0 = Instant::now();
+
+        for (i, ch) in "hello world".chars().enumerate() {
+            assert!(handle_paste_burst_key(
+                &mut app,
+                &plain(ch),
+                t0 + Duration::from_millis(2 * i as u64)
+            ));
+        }
+        assert!(handle_paste_burst_key(
+            &mut app,
+            &KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            t0 + Duration::from_millis(60),
+        ));
     }
 
     #[test]

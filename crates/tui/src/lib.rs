@@ -36,6 +36,7 @@ mod commands;
 mod compaction;
 mod composer_history;
 mod composer_stash;
+pub mod computer_meter;
 mod config;
 mod config_persistence;
 mod config_ui;
@@ -319,7 +320,8 @@ enum Commands {
     Speech(SpeechArgs),
     /// Run a non-interactive prompt. Use --auto for agent-with-tools mode.
     Exec(ExecArgs),
-    /// Manage local Agent Fleet runs and workers
+    /// Manage local Agent Pod runs and workers (`fleet` is a compatibility alias)
+    #[command(name = "pod", alias = "fleet")]
     Fleet(FleetArgs),
     /// Internal model-free Workflow tool dispatcher used by Lane Runtime.
     #[command(name = "workflow-tool", hide = true)]
@@ -569,54 +571,54 @@ struct FleetArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 enum FleetCommand {
-    /// Initialize the local fleet ledger for this workspace
+    /// Initialize the local Pod ledger for this workspace
     Init,
     /// Create a run from a task spec and start the foreground manager loop
     Run(FleetRunArgs),
-    /// List durable Fleet runs from this workspace's ledger
+    /// List durable Pod runs from this workspace's ledger
     List,
-    /// Show queued/running/completed/failed/stale fleet counts
+    /// Show queued/running/completed/failed/stale Pod counts
     Status,
     /// Inspect one worker's status, heartbeat, latest event, and artifacts
     Inspect {
-        /// Worker id printed by `codewhale fleet run`
+        /// Worker id printed by `codewhale pod run`
         worker_id: String,
     },
     /// Print bounded log artifacts for one worker
     Logs {
-        /// Worker id printed by `codewhale fleet run`
+        /// Worker id printed by `codewhale pod run`
         worker_id: String,
     },
     /// List artifact refs for one worker
     Artifacts {
-        /// Worker id printed by `codewhale fleet run`
+        /// Worker id printed by `codewhale pod run`
         worker_id: String,
     },
     /// Interrupt a running worker task and record a terminal cancellation
     Interrupt {
-        /// Worker id printed by `codewhale fleet run`
+        /// Worker id printed by `codewhale pod run`
         worker_id: String,
     },
     /// Restart the latest task for a worker
     Restart {
-        /// Worker id printed by `codewhale fleet run`
+        /// Worker id printed by `codewhale pod run`
         worker_id: String,
     },
     /// Resume a run from durable ledger state, reconciling orphaned/stale leases
     Resume {
-        /// Run id printed by `codewhale fleet run`
+        /// Run id printed by `codewhale pod run`
         run_id: String,
         /// Seconds without heartbeat before a leased task is treated as stale
         #[arg(long, default_value_t = 300)]
         stale_after_seconds: u64,
     },
-    /// Stop all queued and running fleet work
+    /// Stop all queued and running Pod work
     Stop {
-        /// Confirm stopping all queued and running fleet tasks
+        /// Confirm stopping all queued and running Pod tasks
         #[arg(long, required = true)]
         all: bool,
     },
-    /// Render a redacted fleet alert payload without sending it
+    /// Render a redacted Pod alert payload without sending it
     AlertDryRun(FleetAlertDryRunArgs),
 }
 
@@ -641,7 +643,7 @@ struct FleetAlertDryRunArgs {
     /// Alert event class to render
     #[arg(long, value_enum)]
     event: FleetAlertEventArg,
-    /// Fleet run id
+    /// Pod run id
     #[arg(long)]
     run_id: String,
     /// Worker id, when the event belongs to one worker
@@ -651,7 +653,7 @@ struct FleetAlertDryRunArgs {
     #[arg(long)]
     task_id: Option<String>,
     /// Short human-readable reason for the alert
-    #[arg(long, default_value = "manual fleet alert dry-run")]
+    #[arg(long, default_value = "manual Pod alert dry-run")]
     reason: String,
     /// Status label to include in the payload
     #[arg(long)]
@@ -973,6 +975,31 @@ fn resolve_exec_resume_route(
         return Ok(resolve_exec_model(config, None));
     }
     Ok(saved.metadata.model.clone())
+}
+
+/// Fold the dispatcher-forwarded launch overrides (`CODEWHALE_PROVIDER` /
+/// `CODEWHALE_MODEL`, set by `codewhale --provider X --model Y exec ...`)
+/// into the explicit route signals `exec --resume`/`--continue` honour.
+///
+/// Exec-level flags win when both are present; either source counts as
+/// "the user named a route for this run", so a resume must not silently
+/// restore the saved provider/model over it.
+fn exec_resume_route_overrides(
+    exec_provider: Option<&str>,
+    exec_model: Option<&str>,
+    launch_provider: Option<&str>,
+    launch_model: Option<&str>,
+) -> (bool, Option<String>) {
+    let non_empty = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let explicit_provider =
+        non_empty(exec_provider).is_some() || non_empty(launch_provider).is_some();
+    let explicit_model = non_empty(exec_model).or_else(|| non_empty(launch_model));
+    (explicit_provider, explicit_model)
 }
 
 #[derive(Args, Debug, Clone, Default)]
@@ -2276,12 +2303,24 @@ async fn run_async_main_dispatch(
                         explicit_reasoning.is_some(),
                     )?;
                 }
+                // The `codewhale` dispatcher refuses `--provider`/`--model`
+                // after `exec` and forwards the top-level flags as
+                // `CODEWHALE_PROVIDER` / `CODEWHALE_MODEL` instead, so a
+                // resume must treat those launch overrides as explicit or it
+                // silently restores the saved route (cloud-agent e2e,
+                // 2026-08-30).
+                let (resume_explicit_provider, resume_explicit_model) = exec_resume_route_overrides(
+                    explicit_provider,
+                    explicit_model,
+                    crate::config::explicit_launch_provider_override().as_deref(),
+                    crate::config::explicit_launch_model_override().as_deref(),
+                );
                 let model = if let Some(saved) = resume_session.as_ref() {
                     resolve_exec_resume_route(
                         &mut config,
                         saved,
-                        explicit_provider.is_some(),
-                        explicit_model,
+                        resume_explicit_provider,
+                        resume_explicit_model.as_deref(),
                     )?
                 } else {
                     resolve_exec_model(&config, explicit_model)
@@ -2518,8 +2557,10 @@ async fn run_async_main_dispatch(
     let mut startup_notice = None;
     let resume_session_id = if cli.continue_session {
         let workspace = resolve_workspace(&cli);
-        recover_interrupted_checkpoint_for_resume(&workspace)
-            .or_else(|| latest_session_id_for_workspace(&workspace).ok().flatten())
+        resolve_continue_session_id(
+            &workspace,
+            io::stdin().is_terminal() && io::stdout().is_terminal(),
+        )
     } else if let Some(id) = cli.resume.clone() {
         Some(id)
     } else if !cli.fresh {
@@ -3096,7 +3137,7 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
             let path = workspace.join(&artifact.path);
             println!("== {} ==", artifact.path.display());
             let contents = std::fs::read_to_string(&path)
-                .with_context(|| format!("reading fleet log {}", path.display()))?;
+                .with_context(|| format!("reading Pod log {}", path.display()))?;
             let preview: String = contents.chars().take(16 * 1024).collect();
             // Worker logs can contain captured terminal bytes (a child TUI's
             // mouse-tracking handshake, SGR, OSC). Printing them raw would
@@ -3215,7 +3256,7 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
         .with_route_config(config.clone());
     match args.command {
         FleetCommand::Init => {
-            println!("fleet ledger: {}", manager.ledger_path().display());
+            println!("Pod ledger: {}", manager.ledger_path().display());
             Ok(())
         }
         FleetCommand::Run(args) => {
@@ -3224,7 +3265,7 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
                 manager.with_stale_after(Duration::from_secs(args.stale_after_seconds.max(1)));
             let report = manager.create_run_from_task_spec_path(&args.task_spec, max_workers)?;
             println!(
-                "fleet run: {} tasks={} leased={} queued={}",
+                "Pod run: {} tasks={} leased={} queued={}",
                 report.run_id.0, report.task_count, report.leased, report.queued
             );
             for warning in &report.warnings {
@@ -3239,7 +3280,7 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
                 return Ok(());
             }
             println!(
-                "manager loop running; use `codewhale fleet status`, `inspect`, `interrupt`, or `stop --all` from another terminal."
+                "manager loop running; use `codewhale pod status`, `inspect`, `interrupt`, or `stop --all` from another terminal."
             );
             let mut executor = FleetExecutor::new(workspace);
             let codewhale_binary = fleet::executor::configured_codewhale_binary();
@@ -3299,7 +3340,7 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
             let report = manager.restart_worker(&worker_id)?;
             print_inspection(&report.inspection);
             println!(
-                "manager loop running for restarted run {}; use `codewhale fleet status`, `inspect`, `interrupt`, or `stop --all` from another terminal.",
+                "manager loop running for restarted run {}; use `codewhale pod status`, `inspect`, `interrupt`, or `stop --all` from another terminal.",
                 report.run_id.0
             );
             let mut executor = FleetExecutor::new(workspace);
@@ -3333,7 +3374,7 @@ async fn run_fleet_command(workspace: &Path, config: &Config, args: FleetArgs) -
         }
         FleetCommand::Stop { all } => {
             if !all {
-                bail!("pass --all to stop all fleet work");
+                bail!("pass --all to stop all Pod work");
             }
             let stopped = manager.stop_all()?;
             println!("stopped: {stopped}");
@@ -6004,7 +6045,7 @@ fn print_doctor_setup_report(
         doctor_ready_label(update_ready)
     );
     println!(
-        "  {operate_icon} operate/fleet: {}",
+        "  {operate_icon} operate/pod: {}",
         doctor_ready_label(operate_ready)
     );
     println!(
@@ -6034,7 +6075,7 @@ fn print_doctor_setup_report(
         );
     }
     println!(
-        "  · next actions: /constitution (standing law), /setup report (readiness), /setup provider or /provider setup <name> (provider credentials), /model (route), /config (runtime posture), /setup fleet (Operate/Fleet readiness), /pod setup (explicit profile authoring), /setup hotbar (optional shortcuts), /setup tools (Tools/MCP readiness), /setup remote (remote runtime on-ramp), /setup persistence (path review)"
+        "  · next actions: /constitution (standing law), /setup report (readiness), /setup provider or /provider setup <name> (provider credentials), /model (route), /config (runtime posture), /setup pod (Operate/Pod readiness), /pod setup (explicit profile authoring), /setup hotbar (optional shortcuts), /setup tools (Tools/MCP readiness), /setup remote (remote runtime on-ramp), /setup persistence (path review)"
     );
     for step in codewhale_config::SetupStep::ALL {
         let entry = state.steps.get(&step);
@@ -6061,7 +6102,7 @@ fn print_doctor_fleet_roster_layers(config: &Config, workspace: &Path) {
     let roster =
         crate::fleet::identity::load_effective_roster(&config.fleet_config(), workspace, None);
     println!();
-    println!("{}", "Fleet roster layers:".bold());
+    println!("{}", "Pod roster layers:".bold());
     if let Some(error) = roster.load_error() {
         println!("  ! {error}");
         return;
@@ -6637,7 +6678,7 @@ fn doctor_setup_report_json(config: &Config, workspace: &Path) -> serde_json::Va
             "setup_report": "/setup report",
             "provider_model": "/setup provider, /provider setup <name>, or /model",
             "runtime_posture": "/config",
-            "operate_fleet": "/setup fleet (readiness), /pod setup (explicit profile authoring)",
+            "operate_fleet": "/setup pod (readiness), /pod setup (explicit profile authoring)",
             "hotbar": "/setup hotbar",
             "tools_mcp": "/setup tools",
             "remote_runtime": "/setup remote",
@@ -7015,7 +7056,14 @@ fn provider_capability_report(config: &Config) -> serde_json::Value {
     let resolved_model = route
         .as_ref()
         .map_or(configured_model.as_str(), |route| route.model.as_str());
-    let cap = crate::config::provider_capability(provider, resolved_model);
+    // Wire-aware so a custom provider's `wire = "responses" | "anthropic"`
+    // reports the payload mode the client will actually speak instead of the
+    // static Chat default.
+    let cap = crate::config::provider_capability_with_wire(
+        provider,
+        resolved_model,
+        config.provider_wire_dialect(provider),
+    );
     let route_profile = route.as_ref().map(|route| {
         crate::model_profile::resolved_capability_profile_for_route(
             provider,
@@ -7949,7 +7997,7 @@ fn apply_selected_fleet_operator_for_launch(
     }
     let Some(selected) = crate::fleet::store::resolve_selected_fleet(workspace).map_err(|_| {
         anyhow!(
-            "Selected Fleet is missing or unreadable; inspect /pod and repair or clear the selection."
+            "Selected Pod is missing or unreadable; inspect /pod and repair or clear the selection."
         )
     })?
     else {
@@ -7958,7 +8006,7 @@ fn apply_selected_fleet_operator_for_launch(
     let fleet_name = crate::safe_label::SafeLabel::phrase(&selected.name);
     let (fleet, _) = crate::fleet::store::load_fleet_at(&selected.path).map_err(|_| {
         anyhow!(
-            "selected Fleet '{}' ({}) is invalid or unreadable; inspect /pod and repair or clear the selection.",
+            "selected Pod '{}' ({}) is invalid or unreadable; inspect /pod and repair or clear the selection.",
             fleet_name,
             selected.scope.label()
         )
@@ -7970,7 +8018,7 @@ fn apply_selected_fleet_operator_for_launch(
     let model_id = operator.model.trim();
     if provider_id.is_empty() || model_id.is_empty() {
         bail!(
-            "selected Fleet '{}' has an incomplete operator route; provider and model must both be non-empty",
+            "selected Pod '{}' has an incomplete operator route; provider and model must both be non-empty",
             fleet_name
         );
     }
@@ -7981,7 +8029,7 @@ fn apply_selected_fleet_operator_for_launch(
         .resolve_provider_pin_identity(provider_id)
         .map_err(|error| {
             anyhow!(
-                "selected Fleet '{}' operator provider '{}' is unavailable: {}",
+                "selected Pod '{}' operator provider '{}' is unavailable: {}",
                 fleet_name,
                 safe_provider_id,
                 crate::safe_label::safe_error_text(&error)
@@ -7991,7 +8039,7 @@ fn apply_selected_fleet_operator_for_launch(
         crate::route_runtime::resolve_runtime_route_for_identity(config, &identity, Some(model_id))
             .map_err(|error| {
                 anyhow!(
-                    "selected Fleet '{}' operator route {}/{} is invalid: {}",
+                    "selected Pod '{}' operator route {}/{} is invalid: {}",
                     fleet_name,
                     safe_provider_id,
                     safe_model_id,
@@ -8009,7 +8057,7 @@ fn apply_selected_fleet_operator_for_launch(
             .filter(|reasoning| !reasoning.is_empty())
         && let Some(reasoning) = normalize_cli_reasoning_effort(reasoning).map_err(|error| {
             anyhow!(
-                "selected Fleet '{}' has invalid operator reasoning: {}",
+                "selected Pod '{}' has invalid operator reasoning: {}",
                 fleet_name,
                 crate::safe_label::safe_error_text(&error.to_string())
             )
@@ -10170,6 +10218,28 @@ fn checkpoint_age_label(age: std::time::Duration) -> String {
 /// matches, a one-line notice points at `codewhale sessions`, and nothing is
 /// auto-loaded: another workspace's checkpoint file is never touched (it may
 /// belong to a live session there).
+/// Resolve the session `--continue` attaches to.
+///
+/// Recovery promotes the newest same-workspace checkpoint to a session file
+/// and clears the checkpoint. That is only correct when the TUI can actually
+/// start: a non-TTY launch fails `require_interactive_terminal` later and must
+/// not consume the crash record on the way out, or the next real `--continue`
+/// has nothing left to recover. Without a terminal, only the latest saved
+/// session is considered (and the launch still fails the TTY check).
+fn resolve_continue_session_id(launch_workspace: &Path, interactive: bool) -> Option<String> {
+    if interactive {
+        recover_interrupted_checkpoint_for_resume(launch_workspace).or_else(|| {
+            latest_session_id_for_workspace(launch_workspace)
+                .ok()
+                .flatten()
+        })
+    } else {
+        latest_session_id_for_workspace(launch_workspace)
+            .ok()
+            .flatten()
+    }
+}
+
 fn recover_interrupted_checkpoint_for_resume(launch_workspace: &Path) -> Option<String> {
     let manager = session_manager::SessionManager::default_location().ok()?;
     let candidates = load_recent_checkpoints(&manager);
@@ -12176,7 +12246,7 @@ fn validate_exec_tool_authority_resume(
 ) -> Result<()> {
     if tool_authority_json.is_some() && resuming {
         bail!(
-            "Fleet tool authority cannot be combined with exec --resume, --session-id, or --continue"
+            "Pod tool authority cannot be combined with exec --resume, --session-id, or --continue"
         );
     }
     Ok(())
@@ -12925,7 +12995,7 @@ mod doctor_setup_state_tests {
         assert_eq!(report["next_actions"]["runtime_posture"], "/config");
         assert_eq!(
             report["next_actions"]["operate_fleet"],
-            "/setup fleet (readiness), /pod setup (explicit profile authoring)"
+            "/setup pod (readiness), /pod setup (explicit profile authoring)"
         );
         assert_eq!(report["next_actions"]["hotbar"], "/setup hotbar");
         assert_eq!(report["next_actions"]["tools_mcp"], "/setup tools");
@@ -13484,7 +13554,7 @@ mod doctor_setup_state_tests {
             .expect("steps array")
             .iter()
             .find(|step| step["step"] == "operate_fleet")
-            .expect("operate/fleet step");
+            .expect("operate/pod step");
         assert_eq!(operate_step["status"], "verified");
         assert!(
             operate_step["result"]
@@ -14515,7 +14585,7 @@ reasoning = "high"
                 true,
                 false,
             )
-            .expect("explicit route bypasses Fleet operator")
+            .expect("explicit route bypasses Pod operator")
         );
         assert_eq!(
             explicit.api_provider(),
@@ -14552,7 +14622,7 @@ reasoning = "high"
             false,
             true,
         )
-        .expect("explicit reasoning coexists with Fleet route");
+        .expect("explicit reasoning coexists with Pod route");
         assert_eq!(
             reasoning_override.default_model(),
             "deepseek-v4-flash-vision-exp"
@@ -14573,12 +14643,12 @@ reasoning = "high"
             fleets.join(format!("{secret_marker}.toml")),
             format!("invalid TOML /Users/operator/private {secret_marker}\n"),
         )
-        .expect("invalid Fleet");
+        .expect("invalid Pod");
 
         let mut config = Config::default();
         let message =
             apply_selected_fleet_operator_for_launch(&mut config, workspace.path(), false, false)
-                .expect_err("invalid selected Fleet must fail")
+                .expect_err("invalid selected Pod must fail")
                 .to_string();
 
         assert!(!message.contains(&workspace.path().display().to_string()));
@@ -14919,6 +14989,144 @@ reasoning = "high"
             .expect_err("removed saved provider must fail closed");
         assert!(err.to_string().contains("will not fall back"), "{err}");
         assert_eq!(missing.provider, before);
+    }
+
+    #[test]
+    fn exec_resume_honours_dispatcher_forwarded_launch_overrides() {
+        // `codewhale --provider X --model Y exec --resume ID ...` reaches this
+        // binary with X/Y only in CODEWHALE_PROVIDER / CODEWHALE_MODEL; a
+        // resume must treat them as explicit instead of restoring the saved
+        // route.
+        assert_eq!(
+            exec_resume_route_overrides(None, None, None, None),
+            (false, None)
+        );
+        assert_eq!(
+            exec_resume_route_overrides(None, None, Some("modelstudio-token-plan"), None),
+            (true, None)
+        );
+        assert_eq!(
+            exec_resume_route_overrides(None, None, None, Some("qwen3.8-flash")),
+            (false, Some("qwen3.8-flash".to_string()))
+        );
+        assert_eq!(
+            exec_resume_route_overrides(
+                None,
+                None,
+                Some("modelstudio-token-plan"),
+                Some(" qwen3.8-flash ")
+            ),
+            (true, Some("qwen3.8-flash".to_string()))
+        );
+        // Exec-level flags still win over the forwarded launch env.
+        assert_eq!(
+            exec_resume_route_overrides(
+                Some("deepseek"),
+                Some("deepseek-v4-pro"),
+                Some("x"),
+                Some("y")
+            ),
+            (true, Some("deepseek-v4-pro".to_string()))
+        );
+        // Blank values are not overrides.
+        assert_eq!(
+            exec_resume_route_overrides(None, None, Some("  "), Some("")),
+            (false, None)
+        );
+
+        let saved = saved_exec_session("custom-a", crate::config::ZAI_GLM_5_2_MODEL);
+        let mut launch_model_only = custom_exec_config("custom-b");
+        let (explicit_provider, explicit_model) =
+            exec_resume_route_overrides(None, None, None, Some("override-model"));
+        let model = resolve_exec_resume_route(
+            &mut launch_model_only,
+            &saved,
+            explicit_provider,
+            explicit_model.as_deref(),
+        )
+        .expect("launch model override keeps saved provider");
+        assert_eq!(launch_model_only.provider.as_deref(), Some("custom-a"));
+        assert_eq!(model, "override-model");
+
+        let mut launch_provider = custom_exec_config("custom-b");
+        let (explicit_provider, explicit_model) =
+            exec_resume_route_overrides(None, None, Some("custom-b"), None);
+        let model = resolve_exec_resume_route(
+            &mut launch_provider,
+            &saved,
+            explicit_provider,
+            explicit_model.as_deref(),
+        )
+        .expect("launch provider override keeps the launched route");
+        assert_eq!(launch_provider.provider.as_deref(), Some("custom-b"));
+        assert_eq!(model, "model-b");
+    }
+
+    #[test]
+    fn exec_resume_uses_dispatcher_env_route_loaded_by_config() {
+        // Exercise the production sequence without starting an Engine turn:
+        // `Config::load` applies the dispatcher-forwarded environment, then
+        // the resume seam must treat the same launch env as explicit and skip
+        // the unavailable persisted route rather than restoring it.
+        let _env_lock = crate::test_support::lock_test_env();
+        let _legacy_provider = crate::test_support::EnvVarGuard::remove("DEEPSEEK_PROVIDER");
+        let _legacy_model = crate::test_support::EnvVarGuard::remove("DEEPSEEK_MODEL");
+        let _provider = crate::test_support::EnvVarGuard::set("CODEWHALE_PROVIDER", "launch-route");
+        let _model = crate::test_support::EnvVarGuard::set("CODEWHALE_MODEL", "dispatcher-model");
+        let tmp = tempfile::tempdir().expect("config tempdir");
+        let codewhale_home = tmp.path().join("codewhale-home");
+        std::fs::create_dir_all(&codewhale_home).expect("isolated Codewhale home");
+        let _codewhale_home =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", &codewhale_home);
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"provider = "stored-route"
+
+[providers.launch-route]
+kind = "openai-compatible"
+base_url = "https://launch.example.test/v1"
+model = "configured-launch-model"
+api_key = "test-only-key"
+"#,
+        )
+        .expect("write config");
+
+        let mut config = Config::load(Some(config_path), None).expect("load launch config");
+        assert_eq!(config.provider.as_deref(), Some("launch-route"));
+        assert_eq!(config.default_model(), "dispatcher-model");
+
+        // The saved route deliberately has no live config table. This control
+        // proves that a non-explicit resume would fail closed instead of
+        // silently falling back; the dispatcher overrides must prevent that
+        // restore attempt.
+        let saved = saved_exec_session("stored-route", "stored-model");
+        let mut restore_attempt = config.clone();
+        let restore_error = resolve_exec_resume_route(&mut restore_attempt, &saved, false, None)
+            .expect_err("unavailable saved route must not be restored");
+        assert!(
+            restore_error.to_string().contains("stored-route"),
+            "{restore_error}"
+        );
+
+        let (explicit_provider, explicit_model) = exec_resume_route_overrides(
+            None,
+            None,
+            crate::config::explicit_launch_provider_override().as_deref(),
+            crate::config::explicit_launch_model_override().as_deref(),
+        );
+        assert!(explicit_provider);
+        assert_eq!(explicit_model.as_deref(), Some("dispatcher-model"));
+
+        let model = resolve_exec_resume_route(
+            &mut config,
+            &saved,
+            explicit_provider,
+            explicit_model.as_deref(),
+        )
+        .expect("dispatcher environment must keep the launch route on resume");
+        assert_eq!(config.provider.as_deref(), Some("launch-route"));
+        assert_eq!(model, "dispatcher-model");
     }
 
     #[test]
@@ -16080,7 +16288,7 @@ reasoning = "high"
         assert!(validate_exec_tool_authority_resume(None, true).is_ok());
         assert!(validate_exec_tool_authority_resume(Some("{}"), false).is_ok());
         let error = validate_exec_tool_authority_resume(Some("{}"), true)
-            .expect_err("authority must remain bound to its fresh Fleet launch")
+            .expect_err("authority must remain bound to its fresh Pod launch")
             .to_string();
         assert!(error.contains("cannot be combined with exec --resume"));
     }
@@ -18579,6 +18787,60 @@ mod setup_helper_tests {
                     .expect("load checkpoint")
                     .is_none(),
                 "--continue should consume the per-session checkpoint"
+            );
+            assert!(manager.load_session(&session_id).is_ok());
+        });
+    }
+
+    #[test]
+    fn continue_without_interactive_terminal_leaves_checkpoint_for_a_real_launch() {
+        // `codewhale --continue </dev/null` (and `run --continue`) used to
+        // promote and clear the in-flight checkpoint before the TTY check
+        // failed, so the crash record was consumed by a launch that never
+        // started and the next real `--continue` found nothing.
+        let _guard = crate::test_support::lock_test_env();
+        let tmp = TempDir::new().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        with_home(tmp.path(), || {
+            let manager = SessionManager::default_location().expect("manager");
+            let messages = vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "continue me".to_string(),
+                    cache_control: None,
+                }],
+            }];
+            let session = create_saved_session(&messages, "test-model", &workspace, 0, None);
+            let session_id = session.metadata.id.clone();
+            manager.save_checkpoint(&session).expect("save checkpoint");
+
+            let non_interactive = resolve_continue_session_id(&workspace, false);
+            assert_eq!(
+                non_interactive, None,
+                "no saved session exists yet, so a non-TTY launch resolves nothing"
+            );
+            assert!(
+                manager
+                    .load_session_checkpoint(&session_id)
+                    .expect("load checkpoint")
+                    .is_some(),
+                "a non-TTY --continue must not consume the checkpoint"
+            );
+            assert!(
+                manager.load_session(&session_id).is_err(),
+                "a non-TTY --continue must not promote the checkpoint to a session"
+            );
+
+            let interactive = resolve_continue_session_id(&workspace, true);
+            assert_eq!(interactive.as_deref(), Some(session_id.as_str()));
+            assert!(
+                manager
+                    .load_session_checkpoint(&session_id)
+                    .expect("load checkpoint")
+                    .is_none(),
+                "an interactive --continue consumes the checkpoint"
             );
             assert!(manager.load_session(&session_id).is_ok());
         });

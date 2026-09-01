@@ -134,6 +134,10 @@ fn initial_input_prefill_waits_for_manual_submit() {
 
     let app = App::new(options, &Config::default());
 
+    assert!(
+        !app.launch.visible,
+        "an intentional prefilled prompt must enter the live composer instead of the startup hero"
+    );
     assert_eq!(app.input, "review this PR");
     assert_eq!(app.cursor_position, "review this PR".chars().count());
     assert!(!app.auto_submit_initial_input);
@@ -148,12 +152,70 @@ fn initial_input_submit_marks_startup_dispatch() {
 
     let app = App::new(options, &Config::default());
 
+    assert!(
+        !app.launch.visible,
+        "an intentional submitted prompt must bypass the startup hero"
+    );
     assert_eq!(app.input, "阅读项目 and wait for instructions");
     assert_eq!(
         app.cursor_position,
         "阅读项目 and wait for instructions".chars().count()
     );
     assert!(app.auto_submit_initial_input);
+}
+
+#[test]
+fn clean_launch_keeps_startup_hero_despite_a_startup_notice() {
+    let _env_lock = lock_test_env();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+    std::fs::write(tmp.path().join("settings.toml"), "launch_screen = false\n")
+        .expect("legacy settings");
+    let mut options = test_options(false);
+    options.startup_notice =
+        Some("Provider route changed; inspect the route before sending".into());
+
+    let app = App::new(options, &Config::default());
+
+    assert!(
+        app.launch.visible,
+        "a fresh interactive launch must keep the Tideline startup hero visible; a notice is not an intentional resume or prompt"
+    );
+}
+
+#[test]
+fn explicit_resume_bypasses_startup_hero() {
+    let _env_lock = lock_test_env();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+    let mut options = test_options(false);
+    options.resume_session_id = Some("explicit-resume".into());
+
+    let app = App::new(options, &Config::default());
+
+    assert!(
+        !app.launch.visible,
+        "an explicit resume must preserve the existing session path"
+    );
+}
+
+#[test]
+fn remote_control_initial_input_bypasses_startup_hero() {
+    let _env_lock = lock_test_env();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = tmp.path().join("config.toml");
+    let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+    let mut options = test_options(false);
+    options.initial_input = Some(InitialInput::RemoteControl);
+
+    let app = App::new(options, &Config::default());
+
+    assert!(
+        !app.launch.visible,
+        "an intentional remote-control launch must preserve its existing direct-session path"
+    );
 }
 
 #[test]
@@ -2420,22 +2482,22 @@ fn returning_user_missing_api_key_goes_to_canonical_provider_setup() {
 }
 
 #[test]
-fn first_run_user_starts_at_welcome() {
+fn first_run_user_starts_at_composer() {
     assert_eq!(
         initial_onboarding_state(false, false, true, true, true),
-        OnboardingState::Welcome
+        OnboardingState::None
     );
     assert_eq!(
         initial_onboarding_state(false, false, false, true, true),
-        OnboardingState::Welcome
+        OnboardingState::None
     );
     assert_eq!(
         initial_onboarding_state(false, false, false, false, true),
-        OnboardingState::Welcome
+        OnboardingState::None
     );
     assert_eq!(
         initial_onboarding_state(false, false, false, false, false),
-        OnboardingState::Welcome
+        OnboardingState::None
     );
 }
 
@@ -2500,7 +2562,7 @@ fn app_new_detects_missing_api_key_with_default_config() {
 }
 
 #[test]
-fn first_run_app_starts_on_welcome_when_a_key_is_missing() {
+fn first_run_app_starts_on_composer_when_a_key_is_missing() {
     let _lock = lock_test_env();
     let home = tempfile::TempDir::new().expect("isolated first-run home");
     let _home = EnvVarGuard::set("CODEWHALE_HOME", home.path().to_string_lossy().as_ref());
@@ -2532,7 +2594,7 @@ fn first_run_app_starts_on_welcome_when_a_key_is_missing() {
     .collect();
 
     let app = App::new(test_options(false), &Config::default());
-    assert_eq!(app.onboarding, OnboardingState::Welcome);
+    assert_eq!(app.onboarding, OnboardingState::None);
     assert!(app.onboarding_needs_api_key);
     assert!(!app.onboarding_missing_key_recovery);
 }
@@ -7243,20 +7305,18 @@ fn launch_onboarding_clean_when_onboarded_with_key() {
 }
 
 #[test]
-fn launch_onboarding_starts_first_run_at_welcome() {
-    // First run always starts at Welcome, even when a key is missing and even
-    // when an xAI OAuth credential is absent. Enter then routes to language,
-    // provider setup, or trust. Auto-opening the picker is recovery-only.
+fn launch_onboarding_starts_first_run_at_composer() {
+    // First paint is the composer. Recovery picker is returning-user only.
     let (onboarding, recovery) = launch_onboarding_decision(false, false, false, true, false, true);
-    assert_eq!(onboarding, OnboardingState::Welcome);
+    assert_eq!(onboarding, OnboardingState::None);
     assert!(!recovery);
 
     let (language, _) = launch_onboarding_decision(false, false, true, true, true, false);
-    assert_eq!(language, OnboardingState::Welcome);
+    assert_eq!(language, OnboardingState::None);
 
     let (trust, _) = launch_onboarding_decision(false, false, false, false, true, false);
-    assert_eq!(trust, OnboardingState::Welcome);
+    assert_eq!(trust, OnboardingState::None);
 
     let (ready, _) = launch_onboarding_decision(false, false, false, false, false, false);
-    assert_eq!(ready, OnboardingState::Welcome);
+    assert_eq!(ready, OnboardingState::None);
 }

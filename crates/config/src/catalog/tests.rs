@@ -1002,3 +1002,47 @@ fn live_offerings_normalize_models_dev_provider_aliases() {
     assert!(rows.iter().all(|r| r.provider != "togetherai"));
     assert!(rows.iter().all(|r| r.provider != "zhipuai"));
 }
+
+fn offering(provider: &str, wire: &str, source: CatalogSource) -> CatalogOffering {
+    CatalogOffering {
+        provider: provider.to_string(),
+        wire_model_id: wire.to_string(),
+        endpoint_key: "chat".to_string(),
+        source,
+        ..CatalogOffering::default()
+    }
+}
+
+#[test]
+fn codewhale_live_catalog_beats_models_dev_on_the_same_wire() {
+    let snapshot = CatalogCompiler::new()
+        .with_bundled(vec![offering(
+            "command-code",
+            "deepseek/deepseek-v4-flash",
+            CatalogSource::Bundled,
+        )])
+        .with_models_dev_live(vec![offering(
+            "command-code",
+            "deepseek/deepseek-v4-flash",
+            CatalogSource::ModelsDevLive { fetched_at: 1 },
+        )])
+        .with_codewhale_live(vec![offering(
+            "command-code",
+            "deepseek/deepseek-v4-flash",
+            CatalogSource::CodewhaleLive {
+                revision: "2026-08-31.1".into(),
+                fetched_at: 2,
+            },
+        )])
+        .compile();
+    let row = find(
+        &snapshot.offerings,
+        "command-code",
+        "deepseek/deepseek-v4-flash",
+    );
+    assert!(matches!(
+        row.source,
+        CatalogSource::CodewhaleLive { ref revision, fetched_at: 2 }
+            if revision == "2026-08-31.1"
+    ));
+}

@@ -7,11 +7,11 @@ import type { DocsGuideDict } from "../types";
 export const docsGuide: DocsGuideDict = {
   metaTitle: "Başlangıç · Codewhale Belgeleri",
   metaDescription:
-    "Kurulumdan ideal Fleet'ine kadar tam yol: kurulum, anahtarsız ilk oturum, sağlayıcı bağlantısı ve Fleet kurulumu.",
+    "Kurulumdan ideal Pod'ine kadar tam yol: kurulum, anahtarsız ilk oturum, sağlayıcı bağlantısı ve Pod kurulumu.",
   bodyClassName: "text-ink-soft leading-relaxed",
   overviewTitle: "Başlangıç",
   overviewLead:
-    "Tek bir kurulum komutundan işine hazır bir Fleet'e dört adım.",
+    "Tek bir kurulum komutundan işine hazır bir Pod'e dört adım.",
   sessionTitle: "Gerçek bir oturum izle",
   sessionLead:
     "Buraya gerçek bir oturumun kaydı gelecek. Henüz kayıt yok, bu yüzden hiçbir şey gösterilmiyor.",

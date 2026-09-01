@@ -67,7 +67,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "New here? Four steps.",
   startLede:
-    "Install → first session, no key → connect a provider → set up a fleet.",
+    "Install → first session, no key → connect a provider → set up a pod.",
   startGuideLink: "Read the getting-started guide →",
   startVocabularyLink: "Look up a term →",
 
@@ -88,7 +88,7 @@ export const home: HomeDict = {
     ["codewhale exec", "Scripts and CI"],
     ["Web client", "Browser client, localhost only"],
     ["Runtime API + MCP", "Local integrations"],
-    ["Fleet", "Several agents on one job"],
+    ["Pod", "Several agents on one job"],
   ],
   runtimeLink: "Runtime surfaces and what is stable →",
 

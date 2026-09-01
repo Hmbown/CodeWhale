@@ -26,13 +26,6 @@ pub(crate) struct CredentialProbe {
 }
 
 impl CredentialProbe {
-    pub(crate) fn new(place: impl Into<Cow<'static, str>>) -> Self {
-        Self {
-            place: place.into(),
-            fix: None,
-        }
-    }
-
     pub(crate) fn with_fix(
         place: impl Into<Cow<'static, str>>,
         fix: impl Into<Cow<'static, str>>,

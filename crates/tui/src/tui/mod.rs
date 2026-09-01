@@ -64,6 +64,7 @@ pub mod key_shortcuts;
 pub mod keybindings;
 pub mod list_nav;
 pub mod live_transcript;
+pub mod mark;
 pub mod markdown_render;
 mod mcp_routing;
 pub(crate) mod mention_completion;

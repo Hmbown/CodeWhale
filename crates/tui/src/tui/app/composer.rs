@@ -478,10 +478,6 @@ const MAX_COMPOSER_DISPLAY_CHARS: usize = 4_000;
 const MAX_DRAFT_HISTORY: usize = 50;
 
 impl ComposerState {
-    pub fn cursor_byte_index(&self) -> usize {
-        byte_index_at_char(&self.input, self.cursor_position)
-    }
-
     /// When the user starts editing a truncated oversized paste, restore the
     /// full text so they can see and edit the complete content (#3263).
     fn auto_expand_oversized_paste(&mut self) {

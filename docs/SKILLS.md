@@ -3,7 +3,7 @@
 > 阅读简体中文版：[zh_hans/SKILLS.md](zh_hans/SKILLS.md)
 
 Skills are reusable `SKILL.md` instruction packs. Codewhale discovers them from
-several roots, but **only CodeWhale-owned directories are writable**. The unified
+several roots, but **only Codewhale-owned directories are writable**. The unified
 `/skills` manager is the interactive surface for audit and mutation; slash
 aliases share the same write path.
 
@@ -25,7 +25,7 @@ shadowing stay visible.
 
 ## Ownership and roots
 
-**Writable (CodeWhale-owned)**
+**Writable (Codewhale-owned)**
 
 | Scope | Path |
 | --- | --- |
@@ -43,7 +43,7 @@ and similar harness layouts.
 - `.codex/skills` appears in **compatible** audit scans so operators can see it.
   It does **not** join the runtime discovery set.
 
-Configured `skills_dir` that is not one of the owned CodeWhale roots stays
+Configured `skills_dir` that is not one of the owned Codewhale roots stays
 read-only. Discovery and the manager can list it; mutations still target owned
 project/global roots only.
 
@@ -67,7 +67,7 @@ Notes:
 
 - There is **no** `/skills audit` subcommand. Use the manager (and `c` to toggle
   compatible roots) or `/skills inspect` for discovery details.
-- Bare `/skill install <spec>` (no scope flag) installs into the CodeWhale
+- Bare `/skill install <spec>` (no scope flag) installs into the Codewhale
   **global** owned root.
 - `/skills suggest` only reads the curated registry through the existing
   network policy. It never downloads, trusts, enables, or activates a skill;
@@ -296,12 +296,12 @@ does not run readiness probes and does not block mutations on readiness.
 
 ```toml
 # Optional override for discovery preference (not automatically a write target
-# unless it is the CodeWhale project/global owned path).
+# unless it is the Codewhale project/global owned path).
 skills_dir = "/path/to/skills"
 
 [skills]
 # When true, runtime discovery skips cross-tool roots (.claude, .agents, …).
-# Owned CodeWhale roots and an explicit skills_dir override still apply.
+# Owned Codewhale roots and an explicit skills_dir override still apply.
 scan_codewhale_only = false
 
 # Optional registry / install size overrides used by --remote, sync, and install.

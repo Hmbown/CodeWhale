@@ -21,15 +21,10 @@ pub(crate) struct PasteBurst {
 }
 
 pub(crate) enum CharDecision {
-    BeginBuffer { retro_chars: u16 },
+    BeginBuffer,
     BufferAppend,
     RetainFirstChar,
     BeginBufferFromPending,
-}
-
-pub(crate) struct RetroGrab {
-    pub start_byte: usize,
-    pub grabbed: String,
 }
 
 pub(crate) enum FlushResult {
@@ -68,31 +63,11 @@ impl PasteBurst {
         }
 
         if self.consecutive_plain_char_burst >= PASTE_BURST_MIN_CHARS {
-            return CharDecision::BeginBuffer {
-                retro_chars: self.consecutive_plain_char_burst.saturating_sub(1),
-            };
+            return CharDecision::BeginBuffer;
         }
 
         self.pending_first_char = Some((ch, now));
         CharDecision::RetainFirstChar
-    }
-
-    #[allow(dead_code)]
-    pub fn on_plain_char_no_hold(&mut self, now: Instant) -> Option<CharDecision> {
-        self.note_plain_char(now);
-
-        if self.active {
-            self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
-            return Some(CharDecision::BufferAppend);
-        }
-
-        if self.consecutive_plain_char_burst >= PASTE_BURST_MIN_CHARS {
-            return Some(CharDecision::BeginBuffer {
-                retro_chars: self.consecutive_plain_char_burst.saturating_sub(1),
-            });
-        }
-
-        None
     }
 
     pub(crate) fn note_plain_char(&mut self, now: Instant) -> u16 {
@@ -173,12 +148,26 @@ impl PasteBurst {
         self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
     }
 
-    pub fn begin_with_retro_grabbed(&mut self, grabbed: String, now: Instant) {
-        if !grabbed.is_empty() {
-            self.buffer.push_str(&grabbed);
-        }
+    /// Begin buffering from the current char, leaving already-typed text
+    /// untouched. The burst never rewrites the composer (Y-7): chars before
+    /// the burst stay exactly as the user typed them.
+    pub fn begin_buffer_from_now(&mut self, ch: char, now: Instant) {
+        self.buffer.push(ch);
         self.active = true;
         self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+    }
+
+    /// The text the heuristic currently holds on the user's behalf: the
+    /// held first char plus the burst buffer, in arrival order. Command
+    /// context must be judged on this — while a burst is held the composer
+    /// can be empty even though the user is mid-command (Y-7).
+    pub fn held_text(&self) -> String {
+        let mut out = String::new();
+        if let Some((ch, _)) = self.pending_first_char {
+            out.push(ch);
+        }
+        out.push_str(&self.buffer);
+        out
     }
 
     pub fn append_char_to_buffer(&mut self, ch: char, now: Instant) {
@@ -193,34 +182,6 @@ impl PasteBurst {
             true
         } else {
             false
-        }
-    }
-
-    pub fn decide_begin_buffer(
-        &mut self,
-        now: Instant,
-        before: &str,
-        retro_chars: usize,
-    ) -> Option<RetroGrab> {
-        let start_byte = retro_start_index(before, retro_chars);
-        let grabbed = before[start_byte..].to_string();
-        // Short CJK first-line pastes (e.g. "请联网搜索：" copied from a web
-        // chat) used to fail the heuristic — no whitespace and under the
-        // 16-char threshold meant the trailing pasted newline fell through
-        // as a real Enter and submitted the first line on its own.
-        // Treating any non-ASCII run as paste-like fixes this without
-        // false-firing on ASCII typing (#1302, PR #1342 from @reidliu41).
-        let looks_pastey = grabbed.chars().any(char::is_whitespace)
-            || !grabbed.is_ascii()
-            || grabbed.chars().count() >= 16;
-        if looks_pastey {
-            self.begin_with_retro_grabbed(grabbed.clone(), now);
-            Some(RetroGrab {
-                start_byte,
-                grabbed,
-            })
-        } else {
-            None
         }
     }
 
@@ -299,18 +260,6 @@ impl PasteBurst {
             self.burst_window_until = Some(now + PASTE_BURST_CHAR_INTERVAL);
         }
     }
-}
-
-pub(crate) fn retro_start_index(before: &str, retro_chars: usize) -> usize {
-    if retro_chars == 0 {
-        return before.len();
-    }
-    before
-        .char_indices()
-        .rev()
-        .nth(retro_chars.saturating_sub(1))
-        .map(|(idx, _)| idx)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

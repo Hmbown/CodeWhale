@@ -147,8 +147,13 @@ use unicode_width::UnicodeWidthStr;
 use crate::palette::{ChromeInk, UiTheme, chrome_style};
 
 /// The composer's fixed docked height in the work-screen shell (spec §5b).
-#[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub const TIDELINE_COMPOSER_HEIGHT: u16 = 4;
+
+/// Fixed width of the painted `[↑]` submit control.
+pub const TIDELINE_COMPOSER_SUBMIT_WIDTH: u16 = 3;
+
+/// Blank cell between input content and the painted submit control.
+pub const TIDELINE_COMPOSER_SUBMIT_BREATHING_WIDTH: u16 = 1;
 
 /// What the caller owes the composer chrome. Draft, queued-crumb, and
 /// approval state are injected so renders stay deterministic for goldens.
@@ -227,33 +232,99 @@ fn put(buf: &mut Buffer, x: u16, y: u16, text: &str, style: Style) {
     buf.set_stringn(x, y, text, width, style);
 }
 
-/// Paint the composer chrome. Deterministic: the caller owns the caret clock
-/// (a `low_motion` caller passes the still `_`); this render shows the draft
-/// and a terminal caret block.
-#[allow(dead_code)] // translation scaffolding: wired by the landing slice
-pub fn render_tideline_composer(area: Rect, buf: &mut Buffer, composer: &TidelineComposer<'_>) {
+fn symbol(glyph: &str, ascii_safe: bool) -> String {
+    if !ascii_safe {
+        return glyph.to_string();
+    }
+    if let Some(fallback) = crate::tui::glyphs::ascii_fallback(glyph) {
+        return fallback.to_string();
+    }
+    glyph
+        .chars()
+        .map(|ch| {
+            crate::tui::glyphs::ascii_fallback(&ch.to_string())
+                .map(str::to_string)
+                .unwrap_or_else(|| ch.to_string())
+        })
+        .collect()
+}
+
+/// Shared geometry for the rounded Tideline composer shell.
+///
+/// Rendering, launch hit-testing, and the live composer must derive their
+/// interior and submit rect from this one cell map. Otherwise a visible
+/// `[↑]` can drift away from the mouse target at a terminal width boundary.
+#[derive(Debug, Clone, Copy)]
+pub struct TidelineComposerGeometry {
+    /// Interior input rows, excluding the one-cell rails, the submit control,
+    /// and its one-cell breathing space.
+    pub content: Rect,
+    /// The visible three-cell `[↑]` submit affordance.
+    pub submit: Rect,
+    /// The full rounded shell; clicking it focuses the composer.
+    pub focus: Rect,
+}
+
+/// Derive the fixed shell geometry. The caller must only paint the rounded
+/// shell when the area is at least three rows tall.
+#[must_use]
+pub fn tideline_composer_geometry(area: Rect) -> TidelineComposerGeometry {
+    let rail_width = 1;
+    let interior_breathing_width = 1;
+    let submit = Rect {
+        x: area.x.saturating_add(area.width.saturating_sub(
+            rail_width + interior_breathing_width + TIDELINE_COMPOSER_SUBMIT_WIDTH,
+        )),
+        y: area.y.saturating_add(area.height.saturating_sub(2)),
+        width: TIDELINE_COMPOSER_SUBMIT_WIDTH.min(area.width),
+        height: 1.min(area.height),
+    };
+    let content_x = area.x.saturating_add(rail_width + interior_breathing_width);
+    let content_right = submit
+        .x
+        .saturating_sub(TIDELINE_COMPOSER_SUBMIT_BREATHING_WIDTH);
+    let content = Rect {
+        x: content_x,
+        y: area.y.saturating_add(1),
+        width: content_right.saturating_sub(content_x),
+        height: area.height.saturating_sub(2),
+    };
+    TidelineComposerGeometry {
+        content,
+        submit,
+        focus: area,
+    }
+}
+
+/// Paint only the shared rounded shell and its visible `[↑]` submit target.
+///
+/// Content remains caller-owned: the launch surface supplies its localized
+/// placeholder/caret/hint projection, while the live composer supplies its
+/// multiline editor. Sharing this shell keeps the visual component and exact
+/// submit geometry coherent without creating a second input authority.
+pub fn render_tideline_composer_shell(
+    area: Rect,
+    buf: &mut Buffer,
+    theme: &UiTheme,
+    focused: bool,
+    ascii_safe: bool,
+) {
     if area.width < 6 || area.height < 3 {
         return;
     }
-    let theme = composer.theme;
-    let border_ink = if composer.focused {
+    let border_ink = if focused {
         ChromeInk::Info
     } else {
         ChromeInk::MetadataDim
     };
     let border = chrome(theme, border_ink);
-
-    // Rounded border. Top row: `╭──…──╮` — the hand-drawn crown fluke that
-    // used to replace the top-right corner was deleted by the founder
-    // decree; the corner is a plain `╮` again, waking with the border only.
     let top_fill = usize::from(area.width.saturating_sub(2).max(1));
     let top: String = std::iter::once('╭')
         .chain(std::iter::repeat_n('─', top_fill))
         .chain(std::iter::once('╮'))
         .collect();
-    put(buf, area.x, area.y, &composer.sym(&top), border);
+    put(buf, area.x, area.y, &symbol(&top, ascii_safe), border);
 
-    // Bottom row: `╰──…──╯`.
     let bottom_fill = usize::from(area.width.saturating_sub(2));
     let bottom: String = std::iter::once('╰')
         .chain(std::iter::repeat_n('─', bottom_fill))
@@ -263,23 +334,67 @@ pub fn render_tideline_composer(area: Rect, buf: &mut Buffer, composer: &Tidelin
         buf,
         area.x,
         area.y + area.height - 1,
-        &composer.sym(&bottom),
+        &symbol(&bottom, ascii_safe),
         border,
     );
 
-    // Side rails.
-    let rail = composer.sym("│");
-    let rail_w = rail.width() as u16;
+    let rail = symbol("│", ascii_safe);
+    let rail_width = rail.width() as u16;
     for y in (area.y + 1)..(area.y + area.height - 1) {
         put(buf, area.x, y, &rail, border);
-        put(buf, area.x + area.width - rail_w, y, &rail, border);
+        put(buf, area.x + area.width - rail_width, y, &rail, border);
     }
 
-    let inner_x = area.x + 2;
-    let inner_w = area.width.saturating_sub(2 + rail_w * 2).max(1);
-    let content_top = area.y + 1;
+    render_tideline_composer_submit(area, buf, theme, focused, ascii_safe);
+}
+
+/// Paint or restore the visible `[↑]` affordance above caller-owned content.
+///
+/// The standalone shell paints it immediately. The multiline work composer
+/// calls this again after it has painted a long input or queued crumb, so that
+/// content can never overwrite the one cell target the user is meant to click.
+pub fn render_tideline_composer_submit(
+    area: Rect,
+    buf: &mut Buffer,
+    theme: &UiTheme,
+    focused: bool,
+    ascii_safe: bool,
+) {
+    if area.width < 6 || area.height < 3 {
+        return;
+    }
+    let geometry = tideline_composer_geometry(area);
+    let send = symbol("[↑]", ascii_safe);
+    let send_ink = if focused {
+        ChromeInk::Active
+    } else {
+        ChromeInk::MetadataDim
+    };
+    put(
+        buf,
+        geometry.submit.x,
+        geometry.submit.y,
+        &send,
+        chrome(theme, send_ink),
+    );
+}
+
+/// Paint the composer chrome. Deterministic: the caller owns the caret clock
+/// (a `low_motion` caller passes the still `_`); this render shows the draft
+/// and a terminal caret block.
+pub fn render_tideline_composer(area: Rect, buf: &mut Buffer, composer: &TidelineComposer<'_>) {
+    if area.width < 6 || area.height < 3 {
+        return;
+    }
+    let theme = composer.theme;
+    render_tideline_composer_shell(area, buf, theme, composer.focused, composer.ascii_safe);
+
+    let geometry = tideline_composer_geometry(area);
+    let inner_x = geometry.content.x;
+    let inner_w = geometry.content.width.max(1);
+    let content_top = geometry.content.y;
     // Last row *inside* the border (the bottom border owns the final row).
-    let content_bottom = area.y + area.height - 2;
+    let content_bottom = geometry.content.bottom().saturating_sub(1);
 
     // Content rows: the crumb (if any) sits one row above the input line
     // (spec §3 slot-3 merge); without a crumb the input takes the first
@@ -327,24 +442,9 @@ pub fn render_tideline_composer(area: Rect, buf: &mut Buffer, composer: &Tidelin
         put(buf, inner_x, input_y, &line, chrome(theme, ink));
     }
 
-    // Send hitbox `[↑]`, right-aligned inside the border on the last
-    // content row — its own quiet row unless height collapsed to one.
-    let send = composer.sym("[↑]");
-    let send_w = send.width() as u16;
-    let send_x = area.x + area.width - rail_w - 1 - send_w;
-    let send_y = if input_y == content_bottom {
-        input_y
-    } else {
-        content_bottom
-    };
-    if send_x > inner_x {
-        let send_ink = if composer.focused {
-            ChromeInk::Active
-        } else {
-            ChromeInk::MetadataDim
-        };
-        put(buf, send_x, send_y, &send, chrome(theme, send_ink));
-    }
+    // `render_tideline_composer_shell` paints the action for standalone
+    // callers; restore it after content so a long draft cannot erase it.
+    render_tideline_composer_submit(area, buf, theme, composer.focused, composer.ascii_safe);
 }
 
 /// Truncate a rendered string to `width` cells on a char boundary (never
@@ -364,9 +464,8 @@ fn truncate_cells(text: &str, width: usize) -> String {
 }
 
 /// Recorded hitboxes for one rendered composer (spec §6): the `[↑]` submit
-/// rect and the top-border ring (click = focus the composer).
+/// rect and the full rounded shell (click = focus the composer).
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub struct TidelineComposerHitboxes {
     pub submit: Rect,
     pub border: Rect,
@@ -375,24 +474,11 @@ pub struct TidelineComposerHitboxes {
 /// Compute the composer hitboxes for one render area; same inputs as
 /// [`render_tideline_composer`] so the submit rect matches painted cells.
 #[must_use]
-#[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub fn tideline_composer_hitboxes(area: Rect) -> TidelineComposerHitboxes {
-    let rail_w = 1;
-    let send_w = 3;
-    let send_x = area.x + area.width.saturating_sub(rail_w + 1 + send_w);
+    let geometry = tideline_composer_geometry(area);
     TidelineComposerHitboxes {
-        submit: Rect {
-            x: send_x,
-            y: area.y + area.height.saturating_sub(2),
-            width: send_w,
-            height: 1,
-        },
-        border: Rect {
-            x: area.x,
-            y: area.y,
-            width: area.width,
-            height: 1,
-        },
+        submit: geometry.submit,
+        border: geometry.focus,
     }
 }
 

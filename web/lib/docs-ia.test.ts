@@ -89,8 +89,8 @@ describe("sitemap and hreflang preservation", () => {
   });
 
   it("keeps sitemap and hreflang output aligned with real translation coverage", () => {
-    expect(sitemapEntries).toHaveLength(84);
-    for (const path of ["/pricing", "/legal/terms", "/legal/privacy"]) {
+    expect(sitemapEntries).toHaveLength(88);
+    for (const path of ["/pricing", "/signin", "/signup", "/legal/terms", "/legal/privacy"]) {
       expect(
         sitemapEntries.some((entry) => entry.url === `${SITE_URL}/en${path}`),
         path,
@@ -119,6 +119,23 @@ describe("sitemap and hreflang preservation", () => {
       expect(page, route).toContain('import { buildPageMetadata } from "@/lib/page-meta"');
       expect(page, route).toContain(`path: "/docs/${route}"`);
     }
+  });
+
+  it("indexes public sign-in and create-account routes", () => {
+    for (const path of ["/signin", "/signup"]) {
+      expect(
+        sitemapEntries.some((entry) => entry.url === `${SITE_URL}/en${path}`),
+        path,
+      ).toBe(true);
+      expect(existsSync(new URL(`app/[locale]${path}/page.tsx`, webRoot)), path).toBe(true);
+    }
+    const entry = webText("components/public-account-entry.tsx");
+    expect(entry).toContain("CANONICAL_MARK_SRC");
+    expect(entry).toContain("Install locally");
+    expect(webText("app/[locale]/signin/page.tsx")).toContain('kind="sign-in"');
+    expect(webText("app/[locale]/signup/page.tsx")).toContain('kind="sign-up"');
+    expect(nav).toContain("APP_LOGIN_URL");
+    expect(nav).toContain("APP_SIGNUP_URL");
   });
 });
 
