@@ -230,6 +230,52 @@ fn has_tool_result_id(message: &Message, id: &str) -> bool {
     })
 }
 
+fn tool_use_ids(message: &Message) -> Vec<String> {
+    message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn has_tool_use_id(message: &Message, id: &str) -> bool {
+    message.content.iter().any(|block| {
+        matches!(
+            block,
+            ContentBlock::ToolUse { id: seen, .. } if seen == id
+        )
+    })
+}
+
+fn assistant_text_of(message: &Message) -> Option<String> {
+    if !message.role.is_assistant_like() {
+        return None;
+    }
+    let text = message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// A retained copy may be truncated (`bound_last_round` caps oversized blocks),
+/// so a prefix either way counts as survival -- but nothing weaker does.
+fn survives(text: &str, replacement: &[Message], of: fn(&Message) -> Option<String>) -> bool {
+    replacement.iter().any(|message| {
+        of(message)
+            .is_some_and(|kept| kept == text || text.starts_with(&kept) || kept.starts_with(text))
+    })
+}
+
 pub(crate) fn validate_last_round_coverage(
     original: &[Message],
     replacement: &[Message],
@@ -238,15 +284,15 @@ pub(crate) fn validate_last_round_coverage(
     if last_round.is_empty() {
         return Ok(());
     }
-    if let Some(text) = last_round.iter().find_map(user_text_of) {
-        let kept = replacement.iter().any(|message| {
-            user_text_of(message).is_some_and(|kept| {
-                kept == text || text.starts_with(&kept) || kept.starts_with(&text)
-            })
-        });
-        if !kept {
+    // Every user turn in the round, not the first one `find_map` happens to
+    // reach. `last_round_start` walks back past a toolless tail to the previous
+    // tool-bearing turn, so the round routinely spans two user messages -- and
+    // checking only the earliest let a rewrite drop the *latest* one, which is
+    // the turn this whole contract exists to keep.
+    for text in last_round.iter().filter_map(user_text_of) {
+        if !survives(&text, replacement, user_text_of) {
             anyhow::bail!(
-                "Compaction coverage floor: the last user message was dropped; history was not replaced."
+                "Compaction coverage floor: a last-round user message was dropped; history was not replaced."
             );
         }
     }
@@ -257,6 +303,28 @@ pub(crate) fn validate_last_round_coverage(
         {
             anyhow::bail!(
                 "Compaction coverage floor: last-round tool result {id} was dropped; history was not replaced."
+            );
+        }
+    }
+    // The call, not just its result. Keeping a tool_result whose tool_use was
+    // summarized away leaves an orphaned result that providers reject outright.
+    for id in last_round.iter().flat_map(tool_use_ids) {
+        if !replacement
+            .iter()
+            .any(|message| has_tool_use_id(message, &id))
+        {
+            anyhow::bail!(
+                "Compaction coverage floor: last-round tool call {id} was dropped; history was not replaced."
+            );
+        }
+    }
+    // Match the assistant's actual output. An existential "some assistant
+    // message survived" check passed on a replacement whose only assistant
+    // message was the summary the rewrite had just written.
+    for text in last_round.iter().filter_map(assistant_text_of) {
+        if !survives(&text, replacement, assistant_text_of) {
+            anyhow::bail!(
+                "Compaction coverage floor: last-round assistant output was dropped; history was not replaced."
             );
         }
     }
@@ -431,6 +499,73 @@ mod tests {
         ];
         let error = validate_last_round_coverage(&original, &[msg("user", "What failed?")])
             .expect_err("dropping last-round assistant text must fail closed");
+        assert!(error.to_string().contains("assistant"), "{error}");
+    }
+
+    /// The round spans the tool-bearing turn *and* the toolless tail after it,
+    /// because `last_round_start` walks back for the tools. Checking only the
+    /// first user text it found meant a rewrite could keep the older question
+    /// and drop the one the person actually just asked.
+    #[test]
+    fn coverage_floor_rejects_a_replacement_that_drops_the_latest_user_turn() {
+        let original = vec![
+            msg("user", "Run the suite."),
+            msg("assistant", "Running."),
+            tool_use("live", "Bash", json!({"command": "cargo test"})),
+            tool_result("live", "ok"),
+            msg("user", "Now ship it."),
+            msg("assistant", "Shipping."),
+        ];
+        assert_eq!(last_round_start(&original), 0, "round must span both turns");
+
+        let drops_latest = vec![
+            msg("user", "Run the suite."),
+            msg("assistant", "Running."),
+            tool_use("live", "Bash", json!({"command": "cargo test"})),
+            tool_result("live", "ok"),
+            checkpoint("then shipped"),
+        ];
+        let error = validate_last_round_coverage(&original, &drops_latest)
+            .expect_err("dropping the latest user turn must fail the coverage floor");
+        assert!(error.to_string().contains("user message"), "{error}");
+        assert!(validate_last_round_coverage(&original, &original).is_ok());
+    }
+
+    /// A surviving `tool_result` whose `tool_use` was summarized away is an
+    /// orphan the provider rejects, so the floor must cover the call too.
+    #[test]
+    fn coverage_floor_rejects_a_replacement_that_drops_the_tool_call() {
+        let original = vec![
+            msg("user", "Run the failing test."),
+            msg("assistant", "Running."),
+            tool_use("live", "Bash", json!({"command": "cargo test"})),
+            tool_result("live", "FAILED"),
+        ];
+        let orphaned = vec![
+            msg("user", "Run the failing test."),
+            msg("assistant", "Running."),
+            tool_result("live", "FAILED"),
+            checkpoint("and it failed"),
+        ];
+        let error = validate_last_round_coverage(&original, &orphaned)
+            .expect_err("dropping the tool call must fail the coverage floor");
+        assert!(error.to_string().contains("tool call live"), "{error}");
+    }
+
+    /// "Some assistant message survived" was satisfied by the summary the
+    /// rewrite had just written, so the round's real output could vanish.
+    #[test]
+    fn coverage_floor_rejects_assistant_output_replaced_by_a_summary() {
+        let original = vec![
+            msg("user", "What failed?"),
+            msg("assistant", "session_store::roundtrip panics on reload."),
+        ];
+        let summarized = vec![
+            msg("user", "What failed?"),
+            msg("assistant", "Earlier we discussed several test failures."),
+        ];
+        let error = validate_last_round_coverage(&original, &summarized)
+            .expect_err("substituting a summary for the round's output must fail closed");
         assert!(error.to_string().contains("assistant"), "{error}");
     }
 

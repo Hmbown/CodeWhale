@@ -68,26 +68,47 @@ function toolResultIds(message) {
     .map((block) => block.tool_use_id);
 }
 
+function toolUseIds(message) {
+  return (message.content ?? [])
+    .filter((block) => block.type === "tool_use")
+    .map((block) => block.id);
+}
+
 function isAssistantLike(message) {
   return message.role === "assistant" || message.role === "assistant_interrupted";
+}
+
+function assistantTextOf(message) {
+  if (!isAssistantLike(message)) return null;
+  const text = (message.content ?? [])
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n")
+    .trim();
+  return text || null;
+}
+
+// A retained copy may be truncated, so a prefix either way counts as survival
+// -- but nothing weaker does.
+function survives(text, replacement, of) {
+  return replacement.some((message) => {
+    const kept = of(message);
+    return (
+      kept &&
+      (kept === text || text.startsWith(kept) || kept.startsWith(text))
+    );
+  });
 }
 
 export function validateSurvivalContract(original, replacement, anchors) {
   const start = lastRoundStart(original);
   const lastRound = original.slice(start);
-  const lastUserText = lastRound.map(userTextOf).find(Boolean);
-  if (lastUserText) {
-    const kept = replacement.some((message) => {
-      const text = userTextOf(message);
-      return (
-        text &&
-        (text === lastUserText ||
-          lastUserText.startsWith(text) ||
-          text.startsWith(lastUserText))
-      );
-    });
-    if (!kept) {
-      return "last user message was dropped";
+  // Every user turn in the round, not the first one `find` reaches: the round
+  // spans a tool-bearing turn plus the toolless tail after it, so checking one
+  // let a rewrite drop the latest turn.
+  for (const text of lastRound.map(userTextOf).filter(Boolean)) {
+    if (!survives(text, replacement, userTextOf)) {
+      return "a last-round user message was dropped";
     }
   }
   for (const id of lastRound.flatMap(toolResultIds)) {
@@ -98,6 +119,25 @@ export function validateSurvivalContract(original, replacement, anchors) {
     );
     if (!kept) {
       return `last-round tool result ${id} was dropped`;
+    }
+  }
+  // The call, not just its result: a tool_result whose tool_use was summarized
+  // away is an orphan providers reject.
+  for (const id of lastRound.flatMap(toolUseIds)) {
+    const kept = replacement.some((message) =>
+      (message.content ?? []).some(
+        (block) => block.type === "tool_use" && block.id === id,
+      ),
+    );
+    if (!kept) {
+      return `last-round tool call ${id} was dropped`;
+    }
+  }
+  // Match the text: "some assistant message survived" is satisfied by the
+  // summary the rewrite itself just wrote.
+  for (const text of lastRound.map(assistantTextOf).filter(Boolean)) {
+    if (!survives(text, replacement, assistantTextOf)) {
+      return "last-round assistant output was dropped";
     }
   }
   if (

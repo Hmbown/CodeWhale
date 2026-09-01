@@ -70,8 +70,13 @@ Rust now:
   (assistant + tool results) and appends one checkpoint receipt. A trailing
   toolless user/assistant tail still walks back to the last tool-bearing
   round; chat-only sessions keep only the latest user turn.
-- `validate_last_round_coverage` refuses the rewrite if that round's user
-  text, tool-result ids, or assistant output would vanish.
+- `validate_last_round_coverage` refuses the rewrite if any of that round's
+  user texts, tool-call ids, tool-result ids, or assistant texts would vanish.
+  Every user turn in the round is checked, not just the first: the round spans
+  a tool-bearing turn plus the toolless tail after it, so checking one would
+  let the latest turn -- the one this contract exists for -- be dropped. The
+  assistant check compares text, because "some assistant message survived" is
+  satisfied by the summary the rewrite itself just wrote.
 - `validate_survival_contract` also refuses a missing checkpoint receipt,
   duplicated prior summaries, dropped `/anchor` text, or a placeholder-only
   checkpoint.
