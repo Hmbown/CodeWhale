@@ -156,3 +156,6 @@ CODEWHALE_0_9_0_CUTOVER.md
 
 # Ralph agent scratch (local only)
 .ralph/
+
+# Local playwright MCP artifacts
+.playwright-mcp/
