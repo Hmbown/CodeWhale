@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The app-server can listen on a unix domain socket and advertise a
+  `daemon/attach` handshake, so a local client can attach to an already-running
+  engine instead of spawning its own. The socket is created with
+  owner-only permissions and stale sockets are reclaimed on start. Non-unix
+  hosts return a typed unsupported-platform refusal; the Windows named-pipe
+  endpoint is named but not yet implemented (#5749).
+
 - Computer session records now count only time a provider actually accepted the
   session as active, at per-second granularity. Idle, queued, stopped, and
   teardown time are excluded, and a session whose allocation does not match a
