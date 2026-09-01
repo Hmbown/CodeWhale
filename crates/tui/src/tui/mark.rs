@@ -178,8 +178,7 @@ pub fn render_fluke(
             break;
         }
         // Skip blanks rather than pad: they must not erase the field behind.
-        let mut x = x0;
-        for glyph in line.chars() {
+        for (x, glyph) in (x0..).zip(line.chars()) {
             if x >= area.right() {
                 break;
             }
@@ -189,7 +188,6 @@ pub fn render_fluke(
                 cell.set_symbol(&glyph.to_string());
                 cell.set_style(Style::default().fg(color));
             }
-            x += 1;
         }
     }
     Rect::new(x0, area.y, cols, row_count)

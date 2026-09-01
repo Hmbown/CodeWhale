@@ -36,6 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Internal: `codewhale-config` gains `RouteAuthoritySnapshot`, one immutable
+  authority that owns a compiled provider catalog together with the route
+  resolver projected from it, so a picker, a readiness view, and an execution
+  path can no longer resolve against different catalog snapshots without a
+  type-level signal. Resolution still goes through the sole resolver; the
+  returned receipt distinguishes an exact catalog row, a custom-endpoint route
+  whose provider facts are deliberately not reused, and an allowed
+  pass-through route with no catalog row. All state is secret-free. No call
+  site changed and no user-visible behaviour changed yet (#5766).
+
 - Computer session records now count only time a provider actually accepted the
   session as active, at per-second granularity. Idle, queued, stopped, and
   teardown time are excluded, and a session whose allocation does not match a

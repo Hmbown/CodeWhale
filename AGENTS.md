@@ -4,6 +4,43 @@ Keep this file durable. Derive changing release, provider, branch, and flake
 state from the repository, tests, CI, and current issue tracker rather than from
 instructions or memory. The nearest scoped `AGENTS.md` adds path-specific rules.
 
+## The ponytail method
+
+From [dietrichgebert/ponytail](https://github.com/dietrichgebert/ponytail) —
+"the laziest senior dev in the room." *He says nothing. He writes one line. It
+works.* The best code is the code you never wrote.
+
+Before writing code, walk the decision ladder in order and stop at the first
+rung that answers:
+
+1. **Does this need to exist?** → Skip it.
+2. **Already in this codebase?** → Reuse it.
+3. **Stdlib does it?** → Use it.
+4. **Native platform feature?** → Use it.
+5. **Installed dependency?** → Use it.
+6. **One line?** → One line.
+7. **Only then:** the minimum that works.
+
+The ladder runs *after* understanding the problem. Lazy about solutions, never
+about reading the code first — a short diff written without reading the call
+sites is not ponytail, it is a guess.
+
+**Never cut, at any rung:** trust-boundary validation, data-loss handling,
+security, accessibility. Brevity is not a reason to drop a guard.
+
+Rung 2 is the one this repository keeps failing. The `model_*` / `*_config` /
+`provider_*` grep rule below is rung 2 with a name; so is "one turn loop, one
+base prompt". Two more corollaries earned here:
+
+- **An abstraction must delete caller code.** If adopting it is pure
+  obligation — required methods, no default bodies that do work — it gets
+  built, adopted once, and abandoned.
+- **Migrate the last consumer, or do not start.** Framework, one caller,
+  ticket the rest, silence the warning: that ships two systems and a comment
+  that is no longer true. If the migration will not fit, narrow the slice —
+  never the adoption. The standing `#[allow(dead_code)]` count is the running
+  receipt; `scripts/check-dead-code-budget.py` prints it.
+
 ## Working rules
 
 - Inspect status and existing consumers before editing. Preserve unrelated,

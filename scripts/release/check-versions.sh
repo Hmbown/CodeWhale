@@ -28,12 +28,26 @@
 set -euo pipefail
 
 require_dated_release=0
-if [[ "${1:-}" == "--require-dated-release" ]]; then
-  require_dated_release=1
-  shift
-fi
-if [[ "$#" -ne 0 ]]; then
-  echo "Usage: $0 [--require-dated-release]" >&2
+# Checks 7 and 12 audit a *commit range* (previous tag..HEAD), not the working
+# tree. Debt left by an already-merged commit therefore reddens this gate for
+# every unrelated open pull request, and the PR that gets blamed is innocent.
+# The per-PR CI job passes --range-audit-advisory so that class of failure
+# reports without blocking; every release path (release-candidate.yml,
+# auto-tag.yml, release.yml, prepare-release.sh) still runs them blocking, so
+# nothing can be published without its receipt.
+range_audit_advisory=0
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --require-dated-release) require_dated_release=1; shift ;;
+    --range-audit-advisory) range_audit_advisory=1; shift ;;
+    *)
+      echo "Usage: $0 [--require-dated-release] [--range-audit-advisory]" >&2
+      exit 2
+      ;;
+  esac
+done
+if [[ "${require_dated_release}" == "1" && "${range_audit_advisory}" == "1" ]]; then
+  echo "::error::--range-audit-advisory must not be combined with --require-dated-release; publication requires the range audit to block." >&2
   exit 2
 fi
 
@@ -200,15 +214,23 @@ if [[ -n "${previous_tag}" ]]; then
   fi
   if git rev-parse -q --verify "refs/tags/${previous_tag}" >/dev/null; then
     if ! ./scripts/release/check-feature-release-notes.sh "${previous_tag}" HEAD; then
-      fail=1
+      if [[ "${range_audit_advisory}" == "1" ]]; then
+        echo "::warning::Missing feature release-note receipt(s) above. Advisory here because this audits already-merged commits in ${previous_tag}..HEAD, not this change. It blocks every release path; fix it before the next release." >&2
+      else
+        fail=1
+      fi
     fi
     while IFS= read -r line; do
       [[ -z "${line}" ]] && continue
       handle="$(sed -E 's#.*github.com/([^)/]+).*#\1#' <<<"${line}")"
       if [[ -n "${handle}" && "${handle}" != "${line}" ]]; then
         if ! grep -Fq "github.com/${handle}" <<<"${credit_sections}" && ! grep -Fq "@${handle}" <<<"${credit_sections}"; then
-          echo "::error::README.md adds contributor @${handle}, but CHANGELOG.md ${workspace_version} or [Unreleased] does not mention that credit." >&2
-          fail=1
+          if [[ "${range_audit_advisory}" == "1" ]]; then
+            echo "::warning::README.md adds contributor @${handle}, but CHANGELOG.md ${workspace_version} or [Unreleased] does not mention that credit. Advisory here; blocking on every release path." >&2
+          else
+            echo "::error::README.md adds contributor @${handle}, but CHANGELOG.md ${workspace_version} or [Unreleased] does not mention that credit." >&2
+            fail=1
+          fi
         fi
       fi
     done < <(
