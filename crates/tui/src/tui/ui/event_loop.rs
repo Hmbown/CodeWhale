@@ -859,6 +859,10 @@ async fn dispatch_launch_composer_submit(
         return Ok(false);
     }
     if looks_like_slash_command_input(&input) {
+        // Every submit echoes (see submit_decided_composer_input).
+        app.add_message(HistoryCell::User {
+            content: input.clone(),
+        });
         if execute_command_input(
             terminal,
             app,
@@ -966,6 +970,12 @@ async fn submit_decided_composer_input(
         return Ok(false);
     }
     if looks_like_slash_command_input(&input) {
+        // Every submit echoes: a command that clears the composer must leave
+        // what the user typed in the thread, not just its receipt — bare
+        // error lines with no user row read as a void.
+        app.add_message(HistoryCell::User {
+            content: input.clone(),
+        });
         if execute_command_input(
             terminal,
             app,
