@@ -57,7 +57,7 @@ fn whale_column_stays_blue_and_gently_banded_at_full_screen_depth() {
             "row {row} lost the authored blue-ocean ordering: {current:?}"
         );
         assert!(
-            relative_luminance(current) > relative_luminance(theme.surface_bg),
+            relative_luminance(current) > relative_luminance(crate::palette::WHALE_BG),
             "row {row} fell back into the near-black shell field"
         );
         assert!(
@@ -160,7 +160,7 @@ fn light_ocean_and_selection_keep_text_and_semantic_roles_readable() {
 fn whale_custom_background_uses_the_configured_surface() {
     let custom = Color::Rgb(0x12, 0x1a, 0x2d);
     let theme = crate::palette::UI_THEME.with_background_color(custom);
-    let ramp = OceanRamp::for_theme(&theme).expect("custom backgrounds retain ombre");
+    let ramp = OceanRamp::for_theme(&theme).expect("custom backgrounds retain Deepsea");
 
     assert_ne!(ramp.surface, Color::Rgb(0x0e, 0x17, 0x29));
     assert_ne!(ramp.surface, ramp.deep);
@@ -168,9 +168,10 @@ fn whale_custom_background_uses_the_configured_surface() {
 
 #[test]
 fn inherited_terminal_background_reports_no_ramp() {
-    let mut theme = crate::palette::UI_THEME;
-    theme.surface_bg = Color::Reset;
-    assert_eq!(OceanRamp::for_theme(&theme), None);
+    assert_eq!(
+        OceanRamp::for_theme(&crate::palette::TERMINAL_UI_THEME),
+        None
+    );
 }
 
 #[test]
@@ -182,10 +183,10 @@ fn solarized_light_preserves_its_canonical_base3_background() {
 }
 
 #[test]
-fn solarized_light_custom_background_preserves_ombre() {
+fn solarized_light_custom_background_preserves_deepsea() {
     let custom = Color::Rgb(0x1a, 0x1b, 0x26);
     let theme = crate::palette::SOLARIZED_LIGHT_UI_THEME.with_background_color(custom);
-    let ramp = OceanRamp::for_theme(&theme).expect("custom backgrounds retain ombre");
+    let ramp = OceanRamp::for_theme(&theme).expect("custom backgrounds retain Deepsea");
 
     assert_ne!(ramp.surface, custom);
     assert_ne!(ramp.surface, ramp.deep);
@@ -217,31 +218,63 @@ fn every_shipped_theme_has_an_intentional_ocean_treatment() {
 }
 
 #[test]
-fn treatment_parses_saved_values_and_defaults_to_ombre() {
+fn treatment_parses_saved_values_and_migrates_legacy_ombre_values() {
     assert_eq!(OceanTreatment::parse("flat"), OceanTreatment::Flat);
     assert_eq!(OceanTreatment::parse(" FLAT "), OceanTreatment::Flat);
-    assert_eq!(OceanTreatment::parse("ombre"), OceanTreatment::Ombre);
-    assert_eq!(OceanTreatment::parse("kelp"), OceanTreatment::Ombre);
-    assert_eq!(OceanTreatment::parse(""), OceanTreatment::Ombre);
-    // Migration shim: settings saved by pre-0.9.4 builds may still carry the
-    // removed classic shell; they load as the default ombre treatment.
-    assert_eq!(OceanTreatment::parse("classic"), OceanTreatment::Ombre);
+    assert_eq!(OceanTreatment::parse("deepsea"), OceanTreatment::Deepsea);
+    assert_eq!(OceanTreatment::parse("ombre"), OceanTreatment::Deepsea);
+    assert_eq!(OceanTreatment::parse("kelp"), OceanTreatment::Flat);
+    assert_eq!(OceanTreatment::parse(""), OceanTreatment::Flat);
+    // Migration aliases remain deterministic for older persisted settings.
+    assert_eq!(OceanTreatment::parse("classic"), OceanTreatment::Deepsea);
 }
 
 #[test]
-fn every_underwater_treatment_keeps_ambient_life() {
-    // The classic shell was the only treatment that stilled ambient life; with
-    // it removed there is no per-treatment ambient-life flag left to test.
-    // What remains worth pinning: both live treatments stay distinct so the
-    // flat/ombre choice keeps its meaning.
-    assert_ne!(OceanTreatment::Ombre, OceanTreatment::Flat);
-    assert!(OceanTreatment::Ombre.is_ombre());
+fn deepsea_is_the_explicit_underwater_treatment() {
+    // The ordinary terminal must not be turned into an aquarium by default.
+    // Flat and Deepsea stay distinct so the user can deliberately opt into the
+    // underwater field.
+    assert_eq!(OceanTreatment::default(), OceanTreatment::Flat);
+    assert_ne!(OceanTreatment::Deepsea, OceanTreatment::Flat);
+    assert!(OceanTreatment::Deepsea.is_deepsea());
     assert!(OceanTreatment::Flat.is_flat());
 }
 
 #[test]
+fn whale_pair_flat_shells_reset_while_deepsea_paints_the_shared_column() {
+    assert!(OceanTreatment::Flat.is_flat());
+    assert!(OceanTreatment::Deepsea.is_deepsea());
+
+    for theme in [crate::palette::UI_THEME, crate::palette::LIGHT_UI_THEME] {
+        for shell_surface in [
+            theme.surface_bg,
+            theme.panel_bg,
+            theme.composer_bg,
+            theme.header_bg,
+            theme.footer_bg,
+        ] {
+            assert_eq!(shell_surface, Color::Reset, "{} Flat shell", theme.name);
+        }
+
+        let ramp = OceanRamp::for_theme(&theme).expect("built-in Deepsea ramp");
+        for painted in [ramp.surface, ramp.middle, ramp.deep, ramp.ambient] {
+            assert_ne!(painted, Color::Reset, "{} Deepsea paint", theme.name);
+        }
+
+        let area = Rect::new(0, 0, 4, 4);
+        let mut buf = Buffer::empty(area);
+        let column = OceanColumn::new(ramp, area, 0, None, ShellPhase::Idle, false, 0);
+        column.paint_matching(area, &mut buf, theme.surface_bg);
+        assert_ne!(buf[(0, 0)].bg, Color::Reset);
+        assert_ne!(buf[(0, area.height - 1)].bg, Color::Reset);
+        assert_ne!(buf[(0, 0)].bg, buf[(0, area.height - 1)].bg);
+    }
+}
+
+#[test]
 fn ambient_ink_matches_sunk_sky_shades_and_survives_reset_surfaces() {
-    // RGB themes: fish wear two sunk sky shades; seafoam remains live-work ink.
+    // Deepsea's authored RGB ramp gives the terminal-native Whale shell two
+    // sunk sky shades; seafoam remains live-work ink.
     let theme = crate::palette::UI_THEME;
     let ramp = OceanRamp::for_theme(&theme).expect("RGB theme");
     let baseline = crate::tui::ambient_life::AmbientActivity::Baseline;
@@ -539,7 +572,7 @@ fn split_shell_surfaces_share_one_absolute_row_column() {
     assert_eq!(
         buf[(4, 10)].bg,
         theme.selection_bg,
-        "semantic surfaces must survive the shell ombre pass"
+        "semantic surfaces must survive the shell Deepsea pass"
     );
 }
 

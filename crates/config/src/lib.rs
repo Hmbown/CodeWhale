@@ -1324,6 +1324,20 @@ pub const DEFAULT_HOTBAR_ACTIONS: [&str; HOTBAR_SLOT_COUNT as usize] = [
     "sidebar.toggle",
 ];
 
+/// Normalize persisted action ids at the compatibility boundary.
+///
+/// `/pod` is the canonical public command, but existing settings may still
+/// contain the former `slash.fleet` hotbar id. Resolution and direct registry
+/// lookup both use this helper so those slots continue to dispatch while any
+/// subsequent save naturally writes the canonical id.
+#[must_use]
+pub fn normalize_hotbar_action_id(action_id: &str) -> &str {
+    match action_id {
+        "slash.fleet" => "slash.pod",
+        other => other,
+    }
+}
+
 /// On-disk schema for one `[[hotbar]]` table.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -1433,7 +1447,7 @@ pub fn resolve_hotbar_bindings(
             .iter()
             .map(|binding| HotbarBinding {
                 slot: binding.slot,
-                action: binding.action.clone(),
+                action: normalize_hotbar_action_id(&binding.action).to_string(),
                 label: binding.label.clone(),
             })
             .collect::<Vec<_>>(),
@@ -3241,69 +3255,8 @@ impl ConfigToml {
         ) {
             resolve_deepseek_base_url(configured_base_url, provider, provider_wire)
         } else {
-            configured_base_url.unwrap_or_else(|| match provider {
-                ProviderKind::Deepseek => DEFAULT_DEEPSEEK_BASE_URL.to_string(),
-                ProviderKind::DeepseekAnthropic => DEFAULT_DEEPSEEK_ANTHROPIC_BASE_URL.to_string(),
-                ProviderKind::NvidiaNim => DEFAULT_NVIDIA_NIM_BASE_URL.to_string(),
-                ProviderKind::Openai => DEFAULT_OPENAI_BASE_URL.to_string(),
-                ProviderKind::Atlascloud => DEFAULT_ATLASCLOUD_BASE_URL.to_string(),
-                ProviderKind::WanjieArk => DEFAULT_WANJIE_ARK_BASE_URL.to_string(),
-                ProviderKind::Volcengine => DEFAULT_VOLCENGINE_BASE_URL.to_string(),
-                ProviderKind::Openrouter => DEFAULT_OPENROUTER_BASE_URL.to_string(),
-                ProviderKind::Orcarouter => DEFAULT_ORCAROUTER_BASE_URL.to_string(),
-                ProviderKind::XiaomiMimo => DEFAULT_XIAOMI_MIMO_BASE_URL.to_string(),
-                ProviderKind::Novita => DEFAULT_NOVITA_BASE_URL.to_string(),
-                ProviderKind::Fireworks => DEFAULT_FIREWORKS_BASE_URL.to_string(),
-                ProviderKind::Siliconflow => DEFAULT_SILICONFLOW_BASE_URL.to_string(),
-                ProviderKind::SiliconflowCN => DEFAULT_SILICONFLOW_CN_BASE_URL.to_string(),
-                ProviderKind::Arcee => DEFAULT_ARCEE_BASE_URL.to_string(),
-                ProviderKind::Moonshot => {
-                    if auth_mode
-                        .as_deref()
-                        .is_some_and(auth_mode_uses_kimi_imported_token)
-                    {
-                        DEFAULT_KIMI_CODE_BASE_URL.to_string()
-                    } else {
-                        DEFAULT_MOONSHOT_BASE_URL.to_string()
-                    }
-                }
-                ProviderKind::Sglang => DEFAULT_SGLANG_BASE_URL.to_string(),
-                ProviderKind::Vllm => DEFAULT_VLLM_BASE_URL.to_string(),
-                ProviderKind::Ollama => DEFAULT_OLLAMA_BASE_URL.to_string(),
-                ProviderKind::OllamaCloud => DEFAULT_OLLAMA_CLOUD_BASE_URL.to_string(),
-                ProviderKind::Huggingface => DEFAULT_HUGGINGFACE_BASE_URL.to_string(),
-                ProviderKind::Together => DEFAULT_TOGETHER_BASE_URL.to_string(),
-                ProviderKind::Qianfan => DEFAULT_QIANFAN_BASE_URL.to_string(),
-                ProviderKind::OpenaiCodex => DEFAULT_OPENAI_CODEX_BASE_URL.to_string(),
-                ProviderKind::Anthropic => DEFAULT_ANTHROPIC_BASE_URL.to_string(),
-                ProviderKind::Openmodel => DEFAULT_OPENMODEL_BASE_URL.to_string(),
-                ProviderKind::Zai => DEFAULT_ZAI_BASE_URL.to_string(),
-                ProviderKind::Stepfun => DEFAULT_STEPFUN_BASE_URL.to_string(),
-                ProviderKind::Minimax => DEFAULT_MINIMAX_BASE_URL.to_string(),
-                ProviderKind::MinimaxAnthropic => DEFAULT_MINIMAX_ANTHROPIC_BASE_URL.to_string(),
-                ProviderKind::Deepinfra => DEFAULT_DEEPINFRA_BASE_URL.to_string(),
-                ProviderKind::Sakana => DEFAULT_SAKANA_BASE_URL.to_string(),
-                ProviderKind::LongCat => DEFAULT_LONGCAT_BASE_URL.to_string(),
-                ProviderKind::OpencodeGo => DEFAULT_OPENCODE_GO_BASE_URL.to_string(),
-                ProviderKind::OpencodeZen => DEFAULT_OPENCODE_ZEN_BASE_URL.to_string(),
-                ProviderKind::Meta => DEFAULT_META_BASE_URL.to_string(),
-                ProviderKind::Xai => DEFAULT_XAI_BASE_URL.to_string(),
-                ProviderKind::Mistral => DEFAULT_MISTRAL_BASE_URL.to_string(),
-                ProviderKind::Google => DEFAULT_GOOGLE_BASE_URL.to_string(),
-                ProviderKind::Antigravity => DEFAULT_ANTIGRAVITY_BASE_URL.to_string(),
-                ProviderKind::Telecomjs => DEFAULT_TELECOMJS_BASE_URL.to_string(),
-                ProviderKind::Edenai => DEFAULT_EDENAI_BASE_URL.to_string(),
-                ProviderKind::ModelstudioTokenPlan
-                | ProviderKind::ModelstudioTokenPlanAnthropic
-                | ProviderKind::ModelstudioCodingPlan
-                | ProviderKind::ModelstudioCodingPlanAnthropic => {
-                    DEFAULT_MODELSTUDIO_TOKEN_PLAN_BASE_URL.to_string()
-                }
-                // The custom provider has no built-in endpoint; fall back to its
-                // descriptor placeholder so the lookup is total. Real custom
-                // routes always supply a configured base_url before this point.
-                ProviderKind::Custom => provider.provider().default_base_url().to_string(),
-            })
+            configured_base_url
+                .unwrap_or_else(|| descriptor_fallback_base_url(provider, auth_mode.as_deref()))
         };
         // Released builds represented Ollama Cloud as the local `ollama`
         // identity plus one exact hosted base URL. Upgrade only that tuple in
@@ -3432,6 +3385,20 @@ impl ConfigToml {
             normalize_model_for_provider(provider, &model)
         };
 
+        // RouteResolver is the runtime path: the executable wire model,
+        // protocol, and endpoint come from a ReadyRouteCandidate. Auth/key
+        // resolution above is unchanged. A resolver error keeps the existing
+        // model string so this method stays total.
+        let route = crate::route::RouteResolver::new()
+            .resolve(&crate::route::RouteRequest {
+                explicit_provider: Some(provider),
+                model_selector: Some(crate::route::LogicalModelRef::from(model.as_str())),
+                saved_provider_model: None,
+                base_url_override: Some(base_url.clone()),
+                limit_overrides: Vec::new(),
+            })
+            .ok();
+
         let mut http_headers = self.http_headers.clone();
         http_headers.extend(provider_cfg.http_headers.clone());
         if let Some(env_headers) = env.http_headers {
@@ -3544,8 +3511,22 @@ impl ConfigToml {
             yolo,
             verbosity,
             http_headers,
+            route,
         }
     }
+}
+
+/// Default base URL from the route descriptor, plus the one Moonshot/Kimi
+/// imported-token exception that is an auth-mode fact rather than a kind.
+fn descriptor_fallback_base_url(provider: ProviderKind, auth_mode: Option<&str>) -> String {
+    if provider == ProviderKind::Moonshot
+        && auth_mode.is_some_and(auth_mode_uses_kimi_imported_token)
+    {
+        return DEFAULT_KIMI_CODE_BASE_URL.to_string();
+    }
+    crate::route::ProviderDescriptor::for_kind(provider)
+        .default_base_url()
+        .to_string()
 }
 
 fn merge_project_provider_config(target: &mut ProviderConfigToml, source: &ProviderConfigToml) {
@@ -4862,7 +4843,10 @@ pub fn provider_base_url_is_official(provider: ProviderKind, base_url: &str) -> 
             "https://api.siliconflow.com/v1" | "https://api.siliconflow.cn/v1"
         ),
         ProviderKind::Moonshot => {
-            normalized == DEFAULT_MOONSHOT_BASE_URL || moonshot_base_url_uses_kimi_code(base_url)
+            matches!(
+                normalized.as_str(),
+                DEFAULT_MOONSHOT_BASE_URL | MOONSHOT_CN_BASE_URL
+            ) || moonshot_base_url_uses_kimi_code(base_url)
         }
         ProviderKind::Zai => matches!(
             normalized.as_str(),
@@ -5165,6 +5149,12 @@ pub struct ResolvedRuntimeOptions {
     pub yolo: Option<bool>,
     pub verbosity: Option<String>,
     pub http_headers: BTreeMap<String, String>,
+    /// Executable route minted by [`crate::route::RouteResolver`].
+    ///
+    /// `None` only when the resolver rejected the selector (foreign model on a
+    /// strict direct provider, empty model). Auth/key fields above are
+    /// independent: the resolver never inspects credentials.
+    pub route: Option<crate::route::ReadyRouteCandidate>,
 }
 
 #[derive(Debug, Clone)]

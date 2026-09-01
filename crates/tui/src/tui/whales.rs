@@ -2,11 +2,14 @@
 //!
 //! CWC's "Whale Teams / Signal Cut" identity (2026-08-15) gives each agent
 //! role a species-led whale and every whale one of six runtime states. This
-//! module carries that identity into the TUI as authored glyph art: nothing
-//! here is converted from the CWC rasters (there is no vector source), and no
-//! CWC file is copied. Colors are Codewhale palette tokens resolved through
-//! the live [`UiTheme`], so the whales follow Blue Stage dark/light, the
-//! Terminal theme, and ANSI-16 adaptation like every other surface.
+//! module carries that identity into the TUI as species badges and state
+//! words. The hand-drawn portrait art that used to live here (the three-row
+//! glyph renditions and the hand-drawn crown fluke) was deleted per the
+//! 2026-08-29 founder directive; the only sanctioned terminal mark is the one
+//! generated from the brand master path. Colors are Codewhale palette tokens
+//! resolved through the live [`UiTheme`], so the whales follow Blue Stage
+//! dark/light, the Terminal theme, and ANSI-16 adaptation like every other
+//! surface.
 //!
 //! Contract:
 //! - **Role → species is one table** ([`WhaleSpecies::for_role_id`]). Fleet
@@ -15,15 +18,12 @@
 //! - **State is evidence, never decoration.** [`WhaleState`] is derived only
 //!   from real runtime facts ([`WhaleState::for_subagent`],
 //!   [`WhaleState::for_shell_phase`]). *Working* is asserted only for a child
-//!   or turn that is actually running; a portrait rendered without a state
-//!   claims nothing about runtime.
+//!   or turn that is actually running.
 //! - **Every state pairs a glyph cue with a word** ([`WhaleState::word`]), so
 //!   state never depends on color alone (same rule as `menu_style`).
-//! - **Motion is policy-gated.** The Working wake animates only under
-//!   [`MotionMode::Full`]; Reduced/Still hold the frame-A poster.
 //! - **ASCII-safe by construction.** Every authored glyph has a
-//!   [`glyphs::ascii_fallback`] entry, and [`portrait_ascii`] exposes the
-//!   narrowed silhouette for tests and text surfaces.
+//!   [`glyphs::ascii_fallback`] entry, and [`badge_ascii`] exposes the
+//!   narrowed badge for tests and text surfaces.
 //!
 //! Only the *signal-classic* colorway is represented. The three alternate CWC
 //! colorways exist only as resting rasters upstream and are not modelled here.
@@ -31,7 +31,7 @@
 use std::borrow::Cow;
 
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::Span;
 
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette::{self, UiTheme};
@@ -40,10 +40,6 @@ use crate::tui::glyphs;
 use crate::tui::motion::mode::MotionMode;
 use crate::tui::underwater::ShellPhase;
 
-/// Portrait canvas: three rows, fourteen columns, including the two-column
-/// state cue at the left and the wake lane under the tail at the right.
-pub const PORTRAIT_WIDTH: usize = 14;
-pub const PORTRAIT_HEIGHT: usize = 3;
 /// Cells occupied by a badge (species mark + body).
 pub const BADGE_WIDTH: usize = 2;
 /// Working wake loop: four frames over 720 ms, as in the CWC GIFs.
@@ -293,8 +289,6 @@ pub struct WhaleInk {
     pub body: Color,
     /// Orca body: ink/white patches read as muted text ink, saddle stays gold.
     pub lantern_body: Color,
-    /// Eye, fluke centre.
-    pub detail: Color,
     /// Bounded cyan: thinking ticks and the working wake.
     pub current: Color,
     /// Waiting ring — Signal Gold, the human-attention role.
@@ -322,7 +316,6 @@ impl WhaleInk {
         Self {
             body: lift(theme.accent_action),
             lantern_body: lift(theme.text_muted),
-            detail: theme.text_body,
             current: lift(rgb(palette::WHALE_CYAN_RGB)),
             human: lift(theme.accent_action),
             bar: lift(theme.text_muted),
@@ -358,212 +351,6 @@ impl WhaleInk {
     }
 }
 
-/// Which ink a cell takes. Authored art carries one code per cell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Ink {
-    None,
-    Body,
-    Accent,
-    Detail,
-    Cue,
-    Human,
-    Bar,
-}
-
-impl Ink {
-    fn from_code(code: char) -> Self {
-        match code {
-            'b' => Self::Body,
-            'a' => Self::Accent,
-            'd' => Self::Detail,
-            'c' => Self::Cue,
-            'h' => Self::Human,
-            'i' => Self::Bar,
-            _ => Self::None,
-        }
-    }
-}
-
-/// Authored art: three rows of glyphs and a parallel ink map. Column 0–1 is
-/// the state-cue lane (kept free of body glyphs on rows 0 and 2; row 1 may
-/// hold a species feature at column 1 that a state cue overrides). Columns
-/// 10–13 of row 2 are the wake lane. Head at the left, crown fluke `▚△▞` at
-/// the right, matching the idle Codewhale mark in `underwater.rs`.
-struct Art {
-    rows: [&'static str; PORTRAIT_HEIGHT],
-    inks: [&'static str; PORTRAIT_HEIGHT],
-}
-
-const fn art(species: WhaleSpecies) -> Art {
-    match species {
-        // Beaked whale: long beak, swept forehead, high tail, research lens.
-        WhaleSpecies::Scout => Art {
-            rows: ["    ▗▄▄▖   ▚△▞", " ━▐█○██▙━━━▞  ", "   ▝▀▀▀▘      "],
-            inks: ["    bbbb   bdb", " bbbabbbbbbb  ", "   bbbbb      "],
-        },
-        // Harbor porpoise: compact torpedo, blunt forehead, small dorsal,
-        // short tail, bracket patch.
-        WhaleSpecies::Patch => Art {
-            rows: ["  ▗▄▟▄▄▖  ▚△▞ ", "  ▐█·[]▙━━▞   ", "  ▝▀▀▀▀▘      "],
-            inks: ["  bbbbbb  bdb ", "  bbdaabbbb   ", "  bbbbbb      "],
-        },
-        // Humpback: knobbled forehead, long winglike flipper, arched back,
-        // broad tail, mooring-loop marking.
-        WhaleSpecies::Harbor => Art {
-            rows: ["  ▗▄▄▄▄▄▖  ▚△▞", "  ▐▒·█○█▙━━▞  ", "  ▝▀▚▀▀▀▘     "],
-            inks: ["  bbbbbbb  bdb", "  bbdbabbbbb  ", "  bbbbbbb     "],
-        },
-        // Pilot whale: bulbous forehead, swept dorsal, sickle flipper, three
-        // acoustic cheek ticks.
-        WhaleSpecies::Echo => Art {
-            rows: ["  ▄▄▄▄▟▄▖  ▚△▞", " :▐█·███▙━━▞  ", " ·▝▀▞▀▀▀▘     "],
-            inks: ["  bbbbbbb  bdb", " abbdbbbbbbb  ", " abbbbbbb     "],
-        },
-        // Sperm whale: squared forehead, low dorsal ridge, heavy tail stock,
-        // keel stripe.
-        WhaleSpecies::Keel => Art {
-            rows: ["  ▛▀▀▀▀▄▖  ▚△▞", "  ▐█·███▙▄▄▞  ", "  ▝▀━━━▀▘     "],
-            inks: ["  bbbbbbb  bdb", "  bbdbbbbbbb  ", "  bbaaabb     "],
-        },
-        // Orca: tall dorsal, compact body, gold saddle patch on an ink body,
-        // review-lens ring.
-        WhaleSpecies::Lantern => Art {
-            rows: ["  ▗▄▐▄▄▖  ▚△▞ ", "  ▐█○█▘▙━━▞   ", "  ▝▀▀▀▀▘      "],
-            inks: ["  bbbbbb  bdb ", "  bbabhbbbb   ", "  bbbbbb      "],
-        },
-        // The plain Codewhale whale.
-        WhaleSpecies::Plain => Art {
-            rows: ["  ▗▄▄▄▄▄▖  ▚△▞", "  ▐█·███▙━━▞  ", "  ▝▀▀▀▀▀▘     "],
-            inks: ["  bbbbbbb  bdb", "  bbdbbbbbbb  ", "  bbbbbbb     "],
-        },
-    }
-}
-
-/// One rendered cell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Cell {
-    glyph: &'static str,
-    ink: Ink,
-}
-
-type Canvas = [[Cell; PORTRAIT_WIDTH]; PORTRAIT_HEIGHT];
-
-fn blank() -> Canvas {
-    [[Cell {
-        glyph: " ",
-        ink: Ink::None,
-    }; PORTRAIT_WIDTH]; PORTRAIT_HEIGHT]
-}
-
-/// Slice a static row into single-glyph `&'static str` cells.
-fn glyph_at(row: &'static str, col: usize) -> Option<&'static str> {
-    let mut indices = row.char_indices().skip(col);
-    let (start, ch) = indices.next()?;
-    Some(&row[start..start + ch.len_utf8()])
-}
-
-fn compose(species: WhaleSpecies, state: Option<WhaleState>, frame: usize) -> Canvas {
-    let art = art(species);
-    let mut canvas = blank();
-    for (canvas_row, (row, inks)) in canvas.iter_mut().zip(art.rows.iter().zip(art.inks.iter())) {
-        for (c, cell) in canvas_row.iter_mut().enumerate() {
-            let glyph = glyph_at(row, c).unwrap_or(" ");
-            let ink = inks.chars().nth(c).map(Ink::from_code).unwrap_or(Ink::None);
-            *cell = Cell { glyph, ink };
-        }
-    }
-    let Some(state) = state else {
-        return canvas;
-    };
-    match state {
-        WhaleState::Resting => {}
-        WhaleState::Thinking => {
-            // Two compact current ticks above the head.
-            canvas[0][0] = Cell {
-                glyph: "˚",
-                ink: Ink::Cue,
-            };
-            canvas[0][1] = Cell {
-                glyph: "˚",
-                ink: Ink::Cue,
-            };
-        }
-        WhaleState::Working => {
-            // Bounded wake under the tail: anticipation, power stroke, glide,
-            // recovery. Frame 0 is the reduced-motion poster.
-            const WAKE: [[&str; 4]; WORKING_FRAMES] = [
-                ["·", " ", " ", " "],
-                ["·", "˚", " ", " "],
-                [" ", "·", "˚", "·"],
-                [" ", " ", "˚", "·"],
-            ];
-            let wake = WAKE[frame % WORKING_FRAMES];
-            for (i, glyph) in wake.iter().enumerate() {
-                canvas[2][10 + i] = Cell {
-                    glyph,
-                    ink: Ink::Cue,
-                };
-            }
-        }
-        WhaleState::Waiting => {
-            // Surfaced head inside a Signal Gold ring cue.
-            for (r, (left, right)) in [("╭", "─"), ("│", " "), ("╰", "─")].iter().enumerate()
-            {
-                canvas[r][0] = Cell {
-                    glyph: left,
-                    ink: Ink::Human,
-                };
-                if *right != " " {
-                    canvas[r][1] = Cell {
-                        glyph: right,
-                        ink: Ink::Human,
-                    };
-                }
-            }
-        }
-        WhaleState::Blocked => {
-            // Nose against a vertical ink obstruction bar; wake and cues off.
-            for row in canvas.iter_mut() {
-                row[1] = Cell {
-                    glyph: "▌",
-                    ink: Ink::Bar,
-                };
-            }
-        }
-        WhaleState::Offline => {
-            // Intact anatomy as a quiet open outline: fill drains, no wake.
-            for row in canvas.iter_mut() {
-                for cell in row.iter_mut() {
-                    if cell.glyph == "█" {
-                        cell.glyph = "░";
-                    }
-                }
-            }
-        }
-    }
-    canvas
-}
-
-fn cell_color(
-    cell: Cell,
-    species: WhaleSpecies,
-    state: Option<WhaleState>,
-    ink: &WhaleInk,
-) -> Color {
-    if state == Some(WhaleState::Offline) && cell.ink != Ink::None {
-        return ink.dim;
-    }
-    match cell.ink {
-        Ink::None => ink.dim,
-        Ink::Body => ink.body_for(species),
-        Ink::Accent => ink.accent(species),
-        Ink::Detail => ink.detail,
-        Ink::Cue => ink.current,
-        Ink::Human => ink.human,
-        Ink::Bar => ink.bar,
-    }
-}
-
 /// Which working frame to show now. Anything but [`MotionMode::Full`] holds
 /// the frame-A poster; callers must also only pass `Some(Working)` for a
 /// child that is really running.
@@ -573,104 +360,6 @@ pub const fn working_frame(now_ms: u64, mode: MotionMode) -> usize {
         MotionMode::Full => ((now_ms / WORKING_FRAME_MS) % WORKING_FRAMES as u64) as usize,
         MotionMode::Reduced | MotionMode::Still => 0,
     }
-}
-
-/// Three-row portrait as styled lines. `state == None` renders identity only
-/// (no cue, no claim); `frame` selects the working wake frame.
-#[must_use]
-pub fn portrait(
-    species: WhaleSpecies,
-    state: Option<WhaleState>,
-    frame: usize,
-    theme: &UiTheme,
-) -> Vec<Line<'static>> {
-    let ink = WhaleInk::from_theme(theme);
-    let canvas = compose(species, state, frame);
-    canvas
-        .iter()
-        .map(|row| {
-            let mut spans: Vec<Span<'static>> = Vec::new();
-            let mut run = String::new();
-            let mut run_color: Option<Color> = None;
-            let flush = |run: &mut String, color: Option<Color>, spans: &mut Vec<Span<'static>>| {
-                if run.is_empty() {
-                    return;
-                }
-                let style = match color {
-                    Some(color) => Style::default().fg(color),
-                    None => Style::default(),
-                };
-                spans.push(Span::styled(std::mem::take(run), style));
-            };
-            let mut leading = true;
-            for cell in row {
-                let color = if cell.ink == Ink::None {
-                    None
-                } else {
-                    Some(cell_color(*cell, species, state, &ink))
-                };
-                if color != run_color && !run.is_empty() {
-                    flush(&mut run, run_color, &mut spans);
-                }
-                run_color = color;
-                // Leading blanks become braille blanks so a trimming
-                // `Paragraph` cannot shear the rows out of alignment (the
-                // spinner already relies on U+2800 rendering blank; the
-                // ASCII-safe backend narrows it back to a space).
-                if leading && cell.glyph == " " {
-                    run.push('\u{2800}');
-                } else {
-                    leading = false;
-                    run.push_str(cell.glyph);
-                }
-            }
-            flush(&mut run, run_color, &mut spans);
-            Line::from(spans)
-        })
-        .collect()
-}
-
-/// The portrait narrowed through the glyph charter's ASCII fallback — what an
-/// `CODEWHALE_ASCII_SAFE=1` terminal draws. Pure text, for tests and
-/// text-only surfaces.
-#[cfg(test)]
-#[must_use]
-pub fn portrait_ascii(
-    species: WhaleSpecies,
-    state: Option<WhaleState>,
-    frame: usize,
-) -> [String; 3] {
-    let canvas = compose(species, state, frame);
-    let mut rows: [String; 3] = Default::default();
-    for (r, row) in canvas.iter().enumerate() {
-        for cell in row {
-            let glyph = cell.glyph;
-            rows[r].push_str(if glyph.is_ascii() {
-                glyph
-            } else {
-                glyphs::ascii_fallback(glyph).unwrap_or("?")
-            });
-        }
-    }
-    rows
-}
-
-/// The portrait as plain Unicode rows (no color), for tests and snapshots.
-#[cfg(test)]
-#[must_use]
-pub fn portrait_text(
-    species: WhaleSpecies,
-    state: Option<WhaleState>,
-    frame: usize,
-) -> [String; 3] {
-    let canvas = compose(species, state, frame);
-    let mut rows: [String; 3] = Default::default();
-    for (r, row) in canvas.iter().enumerate() {
-        for cell in row {
-            rows[r].push_str(cell.glyph);
-        }
-    }
-    rows
 }
 
 /// Two-cell species badge: feature glyph in the role accent, body in Signal
@@ -732,15 +421,15 @@ pub fn badge_with_state_frame(
     spans
 }
 
-/// One-cell state cue paired with its tone: the same grammar the portrait
-/// draws, folded to a single glyph for badge rows.
+/// One-cell state cue paired with its tone: the state grammar folded to a
+/// single glyph for badge rows.
 fn state_cue(
     state: WhaleState,
     frame: usize,
     ink: &WhaleInk,
     theme: &UiTheme,
 ) -> (&'static str, Color) {
-    /// One-cell wake: the same four-beat loop as the portrait, never blank.
+    /// One-cell wake: the four-beat working loop, never blank.
     const WAKE_CUE: [&str; WORKING_FRAMES] = ["·", "˚", "·", "˚"];
     match state {
         WhaleState::Resting => ("", theme.text_muted),
@@ -771,18 +460,10 @@ pub fn badge_ascii(species: WhaleSpecies) -> String {
     }
 }
 
-/// Whether a portrait fits beside its caption: below the Compact tier width
-/// callers should fall back to the badge.
-#[must_use]
-pub const fn portrait_fits(width: u16) -> bool {
-    width as usize >= 60
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::palette::contrast_ratio;
-    use unicode_width::UnicodeWidthStr;
 
     fn theme_dark() -> UiTheme {
         palette::UI_THEME
@@ -836,30 +517,6 @@ mod tests {
     }
 
     #[test]
-    fn every_species_and_state_renders_inside_the_canvas() {
-        for species in WhaleSpecies::ALL {
-            let states = std::iter::once(None).chain(WhaleState::ALL.into_iter().map(Some));
-            for state in states {
-                for frame in 0..WORKING_FRAMES {
-                    let rows = portrait_text(species, state, frame);
-                    for row in &rows {
-                        assert_eq!(
-                            UnicodeWidthStr::width(row.as_str()),
-                            PORTRAIT_WIDTH,
-                            "{species:?} {state:?} f{frame}: {row:?}"
-                        );
-                    }
-                    let lines = portrait(species, state, frame, &theme_dark());
-                    assert_eq!(lines.len(), PORTRAIT_HEIGHT);
-                    for line in &lines {
-                        assert_eq!(line.width(), PORTRAIT_WIDTH, "{species:?} {state:?}");
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
     fn state_priority_orders_attention_before_work() {
         assert!(
             WhaleState::Waiting.priority() > WhaleState::Working.priority()
@@ -868,56 +525,8 @@ mod tests {
     }
 
     #[test]
-    fn authored_art_rows_and_ink_maps_agree() {
+    fn badge_glyphs_have_ascii_fallbacks_and_stay_distinct() {
         for species in WhaleSpecies::ALL {
-            let art = art(species);
-            for (row, inks) in art.rows.iter().zip(art.inks.iter()) {
-                assert_eq!(row.chars().count(), PORTRAIT_WIDTH, "{species:?} {row:?}");
-                assert_eq!(inks.chars().count(), PORTRAIT_WIDTH, "{species:?} {inks:?}");
-                for (glyph, code) in row.chars().zip(inks.chars()) {
-                    assert_eq!(
-                        glyph == ' ',
-                        code == ' ',
-                        "{species:?}: glyph {glyph:?} vs ink {code:?} in {row:?}"
-                    );
-                }
-            }
-            // The cue lane (cols 0-1) stays clear on rows 0 and 2 so state
-            // cues never collide with anatomy; the wake lane (row 2, cols
-            // 10-13) stays clear so the working wake never overprints.
-            assert!(art.rows[0].starts_with("  "), "{species:?} row0 cue lane");
-            assert!(art.rows[2].starts_with(' '), "{species:?} row2 cue lane");
-            assert!(
-                art.rows[2].chars().skip(10).all(|c| c == ' '),
-                "{species:?} wake lane"
-            );
-        }
-    }
-
-    #[test]
-    fn every_glyph_has_an_ascii_fallback_and_ascii_silhouettes_are_pure() {
-        for species in WhaleSpecies::ALL {
-            let states = std::iter::once(None).chain(WhaleState::ALL.into_iter().map(Some));
-            for state in states {
-                for frame in 0..WORKING_FRAMES {
-                    let unicode = portrait_text(species, state, frame);
-                    for row in &unicode {
-                        for ch in row.chars() {
-                            let glyph = ch.to_string();
-                            assert!(
-                                ch.is_ascii() || glyphs::ascii_fallback(&glyph).is_some(),
-                                "{species:?} {state:?}: {glyph:?} has no ASCII fallback"
-                            );
-                        }
-                    }
-                    let ascii = portrait_ascii(species, state, frame);
-                    for row in &ascii {
-                        assert!(row.is_ascii(), "{species:?} {state:?}: {row:?}");
-                        assert_eq!(row.chars().count(), PORTRAIT_WIDTH);
-                        assert!(!row.contains('?'), "{species:?} {state:?}: {row:?}");
-                    }
-                }
-            }
             let badge = badge_ascii(species);
             assert!(
                 badge.is_ascii() && badge.chars().count() == BADGE_WIDTH,
@@ -929,47 +538,6 @@ mod tests {
         badges.sort();
         badges.dedup();
         assert_eq!(badges.len(), WhaleSpecies::ALL.len(), "{badges:?}");
-    }
-
-    #[test]
-    fn plain_whale_matches_the_codewhale_mark_vocabulary() {
-        let rows = portrait_text(WhaleSpecies::Plain, None, 0);
-        assert_eq!(rows[0], "  ▗▄▄▄▄▄▖  ▚△▞");
-        assert_eq!(rows[1], "  ▐█·███▙━━▞  ");
-        assert_eq!(rows[2], "  ▝▀▀▀▀▀▘     ");
-        let ascii = portrait_ascii(WhaleSpecies::Plain, None, 0);
-        assert_eq!(ascii[0], "  .#####.  \\^/");
-        assert_eq!(ascii[1], "  |#.####--/  ");
-        assert_eq!(ascii[2], "  .#####.     ");
-    }
-
-    #[test]
-    fn state_cues_follow_the_visual_brief() {
-        let thinking = portrait_text(WhaleSpecies::Scout, Some(WhaleState::Thinking), 0);
-        assert!(thinking[0].starts_with("˚˚"), "{thinking:?}");
-        let working0 = portrait_text(WhaleSpecies::Scout, Some(WhaleState::Working), 0);
-        assert!(working0[2].ends_with("·   "), "{working0:?}");
-        let working2 = portrait_text(WhaleSpecies::Scout, Some(WhaleState::Working), 2);
-        assert_ne!(working0[2], working2[2]);
-        let waiting = portrait_text(WhaleSpecies::Harbor, Some(WhaleState::Waiting), 0);
-        assert!(
-            waiting[0].starts_with("╭─") && waiting[1].starts_with('│'),
-            "{waiting:?}"
-        );
-        assert!(waiting[2].starts_with("╰─"), "{waiting:?}");
-        let blocked = portrait_text(WhaleSpecies::Keel, Some(WhaleState::Blocked), 0);
-        assert!(
-            blocked.iter().all(|r| r.chars().nth(1) == Some('▌')),
-            "{blocked:?}"
-        );
-        let offline = portrait_text(WhaleSpecies::Echo, Some(WhaleState::Offline), 0);
-        assert!(!offline.iter().any(|r| r.contains('█')), "{offline:?}");
-        assert!(offline[1].contains('░'), "{offline:?}");
-        // Resting and identity-only carry no cue in the cue lane.
-        for state in [None, Some(WhaleState::Resting)] {
-            let rows = portrait_text(WhaleSpecies::Plain, state, 0);
-            assert!(rows.iter().all(|r| r.starts_with("  ")), "{rows:?}");
-        }
     }
 
     #[test]
@@ -1107,7 +675,14 @@ mod tests {
 
     #[test]
     fn badge_accents_meet_secondary_chrome_contrast_on_dark_and_light() {
-        for theme in [palette::UI_THEME, palette::LIGHT_UI_THEME] {
+        // Flat Whale shells are terminal-owned and therefore deliberately
+        // unresolvable. Contrast is enforced against the concrete colors the
+        // explicit Deepsea treatment paints behind these badges.
+        let mut dark = palette::UI_THEME;
+        dark.surface_bg = palette::WHALE_BG;
+        let mut light = palette::LIGHT_UI_THEME;
+        light.surface_bg = palette::LIGHT_SURFACE;
+        for theme in [dark, light] {
             let ink = WhaleInk::from_theme(&theme);
             for species in WhaleSpecies::ALL {
                 for color in [ink.accent(species), ink.body_for(species)] {
@@ -1146,23 +721,5 @@ mod tests {
         }
         assert_eq!(WhaleSpecies::Scout.name(), "Scout");
         assert_eq!(WhaleSpecies::Plain.name(), "Codewhale");
-    }
-
-    /// Rendered gallery — kept as a test so the whole set can be eyeballed
-    /// with `--nocapture` without adding a slash command.
-    #[test]
-    #[allow(clippy::print_stdout)]
-    fn gallery_renders_every_species_in_every_state() {
-        for species in WhaleSpecies::ALL {
-            println!("== {} ({}) ==", species.name(), badge_ascii(species));
-            for state in std::iter::once(None).chain(WhaleState::ALL.into_iter().map(Some)) {
-                let rows = portrait_text(species, state, 1);
-                let ascii = portrait_ascii(species, state, 1);
-                println!("-- {state:?}");
-                for (u, a) in rows.iter().zip(ascii.iter()) {
-                    println!("{u}    {a}");
-                }
-            }
-        }
     }
 }

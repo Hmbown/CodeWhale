@@ -1047,7 +1047,7 @@ fn headless_worker_registration_enforces_live_claims_and_projects_context() {
 
     let overlap = manager
         .preflight_worker_coordination(&worker("worker-b", "src/a/nested"))
-        .expect_err("overlapping live Fleet writer must remain queued");
+        .expect_err("overlapping live Pod writer must remain queued");
     assert!(overlap.contains("worker-a"), "{overlap}");
     assert_eq!(manager.coordination.contentions.len(), 1);
     assert!(manager.get_worker_record("worker-b").is_none());
@@ -2662,13 +2662,13 @@ fn test_implementer_and_verifier_have_distinct_prompts() {
 #[test]
 fn test_agent_type_prompts_include_shared_output_contract_once() {
     for (agent_type, marker) in [
-        (FleetRole::Worker, "Fleet worker"),
-        (FleetRole::Scout, "Fleet scout"),
-        (FleetRole::Planner, "Fleet planner"),
-        (FleetRole::Reviewer, "Fleet reviewer"),
-        (FleetRole::Builder, "Fleet builder"),
-        (FleetRole::Verifier, "Fleet verifier"),
-        (FleetRole::Custom, "custom Fleet worker"),
+        (FleetRole::Worker, "Pod worker"),
+        (FleetRole::Scout, "Pod scout"),
+        (FleetRole::Planner, "Pod planner"),
+        (FleetRole::Reviewer, "Pod reviewer"),
+        (FleetRole::Builder, "Pod builder"),
+        (FleetRole::Verifier, "Pod verifier"),
+        (FleetRole::Custom, "custom Pod worker"),
     ] {
         let prompt = agent_type.system_prompt();
         assert!(prompt.contains(marker));
@@ -2792,7 +2792,7 @@ fn agent_description_explains_background_child_and_transcript_handle() {
     assert!(description.contains("multiple starts"));
     assert!(description.contains("action=wait"));
     assert!(description.contains("action=claim"));
-    assert!(description.contains("Fleet profile"));
+    assert!(description.contains("Pod profile"));
     assert!(
         estimate_tool_description_tokens_conservative(description) <= 1024,
         "agent description exceeds the conservative 1024-token budget"
@@ -3860,7 +3860,7 @@ async fn agent_roster_action_redacts_selected_fleet_load_details() {
         fleets.join("broken.toml"),
         format!("not valid TOML /Users/operator/private {secret_marker}\n"),
     )
-    .expect("broken Fleet");
+    .expect("broken Pod");
 
     let roster = crate::fleet::identity::load_effective_roster(
         &codewhale_config::FleetConfigToml::default(),
@@ -3877,11 +3877,11 @@ async fn agent_roster_action_redacts_selected_fleet_load_details() {
     let message = tool
         .execute(json!({"action": "roster"}), &ToolContext::new(tmp.path()))
         .await
-        .expect_err("invalid selected Fleet must fail visibly")
+        .expect_err("invalid selected Pod must fail visibly")
         .to_string();
 
     assert!(
-        message.contains("Selected folder Fleet `Broken`"),
+        message.contains("Selected folder Pod `Broken`"),
         "{message}"
     );
     assert!(!message.contains(&tmp.path().display().to_string()));
@@ -3899,7 +3899,7 @@ fn test_apply_spawn_profile_unknown_lists_available_members() {
     let err = apply_spawn_profile(&mut request, &roster).expect_err("unknown profile should fail");
     let message = err.to_string();
     assert!(
-        message.contains("Unknown fleet role/profile 'warlock'"),
+        message.contains("Unknown Pod role/profile 'warlock'"),
         "{message}"
     );
     for member in [
@@ -3990,7 +3990,7 @@ fn test_apply_spawn_profile_scout_yields_explore_type_and_inherits_route() {
     assert_eq!(
         selected.model_route,
         ModelRoute::Inherit,
-        "without Fleet setup the scout inherits the active session model"
+        "without Pod setup the scout inherits the active session model"
     );
     assert_eq!(selected.source, SpawnRouteSource::RunModel);
 }
@@ -4423,7 +4423,7 @@ fn named_fleet_profile_rejects_model_override() {
         .expect_err("model override on named profile must fail");
     let message = err.to_string();
     assert!(
-        message.contains("fleet profile 'scout'") && message.contains("'model' may not be set"),
+        message.contains("Pod profile 'scout'") && message.contains("'model' may not be set"),
         "error should name the profile and the forbidden field: {message}"
     );
     assert!(
@@ -4443,7 +4443,7 @@ fn named_fleet_profile_rejects_model_override() {
         .expect_err("model_strength override on named profile must fail");
     let message = err.to_string();
     assert!(
-        message.contains("fleet profile 'builder'")
+        message.contains("Pod profile 'builder'")
             && message.contains("'model_strength' may not be set"),
         "error should name the profile and the forbidden field: {message}"
     );
@@ -4457,7 +4457,7 @@ fn named_fleet_profile_rejects_model_override() {
     .expect("parse should succeed before apply");
     let err = apply_spawn_profile(&mut request, &roster)
         .expect_err("model_strength on reviewer must fail");
-    assert!(err.to_string().contains("fleet profile 'reviewer'"));
+    assert!(err.to_string().contains("Pod profile 'reviewer'"));
 }
 
 /// 'general' is the single escape hatch that accepts model and model_strength.
@@ -4524,7 +4524,7 @@ fn custom_fleet_profile_also_rejects_model_override() {
         .expect_err("model override on custom named profile must fail");
     let message = err.to_string();
     assert!(
-        message.contains("fleet profile 'my-builder'"),
+        message.contains("Pod profile 'my-builder'"),
         "error must name the custom profile: {message}"
     );
     assert!(
@@ -4657,7 +4657,7 @@ fn test_apply_spawn_profile_appends_instruction_overlay() {
         request.prompt
     );
     assert!(
-        request.prompt.contains("Fleet profile: auditor"),
+        request.prompt.contains("Pod profile: auditor"),
         "{}",
         request.prompt
     );
@@ -4907,7 +4907,7 @@ fn test_parse_spawn_request_accepts_human_role_selector_for_runtime_resolution()
     let roster = isolated_fleet_roster_with("flash-scout", profile);
     let member = apply_spawn_profile(&mut parsed, &roster)
         .expect("human role selector should resolve")
-        .expect("matching Fleet member");
+        .expect("matching Pod member");
     assert_eq!(member.id, "flash-scout");
     assert_eq!(parsed.profile.as_deref(), Some("flash-scout"));
 }
@@ -5032,10 +5032,7 @@ fn test_invalid_role_error_lists_real_aliases() {
     let err = apply_spawn_profile(&mut request, &roster)
         .expect_err("unknown fleet role should fail at runtime resolution")
         .to_string();
-    assert!(
-        err.contains("Unknown fleet role/profile 'nonsense'"),
-        "{err}"
-    );
+    assert!(err.contains("Unknown Pod role/profile 'nonsense'"), "{err}");
     assert!(err.contains("scout"), "hint should list scout: {err}");
     assert!(err.contains("reviewer"), "hint should list reviewer: {err}");
     assert!(err.contains("verifier"), "hint should list verifier: {err}");
@@ -5316,15 +5313,15 @@ fn agent_tool_role_schema_is_a_closed_canonical_enum() {
     ]);
     assert_eq!(
         agent_schema["properties"]["type"]["enum"], expected,
-        "model-facing role schema must advertise exactly the canonical Fleet enum"
+        "model-facing role schema must advertise exactly the canonical Pod enum"
     );
 
     // The description teaches each canonical role and never advertises
     // legacy aliases; those stay at replay/deserialization boundaries.
     let description = schema_property_description(&agent_schema, "type");
     assert!(
-        description.starts_with("Fleet role for this delegated worker."),
-        "type description should lead with the Fleet role contract: {description}"
+        description.starts_with("Pod role for this delegated worker."),
+        "type description should lead with the Pod role contract: {description}"
     );
     let lowered = description.to_ascii_lowercase();
     for legacy in [
@@ -6200,7 +6197,7 @@ fn test_parse_spawn_request_rejects_conflicting_type_and_role() {
     let err = parse_spawn_request(&input).expect_err("conflicting type+role should fail");
     assert!(
         err.to_string()
-            .contains("Fleet role conflicts with the explicit legacy agent type")
+            .contains("Pod role conflicts with the explicit legacy agent type")
     );
 }
 
@@ -8094,11 +8091,11 @@ fn every_fleet_role_catalog_advertises_one_executable_load_skill() {
             .count();
         assert_eq!(
             load_skills, 1,
-            "Fleet role {role:?} must advertise exactly one load_skill"
+            "Pod role {role:?} must advertise exactly one load_skill"
         );
         assert!(
             registry.is_tool_allowed("load_skill"),
-            "Fleet role {role:?} must be able to execute the advertised load_skill"
+            "Pod role {role:?} must be able to execute the advertised load_skill"
         );
 
         if matches!(
@@ -8727,6 +8724,7 @@ async fn spawn_duplicate_session_name_error_names_conflicting_agent() {
     // #2656: the duplicate-name error must identify the conflicting agent so a
     // model can recover deterministically (reuse the id, or pick a new name).
     let manager = Arc::new(RwLock::new(SubAgentManager::new(PathBuf::from("."), 5)));
+    let boot_id = manager.read().await.session_boot_id().to_string();
     let (input_tx, _input_rx) = mpsc::unbounded_channel();
     let mut existing = SubAgent::new(
         "test_agent_existing".to_string(),
@@ -8738,7 +8736,7 @@ async fn spawn_duplicate_session_name_error_names_conflicting_agent() {
         Some(vec!["read_file".to_string()]),
         input_tx,
         PathBuf::from("."),
-        "boot_test".to_string(),
+        boot_id,
     );
     existing.session_name = "researcher".to_string();
     existing.status = SubAgentStatus::Running;
@@ -8780,6 +8778,66 @@ async fn spawn_duplicate_session_name_error_names_conflicting_agent() {
         msg.contains("started ") && msg.contains(" ago"),
         "includes elapsed time since spawn: {msg}"
     );
+}
+
+#[tokio::test]
+async fn spawn_session_name_held_by_prior_session_agent_does_not_collide() {
+    // A completed worker hydrated from an earlier session's ledger is not
+    // addressable by `status`/`peek`/`followup` in this session, so it must
+    // not reserve its name either: a fresh `codewhale exec` in the same
+    // workspace has to be able to spawn `researcher` again.
+    let tmp = tempdir().expect("tempdir");
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 5);
+    let (input_tx, _input_rx) = mpsc::unbounded_channel();
+    let mut stale = SubAgent::new(
+        "test_agent_stale".to_string(),
+        FleetRole::Scout,
+        "scan".to_string(),
+        make_assignment(),
+        "deepseek-v4-flash".to_string(),
+        Some("Blue".to_string()),
+        Some(vec!["read_file".to_string()]),
+        input_tx,
+        tmp.path().to_path_buf(),
+        "boot_stale_other".to_string(),
+    );
+    stale.session_name = "researcher".to_string();
+    stale.status = SubAgentStatus::Completed;
+    let stale_id = stale.id.clone();
+    {
+        let mut guard = manager.write().await;
+        guard.agents.insert(stale_id.clone(), stale);
+        assert!(guard.is_from_prior_session(&guard.agents[&stale_id]));
+    }
+
+    let mut runtime = stub_runtime();
+    runtime.manager = Arc::clone(&manager);
+    runtime.context = ToolContext::new(tmp.path());
+    let spawned = {
+        let mut guard = manager.write().await;
+        guard
+            .spawn_background_with_assignment_options(
+                manager.clone(),
+                runtime,
+                FleetRole::Scout,
+                "new work".to_string(),
+                make_assignment(),
+                Some(vec!["read_file".to_string()]),
+                SubAgentSpawnOptions {
+                    name: Some("researcher".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("a prior-session holder must not reject a fresh same-name spawn")
+    };
+    assert_ne!(spawned.agent_id, stale_id);
+    let guard = manager.read().await;
+    let fresh = guard
+        .agents
+        .get(&spawned.agent_id)
+        .expect("fresh agent registered");
+    assert_eq!(fresh.session_name, "researcher");
+    assert!(!guard.is_from_prior_session(fresh));
 }
 
 #[tokio::test]
@@ -8913,7 +8971,7 @@ async fn write_scope_contention_covers_regular_agent_and_active_fleet_writer() {
             tmp.path().to_path_buf(),
             "src/shared",
         ))
-        .expect("active Fleet writer claim");
+        .expect("active Pod writer claim");
 
     let regular_id = inner.insert_test_running_agent("regular", tmp.path());
     inner
@@ -8936,7 +8994,7 @@ async fn write_scope_contention_covers_regular_agent_and_active_fleet_writer() {
             Vec::new(),
             Vec::new(),
         )
-        .expect_err("regular-agent scope expansion must see active Fleet ownership");
+        .expect_err("regular-agent scope expansion must see active Pod ownership");
     assert!(
         expansion.contains("fleet-writer") && expansion.contains("contention"),
         "{expansion}"
@@ -8953,7 +9011,7 @@ async fn write_scope_contention_covers_regular_agent_and_active_fleet_writer() {
             Arc::clone(&manager),
             runtime,
             FleetRole::Builder,
-            "edit Fleet-owned scope".into(),
+            "edit Pod-owned scope".into(),
             make_assignment(),
             Some(vec![]),
             SubAgentSpawnOptions {
@@ -8967,7 +9025,7 @@ async fn write_scope_contention_covers_regular_agent_and_active_fleet_writer() {
                 ..Default::default()
             },
         )
-        .expect_err("regular-agent launch must see active Fleet ownership");
+        .expect_err("regular-agent launch must see active Pod ownership");
     let launch = launch.to_string();
     assert!(
         launch.contains("fleet-writer") && launch.contains("contention"),
@@ -11506,6 +11564,257 @@ fn shared_claim_shell_gate_normalizes_only_the_run_action() {
             "Bash.{action} must retain its existing non-run claim behavior"
         );
     }
+}
+
+/// Build one registry per contended child, both bound to the same shared
+/// manager and workspace — the two-builder shared-checkout topology.
+fn contended_builder_registry(
+    manager: &SharedSubAgentManager,
+    workspace: &Path,
+    owner: &str,
+) -> SubAgentToolRegistry {
+    let mut runtime = stub_runtime();
+    runtime.manager = Arc::clone(manager);
+    runtime.context = ToolContext::new(workspace);
+    runtime.context.auto_approve = true;
+    runtime.worker_profile = WorkerRuntimeProfile::for_role(FleetRole::Builder);
+    SubAgentToolRegistry::new_with_owner(
+        runtime,
+        FleetRole::Builder,
+        owner.to_string(),
+        "implementer".into(),
+        Some(vec!["File".into(), "Bash".into()]),
+        Arc::new(Mutex::new(TodoList::new())),
+        Arc::new(Mutex::new(PlanState::default())),
+    )
+}
+
+/// Two live write-capable children with disjoint `exact_files` claims in one
+/// shared checkout: a bash call the read-only classifier proves mutation-free
+/// must still run on both. The contention gate used to re-test
+/// `is_unbounded_shell_run` unconditionally, so a provably read-only `ls` was
+/// refused whenever a peer held a claim — even though the ledger had already
+/// proven the two claims disjoint at admission.
+#[tokio::test]
+async fn contended_shared_writers_keep_proven_readonly_shell() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
+    {
+        let mut guard = manager.write().await;
+        assert_eq!(guard.insert_test_running_agent("a", tmp.path()), "agent_a");
+        assert_eq!(guard.insert_test_running_agent("b", tmp.path()), "agent_b");
+        let live: HashSet<String> = ["agent_a".to_string(), "agent_b".to_string()]
+            .into_iter()
+            .collect();
+        for (owner, file) in [("agent_a", "src/a.txt"), ("agent_b", "src/b.txt")] {
+            guard
+                .coordination
+                .register_claim(
+                    WriteScopeClaim {
+                        owner: owner.into(),
+                        roots: vec![],
+                        exact_files: vec![file.into()],
+                        contracts: vec![],
+                    },
+                    false,
+                    |candidate| live.contains(candidate),
+                )
+                .expect("disjoint exact-file claims admit both live writers");
+        }
+    }
+    for owner in ["agent_a", "agent_b"] {
+        let registry = contended_builder_registry(&manager, tmp.path(), owner);
+        registry
+            .execute(owner, "Bash", json!({"action": "run", "command": "ls src"}))
+            .await
+            .unwrap_or_else(|err| {
+                panic!("proven read-only shell must survive contention for {owner}: {err}")
+            });
+    }
+}
+
+/// The same contention still refuses a shell call the classifier cannot prove
+/// read-only — and the refusal names the blocking peer and its remediation so
+/// the child can recover instead of retrying blindly.
+#[tokio::test]
+async fn contended_shared_writer_refusal_names_blocking_peer_and_remediation() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
+    {
+        let mut guard = manager.write().await;
+        assert_eq!(guard.insert_test_running_agent("a", tmp.path()), "agent_a");
+        assert_eq!(guard.insert_test_running_agent("b", tmp.path()), "agent_b");
+        let live: HashSet<String> = ["agent_a".to_string(), "agent_b".to_string()]
+            .into_iter()
+            .collect();
+        for (owner, file) in [("agent_a", "src/a.txt"), ("agent_b", "src/b.txt")] {
+            guard
+                .coordination
+                .register_claim(
+                    WriteScopeClaim {
+                        owner: owner.into(),
+                        roots: vec![],
+                        exact_files: vec![file.into()],
+                        contracts: vec![],
+                    },
+                    false,
+                    |candidate| live.contains(candidate),
+                )
+                .expect("disjoint exact-file claims admit both live writers");
+        }
+    }
+    let registry = contended_builder_registry(&manager, tmp.path(), "agent_a");
+    let err = registry
+        .execute(
+            "agent_a",
+            "Bash",
+            json!({"action": "run", "command": "touch src/a2.txt"}),
+        )
+        .await
+        .expect_err("mutating shell under contention must stay refused")
+        .to_string();
+    assert!(
+        err.contains("cannot prove a bounded file target"),
+        "refusal kind: {err}"
+    );
+    assert!(
+        err.contains("agent_b"),
+        "refusal must name the blocking peer: {err}"
+    );
+    assert!(
+        err.contains("agents/coordinate action=release") && err.contains("worktree isolation"),
+        "refusal must state concrete remediation: {err}"
+    );
+    assert!(
+        !tmp.path().join("src/a2.txt").exists(),
+        "the refused command must not have run"
+    );
+}
+
+/// A child whose task body panics must still reach a terminal state.
+/// `spawn_supervised` catches the panic to keep the parent alive; without the
+/// guard committing a crash result the child stayed `Running` and its write
+/// claim kept gating live peers until heartbeat auto-cancel — or forever while
+/// a lingering shell kept the heartbeat fresh.
+#[tokio::test]
+async fn panicked_child_task_terminalizes_and_stops_gating_peers() {
+    let tmp = tempdir().expect("tempdir");
+    let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 4);
+    let agent_id = {
+        let mut guard = manager.write().await;
+        let agent_id = guard.insert_test_running_agent("panicked", tmp.path());
+        guard
+            .coordination
+            .register_claim(
+                WriteScopeClaim {
+                    owner: agent_id.clone(),
+                    roots: vec!["src".into()],
+                    exact_files: vec![],
+                    contracts: vec![],
+                },
+                false,
+                |_| false,
+            )
+            .expect("panicked child's claim");
+        assert!(guard.is_live_coordination_owner(&agent_id));
+        agent_id
+    };
+
+    // Drive a panic through the same guard the production spawn path wraps
+    // around the task body.
+    let handle = tokio::spawn(supervise_subagent_task_body(
+        Arc::clone(&manager),
+        agent_id.clone(),
+        async { panic!("intentional test panic") },
+    ));
+    let join_error = handle
+        .await
+        .expect_err("the panic must still reach the task supervisor");
+    assert!(join_error.is_panic());
+
+    let guard = manager.read().await;
+    let result = guard.get_result(&agent_id).expect("agent record survives");
+    assert!(
+        matches!(&result.status, SubAgentStatus::Failed(message) if message.contains("panicked")),
+        "panicked child must commit a crash terminal result, got {:?}",
+        result.status
+    );
+    assert!(
+        guard
+            .get_worker_record(&agent_id)
+            .expect("worker record")
+            .status
+            .is_terminal(),
+        "the paired worker record terminalizes with the agent"
+    );
+    assert!(
+        !guard.is_live_coordination_owner(&agent_id),
+        "a panicked child must not keep gating peers as a live writer"
+    );
+}
+
+/// A headless fleet worker (a worker record with no paired agent entry) that
+/// reaches `WaitingForUser` can never be answered — nothing will resume or
+/// finalize it — so it must not count as a live coordination owner, and the
+/// `agents/coordinate action=release` remediation the gate names must be able
+/// to clear its claim. A *paired* child waiting on the user is untouched.
+#[test]
+fn waiting_for_user_headless_worker_is_not_a_live_coordination_owner() {
+    let tmp = tempdir().expect("tempdir");
+    let workspace = tmp.path().canonicalize().expect("canonical workspace");
+    let mut manager = SubAgentManager::new(workspace.clone(), 8);
+
+    manager
+        .register_worker_with_coordination(make_write_worker_spec(
+            "worker-waiting",
+            workspace.clone(),
+            "src/waiting",
+        ))
+        .expect("headless worker registration");
+    assert!(manager.is_live_coordination_owner("worker-waiting"));
+    manager
+        .worker_records
+        .get_mut("worker-waiting")
+        .expect("worker record")
+        .status = AgentWorkerStatus::WaitingForUser;
+    assert!(
+        !manager.is_live_coordination_owner("worker-waiting"),
+        "a headless worker can never answer WaitingForUser"
+    );
+    assert!(
+        !manager
+            .active_coordination_owners()
+            .contains("worker-waiting"),
+        "admission and stale-claim release share the same liveness answer"
+    );
+    let released = manager
+        .release_stale_write_claims(Some("worker-waiting".to_string()))
+        .expect("release sweep");
+    assert_eq!(
+        released,
+        vec!["worker-waiting".to_string()],
+        "the remediation the gate names must actually clear the leaked claim"
+    );
+
+    // The interactive case is preserved: a paired child waiting on the user
+    // keeps its claim — the user can still answer and the child will write.
+    let paired = manager.insert_test_running_agent("paired", &workspace);
+    manager
+        .agents
+        .get_mut(&paired)
+        .expect("paired agent")
+        .status = SubAgentStatus::Interrupted("awaiting user input".to_string());
+    manager
+        .worker_records
+        .get_mut(&paired)
+        .expect("paired worker record")
+        .status = AgentWorkerStatus::WaitingForUser;
+    assert!(
+        manager.is_live_coordination_owner(&paired),
+        "an interactive child waiting on the user stays live"
+    );
 }
 
 #[tokio::test]
@@ -19139,7 +19448,7 @@ fn the_spawn_boundary_fails_closed_on_a_missing_or_mismatched_authority() {
         let error = verify_fleet_authority_input(&fingerprint, &tampered)
             .expect_err("a tampered envelope must fail closed");
         assert!(
-            error.to_string().contains("fleet authority mismatch"),
+            error.to_string().contains("Pod authority mismatch"),
             "{label}: {error}"
         );
     }

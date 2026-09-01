@@ -56,6 +56,10 @@ pub const MAX_STREAM_CHUNK_TIMEOUT_SECS: u64 = 3600;
 pub(crate) const STREAM_CHUNK_TIMEOUT_ENV: &str = "CODEWHALE_STREAM_IDLE_TIMEOUT_SECS";
 /// Legacy alias for [`STREAM_CHUNK_TIMEOUT_ENV`].
 pub(crate) const LEGACY_STREAM_CHUNK_TIMEOUT_ENV: &str = "DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS";
+/// R1: env override for `[tui].max_model_steps`.
+pub(crate) const MAX_MODEL_STEPS_ENV: &str = "CODEWHALE_MAX_MODEL_STEPS";
+/// R1: env override for `[tui].turn_wall_clock_secs`.
+pub(crate) const TURN_WALL_CLOCK_ENV: &str = "CODEWHALE_TURN_WALL_CLOCK_SECS";
 
 pub(crate) fn resolve_subagent_api_timeout_secs(raw: Option<u64>) -> u64 {
     let raw = raw.unwrap_or(DEFAULT_SUBAGENT_API_TIMEOUT_SECS);

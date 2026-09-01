@@ -90,8 +90,33 @@ fn apple_interface_style_maps_dark_and_missing_key_to_expected_modes() {
 fn ui_theme_selects_light_variant() {
     let theme = UiTheme::for_mode(PaletteMode::Light);
     assert_eq!(theme, LIGHT_UI_THEME);
-    assert_eq!(theme.surface_bg, LIGHT_SURFACE);
+    assert_eq!(theme.surface_bg, Color::Reset);
     assert_eq!(theme.text_body, LIGHT_TEXT_BODY);
+}
+
+#[test]
+fn whale_pair_flat_shells_are_terminal_native_without_erasing_semantic_surfaces() {
+    for theme in [UI_THEME, LIGHT_UI_THEME] {
+        for shell_surface in [
+            theme.surface_bg,
+            theme.panel_bg,
+            theme.composer_bg,
+            theme.header_bg,
+            theme.footer_bg,
+        ] {
+            assert_eq!(shell_surface, Color::Reset, "{} shell", theme.name);
+        }
+
+        for semantic_surface in [
+            theme.elevated_bg,
+            theme.selection_bg,
+            theme.error_surface,
+            theme.diff_added_bg,
+            theme.diff_deleted_bg,
+        ] {
+            assert_ne!(semantic_surface, Color::Reset, "{} semantics", theme.name);
+        }
+    }
 }
 
 #[test]
@@ -613,6 +638,31 @@ fn color_depth_detect_is_safe_without_env() {
     let _ = adapt_color(WHALE_BG, ColorDepth::detect());
 }
 
+/// no-color.org contract (spec TIDELINE §5d gap): `NO_COLOR` present and
+/// non-empty forces the mono/ascii-safe path even on a truecolor terminal;
+/// an empty value does not count.
+#[test]
+fn no_color_forces_the_mono_depth_even_on_truecolor() {
+    fn read(pairs: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+        move |key: &str| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| std::ffi::OsString::from(v))
+        }
+    }
+    let depth = ColorDepth::detect_with(read(&[("NO_COLOR", "1"), ("COLORTERM", "truecolor")]));
+    assert_eq!(depth, ColorDepth::Ansi16, "NO_COLOR wins over COLORTERM");
+    let depth = ColorDepth::detect_with(read(&[("NO_COLOR", ""), ("COLORTERM", "truecolor")]));
+    assert_eq!(
+        depth,
+        ColorDepth::TrueColor,
+        "empty NO_COLOR does not count (no-color.org)"
+    );
+    let depth = ColorDepth::detect_with(read(&[("COLORTERM", "truecolor")]));
+    assert_eq!(depth, ColorDepth::TrueColor, "no NO_COLOR: normal detect");
+}
+
 // === #4833: contrast floor ===
 
 use super::contrast::{
@@ -978,22 +1028,25 @@ fn every_selectable_theme_clears_the_text_floor() {
             theme_id.name(),
         );
     }
-    // The transparent-terminal exemption is exactly one theme, by design.
-    assert_eq!(terminal_owned, ["terminal"]);
+    // System resolves to one member of the built-in Whale pair. Those Flat
+    // shells and Terminal are intentionally host-owned; community themes stay
+    // painted and therefore remain fully auditable here.
+    assert_eq!(terminal_owned, ["system", "terminal", "dark", "light"]);
 }
 
 #[test]
-fn transparent_terminal_theme_is_explicitly_terminal_owned() {
-    // The Terminal theme paints `Color::Reset` surfaces and named-ANSI text:
-    // every audited pair is terminal-defined, so the audit records zero
-    // violations. That is *not* a pass — unresolvable pairs are skipped,
-    // never counted as clearing the floor. `theme_uses_terminal_owned_surfaces`
-    // is what keeps the exemption explicit instead of silent.
-    assert!(theme_uses_terminal_owned_surfaces(&TERMINAL_UI_THEME));
-    assert_eq!(TERMINAL_UI_THEME.surface_bg, Color::Reset);
-    assert!(theme_contrast_violations(&TERMINAL_UI_THEME).is_empty());
-    // A theme with resolvable RGB surfaces never gets the exemption.
-    assert!(!theme_uses_terminal_owned_surfaces(&UI_THEME));
+fn terminal_native_theme_exemptions_are_explicit() {
+    // Reset surfaces are terminal-defined, so the audit records zero
+    // violations for those pairs. That is *not* a pass — unresolvable pairs
+    // are skipped, never counted as clearing the floor. Deepsea's authored
+    // RGB ramp is audited separately by the ocean tests.
+    for theme in [TERMINAL_UI_THEME, UI_THEME, LIGHT_UI_THEME] {
+        assert!(theme_uses_terminal_owned_surfaces(&theme));
+        assert_eq!(theme.surface_bg, Color::Reset);
+        assert!(theme_contrast_violations(&theme).is_empty());
+    }
+    // A painted community theme never gets the exemption.
+    assert!(!theme_uses_terminal_owned_surfaces(&TOKYO_NIGHT_UI_THEME));
 }
 
 #[test]
@@ -1020,7 +1073,7 @@ fn high_contrast_grayscale_theme_clears_body_floor_on_every_surface() {
 
 #[test]
 fn violation_report_names_pair_and_ratio() {
-    let mut bad = UI_THEME;
+    let mut bad = TOKYO_NIGHT_UI_THEME;
     bad.text_muted = bad.surface_bg;
     let violations = theme_contrast_violations(&bad);
     // The muted-on-surface color fails against all four text surfaces.

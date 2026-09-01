@@ -1,7 +1,7 @@
-//! The saved named Fleet — the single configuration concept for the whole
-//! Fleet surface (v2, `schema = "fleet"`).
+//! The saved named Pod — the single configuration concept for the whole
+//! Pod surface. Its v2 compatibility storage keeps `schema = "fleet"`.
 //!
-//! A Fleet is one self-contained TOML file. It owns:
+//! A Pod is one self-contained TOML file. It owns:
 //!
 //! - its **operator** route (provider + exact model + reasoning), or the
 //!   explicit absence of one ("inherit the session route");
@@ -16,13 +16,13 @@
 //! (`~/.codewhale/agents/*.toml`, `.codewhale/agents/*.toml`,
 //! `[fleet.profiles]`) and the workflow crate's `exact`/legacy named-fleet
 //! files are migration/compat input only — read here, never shadowed, never
-//! the runtime winner alongside a v2 Fleet.
+//! the runtime winner alongside a v2 Pod.
 //!
 //! Selection is a scope-explicit file: `fleets/selected` under the personal
 //! root is the user-global default; the same file under the workspace root is
 //! an intentional workspace selection. Workspace selection wins; both are
 //! labeled in the UI. A workspace selection can never hide or rewrite a
-//! personal Fleet.
+//! personal Pod.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -43,7 +43,7 @@ const MAX_MEMBER_DISPLAY_NAME_CHARS: usize = 80;
 pub const FLEET_DIR: &str = "fleets";
 pub const SELECTED_FILE: &str = "selected";
 
-/// Where a Fleet was saved. This is the pin target: personal = user-global,
+/// Where a Pod was saved. This is the pin target: personal = user-global,
 /// workspace = folder-scoped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -79,7 +79,7 @@ impl FleetScope {
     }
 }
 
-/// A Fleet's own operator route. Absent = inherit the live session route.
+/// A Pod's own operator route. Absent = inherit the live session route.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FleetOperator {
@@ -119,7 +119,7 @@ impl MemberCapability {
     }
 }
 
-/// One roster member of a Fleet.
+/// One roster member of a Pod.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FleetMember {
@@ -157,7 +157,7 @@ pub struct FleetMember {
     pub requires: Vec<String>,
 }
 
-/// The saved named Fleet document (`schema = "fleet"`, revision 2).
+/// The saved named Pod document (compatibility `schema = "fleet"`, revision 2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FleetFile {
@@ -179,19 +179,17 @@ pub struct FleetFile {
 /// Why a Fleet file could not be used.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum FleetStoreError {
-    #[error("invalid fleet: {0}")]
+    #[error("invalid Pod: {0}")]
     Invalid(String),
-    #[error(
-        "fleet `{0}` is defined in both {1} and {2}; name one explicitly as {1}/{0} or {2}/{0}"
-    )]
+    #[error("Pod `{0}` is defined in both {1} and {2}; name one explicitly as {1}/{0} or {2}/{0}")]
     Ambiguous(String, String, String),
-    #[error("fleet file not found: {0}")]
+    #[error("Pod file not found: {0}")]
     NotFound(String),
     #[error("failed to read {path}: {message}")]
     Io { path: String, message: String },
     #[error("failed to parse {path}: {message}")]
     Parse { path: String, message: String },
-    #[error("a fleet named `{name}` already exists at {path}; rename it or choose another name")]
+    #[error("a Pod named `{name}` already exists at {path}; rename it or choose another name")]
     NameTaken { name: String, path: String },
 }
 
@@ -229,7 +227,7 @@ impl FleetFile {
         let name = self.name.trim();
         if name.is_empty() {
             return Err(FleetStoreError::Invalid(
-                "fleet name must not be empty".to_string(),
+                "Pod name must not be empty".to_string(),
             ));
         }
         let mut seen: BTreeMap<String, String> = BTreeMap::new();
@@ -296,14 +294,14 @@ impl FleetFile {
     pub fn render_toml(&self) -> Result<String, FleetStoreError> {
         self.validate()?;
         let rendered = toml::to_string_pretty(self)
-            .map_err(|e| FleetStoreError::Invalid(format!("failed to serialize fleet: {e}")))?;
+            .map_err(|e| FleetStoreError::Invalid(format!("failed to serialize Pod: {e}")))?;
         Ok(rendered)
     }
 
     /// Parse a v2 fleet document from TOML text.
     pub fn parse(text: &str) -> Result<Self, FleetStoreError> {
         let fleet: Self = toml::from_str(text)
-            .map_err(|e| FleetStoreError::Invalid(format!("invalid fleet TOML: {e}")))?;
+            .map_err(|e| FleetStoreError::Invalid(format!("invalid Pod TOML: {e}")))?;
         fleet.validate()?;
         Ok(fleet)
     }
@@ -351,7 +349,7 @@ fn slugify(name: &str) -> String {
     }
 }
 
-/// One entry in the Fleet list: name, scope, exact path, and health.
+/// One entry in the Pod list: name, scope, exact path, and health.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FleetEntry {
     pub name: String,
@@ -365,7 +363,7 @@ pub struct FleetEntry {
     pub legacy: bool,
 }
 
-/// The resolved selection: which Fleet a session should start on, and which
+/// The resolved selection: which Pod a session should start on, and which
 /// scope made the choice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectedFleet {
@@ -443,9 +441,9 @@ fn collect_entries(dir: &Path, scope: FleetScope, out: &mut Vec<FleetEntry>) {
             .as_deref()
             .and_then(|text| FleetFile::parse(text).err())
             .map(|e| e.to_string());
-        let legacy = parse_error.as_deref().is_some_and(|err| {
-            err.contains("unknown schema") || err.contains("invalid fleet TOML")
-        });
+        let legacy = parse_error
+            .as_deref()
+            .is_some_and(|err| err.contains("unknown schema") || err.contains("invalid Pod TOML"));
         // The row shows the Fleet's own display name, never the file slug —
         // a file saved as `Temp Fleet` must not appear as `temp-fleet`.
         let name = text
@@ -646,7 +644,7 @@ pub fn resolve_selected_fleet(workspace: &Path) -> Result<Option<SelectedFleet>,
             }
         }
         return Err(FleetStoreError::NotFound(format!(
-            "selected Fleet `{name}` (folder selection at {})",
+            "selected Pod `{name}` (folder selection at {})",
             ws_dir.join(SELECTED_FILE).display()
         )));
     }
@@ -662,7 +660,7 @@ pub fn resolve_selected_fleet(workspace: &Path) -> Result<Option<SelectedFleet>,
             }));
         }
         return Err(FleetStoreError::NotFound(format!(
-            "selected Fleet `{name}` (user selection at {})",
+            "selected Pod `{name}` (user selection at {})",
             dir.join(SELECTED_FILE).display()
         )));
     }
@@ -768,7 +766,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), FleetStoreError> {
 }
 
 /// One row of the migration receipt: how a legacy role profile maps into the
-/// new Fleet.
+/// new Pod.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationRow {
     /// Role id, e.g. `scout`.
@@ -1166,7 +1164,10 @@ role = "scout"
         std::fs::write(dir.join(SELECTED_FILE), "Missing Fleet\n").unwrap();
 
         let error = resolve_selected_fleet(ws.path()).expect_err("stale selection must fail");
-        assert!(error.to_string().contains("Missing Fleet"), "{error}");
+        assert!(
+            error.to_string().contains("selected Pod `Missing Fleet`"),
+            "{error}"
+        );
         assert!(error.to_string().contains("folder selection"), "{error}");
     }
 

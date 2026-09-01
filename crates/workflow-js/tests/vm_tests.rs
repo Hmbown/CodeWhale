@@ -602,7 +602,7 @@ async fn parallel_partial_mode_keeps_schema_failures_as_structured_slots() {
         ], { mode: "partial" });
         return results.map((slot) =>
             slot && typeof slot === "object" && slot.__taskError !== undefined
-                ? "schema:" + slot.__taskError.kind
+                ? "error:" + slot.__taskError.kind
                 : slot === null
                   ? "null"
                   : "value:" + JSON.stringify(slot)
@@ -619,8 +619,11 @@ async fn parallel_partial_mode_keeps_schema_failures_as_structured_slots() {
             "value:{\"refuted\":true}",
             // The JS-level kind is the fatal "schema"; the finer decode kind
             // (json_parse) lives on the receipt events, asserted below.
-            "schema:schema",
-            "null"
+            "error:schema",
+            // R9 behavior change: partial mode used to drop a dead subagent
+            // to `null` — indistinguishable from a slot that legitimately
+            // returned nothing. It is now a typed, inspectable failure.
+            "error:agent"
         ])
     );
     // Every failed slot still leaves its terminal receipt.
@@ -998,7 +1001,9 @@ async fn parallel_fail_fast_rejects_with_the_typed_slot_error() {
     .unwrap();
     let text = value.as_str().unwrap();
     assert!(
-        text.starts_with("task:") && text.contains("boom"),
+        // R9: a child that ran and failed is `agent`, distinct from the
+        // `script` kind a plain `throw` in a thunk produces.
+        text.starts_with("agent:") && text.contains("boom"),
         "fail-fast must reject with the typed slot error: {text}"
     );
     assert!(
@@ -1060,7 +1065,7 @@ async fn pipeline_fail_fast_rejects_instead_of_nulling_the_item() {
     )
     .await
     .unwrap();
-    assert_eq!(value, json!("task:stage boom"));
+    assert_eq!(value, json!("script:stage boom"));
 }
 
 #[tokio::test]
@@ -1558,6 +1563,7 @@ async fn sandbox_global_inventory_fails_closed_on_new_host_leaks() {
     for internal in [
         "__workflow_task",
         "__workflow_log",
+        "__workflow_every_slot_failed",
         "__workflow_phase",
         "__workflow_budget_total",
         "__workflow_budget_spent",
@@ -1929,4 +1935,494 @@ async fn vm_rejected_task_options_notify_the_driver() {
     assert_eq!(label.as_deref(), Some("L-bad"));
     assert_eq!(phase.as_deref(), Some("P1"));
     assert!(message.contains("bounded repo-relative paths"), "{message}");
+}
+
+// ---------------------------------------------------------------------------
+// R9: typed slot errors, inspectable settled failures, explicit modes.
+// ---------------------------------------------------------------------------
+
+/// Every way a `task()` can die gets its own kind, assigned by the host where
+/// the failure happened. Before R9 all six collapsed into two buckets
+/// ("budget"/"cancelled" if the message happened to say so, "task" otherwise),
+/// so a dead subagent and a typo'd script throw were the same thing.
+#[tokio::test]
+async fn every_task_failure_mode_carries_its_own_kind() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("agent case", FakeReply::Fail("boom".to_string()));
+    driver.on(
+        "budget case",
+        FakeReply::BudgetExhausted("limit 10".to_string()),
+    );
+    driver.on("cancelled case", FakeReply::Cancelled);
+    driver.on(
+        "admission case",
+        FakeReply::Reject("admission cap".to_string()),
+    );
+    driver.on(
+        "driver case",
+        FakeReply::Unavailable("driver gone".to_string()),
+    );
+    driver.on("dropped case", FakeReply::DropCompletion);
+    driver.on(
+        "schema case",
+        FakeReply::Complete("not json at all".to_string()),
+    );
+
+    let value = run(
+        &driver,
+        r#"
+        const kinds = {};
+        const probe = async (name, opts) => {
+            try {
+                await task(opts);
+                kinds[name] = "none";
+            } catch (err) {
+                kinds[name] = err && err.kind;
+            }
+        };
+        await probe("agent", { description: "agent case" });
+        await probe("budget", { description: "budget case" });
+        await probe("cancelled", { description: "cancelled case" });
+        await probe("admission", { description: "admission case" });
+        await probe("driver", { description: "driver case" });
+        await probe("dropped", { description: "dropped case" });
+        await probe("schema", {
+            description: "schema case",
+            schemaRepairAttempts: 0,
+            responseSchema: { type: "object" },
+        });
+        // A malformed options object never reaches a child either.
+        await probe("bad-options", { description: "x", nosuchoption: 1 });
+        try {
+            await task("not an object");
+            kinds["not-an-object"] = "none";
+        } catch (err) {
+            kinds["not-an-object"] = String(err && err.kind);
+        }
+        return kinds;
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        value,
+        json!({
+            "agent": "agent",
+            "budget": "budget",
+            "cancelled": "cancelled",
+            "admission": "admission",
+            "driver": "driver",
+            "dropped": "driver",
+            "schema": "schema",
+            "bad-options": "admission",
+            // A TypeError raised by the prelude's own argument check never
+            // came from the host, so it is a script error, not a task kind.
+            "not-an-object": "undefined",
+        })
+    );
+}
+
+/// The classifier reads `Error.kind`, never the message text. A child is free
+/// to say "budget exhausted" or "responseSchema" in its own failure prose;
+/// under the old substring classifier that forged a fatal kind and aborted an
+/// otherwise healthy fan-out.
+#[tokio::test]
+async fn slot_kinds_cannot_be_forged_from_child_failure_text() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on(
+        "liar",
+        FakeReply::Fail(
+            "the reviewer said the run cancelled because budget exhausted and responseSchema \
+             validation failed"
+                .to_string(),
+        ),
+    );
+
+    let value = run(
+        &driver,
+        r#"
+        const results = await parallel([
+            () => task({ description: "liar" }),
+            () => task({ description: "honest" }),
+        ]);
+        return {
+            slots: results,
+            kinds: results.errors.map((entry) => entry.kind),
+        };
+        "#,
+        json!(null),
+    )
+    .await
+    .expect("a child's prose must not cancel the run");
+
+    assert_eq!(
+        value,
+        json!({
+            "slots": [null, "done:honest"],
+            "kinds": ["agent"],
+        })
+    );
+}
+
+/// The settled default is unchanged on the wire — same slots, same length,
+/// same JSON — but the run can now ask why a slot is null instead of guessing.
+#[tokio::test]
+async fn settled_parallel_keeps_null_slots_and_attaches_an_inspectable_ledger() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("beta", FakeReply::Fail("boom".to_string()));
+    driver.on(
+        "delta",
+        FakeReply::BudgetExhausted("pool drained".to_string()),
+    );
+
+    let value = run(
+        &driver,
+        r#"
+        const results = await parallel([
+            () => task({ description: "alpha" }),
+            () => task({ description: "beta" }),
+            () => task({ description: "gamma" }),
+            () => task({ description: "delta" }),
+        ]);
+        return {
+            slots: results,
+            length: results.length,
+            // Non-enumerable: the array still serializes as a plain array.
+            encoded: JSON.stringify(results),
+            errors: results.errors.map((entry) => ({
+                index: entry.index,
+                kind: entry.kind,
+                says: entry.message.indexOf("boom") !== -1
+                    || entry.message.indexOf("pool drained") !== -1,
+            })),
+        };
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        value,
+        json!({
+            "slots": ["done:alpha", null, "done:gamma", null],
+            "length": 4,
+            "encoded": "[\"done:alpha\",null,\"done:gamma\",null]",
+            "errors": [
+                {"index": 1, "kind": "agent", "says": true},
+                {"index": 3, "kind": "budget", "says": true},
+            ],
+        })
+    );
+}
+
+/// A clean fan-out still gets the ledger, empty and frozen — a script can read
+/// `results.errors.length` unconditionally.
+#[tokio::test]
+async fn a_clean_fan_out_still_reports_an_empty_frozen_error_ledger() {
+    let value = run(
+        &Arc::new(FakeDriver::new()),
+        r#"
+        const results = await parallel([() => task({ description: "alpha" })]);
+        let mutated = false;
+        try {
+            results.errors = ["forged"];
+            mutated = true;
+        } catch (_) {
+            mutated = false;
+        }
+        return {
+            count: results.errors.length,
+            frozen: Object.isFrozen(results.errors),
+            mutated: mutated,
+            stillEmpty: results.errors.length,
+        };
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        value,
+        json!({"count": 0, "frozen": true, "mutated": false, "stillEmpty": 0})
+    );
+}
+
+/// `settled` is the spelling of today's default; naming it explicitly changes
+/// nothing.
+#[tokio::test]
+async fn explicit_settled_mode_matches_the_default() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("beta", FakeReply::Fail("boom".to_string()));
+    let value = run(
+        &driver,
+        r#"
+        const thunks = () => [
+            () => task({ description: "alpha" }),
+            () => task({ description: "beta" }),
+        ];
+        const implicit = await parallel(thunks());
+        const explicit = await parallel(thunks(), { mode: "settled" });
+        return {
+            implicit: implicit,
+            explicit: explicit,
+            sameKinds: JSON.stringify(implicit.errors.map((e) => e.kind))
+                === JSON.stringify(explicit.errors.map((e) => e.kind)),
+        };
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "implicit": ["done:alpha", null],
+            "explicit": ["done:alpha", null],
+            "sameKinds": true,
+        })
+    );
+}
+
+/// A typo'd mode used to read as `settled`: the author believed slots were
+/// now fatal while they kept silently dropping. It throws instead.
+#[tokio::test]
+async fn an_unknown_mode_is_refused_rather_than_silently_settled() {
+    let driver = Arc::new(FakeDriver::new());
+    let value = run(
+        &driver,
+        r#"
+        const errs = [];
+        for (const mode of ["failfast", "all-settled", 7]) {
+            try {
+                await parallel([() => task({ description: "alpha" })], { mode });
+                errs.push("no-error");
+            } catch (err) {
+                errs.push(err.message);
+            }
+        }
+        try {
+            await pipeline([1], { stages: [(v) => v], mode: "failfast" });
+            errs.push("no-error");
+        } catch (err) {
+            errs.push(err.message);
+        }
+        return errs;
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+    let messages = value.as_array().unwrap();
+    assert_eq!(messages.len(), 4, "{value}");
+    for message in messages {
+        let text = message.as_str().unwrap();
+        assert!(
+            text.contains("unknown mode") && text.contains("settled, fail-fast, partial"),
+            "{text}"
+        );
+    }
+    assert_eq!(
+        driver.spawn_count(),
+        0,
+        "a refused mode must not spawn anything"
+    );
+}
+
+/// Partial mode is the "inspect every outcome" contract: no failure is erased,
+/// and none of them can be mistaken for a value.
+#[tokio::test]
+async fn partial_mode_types_every_non_cancellation_failure() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("dead", FakeReply::Fail("boom".to_string()));
+    driver.on("broke", FakeReply::BudgetExhausted("drained".to_string()));
+    driver.on("refused", FakeReply::Reject("admission cap".to_string()));
+
+    let value = run(
+        &driver,
+        r#"
+        const results = await parallel([
+            () => task({ description: "alive" }),
+            () => task({ description: "dead" }),
+            () => task({ description: "broke" }),
+            () => task({ description: "refused" }),
+        ], { mode: "partial" });
+        return {
+            shapes: results.map((slot) =>
+                slot && typeof slot === "object" && slot.__taskError
+                    ? slot.__taskError.kind + "@" + slot.__taskError.index
+                    : String(slot)
+            ),
+            ledger: results.errors.map((entry) => entry.kind),
+            noNulls: results.every((slot) => slot !== null),
+        };
+        "#,
+        json!(null),
+    )
+    .await
+    .expect("partial mode completes the fan-out");
+
+    assert_eq!(
+        value,
+        json!({
+            "shapes": ["done:alive", "agent@1", "budget@2", "admission@3"],
+            "ledger": ["agent", "budget", "admission"],
+            "noNulls": true,
+        })
+    );
+}
+
+/// `pipeline` speaks the same three modes and keeps the same ledger.
+#[tokio::test]
+async fn pipeline_supports_settled_fail_fast_and_partial_with_a_ledger() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("bad-1", FakeReply::Fail("boom".to_string()));
+
+    let value = run(
+        &driver,
+        r#"
+        const stage = (item) => task({ description: item });
+        const settled = await pipeline(["ok-0", "bad-1", "ok-2"], stage);
+        const partial = await pipeline(["ok-0", "bad-1"], {
+            stages: [stage],
+            mode: "partial",
+        });
+        let failFast = "no-error";
+        try {
+            await pipeline(["ok-0", "bad-1"], { stages: [stage], mode: "fail-fast" });
+        } catch (err) {
+            failFast = err.kind + ":" + (err.message.indexOf("boom") !== -1);
+        }
+        return {
+            settled: settled,
+            settledLedger: settled.errors.map((e) => e.index + ":" + e.kind),
+            partial: partial.map((slot) =>
+                slot && typeof slot === "object" && slot.__taskError
+                    ? slot.__taskError.kind
+                    : slot
+            ),
+            failFast: failFast,
+        };
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        value,
+        json!({
+            "settled": ["done:ok-0", null, "done:ok-2"],
+            "settledLedger": ["1:agent"],
+            "partial": ["done:ok-0", "agent"],
+            "failFast": "agent:true",
+        })
+    );
+}
+
+/// A fan-out where nothing survived is a dead fan-out. The default still
+/// resolves (existing scripts keep working) but the run log says so in a line
+/// the host status classifier and an operator can both find.
+#[tokio::test]
+async fn a_fan_out_where_every_slot_failed_says_so_in_the_run_log() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("doomed", FakeReply::Fail("boom".to_string()));
+    let value = run(
+        &driver,
+        r#"
+        const results = await parallel([
+            () => task({ description: "doomed a" }),
+            () => task({ description: "doomed b" }),
+        ]);
+        return { slots: results, failed: results.errors.length };
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+    assert_eq!(value, json!({"slots": [null, null], "failed": 2}));
+    assert!(
+        driver.events().iter().any(|event| matches!(
+            event,
+            ProgressEvent::Log { message }
+                if message.contains("every slot failed (2 of 2)")
+                    && message.contains("no work survived")
+        )),
+        "a fully-failed fan-out must be named in the run log: {:?}",
+        driver.events()
+    );
+}
+
+/// Cancellation stays fatal in every mode — it is the run's deadline, not a
+/// per-slot outcome — and partial mode does not get to keep it as a value.
+#[tokio::test]
+async fn cancellation_is_fatal_in_partial_pipeline_mode() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("hang", FakeReply::Never);
+    let cancel = WorkflowRunCancel::new();
+    let run_cancel = cancel.clone();
+    let run_driver = driver.clone();
+    let handle = tokio::spawn(async move {
+        WorkflowVm::new()
+            .run_script_with_cancel(
+                r#"
+                await pipeline(["hang"], {
+                    stages: [(item) => task({ description: item })],
+                    mode: "partial",
+                });
+                "#,
+                json!(null),
+                run_driver as Arc<dyn codewhale_workflow_js::WorkflowDriver>,
+                run_cancel,
+            )
+            .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while driver.spawn_count() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("task should start");
+    cancel.cancel();
+
+    let result = handle.await.expect("VM task should join");
+    assert!(
+        matches!(result, Err(WorkflowJsError::Cancelled)),
+        "pipeline partial mode must not downgrade cancellation into a slot value: {result:?}"
+    );
+}
+
+/// The dropped-slot breadcrumb now names the kind, so the run log alone
+/// distinguishes "the agent failed" from "we never got to spawn it".
+#[tokio::test]
+async fn the_dropped_slot_breadcrumb_names_the_kind_and_the_slot() {
+    let driver = Arc::new(FakeDriver::new());
+    driver.on("beta", FakeReply::Fail("boom".to_string()));
+    run(
+        &driver,
+        r#"
+        return await parallel([
+            () => task({ description: "alpha" }),
+            () => task({ description: "beta" }),
+        ]);
+        "#,
+        json!(null),
+    )
+    .await
+    .unwrap();
+    assert!(
+        driver.events().iter().any(|event| matches!(
+            event,
+            ProgressEvent::Log { message }
+                if message.contains("dropped a failed slot as null")
+                    && message.contains("kind=agent")
+                    && message.contains("slot 1")
+        )),
+        "the breadcrumb must name the kind and the slot: {:?}",
+        driver.events()
+    );
 }

@@ -2825,6 +2825,10 @@ fn tui_stream_chunk_timeout_defaults_env_and_clamps() {
     let zero = Config {
         tui: Some(TuiConfig {
             stream_chunk_timeout_secs: Some(0),
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             ..TuiConfig::default()
         }),
         ..Config::default()
@@ -2837,6 +2841,10 @@ fn tui_stream_chunk_timeout_defaults_env_and_clamps() {
     let explicit_min = Config {
         tui: Some(TuiConfig {
             stream_chunk_timeout_secs: Some(MIN_STREAM_CHUNK_TIMEOUT_SECS),
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             ..TuiConfig::default()
         }),
         ..Config::default()
@@ -2849,6 +2857,10 @@ fn tui_stream_chunk_timeout_defaults_env_and_clamps() {
     let high = Config {
         tui: Some(TuiConfig {
             stream_chunk_timeout_secs: Some(MAX_STREAM_CHUNK_TIMEOUT_SECS + 1),
+            max_model_steps: None,
+            turn_wall_clock_secs: None,
+            stream_max_content_mb: None,
+            stream_max_duration_secs: None,
             ..TuiConfig::default()
         }),
         ..Config::default()
@@ -12329,6 +12341,19 @@ fn picker_consent_persists_only_confirmed_exact_scope_and_revoke_is_one_step() {
         "# preserve operator comment\n[providers.openai_codex]\nmodel = \"gpt-5-codex\" # preserve model\n",
     )
     .expect("seed config");
+    // #5772: persistence now reads and validates the exact confirmed file
+    // before any consent record is written, so the fixture must hold a live
+    // token (far-future JWT exp) for the grant to be saved at all.
+    std::fs::write(
+        &external_path,
+        "{\"tokens\":{\"access_token\":\"header.eyJleHAiOjk5OTk5OTk5OTl9.sig\"}}",
+    )
+    .expect("seed external credential");
+    // The secure adapter rejects symlinked path components; macOS `/var` is
+    // one, so the confirmed path must be the canonical one.
+    let external_path = external_path
+        .canonicalize()
+        .expect("canonical external credential path");
     let mut live = Config {
         provider: Some(ApiProvider::OpenaiCodex.as_str().to_string()),
         ..Config::default()
@@ -12357,10 +12382,12 @@ fn picker_consent_persists_only_confirmed_exact_scope_and_revoke_is_one_step() {
     assert_eq!(consent.path, external_path);
     assert_eq!(
         crate::external_credentials::complete_side_effect_trap_counts(),
-        (0, 0, 0, 0, 0),
-        "grant persistence must not inspect the disclosed external path"
+        (1, 1, 0, 0, 0),
+        "grant persistence performs exactly the confirmed read (one secure open, one \
+         bounded read) and never writes, refreshes, or reaches the network"
     );
 
+    crate::external_credentials::reset_side_effect_trap();
     revoke_external_credential_consent_for_at(
         Some(&config_path),
         &mut live,

@@ -2,7 +2,7 @@
  * vocabulary.ts — shared, locale-aware product vocabulary for codewhale.net.
  *
  * This module is the single source of truth for the exact product nouns a new
- * user meets on the site: the Fleet/Workflow/Lane/Runtime execution nouns,
+ * user meets on the site: the Pod/Workflow/Lane/Runtime execution nouns,
  * the Plan/Work/Operate + Ask/Auto-Review/Full Access control vocabulary, the
  * public Consultant role, and the fields that make route provenance legible.
  *
@@ -28,7 +28,7 @@ export interface LocalizedText {
 
 export interface ProductTerm {
   /** The exact product noun. Never translate the noun itself. */
-  term: "Fleet" | "Workflow" | "Lane" | "Runtime";
+  term: "Pod" | "Workflow" | "Lane" | "Runtime";
   /** One-line definition; `en` is verbatim from docs/public-surface-facts.json. */
   short: LocalizedText;
   /** One-sentence elaboration used on docs pages. */
@@ -37,14 +37,17 @@ export interface ProductTerm {
 
 export const PRODUCT_TERMS: ProductTerm[] = [
   {
-    term: "Fleet",
+    // Pod is the customer-facing noun. Fleet is the retained serialization
+    // spelling (ledger file, saved rosters, config tables, `--fleet` flag)
+    // and stays accepted as a command alias; see docs/FLEET.md.
+    term: "Pod",
     short: {
       en: "who is in the roster and which member is selected",
       zh: "花名册中有哪些成员，以及选中了哪一位",
     },
     long: {
-      en: "Fleet records member IDs and names, semantic roles, provider/model identities, and roster state.",
-      zh: "Fleet 记录成员 ID 和名称、语义角色、提供商/模型身份以及花名册状态。",
+      en: "Pod records member IDs and names, semantic roles, provider/model identities, and roster state. Fleet remains the stored name and a command alias.",
+      zh: "Pod 记录成员 ID 和名称、语义角色、提供商/模型身份以及花名册状态。Fleet 仍是存储名称和命令别名。",
     },
   },
   {
@@ -188,8 +191,8 @@ export const ROUTE_IDENTITY: { term: string; description: LocalizedText }[] = [
 export const ADVISORY_ROLE = {
   term: "Consultant",
   description: {
-    en: "The public read-only advisory Fleet role. The historical oracle and advisor spellings remain compatibility aliases for saved configuration and replay only; new product surfaces say Consultant.",
-    zh: "面向用户的只读 Fleet 咨询角色。历史拼写 oracle 与 advisor 仅作为已保存配置和回放的兼容别名保留；新的产品界面统一使用 Consultant。",
+    en: "The public read-only advisory Pod role. The historical oracle and advisor spellings remain compatibility aliases for saved configuration and replay only; new product surfaces say Consultant.",
+    zh: "面向用户的只读 Pod 咨询角色。历史拼写 oracle 与 advisor 仅作为已保存配置和回放的兼容别名保留；新的产品界面统一使用 Consultant。",
   },
 } as const;
 

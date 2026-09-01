@@ -33,6 +33,57 @@ instructions or memory. The nearest scoped `AGENTS.md` adds path-specific rules.
 - Never rewrite published history, retag a release, force-push a shared ref, or
   publish without explicit authorization. Preserve human contributor credit.
 
+## Landing other people's work
+
+An external contributor's branch goes stale because *we* land things, not
+because they did anything wrong. Treat their time as more expensive than ours.
+
+- **Never make a contributor rebase around our churn.** If their PR conflicts
+  only because main moved, a maintainer resolves it. Read their diff against
+  the merge base first so you know exactly what they added, and re-apply that,
+  rather than hand-merging two large sides and hoping.
+- **Conflicts that split mid-function do not resolve by keeping both sides.**
+  Git's markers can land inside a body, so a both-sides resolution produces
+  unbalanced braces that look plausible and do not compile. Take one side
+  whole, then re-insert the other side's additions at their original anchor.
+- **`maintainerCanModify` does not guarantee push access to the fork.** When
+  the push is refused, land the resolved merge on
+  `integration/<topic>-<pr>-<date>` in this repo and land from there. An
+  integration branch is the normal path for anything with conflicts or several
+  moving PRs — it is cheaper than repeatedly rebasing onto a main that keeps
+  moving, and it keeps the contributor's branch untouched.
+- **Check the contribution gate before assuming a PR is stalled.** An unlisted
+  author's workflow runs sit at `action_required` and never start, so the PR
+  looks abandoned when nobody has actually looked at it. Approve the runs, then
+  fix the cause: add them to `.github/APPROVED_CONTRIBUTORS` (`all:username`),
+  or comment `/lgtm` (PR scope) / `/lgtmi` (issue scope) on their thread.
+- **Preserve credit in the mechanical sense, not just the polite one.** Commit
+  authorship and `Co-authored-by` trailers must use the contributor's own
+  GitHub-linked address. `AUTHOR_MAP` and `.mailmap` are project conventions —
+  GitHub reads neither for the contribution graph.
+
+## Merging under a gate
+
+- **A gate is its artifact.** When a rail says a PR merges only on a passing
+  acceptance record, the record must literally say PASS at merge time. "I
+  re-ran it and the failures are rows this PR does not own" is a judgement to
+  write into the artifact first, not a reason to merge past it.
+- **Read the review thread, not the check rollup.** Green checks and an unread
+  review with confirmed findings are a merge that ships known bugs.
+- **When the artifact is ambiguous, resolve the ambiguity — never the merge.**
+
+## Claiming a test passed
+
+- Quote the real `test result: N passed; M failed` line, and confirm `N > 0`
+  for the tests that cover the change. `cargo test <filter>` exits 0 having run
+  zero tests when the filter matches nothing, and an exit code alone has
+  already been mistaken for a pass here.
+- Prefer proving a regression test fails without the fix. A test that passes
+  either way pins the implementation, not the defect.
+- Audit any harness before trusting its score. `ok = ok and X or True` parses
+  as `(ok and X) or True` and silently reported twelve unevaluated rows as
+  passing.
+
 ## Current contracts
 
 - The model-facing subagent tool is `agent`. Do not revive removed

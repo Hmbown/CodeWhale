@@ -57,6 +57,10 @@ pub enum CatalogSource {
     },
     /// A user / custom override (custom endpoint, pinned model, explicit facts).
     UserOverride,
+    /// Live models.dev refresh (layer 10). Distinct from provider `/v1/models`.
+    ModelsDevLive { fetched_at: u64 },
+    /// `config.toml` `[providers.*]` override (layer 30).
+    ConfigOverride,
 }
 
 /// One catalog-layer offering row.
@@ -615,14 +619,32 @@ impl CatalogSnapshot {
     }
 }
 
-/// Builds a [`CatalogSnapshot`] by merging layers in precedence order:
-/// bundled < live < user overrides. Later layers override earlier rows that
-/// share a (provider, wire id) identity.
+/// Builds a [`CatalogSnapshot`] by merging layers in precedence order.
+///
+/// Last writer wins per `(provider, wire id)` field. Policy DENY is applied
+/// after every layer and is never overridden:
+///
+/// ```text
+///  0 bundled          committed models.dev-shaped snapshot
+/// 10 live models.dev  models.dev refresh
+/// 20 provider         per-provider /v1/models refresh
+/// 30 config           config.toml [providers.*] overrides
+/// 40 user             user approved set (Phase 3 hook; empty in Phase 1)
+///    policy DENY      last, never overridden
+/// ```
+///
+/// [`Self::with_live`] remains the combined live bucket so existing callers
+/// keep working; prefer [`Self::with_models_dev_live`] / [`Self::with_provider_live`]
+/// for the split.
 #[derive(Debug, Clone, Default)]
 pub struct CatalogCompiler {
     bundled: Vec<CatalogOffering>,
+    models_dev_live: Vec<CatalogOffering>,
     live: Vec<CatalogOffering>,
+    provider_live: Vec<CatalogOffering>,
+    config: Vec<CatalogOffering>,
     overrides: Vec<CatalogOffering>,
+    policy: crate::route::CatalogPolicy,
 }
 
 impl CatalogCompiler {
@@ -647,35 +669,72 @@ impl CatalogCompiler {
         self
     }
 
-    /// Add live (middle-precedence) rows.
+    /// Add live models.dev refresh rows (layer 10).
+    #[must_use]
+    pub fn with_models_dev_live(mut self, rows: Vec<CatalogOffering>) -> Self {
+        self.models_dev_live.extend(rows);
+        self
+    }
+
+    /// Add live (combined models.dev + provider) rows.
+    ///
+    /// Prefer [`Self::with_models_dev_live`] / [`Self::with_provider_live`].
+    /// Kept so existing callers still compile; these rows sit between
+    /// models.dev live and provider live.
     #[must_use]
     pub fn with_live(mut self, rows: Vec<CatalogOffering>) -> Self {
         self.live.extend(rows);
         self
     }
 
-    /// Add user/custom override (highest-precedence) rows.
+    /// Add per-provider `/v1/models` refresh rows (layer 20).
+    #[must_use]
+    pub fn with_provider_live(mut self, rows: Vec<CatalogOffering>) -> Self {
+        self.provider_live.extend(rows);
+        self
+    }
+
+    /// Add `config.toml` `[providers.*]` override rows (layer 30).
+    #[must_use]
+    pub fn with_config(mut self, rows: Vec<CatalogOffering>) -> Self {
+        self.config.extend(rows);
+        self
+    }
+
+    /// Add user/custom override (highest catalog-layer precedence) rows.
     #[must_use]
     pub fn with_overrides(mut self, rows: Vec<CatalogOffering>) -> Self {
         self.overrides.extend(rows);
         self
     }
 
-    /// Merge all layers into a deterministic snapshot.
+    /// Attach policy evaluated after every layer. DENY is never overridden.
+    #[must_use]
+    pub fn with_policy(mut self, policy: crate::route::CatalogPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Merge all layers into a deterministic snapshot, then apply policy DENY.
     #[must_use]
     pub fn compile(self) -> CatalogSnapshot {
         let mut merged: BTreeMap<(String, String), CatalogOffering> = BTreeMap::new();
         for row in self
             .bundled
             .into_iter()
+            .chain(self.models_dev_live)
             .chain(self.live)
+            .chain(self.provider_live)
+            .chain(self.config)
             .chain(self.overrides)
         {
             merged.insert(row.merge_key(), row);
         }
-        CatalogSnapshot {
-            offerings: merged.into_values().collect(),
-        }
+        let offerings = merged
+            .into_values()
+            .filter(|row| self.policy.allows(&row.provider, &row.wire_model_id))
+            .collect();
+        CatalogSnapshot { offerings }
     }
 }
 

@@ -6,7 +6,7 @@ use super::turn_loop::{
     auto_review_block_tool_error, initial_stream_error_user_message, merge_new_runtime_mcp_tools,
     preview_request_error_user_message, registered_tool_approval_required,
     registered_tool_forces_prompt, repo_law_must_block_without_prompt,
-    requested_sandbox_escalation, workspace_write_carve_out_applies,
+    requested_sandbox_escalation, sandbox_escalation_denial, workspace_write_carve_out_applies,
 };
 use crate::config::ApiProvider;
 use crate::models::{SystemBlock, Usage};
@@ -384,10 +384,17 @@ async fn emergency_compaction_cancellation_drops_provider_and_never_mutates_cont
 }
 const REPRESENTATIVE_HANDOFF_RELAY: &str = "REPRESENTATIVE_HANDOFF_RELAY";
 
+/// R1 inverted this: the ordinary engine default used to be
+/// `UNBOUNDED_MODEL_STEPS = u32::MAX`, i.e. an agent loop with no finite
+/// bound. The default is now finite and every host resolves from it.
 #[test]
-fn ordinary_engine_default_has_no_hidden_step_budget() {
-    assert_eq!(UNBOUNDED_MODEL_STEPS, u32::MAX);
-    assert_eq!(EngineConfig::default().max_steps, UNBOUNDED_MODEL_STEPS);
+fn ordinary_engine_default_has_a_finite_step_budget() {
+    assert_eq!(
+        DEFAULT_MODEL_STEPS,
+        crate::core::engine::turn_budget::DEFAULT_MAX_MODEL_STEPS
+    );
+    const { assert!(DEFAULT_MODEL_STEPS < u32::MAX) };
+    assert_eq!(EngineConfig::default().max_steps, DEFAULT_MODEL_STEPS);
 }
 
 #[test]
@@ -8053,6 +8060,41 @@ fn sandbox_escalation_requires_a_pair_and_a_strictly_wider_mode() {
         .is_none(),
         "field-name collisions on non-shell tools must not create authority"
     );
+}
+
+#[test]
+fn sandbox_escalation_denial_names_no_new_privs_remediation_only_when_flag_active() {
+    use crate::sandbox::SandboxPolicy;
+
+    let full = SandboxPolicy::DangerFullAccess;
+
+    // Flag active + a full-access request: the denial must name both
+    // startup-level remediation paths, because no per-call grant can lift the
+    // irreversible kernel flag (#5723).
+    let error = sandbox_escalation_denial("danger-full-access", &full, Some(true));
+    let message = error.to_string();
+    assert!(message.contains("not strictly wider"), "{message}");
+    assert!(
+        message.contains("sandbox_mode = \"danger-full-access\""),
+        "{message}"
+    );
+    assert!(message.contains("CODEWHALE_NO_NEW_PRIVS=0"), "{message}");
+
+    // Flag relaxed (the startup posture disabled it) or absent (non-Linux):
+    // no remediation clause — sudo works in this tree, or the flag never
+    // applied.
+    for flag in [Some(false), None] {
+        let message = sandbox_escalation_denial("danger-full-access", &full, flag).to_string();
+        assert!(message.contains("not strictly wider"), "{message}");
+        assert!(!message.contains("CODEWHALE_NO_NEW_PRIVS"), "{message}");
+        assert!(!message.contains("sandbox_mode"), "{message}");
+    }
+
+    // The clause attaches only to a full-access request: a workspace-write
+    // denial is about write scope, not privilege transitions.
+    let message = sandbox_escalation_denial("workspace-write", &full, Some(true)).to_string();
+    assert!(message.contains("not strictly wider"), "{message}");
+    assert!(!message.contains("CODEWHALE_NO_NEW_PRIVS"), "{message}");
 }
 
 #[test]
@@ -21211,4 +21253,183 @@ async fn idle_engine_routes_child_approval_decisions_to_the_waiting_child() {
     assert!(!crate::tools::subagent::SubAgentManager::is_child_approval_id("call_123"));
     handle.send(Op::Shutdown).await.expect("shutdown engine");
     run.await.expect("engine task");
+}
+
+// ---------------------------------------------------------------------------
+// R1: finite turn budgets. Each limit must fire, and each must be overridable.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn engine_config_defaults_carry_finite_turn_budgets() {
+    use crate::core::engine::turn_budget;
+
+    let config = EngineConfig::default();
+    assert_eq!(config.max_steps, turn_budget::DEFAULT_MAX_MODEL_STEPS);
+    assert!(
+        config.max_steps < u32::MAX,
+        "the default model-step ceiling must be finite"
+    );
+    assert_eq!(
+        config.turn_wall_clock,
+        std::time::Duration::from_secs(turn_budget::DEFAULT_TURN_WALL_CLOCK_SECS),
+    );
+    assert!(config.turn_wall_clock > std::time::Duration::ZERO);
+    assert_eq!(
+        config.stream_max_content_bytes,
+        turn_budget::DEFAULT_STREAM_MAX_CONTENT_BYTES
+    );
+    assert_eq!(
+        config.stream_max_duration,
+        std::time::Duration::from_secs(turn_budget::DEFAULT_STREAM_MAX_DURATION_SECS),
+    );
+}
+
+/// R1: a spent wall-clock budget stops the turn *before* another billable
+/// request, and reports the stop truthfully rather than as a clean success.
+#[tokio::test]
+async fn turn_wall_clock_budget_stops_the_turn_before_another_model_request() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![canned::simple_text_turn(
+        "this response must never be requested",
+    )]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let engine_config = EngineConfig {
+        // Only tests construct a zero budget; `resolve_turn_wall_clock`
+        // rejects `0` from configuration.
+        turn_wall_clock: std::time::Duration::ZERO,
+        ..deterministic_engine_config(workspace.path())
+    };
+    let (mut engine, _handle) =
+        Engine::new_with_model_client(engine_config, &Config::default(), client);
+    let context = crate::tools::ToolContext::new(workspace.path().to_path_buf());
+    let registry = crate::tools::ToolRegistry::new(context);
+    let surface = test_tool_surface(&engine, registry, None, AppMode::Agent);
+    let mut turn = crate::core::turn::TurnContext::new(engine.config.max_steps);
+
+    let (status, error) = engine.run_turn(&mut turn, surface, None, None).await;
+
+    assert_eq!(
+        status,
+        TurnOutcomeStatus::Failed,
+        "a budget stop is never a clean success"
+    );
+    let error = error.expect("a budget stop must carry a reason");
+    assert!(
+        error.contains("wall-clock budget exhausted"),
+        "the stop must name the budget: {error}"
+    );
+    assert_eq!(
+        mock.call_count(),
+        0,
+        "no billable request may be authorized once the budget is spent"
+    );
+}
+
+/// R1: the wall-clock budget is overridable — a generous budget lets the same
+/// turn run to a normal completion.
+#[tokio::test]
+async fn turn_wall_clock_budget_is_overridable() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![canned::simple_text_turn(
+        "The requested work is complete.",
+    )]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let engine_config = EngineConfig {
+        turn_wall_clock: std::time::Duration::from_secs(600),
+        ..deterministic_engine_config(workspace.path())
+    };
+    let (mut engine, _handle) =
+        Engine::new_with_model_client(engine_config, &Config::default(), client);
+    let context = crate::tools::ToolContext::new(workspace.path().to_path_buf());
+    let registry = crate::tools::ToolRegistry::new(context);
+    let surface = test_tool_surface(&engine, registry, None, AppMode::Agent);
+    let mut turn = crate::core::turn::TurnContext::new(engine.config.max_steps);
+
+    let (status, error) = engine.run_turn(&mut turn, surface, None, None).await;
+
+    assert_eq!(status, TurnOutcomeStatus::Completed, "{error:?}");
+    assert_eq!(mock.call_count(), 1);
+}
+
+/// R1: a turn that keeps calling tools past its model-step ceiling ends as a
+/// reported failure naming the limit — never as a silent completion.
+#[tokio::test]
+async fn model_step_ceiling_fires_and_reports_the_limit() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    let mock = std::sync::Arc::new(MockLlmClient::new(
+        (0..8)
+            .map(|index| {
+                canned::tool_call_turn(&format!("call_{index}"), "definitely_not_a_real_tool", "{}")
+            })
+            .collect(),
+    ));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let engine_config = EngineConfig {
+        max_steps: 2,
+        ..deterministic_engine_config(workspace.path())
+    };
+    let (mut engine, _handle) =
+        Engine::new_with_model_client(engine_config, &Config::default(), client);
+    let context = crate::tools::ToolContext::new(workspace.path().to_path_buf());
+    let registry = crate::tools::ToolRegistry::new(context);
+    let surface = test_tool_surface(&engine, registry, None, AppMode::Agent);
+    let mut turn = crate::core::turn::TurnContext::new(engine.config.max_steps);
+
+    let (status, error) = engine.run_turn(&mut turn, surface, None, None).await;
+
+    assert_eq!(
+        status,
+        TurnOutcomeStatus::Failed,
+        "a model that never stops must not report success: {error:?}"
+    );
+    let error = error.expect("the step ceiling must carry a reason");
+    assert!(
+        error.contains("Maximum model steps reached"),
+        "the stop must name the limit: {error}"
+    );
+    assert!(
+        mock.call_count() <= 4,
+        "the ceiling must bound requests, saw {}",
+        mock.call_count()
+    );
+}
+
+/// R1: the per-step stream cap is overridable, and a tiny cap actually cuts
+/// the stream off instead of accumulating without bound.
+#[tokio::test]
+async fn per_step_stream_content_cap_is_overridable_and_fires() {
+    use crate::llm_client::mock::{MockLlmClient, canned};
+
+    let workspace = tempdir().expect("tempdir");
+    let long_answer = "x".repeat(4096);
+    let mock = std::sync::Arc::new(MockLlmClient::new(vec![canned::simple_text_turn(
+        &long_answer,
+    )]));
+    let client: crate::core::model_client::SharedModelClient = mock.clone();
+    let engine_config = EngineConfig {
+        // Only tests set a cap below the configurable minimum; the resolver
+        // clamps configured values into a sane finite range.
+        stream_max_content_bytes: 64,
+        ..deterministic_engine_config(workspace.path())
+    };
+    let (mut engine, _handle) =
+        Engine::new_with_model_client(engine_config, &Config::default(), client);
+    let context = crate::tools::ToolContext::new(workspace.path().to_path_buf());
+    let registry = crate::tools::ToolRegistry::new(context);
+    let surface = test_tool_surface(&engine, registry, None, AppMode::Agent);
+    let mut turn = crate::core::turn::TurnContext::new(engine.config.max_steps);
+
+    let (status, _error) = engine.run_turn(&mut turn, surface, None, None).await;
+
+    assert_ne!(
+        status,
+        TurnOutcomeStatus::Completed,
+        "a stream cut off by the content cap must not report a clean completion"
+    );
 }

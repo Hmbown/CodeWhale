@@ -1,30 +1,20 @@
 //! Session-page MCP + plugin boot surface.
 //!
 //! Plugin discovery and every enabled MCP server boot as a **set**, not a
-//! toast per name. The activity strip carries the compact pulse
-//! (`MCP · 4 connecting`); the receipt under it keeps per-server outcomes
-//! and next actions until retry succeeds. Slack is one server in that set.
+//! toast per name. The Tideline footer carries the compact pulse
+//! (`MCP · 4 connecting` or `Plugins · Problems: 2 · /plugins`); detailed
+//! diagnosis and actions belong in `/mcp` or `/plugins`, never as multi-row
+//! boot output between the transcript and composer.
 
-use std::borrow::Cow;
-
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::Style,
-    text::{Line, Span},
-    widgets::{Block, Paragraph, Widget},
-};
 use unicode_width::UnicodeWidthStr;
 
 use crate::localization::{Locale, MessageId, tr};
 use crate::mcp::{McpManagerSnapshot, McpServerSnapshot};
-use crate::palette::ChromeInk;
 use crate::plugins::PluginRegistry;
 use crate::plugins::types::{PluginDiagnosticLevel, PluginTrustStatus};
 use crate::tui::app::App;
 
 const ITEM_SEPARATOR: &str = " · ";
-const MAX_RECEIPT_ROWS: u16 = 6;
 const MAX_NAMED_CHIPS: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,19 +33,10 @@ pub enum McpServerBootState {
     Disabled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum McpServerAction {
-    Retry,
-    Login,
-    Diagnose,
-    None,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpServerBootRow {
     pub name: String,
     pub state: McpServerBootState,
-    pub action: McpServerAction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -69,7 +50,17 @@ pub struct PluginBootSummary {
 impl PluginBootSummary {
     #[must_use]
     pub fn is_quiet(self) -> bool {
-        self.loaded == 0 && self.invalid == 0 && self.duplicate == 0 && self.needs_setup == 0
+        self.problem_count() == 0
+    }
+
+    #[must_use]
+    pub fn problem_count(self) -> usize {
+        self.invalid + self.duplicate + self.needs_setup
+    }
+
+    #[must_use]
+    pub fn has_failures(self) -> bool {
+        self.invalid > 0 || self.duplicate > 0
     }
 
     #[must_use]
@@ -92,10 +83,7 @@ impl PluginBootSummary {
                 .any(|diagnostic| diagnostic.level == PluginDiagnosticLevel::Error)
             {
                 invalid += 1;
-            } else if matches!(
-                plugin.trust_status,
-                PluginTrustStatus::NeverReviewed | PluginTrustStatus::CapabilitiesChanged
-            ) {
+            } else if plugin_trust_needs_setup(plugin.trust_status) {
                 needs_setup += 1;
             }
         }
@@ -106,6 +94,33 @@ impl PluginBootSummary {
             needs_setup,
         }
     }
+}
+
+fn plugin_trust_needs_setup(status: PluginTrustStatus) -> bool {
+    matches!(
+        status,
+        PluginTrustStatus::NeverReviewed
+            | PluginTrustStatus::ContentChanged
+            | PluginTrustStatus::CapabilitiesChanged
+    )
+}
+
+/// Semantic severity for the compact boot activity notice.
+///
+/// The text carries no color names or inferred state. Its consumer maps this
+/// closed state into the Tideline palette, so a plugin warning cannot inherit
+/// an unrelated MCP color merely because both use the same footer slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionBootActivityLevel {
+    Active,
+    Attention,
+    Failure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionBootActivityChip {
+    pub text: String,
+    pub level: SessionBootActivityLevel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,7 +167,6 @@ impl SessionBootSurface {
                 .map(|name| McpServerBootRow {
                     name,
                     state: McpServerBootState::Connecting,
-                    action: McpServerAction::None,
                 })
                 .collect()
         } else {
@@ -185,12 +199,11 @@ impl SessionBootSurface {
     }
 
     #[must_use]
-    pub fn is_hidden(&self) -> bool {
-        self.phase == SessionBootPhase::Hidden
-    }
-
-    #[must_use]
-    pub fn activity_chip(&self, locale: Locale, budget: usize) -> Option<String> {
+    pub fn activity_notice(
+        &self,
+        locale: Locale,
+        budget: usize,
+    ) -> Option<SessionBootActivityChip> {
         if self.phase == SessionBootPhase::Hidden || budget == 0 {
             return None;
         }
@@ -216,141 +229,73 @@ impl SessionBootSurface {
             .filter(|row| row.state == McpServerBootState::Connected)
             .count();
 
-        let mut candidates = Vec::new();
         if !connecting.is_empty() {
             let count = connecting.len();
             let named = named_chip_line("MCP", count, "connecting", &connecting);
-            candidates.push(named);
-            candidates.push(format!("MCP{ITEM_SEPARATOR}{count} connecting"));
-        } else if failed > 0 {
-            candidates.push(format!(
-                "MCP{ITEM_SEPARATOR}{connected} {}{ITEM_SEPARATOR}{failed} {}",
-                tr(locale, MessageId::ExtensionsStateConnected),
-                tr(locale, MessageId::PhaseFailed)
-            ));
-            candidates.push(format!("MCP{ITEM_SEPARATOR}{failed} failed"));
-        } else if self.phase == SessionBootPhase::Booting {
+            return activity_notice_from_candidates(
+                SessionBootActivityLevel::Active,
+                vec![named, format!("MCP{ITEM_SEPARATOR}{count} connecting")],
+                budget,
+            );
+        }
+        if failed > 0 {
+            return activity_notice_from_candidates(
+                SessionBootActivityLevel::Failure,
+                vec![
+                    format!(
+                        "MCP{ITEM_SEPARATOR}{connected} {}{ITEM_SEPARATOR}{failed} {}",
+                        tr(locale, MessageId::ExtensionsStateConnected),
+                        tr(locale, MessageId::PhaseFailed)
+                    ),
+                    format!("MCP{ITEM_SEPARATOR}{failed} failed"),
+                ],
+                budget,
+            );
+        }
+        if self.phase == SessionBootPhase::Booting {
             let count = self.servers.len().max(self.unnamed_connecting);
             if count > 0 {
-                candidates.push(format!("MCP{ITEM_SEPARATOR}{count} connecting"));
+                return activity_notice_from_candidates(
+                    SessionBootActivityLevel::Active,
+                    vec![format!("MCP{ITEM_SEPARATOR}{count} connecting")],
+                    budget,
+                );
             }
         }
 
-        candidates.into_iter().find(|line| line.width() <= budget)
-    }
-
-    #[must_use]
-    pub fn receipt_lines(&self, locale: Locale, width: usize) -> Vec<String> {
-        if self.phase == SessionBootPhase::Hidden || width == 0 {
-            return Vec::new();
-        }
-        let mut lines = Vec::new();
-        if let Some(plugin_line) = plugin_receipt_line(self.plugins, locale, width) {
-            lines.push(plugin_line);
+        if self.plugins.is_quiet() {
+            return None;
         }
 
-        match self.phase {
-            SessionBootPhase::Hidden => {}
-            SessionBootPhase::Booting => {
-                let connecting: Vec<&str> = self
-                    .servers
-                    .iter()
-                    .filter(|row| row.state == McpServerBootState::Connecting)
-                    .map(|row| row.name.as_str())
-                    .collect();
-                if connecting.is_empty() && self.servers.is_empty() {
-                    if self.unnamed_connecting > 0 {
-                        lines.push(format!(
-                            "MCP{ITEM_SEPARATOR}{} connecting",
-                            self.unnamed_connecting
-                        ));
-                    }
-                } else {
-                    let count = if connecting.is_empty() {
-                        self.servers.len()
-                    } else {
-                        connecting.len()
-                    };
-                    let named = named_chip_line("MCP", count, "connecting", &connecting);
-                    lines.push(truncate_to_width(&named, width));
-                }
-            }
-            SessionBootPhase::Settled => {
-                if self.servers.len() == 1 {
-                    lines.push(truncate_to_width(
-                        &server_row_text(&self.servers[0], locale),
-                        width,
-                    ));
-                } else {
-                    let mut remaining =
-                        MAX_RECEIPT_ROWS.saturating_sub(lines.len() as u16) as usize;
-                    if remaining == 0 {
-                        return lines;
-                    }
-                    let notable: Vec<&McpServerBootRow> = self
-                        .servers
-                        .iter()
-                        .filter(|row| {
-                            matches!(
-                                row.state,
-                                McpServerBootState::Failed
-                                    | McpServerBootState::NeedsLogin
-                                    | McpServerBootState::Disabled
-                            )
-                        })
-                        .collect();
-                    let connected = self
-                        .servers
-                        .iter()
-                        .filter(|row| row.state == McpServerBootState::Connected)
-                        .count();
-                    if notable.is_empty() {
-                        if connected > 0 {
-                            lines.push(truncate_to_width(
-                                &format!(
-                                    "MCP{ITEM_SEPARATOR}{connected} {}",
-                                    tr(locale, MessageId::ExtensionsStateConnected)
-                                ),
-                                width,
-                            ));
-                        }
-                    } else {
-                        if connected > 0 && remaining > 1 {
-                            lines.push(format!(
-                                "MCP{ITEM_SEPARATOR}{connected} {}",
-                                tr(locale, MessageId::ExtensionsStateConnected)
-                            ));
-                            remaining = remaining.saturating_sub(1);
-                        }
-                        let overflow = notable.len() > remaining;
-                        let show = if overflow {
-                            remaining.saturating_sub(1)
-                        } else {
-                            notable.len()
-                        };
-                        for row in notable.iter().take(show) {
-                            lines.push(truncate_to_width(&server_row_text(row, locale), width));
-                        }
-                        let hidden = notable.len().saturating_sub(show);
-                        if hidden > 0 {
-                            lines.push(format!("+{hidden} more · /mcp"));
-                        }
-                    }
-                }
-            }
-        }
-        lines.truncate(MAX_RECEIPT_ROWS as usize);
-        lines
+        let plugins = tr(locale, MessageId::ExtensionsTabPlugins);
+        let problems = tr(locale, MessageId::ExtensionsGroupProblems);
+        let count = self.plugins.problem_count();
+        let level = if self.plugins.has_failures() {
+            SessionBootActivityLevel::Failure
+        } else {
+            SessionBootActivityLevel::Attention
+        };
+        activity_notice_from_candidates(
+            level,
+            vec![
+                format!("{plugins}{ITEM_SEPARATOR}{problems}: {count}{ITEM_SEPARATOR}/plugins"),
+                format!("{plugins}{ITEM_SEPARATOR}{problems}: {count}"),
+                format!("{plugins}{ITEM_SEPARATOR}{count}"),
+            ],
+            budget,
+        )
     }
+}
 
-    #[must_use]
-    pub fn receipt_height(&self, locale: Locale, width: u16) -> u16 {
-        if self.is_hidden() {
-            return 0;
-        }
-        let lines = self.receipt_lines(locale, usize::from(width));
-        (lines.len() as u16).min(MAX_RECEIPT_ROWS)
-    }
+fn activity_notice_from_candidates(
+    level: SessionBootActivityLevel,
+    candidates: Vec<String>,
+    budget: usize,
+) -> Option<SessionBootActivityChip> {
+    candidates
+        .into_iter()
+        .find(|line| line.width() <= budget)
+        .map(|text| SessionBootActivityChip { text, level })
 }
 
 fn row_from_snapshot(
@@ -358,22 +303,16 @@ fn row_from_snapshot(
     initializing: bool,
     connecting: &[String],
 ) -> McpServerBootRow {
-    let valid_name = server
-        .name
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'));
     if !server.enabled {
         return McpServerBootRow {
             name: server.name.clone(),
             state: McpServerBootState::Disabled,
-            action: McpServerAction::None,
         };
     }
     if server.connected {
         return McpServerBootRow {
             name: server.name.clone(),
             state: McpServerBootState::Connected,
-            action: McpServerAction::None,
         };
     }
     if let Some(error) = server.error.as_deref() {
@@ -381,21 +320,11 @@ fn row_from_snapshot(
             return McpServerBootRow {
                 name: server.name.clone(),
                 state: McpServerBootState::NeedsLogin,
-                action: if valid_name {
-                    McpServerAction::Login
-                } else {
-                    McpServerAction::Diagnose
-                },
             };
         }
         return McpServerBootRow {
             name: server.name.clone(),
             state: McpServerBootState::Failed,
-            action: if valid_name {
-                McpServerAction::Retry
-            } else {
-                McpServerAction::Diagnose
-            },
         };
     }
     let connecting_now = initializing || connecting.iter().any(|name| name == &server.name);
@@ -405,13 +334,6 @@ fn row_from_snapshot(
             McpServerBootState::Connecting
         } else {
             McpServerBootState::Failed
-        },
-        action: if connecting_now {
-            McpServerAction::None
-        } else if valid_name {
-            McpServerAction::Retry
-        } else {
-            McpServerAction::Diagnose
         },
     }
 }
@@ -440,108 +362,6 @@ fn named_chip_line(kind: &str, count: usize, verb: &str, names: &[&str]) -> Stri
         }
     }
     line
-}
-
-fn server_row_text(row: &McpServerBootRow, locale: Locale) -> String {
-    let state = match row.state {
-        McpServerBootState::Connecting => Cow::Borrowed("connecting"),
-        McpServerBootState::Connected => tr(locale, MessageId::ExtensionsStateConnected),
-        McpServerBootState::Failed => tr(locale, MessageId::PhaseFailed),
-        McpServerBootState::NeedsLogin => Cow::Borrowed("needs login"),
-        McpServerBootState::Disabled => tr(locale, MessageId::HotbarSetupStatusDisabled),
-    };
-    let action = match row.action {
-        McpServerAction::Retry => format!(" · /mcp retry {}", row.name),
-        McpServerAction::Login => format!(" · /mcp login {}", row.name),
-        McpServerAction::Diagnose => " · /mcp doctor".to_string(),
-        McpServerAction::None => String::new(),
-    };
-    format!("{}{ITEM_SEPARATOR}{state}{action}", row.name)
-}
-
-fn plugin_receipt_line(summary: PluginBootSummary, locale: Locale, width: usize) -> Option<String> {
-    if summary.is_quiet() {
-        return None;
-    }
-    let mut parts = vec![format!(
-        "{}{ITEM_SEPARATOR}{} {}",
-        tr(locale, MessageId::ExtensionsTabPlugins),
-        summary.loaded,
-        "loaded"
-    )];
-    if summary.invalid > 0 {
-        parts.push(format!(
-            "{} {}",
-            summary.invalid,
-            tr(locale, MessageId::ExtensionsStateInvalid)
-        ));
-    }
-    if summary.duplicate > 0 {
-        parts.push(format!("{} duplicate", summary.duplicate));
-    }
-    if summary.needs_setup > 0 {
-        parts.push(format!("{} need setup", summary.needs_setup));
-    }
-    Some(truncate_to_width(&parts.join(ITEM_SEPARATOR), width))
-}
-
-fn truncate_to_width(text: &str, width: usize) -> String {
-    crate::localization::truncate_to_width(text, width)
-}
-
-/// Activity-strip chip for the current session boot set.
-#[must_use]
-pub fn activity_chip(app: &App, budget: usize) -> Option<String> {
-    SessionBootSurface::from_app(app).activity_chip(app.ui_locale, budget)
-}
-
-/// Rows the compact boot receipt wants above the activity band.
-#[must_use]
-pub fn receipt_height(app: &App, width: u16, budget: u16) -> u16 {
-    if budget == 0 {
-        return 0;
-    }
-    SessionBootSurface::from_app(app)
-        .receipt_height(app.ui_locale, width)
-        .min(budget)
-}
-
-/// Paint the compact boot receipt. Text only: Reduced/Still skip any spin.
-pub fn render(area: Rect, buf: &mut Buffer, app: &App) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let surface = SessionBootSurface::from_app(app);
-    let lines = surface.receipt_lines(app.ui_locale, usize::from(area.width));
-    if lines.is_empty() {
-        return;
-    }
-    Block::default()
-        .style(Style::default().bg(app.ui_theme.surface_bg))
-        .render(area, buf);
-    let ink = if surface.servers.iter().any(|row| {
-        matches!(
-            row.state,
-            McpServerBootState::Failed | McpServerBootState::NeedsLogin
-        )
-    }) {
-        ChromeInk::Failure
-    } else if surface.phase == SessionBootPhase::Booting {
-        ChromeInk::Active
-    } else {
-        ChromeInk::Metadata
-    };
-    let rendered: Vec<Line<'static>> = lines
-        .into_iter()
-        .take(area.height as usize)
-        .map(|line| {
-            Line::from(Span::styled(
-                line,
-                Style::default().fg(ink.color(&app.ui_theme)),
-            ))
-        })
-        .collect();
-    Paragraph::new(rendered).render(area, buf);
 }
 
 #[cfg(test)]
@@ -588,9 +408,120 @@ mod tests {
         let surface =
             SessionBootSurface::from_parts(None, false, &[], 0, PluginBootSummary::default());
         assert_eq!(surface.phase, SessionBootPhase::Hidden);
-        assert!(surface.activity_chip(Locale::En, 80).is_none());
-        assert!(surface.receipt_lines(Locale::En, 80).is_empty());
-        assert_eq!(surface.receipt_height(Locale::En, 80), 0);
+        assert!(
+            surface
+                .activity_notice(Locale::En, 80)
+                .map(|notice| notice.text)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn healthy_loaded_plugins_do_not_claim_the_boot_surface() {
+        let surface = SessionBootSurface::from_parts(
+            None,
+            false,
+            &[],
+            0,
+            PluginBootSummary {
+                loaded: 2,
+                ..PluginBootSummary::default()
+            },
+        );
+        assert_eq!(surface.phase, SessionBootPhase::Hidden);
+        assert!(surface.activity_notice(Locale::En, 80).is_none());
+    }
+
+    #[test]
+    fn changed_plugin_content_requires_setup() {
+        assert!(plugin_trust_needs_setup(PluginTrustStatus::ContentChanged));
+        assert!(plugin_trust_needs_setup(PluginTrustStatus::NeverReviewed));
+        assert!(plugin_trust_needs_setup(
+            PluginTrustStatus::CapabilitiesChanged
+        ));
+        assert!(!plugin_trust_needs_setup(PluginTrustStatus::Trusted));
+    }
+
+    #[test]
+    fn plugin_problems_have_a_compact_footer_action() {
+        let surface = SessionBootSurface::from_parts(
+            None,
+            false,
+            &[],
+            0,
+            PluginBootSummary {
+                loaded: 3,
+                invalid: 1,
+                duplicate: 1,
+                needs_setup: 1,
+            },
+        );
+        assert_eq!(surface.phase, SessionBootPhase::Settled);
+        assert_eq!(
+            surface.activity_notice(Locale::En, 40),
+            Some(SessionBootActivityChip {
+                text: "Plugins · Problems: 3 · /plugins".to_string(),
+                level: SessionBootActivityLevel::Failure,
+            })
+        );
+    }
+
+    #[test]
+    fn plugin_review_notice_uses_attention_and_sheds_whole_fields() {
+        let surface = SessionBootSurface::from_parts(
+            None,
+            false,
+            &[],
+            0,
+            PluginBootSummary {
+                loaded: 1,
+                needs_setup: 1,
+                ..PluginBootSummary::default()
+            },
+        );
+        assert_eq!(
+            surface.activity_notice(Locale::En, 40),
+            Some(SessionBootActivityChip {
+                text: "Plugins · Problems: 1 · /plugins".to_string(),
+                level: SessionBootActivityLevel::Attention,
+            })
+        );
+        assert_eq!(
+            surface
+                .activity_notice(Locale::En, 22)
+                .map(|notice| notice.text)
+                .as_deref(),
+            Some("Plugins · Problems: 1")
+        );
+        assert_eq!(
+            surface
+                .activity_notice(Locale::En, 12)
+                .map(|notice| notice.text)
+                .as_deref(),
+            Some("Plugins · 1")
+        );
+    }
+
+    #[test]
+    fn mcp_activity_outranks_plugin_problems() {
+        let snap = snapshot(vec![server("alpha", true, false, None)]);
+        let surface = SessionBootSurface::from_parts(
+            Some(&snap),
+            true,
+            &["alpha".to_string()],
+            1,
+            PluginBootSummary {
+                invalid: 1,
+                ..PluginBootSummary::default()
+            },
+        );
+        assert_eq!(
+            surface.activity_notice(Locale::En, 80),
+            Some(SessionBootActivityChip {
+                text: "MCP · 1 connecting · alpha".to_string(),
+                level: SessionBootActivityLevel::Active,
+            })
+        );
     }
 
     #[test]
@@ -606,12 +537,12 @@ mod tests {
         assert_eq!(surface.phase, SessionBootPhase::Booting);
         assert_eq!(surface.servers.len(), 1);
         assert_eq!(surface.servers[0].state, McpServerBootState::Connecting);
-        let chip = surface.activity_chip(Locale::En, 80).expect("chip");
+        let chip = surface
+            .activity_notice(Locale::En, 80)
+            .map(|notice| notice.text)
+            .expect("chip");
         assert!(chip.contains("alpha"), "{chip}");
         assert!(!chip.to_ascii_lowercase().contains("slack"), "{chip}");
-        let receipt = surface.receipt_lines(Locale::En, 80);
-        assert_eq!(receipt.len(), 1);
-        assert!(receipt[0].contains("alpha"), "{receipt:?}");
     }
 
     #[test]
@@ -634,18 +565,18 @@ mod tests {
             PluginBootSummary::default(),
         );
         assert_eq!(surface.phase, SessionBootPhase::Booting);
-        let chip = surface.activity_chip(Locale::En, 80).expect("chip");
+        let chip = surface
+            .activity_notice(Locale::En, 80)
+            .map(|notice| notice.text)
+            .expect("chip");
         assert!(chip.contains("4 connecting"), "{chip}");
         assert!(chip.contains("alpha"), "{chip}");
         assert!(chip.contains("docs"), "{chip}");
         assert!(!chip.to_ascii_lowercase().contains("slack"), "{chip}");
-        let receipt = surface.receipt_lines(Locale::En, 80);
-        assert_eq!(receipt.len(), 1, "{receipt:?}");
-        assert!(receipt[0].contains("4 connecting"), "{receipt:?}");
     }
 
     #[test]
-    fn settled_failures_keep_retry_and_login_on_the_row() {
+    fn settled_failures_remain_classified_for_the_footer_chip() {
         let snap = snapshot(vec![
             server("alpha", true, true, None),
             server("beta", true, false, Some("protocol negotiation timed out")),
@@ -662,12 +593,7 @@ mod tests {
             false,
             &[],
             4,
-            PluginBootSummary {
-                loaded: 12,
-                invalid: 1,
-                duplicate: 2,
-                needs_setup: 0,
-            },
+            PluginBootSummary::default(),
         );
         assert_eq!(surface.phase, SessionBootPhase::Settled);
         assert_eq!(
@@ -675,27 +601,17 @@ mod tests {
                 .servers
                 .iter()
                 .find(|row| row.name == "beta")
-                .map(|row| (row.state, row.action)),
-            Some((McpServerBootState::Failed, McpServerAction::Retry))
+                .map(|row| row.state),
+            Some(McpServerBootState::Failed)
         );
         assert_eq!(
             surface
                 .servers
                 .iter()
                 .find(|row| row.name == "gamma")
-                .map(|row| (row.state, row.action)),
-            Some((McpServerBootState::NeedsLogin, McpServerAction::Login))
+                .map(|row| row.state),
+            Some(McpServerBootState::NeedsLogin)
         );
-        let receipt = surface.receipt_lines(Locale::En, 100);
-        let joined = receipt.join("\n");
-        assert!(joined.contains("Plugins"), "{joined}");
-        assert!(joined.contains("12 loaded"), "{joined}");
-        assert!(joined.contains("1 invalid"), "{joined}");
-        assert!(joined.contains("2 duplicate"), "{joined}");
-        assert!(joined.contains("/mcp retry beta"), "{joined}");
-        assert!(joined.contains("/mcp login gamma"), "{joined}");
-        assert!(!joined.contains("/mcp auth"), "{joined}");
-        assert!(!joined.to_ascii_lowercase().contains("slack"), "{joined}");
     }
 
     #[test]
@@ -716,7 +632,10 @@ mod tests {
             3,
             PluginBootSummary::default(),
         );
-        let chip = surface.activity_chip(Locale::En, 22).expect("chip");
+        let chip = surface
+            .activity_notice(Locale::En, 22)
+            .map(|notice| notice.text)
+            .expect("chip");
         assert_eq!(chip, "MCP · 3 connecting");
     }
 
@@ -742,15 +661,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["alpha", "docs", "gamma"]
         );
-        let chip = surface.activity_chip(Locale::En, 80).expect("chip");
+        let chip = surface
+            .activity_notice(Locale::En, 80)
+            .map(|notice| notice.text)
+            .expect("chip");
         assert!(chip.contains("3 connecting"), "{chip}");
         assert!(chip.contains("alpha"), "{chip}");
         assert!(chip.contains("gamma"), "{chip}");
         assert!(!chip.to_ascii_lowercase().contains("slack"), "{chip}");
-        let receipt = surface.receipt_lines(Locale::En, 80);
-        assert_eq!(receipt.len(), 1, "{receipt:?}");
-        assert!(receipt[0].contains("alpha"), "{receipt:?}");
-        assert!(receipt[0].contains("docs"), "{receipt:?}");
     }
 
     #[test]
@@ -760,116 +678,11 @@ mod tests {
         assert_eq!(surface.phase, SessionBootPhase::Booting);
         assert!(surface.servers.is_empty());
         assert_eq!(
-            surface.activity_chip(Locale::En, 80).as_deref(),
+            surface
+                .activity_notice(Locale::En, 80)
+                .map(|notice| notice.text)
+                .as_deref(),
             Some("MCP · 4 connecting")
         );
-        assert_eq!(
-            surface.receipt_lines(Locale::En, 80),
-            vec!["MCP · 4 connecting".to_string()]
-        );
-    }
-
-    #[test]
-    fn settled_single_server_keeps_the_name_and_next_action() {
-        let snap = snapshot(vec![server(
-            "alpha",
-            true,
-            false,
-            Some("protocol negotiation timed out"),
-        )]);
-        let surface = SessionBootSurface::from_parts(
-            Some(&snap),
-            false,
-            &[],
-            1,
-            PluginBootSummary::default(),
-        );
-        assert_eq!(surface.phase, SessionBootPhase::Settled);
-        assert_eq!(
-            surface.receipt_lines(Locale::En, 80),
-            vec!["alpha · failed · /mcp retry alpha".to_string()]
-        );
-    }
-
-    #[test]
-    fn settled_all_connected_collapses_to_the_count() {
-        let snap = snapshot(vec![
-            server("alpha", true, true, None),
-            server("beta", true, true, None),
-        ]);
-        let surface = SessionBootSurface::from_parts(
-            Some(&snap),
-            false,
-            &[],
-            2,
-            PluginBootSummary::default(),
-        );
-        assert_eq!(surface.phase, SessionBootPhase::Settled);
-        assert_eq!(
-            surface.receipt_lines(Locale::En, 80),
-            vec!["MCP · 2 connected".to_string()]
-        );
-        assert!(surface.activity_chip(Locale::En, 80).is_none());
-    }
-
-    #[test]
-    fn overflow_receipt_keeps_a_plus_more_row() {
-        let snap = snapshot(
-            (0..8)
-                .map(|i| {
-                    server(
-                        &format!("s{i}"),
-                        true,
-                        false,
-                        Some("protocol negotiation timed out"),
-                    )
-                })
-                .collect(),
-        );
-        let surface = SessionBootSurface::from_parts(
-            Some(&snap),
-            false,
-            &[],
-            8,
-            PluginBootSummary::default(),
-        );
-        let receipt = surface.receipt_lines(Locale::En, 80);
-        assert_eq!(receipt.len(), 6, "{receipt:?}");
-        assert!(
-            receipt.last().is_some_and(|line| line.contains("+3 more")),
-            "{receipt:?}"
-        );
-        assert!(
-            receipt.iter().any(|line| line.contains("/mcp retry s0")),
-            "{receipt:?}"
-        );
-        assert!(!receipt.join("\n").contains("/mcp auth"), "{receipt:?}");
-    }
-
-    #[test]
-    fn plugin_line_sits_beside_connecting_mcp_names() {
-        let connecting = ["alpha", "beta"]
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        let surface = SessionBootSurface::from_parts(
-            None,
-            true,
-            &connecting,
-            2,
-            PluginBootSummary {
-                loaded: 12,
-                invalid: 1,
-                duplicate: 2,
-                needs_setup: 0,
-            },
-        );
-        let receipt = surface.receipt_lines(Locale::En, 100);
-        let joined = receipt.join("\n");
-        assert!(joined.contains("Plugins"), "{joined}");
-        assert!(joined.contains("12 loaded"), "{joined}");
-        assert!(joined.contains("alpha"), "{joined}");
-        assert!(joined.contains("beta"), "{joined}");
-        assert!(!joined.to_ascii_lowercase().contains("slack"), "{joined}");
     }
 }

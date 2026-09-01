@@ -96,8 +96,8 @@ export const MEDIA_ASSETS: MediaAsset[] = [
       zh: "一次真实的 Codewhale 端到端会话",
     },
     description: {
-      en: "Install, a first session with no key, connecting a provider, and one Fleet workflow on a local model. To be recorded from a release build.",
-      zh: "安装、无密钥的首次会话、接入提供商，以及在本地模型上跑一次 Fleet workflow。将从发布版本录制。",
+      en: "Install, a first session with no key, connecting a provider, and one Pod workflow on a local model. To be recorded from a release build.",
+      zh: "安装、无密钥的首次会话、接入提供商，以及在本地模型上跑一次 Pod workflow。将从发布版本录制。",
     },
     status: "pending",
     pendingLabel: {

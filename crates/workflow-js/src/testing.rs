@@ -31,6 +31,12 @@ pub enum FakeReply {
     BudgetExhausted(String),
     /// Refuse admission: `spawn_task` returns [`DriverError::Rejected`].
     Reject(String),
+    /// The driver seam is gone: `spawn_task` returns
+    /// [`DriverError::Unavailable`].
+    Unavailable(String),
+    /// Admit the task, then drop the completion sender without ever sending a
+    /// terminal outcome — the "driver dropped the completion channel" path.
+    DropCompletion,
     /// Admit the task but never complete it (for cancellation tests). The
     /// completion sender is held so the channel stays open.
     Never,
@@ -148,8 +154,12 @@ impl WorkflowDriver for FakeDriver {
                     None,
                 )
             });
-            if let FakeReply::Reject(message) = reply {
-                return Err(DriverError::Rejected(message));
+            match reply {
+                FakeReply::Reject(message) => return Err(DriverError::Rejected(message)),
+                FakeReply::Unavailable(message) => {
+                    return Err(DriverError::Unavailable(message));
+                }
+                _ => {}
             }
             inner.requests.push(request);
             inner.budget.spent += inner.spend_per_task;
@@ -160,6 +170,7 @@ impl WorkflowDriver for FakeDriver {
         let (tx, rx) = oneshot::channel();
         match reply {
             FakeReply::Never => self.lock().held.push(tx),
+            FakeReply::DropCompletion => drop(tx),
             reply => {
                 let completion = match reply {
                     FakeReply::Complete(text) => TaskCompletion::Completed { text },
@@ -168,7 +179,10 @@ impl WorkflowDriver for FakeDriver {
                     FakeReply::BudgetExhausted(message) => {
                         TaskCompletion::BudgetExhausted { message }
                     }
-                    FakeReply::Reject(_) | FakeReply::Never => unreachable!("handled above"),
+                    FakeReply::Reject(_)
+                    | FakeReply::Unavailable(_)
+                    | FakeReply::Never
+                    | FakeReply::DropCompletion => unreachable!("handled above"),
                 };
                 match delay {
                     None => {

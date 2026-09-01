@@ -234,10 +234,11 @@ pub struct ThemeContrastViolation {
 
 /// `true` when the theme's surfaces belong to the terminal, not to us.
 ///
-/// The `Terminal` theme paints [`Color::Reset`] surfaces so the host
-/// terminal's own scheme shows through. Those colors are terminal-owned and
-/// not enforceable: we cannot know their RGB, so the audit neither passes nor
-/// fails them — it stands down. This function is how callers tell that
+/// The `Terminal` theme and the built-in Whale pair's ordinary Flat shell use
+/// [`Color::Reset`] so the host terminal's own scheme shows through. Those
+/// colors are terminal-owned and not enforceable: we cannot know their RGB,
+/// so the audit neither passes nor fails them — it stands down. Deepsea paints
+/// its authored RGB column later. This function is how callers tell the Flat
 /// exemption apart from a clean bill of health.
 #[allow(dead_code)]
 #[must_use]
@@ -266,9 +267,9 @@ pub fn theme_uses_terminal_owned_surfaces(theme: &UiTheme) -> bool {
 /// Pairs where either color is terminal-defined ([`Color::Reset`], named
 /// ANSI, `Indexed(0..=15)`) are *skipped*, not passed: their real RGB is
 /// owned by the user's terminal profile and cannot be audited. The
-/// `Terminal` theme is therefore largely exempt by design — see
-/// [`theme_uses_terminal_owned_surfaces`], which makes that exemption
-/// explicit rather than silent.
+/// terminal-native themes are therefore partly exempt by design — see
+/// [`theme_uses_terminal_owned_surfaces`], which makes that exemption explicit
+/// rather than silent.
 #[allow(dead_code)]
 #[must_use]
 pub fn theme_contrast_violations(theme: &UiTheme) -> Vec<ThemeContrastViolation> {

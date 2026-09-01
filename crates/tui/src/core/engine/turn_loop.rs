@@ -215,10 +215,11 @@ pub(super) fn requested_sandbox_escalation(
             "danger-full-access",
         ) => crate::sandbox::SandboxPolicy::DangerFullAccess,
         (_, "workspace-write" | "danger-full-access") => {
-            return Err(ToolError::permission_denied(format!(
-                "sandbox escalation to '{requested}' is not strictly wider than this call's current '{}' posture",
-                effective.posture_label()
-            )));
+            return Err(sandbox_escalation_denial(
+                requested,
+                effective,
+                crate::sandbox::process_hardening::no_new_privs_active(),
+            ));
         }
         (_, other) => {
             return Err(ToolError::invalid_input(format!(
@@ -227,6 +228,35 @@ pub(super) fn requested_sandbox_escalation(
         }
     };
     Ok(Some((policy, justification)))
+}
+
+/// Denial for a per-call sandbox escalation that is not strictly wider than
+/// the call's current posture.
+///
+/// When the request aims at `danger-full-access` but the irreversible
+/// no-new-privileges kernel flag was set at startup, even the widest per-call
+/// grant cannot unblock `sudo`/setuid for this process tree — the flag is
+/// process-lifetime and can never be lifted from inside (#5723). Name the two
+/// startup-level paths that actually relax it so the model stops burning
+/// turns on escalation shapes that cannot work.
+pub(super) fn sandbox_escalation_denial(
+    requested: &str,
+    effective: &crate::sandbox::SandboxPolicy,
+    no_new_privs_active: Option<bool>,
+) -> ToolError {
+    let base = format!(
+        "sandbox escalation to '{requested}' is not strictly wider than this call's current '{}' posture",
+        effective.posture_label()
+    );
+    if requested == "danger-full-access" && no_new_privs_active == Some(true) {
+        ToolError::permission_denied(format!(
+            "{base}; sudo/setuid remain blocked by the no-new-privileges kernel flag set at \
+             startup — relaunch with sandbox_mode = \"danger-full-access\" in the config file \
+             or CODEWHALE_NO_NEW_PRIVS=0 to relax it"
+        ))
+    } else {
+        ToolError::permission_denied(base)
+    }
 }
 
 /// Whether a [`Usage`] carries any provider-reported data. The
@@ -588,6 +618,11 @@ impl Engine {
         // registry-derived field as unknown rather than guessing.
         inspection_surface: Option<crate::tool_inspection::ToolSurfaceContext>,
     ) -> (TurnOutcomeStatus, Option<String>) {
+        // R1: restart the cumulative per-turn wall-clock budget. This is the
+        // only place it is started, so exactly one turn owns it at a time.
+        self.turn_wall_clock =
+            crate::core::engine::turn_budget::TurnWallClock::start(self.config.turn_wall_clock);
+
         // Only interactive TUI hosts own terminal chrome. Headless exec,
         // app-server, and stream-json stdout must remain byte-clean.
         if self.config.terminal_chrome_enabled {
@@ -672,6 +707,22 @@ impl Engine {
             if self.cancel_token.is_cancelled() {
                 let _ = self.tx_event.send(Event::status("Request cancelled")).await;
                 return (TurnOutcomeStatus::Interrupted, None);
+            }
+
+            // R1: the cumulative per-turn wall-clock budget. Checked at the
+            // provider-request boundary so a turn that runs out of time stops
+            // before authorizing another billable request, and every tool
+            // result already produced stays in the transcript. Hitting it is
+            // never a clean success — the turn ends `Failed` with the limit
+            // named, matching how the step ceiling below reports.
+            if self.turn_wall_clock.exhausted() {
+                let error = format!(
+                    "Per-turn wall-clock budget exhausted after {}s (limit: {}s). The turn was stopped before another model request; work already done is in the transcript. Send another message to continue, or raise `[tui].turn_wall_clock_secs`.",
+                    self.turn_wall_clock.spent().as_secs(),
+                    self.turn_wall_clock.budget().as_secs(),
+                );
+                let _ = self.tx_event.send(Event::status(error.clone())).await;
+                return (TurnOutcomeStatus::Failed, Some(error));
             }
 
             if self.apply_pending_runtime_authority().await {
@@ -4131,7 +4182,13 @@ impl Engine {
         let mut pending_resume: Option<StreamResume> = None;
         let mut stream_content_bytes: usize = 0;
         let (chunk_timeout_secs, chunk_timeout) = stream_chunk_timeout_budget(&self.config);
-        let max_duration = Duration::from_secs(STREAM_MAX_DURATION_SECS);
+        // R1: the per-step stream caps are resolved from config rather than
+        // read from the module constants, so both are overridable. Both stay
+        // finite: `resolve_stream_*` rejects `0` instead of reading it as
+        // "unlimited".
+        let max_duration = self.config.stream_max_duration;
+        let max_duration_secs = max_duration.as_secs();
+        let max_content_bytes = self.config.stream_max_content_bytes;
 
         // Process stream events
         loop {
@@ -4186,7 +4243,7 @@ impl Engine {
             // Guard: max wall-clock duration
             if stream_start.elapsed() > max_duration {
                 let envelope = StreamError::DurationLimit {
-                    limit_secs: STREAM_MAX_DURATION_SECS,
+                    limit_secs: max_duration_secs,
                 }
                 .into_envelope();
                 crate::logging::warn(&envelope.message);
@@ -4196,9 +4253,9 @@ impl Engine {
             }
 
             // Guard: max accumulated content bytes
-            if stream_content_bytes > STREAM_MAX_CONTENT_BYTES {
+            if stream_content_bytes > max_content_bytes {
                 let envelope = StreamError::Overflow {
-                    limit_bytes: STREAM_MAX_CONTENT_BYTES,
+                    limit_bytes: max_content_bytes,
                 }
                 .into_envelope();
                 crate::logging::warn(&envelope.message);

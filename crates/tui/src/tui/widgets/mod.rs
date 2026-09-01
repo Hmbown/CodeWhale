@@ -62,8 +62,7 @@ pub struct ChatWidget {
     ocean_column: Option<crate::tui::ocean::OceanColumn>,
     /// Live-activity shape of the ambient scene (thinking/tools/subagents).
     ocean_activity: crate::tui::ambient_life::AmbientActivity,
-    /// Ink for idle fish/bubbles. Present for every underwater treatment —
-    /// flat and Terminal-owned keep ambient life without the ombre field.
+    /// Ink for the selected underwater scene's idle fish/bubbles.
     ambient_inks: Option<(Color, Color)>,
     ocean_elapsed_ms: u128,
     ocean_animated: bool,
@@ -129,9 +128,11 @@ impl ChatWidget {
     fn new_with_ocean_elapsed(app: &mut App, area: Rect, ocean_elapsed_ms: u128) -> Self {
         let content_area = area;
         let background = app.ui_theme.surface_bg;
-        let ocean_ramp = app
-            .ocean_treatment
-            .is_ombre()
+        // The ordinary shell inherits its host/theme surface. Underwater life
+        // is earned by the explicit Deepsea treatment, never painted over a
+        // user's terminal simply because the app happens to be active.
+        let underwater_atmosphere = app.ocean_treatment.is_deepsea();
+        let ocean_ramp = underwater_atmosphere
             .then(|| crate::tui::ocean::OceanRamp::for_theme(&app.ui_theme))
             .flatten();
         // Ink hue carries the live activity (reasoning deep-dim, tools bright,
@@ -139,32 +140,28 @@ impl ChatWidget {
         let ocean_activity = crate::tui::ambient_life::AmbientActivity::from_kind(
             crate::tui::underwater::LiveActivity::from_app(app).kind(),
         );
-        let ambient_inks = Some(crate::tui::ocean::ambient_inks_for_activity(
-            &app.ui_theme,
-            ocean_activity,
-        ));
+        let ambient_inks = underwater_atmosphere
+            .then(|| crate::tui::ocean::ambient_inks_for_activity(&app.ui_theme, ocean_activity));
         // The completion breath is authored decorative motion, so it rides the
         // same motion gate as everything else in the water. Both the column's
         // settle flourish and ambient life's presence read this one clock:
         // presence needs the settle tail past the breath, the column does not.
-        let completion_life_clock = app
-            .motion_policy()
-            .allows_decorative()
-            .then_some(())
-            .and(app.ocean_completion_started_at)
-            .map(|started| started.elapsed().as_millis());
+        let completion_life_clock = (underwater_atmosphere
+            && app.motion_policy().allows_decorative())
+        .then_some(())
+        .and(app.ocean_completion_started_at)
+        .map(|started| started.elapsed().as_millis());
         let completion_elapsed_ms = completion_life_clock
             .filter(|elapsed| *elapsed < crate::tui::ocean::COMPLETION_BREATH_MS);
         let completion_life_active = completion_life_clock
             .is_some_and(|elapsed| elapsed < crate::tui::ocean::COMPLETION_SETTLE_MS);
         let render_empty_state = should_render_empty_state(app);
         let phase = ShellPhase::from_app(app);
-        // Keep the water alive while a turn is doing work, even after the
-        // transcript exists. Previously motion was limited to a pristine
-        // empty composer, so typing or receiving the first message made the
-        // fish appear to die.
+        // Keep the selected underwater scene alive while a turn is doing
+        // work, even after the transcript exists. The ordinary Flat shell
+        // remains entirely still and lets the host terminal lead.
         let underwater_motion_enabled =
-            crate::tui::underwater::decorative_shell_motion_enabled(app);
+            underwater_atmosphere && crate::tui::underwater::decorative_shell_motion_enabled(app);
         let browsing_history = !app.viewport.transcript_scroll.is_at_tail();
         let ocean_animated = underwater_motion_enabled
             && (render_empty_state
@@ -214,7 +211,6 @@ impl ChatWidget {
         render_options.reasoning_preview_viewport_lines = Some(visible_lines);
 
         if render_empty_state {
-            crate::tui::underwater::ensure_idle_welcome_started(app, content_area);
             let lines = build_empty_state_lines(app, content_area);
             app.viewport.last_transcript_area = Some(content_area);
             app.viewport.last_transcript_top = 0;
@@ -237,9 +233,10 @@ impl ChatWidget {
                 ocean_animated,
                 life_presence_fixed,
                 fish_flee_elapsed_ms,
-                // Reduced-motion users still get the quiet, static scene;
-                // only movement itself is opt-in.
-                ambient_life: !app.attention_hold_active()
+                // Reduced-motion users still get a quiet, static Deepsea scene;
+                // Flat remains a normal host-owned terminal either way.
+                ambient_life: underwater_atmosphere
+                    && !app.attention_hold_active()
                     && matches!(
                         phase,
                         ShellPhase::Idle
@@ -630,10 +627,12 @@ impl ChatWidget {
             ocean_animated,
             life_presence_fixed,
             fish_flee_elapsed_ms,
-            // Fish also accompany intentional transcript browsing. They only
-            // occupy blank cells and are collision-checked, so history stays
-            // legible while the ocean remains playful when scrolling upward.
-            ambient_life: !app.attention_hold_active()
+            // Fish also accompany intentional transcript browsing in the
+            // selected underwater scene. They only occupy blank cells and are
+            // collision-checked, so history stays legible while the ocean
+            // remains playful when scrolling upward.
+            ambient_life: underwater_atmosphere
+                && !app.attention_hold_active()
                 && (browsing_history
                     || matches!(phase, ShellPhase::Working | ShellPhase::Verifying)
                     || completion_life_active),
@@ -939,11 +938,9 @@ impl Renderable for ChatWidget {
 }
 
 impl ChatWidget {
-    /// Paint the underwater field. The water column belongs to ombre;
-    /// ambient life belongs to every underwater treatment. Flat keeps the
-    /// theme surface, Solarized Light keeps canonical Base3, and Terminal
-    /// keeps its inherited background, but none of those means a lifeless
-    /// ocean.
+    /// Paint the explicitly selected underwater field. Flat keeps the theme
+    /// surface, Solarized Light keeps canonical Base3, and Terminal keeps its
+    /// inherited background without inherited aquarium decoration.
     fn render_underwater_field(&self, area: Rect, buf: &mut Buffer) {
         if let Some(column) = self.ocean_column {
             // Cache per-row ocean colors; invalidate only on phase/size/breath.
@@ -1112,6 +1109,60 @@ fn render_jump_to_latest_button(
 const COMPOSER_PROMPT_GUTTER_WIDTH: u16 = 2;
 const COMPOSER_PANEL_MIN_WIDTH: u16 = 12;
 
+/// Whether the active composer should use its full rounded enclosure.
+///
+/// `composer_border` is a legacy configuration name, but its compatibility
+/// policy is deliberate: the default `true` means the Tideline enclosure;
+/// `false` is an explicit compact/quiet opt-out. Keep every layout consumer
+/// behind this helper so the reserved floor, measured height, and rendered
+/// geometry cannot drift apart.
+#[must_use]
+pub(crate) fn composer_enclosure_enabled(app: &App) -> bool {
+    app.composer_border
+}
+
+/// Shared `[↑]` submit rect for the live composer, or `None` when the
+/// enclosure cannot host the three-cell affordance.
+///
+/// The gate is the same `enclosed_composer_panel_fits` predicate the painter
+/// uses: a hitbox without the painted panel would be an invisible click
+/// target (widths 6–11 rendered a borderless rule while still accepting
+/// clicks).
+#[must_use]
+pub(crate) fn active_composer_submit_rect(app: &App, area: Rect) -> Option<Rect> {
+    if !enclosed_composer_panel_fits(composer_enclosure_enabled(app), area.width, area.height) {
+        return None;
+    }
+    Some(crate::tui::composer_chrome::tideline_composer_geometry(area).submit)
+}
+
+/// Restore the rounded corners after the semantic top/bottom passes.
+///
+/// Ratatui renders a `TOP`-only (or `BOTTOM`-only) block through the corner
+/// cells as horizontal line glyphs. The live composer needs those passes for
+/// its localized titles and independent permission/mode color ramps, so put
+/// the four rounded joins back afterward rather than replacing its mature
+/// input widget with the unfinished translation scaffold.
+fn render_composer_panel_corners(
+    area: Rect,
+    buf: &mut Buffer,
+    background: Style,
+    permission_color: Color,
+    mode_color: Color,
+) {
+    let top_style = background.fg(permission_color);
+    let bottom_style = background.fg(mode_color);
+    let left = area.left();
+    let right = area.right().saturating_sub(1);
+    let top = area.top();
+    let bottom = area.bottom().saturating_sub(1);
+
+    buf[(left, top)].set_symbol("╭").set_style(top_style);
+    buf[(right, top)].set_symbol("╮").set_style(top_style);
+    buf[(left, bottom)].set_symbol("╰").set_style(bottom_style);
+    buf[(right, bottom)].set_symbol("╯").set_style(bottom_style);
+}
+
 /// Whether the outer composer rect can carry both semantic border rows.
 ///
 /// Keep this policy in outer-area coordinates. Input wrapping subtracts the
@@ -1119,6 +1170,35 @@ const COMPOSER_PANEL_MIN_WIDTH: u16 = 12;
 /// 13-column composers render as panels after reserving only the quiet rule.
 fn enclosed_composer_panel_fits(show_panel: bool, area_width: u16, area_height: u16) -> bool {
     show_panel && area_height >= 3 && area_width >= COMPOSER_PANEL_MIN_WIDTH
+}
+
+/// Border-aware input plane for the active composer.
+///
+/// The shared shell's `[↑]` control occupies three cells on the inner row.
+/// Keep the text plane to its left, with one blank cell in between, so input
+/// wrapping, cursor placement, and pointer mapping cannot claim painted send
+/// cells. The outer block still owns the trailing breathing cell before its
+/// right rail.
+fn composer_inner_area(area: Rect, has_panel: bool) -> Rect {
+    let inner = if has_panel {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .inner(area)
+    } else if area.height >= 2 {
+        Block::default().borders(Borders::TOP).inner(area)
+    } else {
+        area
+    };
+    if !has_panel {
+        return inner;
+    }
+
+    let shell = crate::tui::composer_chrome::tideline_composer_geometry(area);
+    Rect {
+        width: shell.content.right().saturating_sub(inner.x),
+        ..inner
+    }
 }
 
 /// Canonical horizontal geometry for composer input text.
@@ -1242,23 +1322,17 @@ impl<'a> ComposerWidget<'a> {
     }
 
     fn wants_enclosed_panel(&self) -> bool {
-        self.app.composer_border
+        composer_enclosure_enabled(self.app)
     }
 
     pub(crate) fn has_panel(&self, area: Rect) -> bool {
         enclosed_composer_panel_fits(self.wants_enclosed_panel(), area.width, area.height)
     }
 
-    fn inner_area(&self, area: Rect) -> Rect {
-        if self.has_panel(area) {
-            Block::default()
-                .borders(Borders::TOP | Borders::BOTTOM)
-                .inner(area)
-        } else if area.height >= 2 {
-            Block::default().borders(Borders::TOP).inner(area)
-        } else {
-            area
-        }
+    /// The border- and submit-aware input rectangle shared by rendering,
+    /// cursor mapping, and the frame's persistent mouse geometry.
+    pub(crate) fn inner_area(&self, area: Rect) -> Rect {
+        composer_inner_area(area, self.has_panel(area))
     }
 
     fn mode_color(&self) -> Color {
@@ -1360,14 +1434,28 @@ impl Renderable for ComposerWidget<'_> {
                 ApprovalMode::Auto => self.app.ui_theme.permission_auto_review,
                 ApprovalMode::Bypass => self.app.ui_theme.permission_full_access,
             };
+            // Paint the enclosure first so the live composer gets actual
+            // rounded side rails. The semantic top/bottom blocks below keep
+            // their existing permission/mode color ramps and titles while the
+            // neutral rails stay legible on every supported theme.
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(self.app.ui_theme.border))
+                .style(background)
+                .render(area, buf);
             let mut top_border = Block::default()
                 .borders(Borders::TOP)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(permission_color))
                 .style(background);
             if self.app.is_history_search_active() {
                 top_border = top_border.title(Line::from(Span::styled(
-                    self.app
-                        .tr(crate::localization::MessageId::HistorySearchTitle),
+                    format!(
+                        " {} ",
+                        self.app
+                            .tr(crate::localization::MessageId::HistorySearchTitle)
+                    ),
                     Style::default().fg(palette::TEXT_MUTED),
                 )));
             }
@@ -1388,12 +1476,20 @@ impl Renderable for ComposerWidget<'_> {
 
             let mut bottom_border = Block::default()
                 .borders(Borders::BOTTOM)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(self.mode_color()))
                 .style(background);
             if let Some(hint_line) = hint_line {
                 bottom_border = bottom_border.title_bottom(hint_line);
             }
             bottom_border.render(area, buf);
+            render_composer_panel_corners(
+                area,
+                buf,
+                background,
+                permission_color,
+                self.mode_color(),
+            );
         } else if area.height >= 2 {
             let mut block = Block::default()
                 .borders(Borders::TOP)
@@ -1748,6 +1844,18 @@ impl Renderable for ComposerWidget<'_> {
             buf[(prompt_x, cursor_y)]
                 .set_symbol("❯")
                 .set_style(Style::default().fg(self.app.ui_theme.accent_primary));
+        }
+
+        // Restore the shared `[↑]` after caller-owned input so a long draft
+        // cannot erase the one cell target the mouse handler also uses.
+        if has_panel {
+            crate::tui::composer_chrome::render_tideline_composer_submit(
+                area,
+                buf,
+                &self.app.ui_theme,
+                true,
+                crate::tui::color_compat::ascii_safe_enabled(),
+            );
         }
     }
 
@@ -3425,11 +3533,13 @@ fn composer_height(
     show_panel: bool,
 ) -> u16 {
     let has_panel = enclosed_composer_panel_fits(show_panel, area_width, available_height);
-    let content_width = usize::from(
-        area_width
-            .saturating_sub(COMPOSER_PROMPT_GUTTER_WIDTH)
-            .max(1),
-    );
+    // Measure through the same border- and submit-aware plane that rendering,
+    // cursor placement, the frame viewport, and mouse mapping use. A draft
+    // that wraps here therefore cannot consume the painted `[↑]` cells later.
+    let measurement_area = Rect::new(0, 0, area_width, if has_panel { 3 } else { 1 });
+    let content_width =
+        composer_content_geometry(composer_inner_area(measurement_area, has_panel), false)
+            .text_width();
     let mut line_count = wrap_input_lines(input, content_width).len();
     if line_count == 0 {
         line_count = 1;
@@ -4313,24 +4423,25 @@ fn line_spans_with_selection<'a>(
 mod tests {
     use super::{
         ACTIVE_REVISION_DOMAIN, ApprovalMode, ApprovalWidget, COMPOSER_PANEL_HEIGHT,
-        COMPOSER_PLACEHOLDER, COMPOSER_PROMPT_GUTTER_WIDTH, ChatWidget, ComposerWidget, Renderable,
-        SlashMenuEntry, active_entry_revision, apply_detail_target_highlight,
+        COMPOSER_PLACEHOLDER, ChatWidget, ComposerWidget, Renderable, SlashMenuEntry,
+        active_composer_submit_rect, active_entry_revision, apply_detail_target_highlight,
         apply_selection_to_line, apply_send_flash, approval_palette, approval_truncation_hint,
         build_empty_state_lines, composer_content_geometry, composer_empty_hint_text,
-        composer_height, composer_max_height, composer_submit_hint, composer_top_padding,
-        cursor_row_col, empty_composer_visual_rows, enclosed_composer_panel_fits, fish_flee_offset,
-        fish_heading, fish_mark, history_entry_revision, layout_input, layout_input_with_scroll,
-        placeholder_visual_lines, push_command_entry, receipt_is_settling, revision_in_domain,
-        should_render_empty_state, slash_completion_hints, tool_run_summary_revision,
-        wrap_input_lines, wrap_input_lines_for_mouse, wrap_text,
+        composer_height, composer_inner_area, composer_max_height, composer_submit_hint,
+        composer_top_padding, cursor_row_col, empty_composer_visual_rows,
+        enclosed_composer_panel_fits, fish_flee_offset, fish_heading, fish_mark,
+        history_entry_revision, layout_input, layout_input_with_scroll, placeholder_visual_lines,
+        push_command_entry, receipt_is_settling, revision_in_domain, should_render_empty_state,
+        slash_completion_hints, tool_run_summary_revision, wrap_input_lines,
+        wrap_input_lines_for_mouse, wrap_text,
     };
     use crate::config::{ApiProvider, Config};
     use crate::localization::Locale;
     use crate::palette;
     use crate::tui::active_cell::ActiveCell;
     use crate::tui::app::{
-        App, AppMode, ComposerDensity, OnboardingState, QueuedMessage, TaskPanelEntry,
-        TaskPanelEntryKind, ToolCollapseMode, TranscriptSpacing, TuiOptions,
+        App, AppMode, ComposerDensity, QueuedMessage, TaskPanelEntry, TaskPanelEntryKind,
+        ToolCollapseMode, TranscriptSpacing, TuiOptions,
     };
     use crate::tui::history::{
         ExecCell, ExecSource, GenericToolCell, HistoryCell, ToolCell, ToolRun, ToolStatus,
@@ -4343,10 +4454,7 @@ mod tests {
         style::{Color, Modifier, Style},
         text::{Line, Span},
     };
-    use std::{
-        path::PathBuf,
-        time::{Duration, Instant},
-    };
+    use std::{path::PathBuf, time::Instant};
     use unicode_width::UnicodeWidthStr;
 
     fn create_test_app() -> App {
@@ -4356,8 +4464,16 @@ mod tests {
             ..crate::test_support::test_tui_options(PathBuf::from("."))
         };
         let mut app = App::new(options, &Config::default());
+        // Widget contracts below exercise the post-Startup conversation
+        // surface. Startup rendering has its own explicit fixture/tests.
+        app.launch.visible = false;
         app.ui_locale = Locale::En;
         app.composer.vim_enabled = false;
+        // Most widget fixtures exercise the explicitly selected underwater
+        // scene. Production defaults to Flat/terminal-owned; keep tests that
+        // inspect fish and caustics intentional rather than coupled to that
+        // startup preference.
+        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Deepsea;
         app
     }
 
@@ -5195,6 +5311,7 @@ mod tests {
         let root = slash_completion_hints("/", 128, &[], Locale::En, None, ApiProvider::Deepseek);
         assert!(root.iter().any(|hint| hint.name == "/model"));
         assert!(!root.iter().any(|hint| hint.name == "/provider"));
+        assert!(!root.iter().any(|hint| hint.name == "/pod"));
         assert!(!root.iter().any(|hint| hint.name == "/fleet"));
         assert!(!root.iter().any(|hint| hint.name == "/config"));
         assert!(!root.iter().any(|hint| hint.name == "/statusline"));
@@ -5399,6 +5516,19 @@ mod tests {
 
         assert_eq!(entry.alias_hint.as_deref(), Some("ship"));
         assert_eq!(entry.description, "Deploy target");
+    }
+
+    #[test]
+    fn slash_completion_migrates_legacy_fleet_to_canonical_pod() {
+        let hints =
+            slash_completion_hints("/fleet", 128, &[], Locale::En, None, ApiProvider::Deepseek);
+        let entry = hints
+            .iter()
+            .find(|hint| hint.name == "/pod")
+            .expect("legacy /fleet should discover canonical /pod");
+
+        assert_eq!(entry.alias_hint.as_deref(), Some("fleet"));
+        assert!(!hints.iter().any(|hint| hint.name == "/fleet"));
     }
 
     #[test]
@@ -5786,7 +5916,10 @@ mod tests {
         } else {
             1
         };
-        let content_width = usize::from(width.saturating_sub(COMPOSER_PROMPT_GUTTER_WIDTH).max(1));
+        let measurement_area = Rect::new(0, 0, width, if has_panel { 3 } else { 1 });
+        let content_width =
+            composer_content_geometry(composer_inner_area(measurement_area, has_panel), false)
+                .text_width();
         let input_height_budget = usize::from(height)
             .saturating_sub(menu_lines)
             .saturating_sub(chrome_height)
@@ -5842,7 +5975,64 @@ mod tests {
                 expected_panel,
                 "width={width} bottom border disagrees with height policy"
             );
+            if expected_panel {
+                let shell = crate::tui::composer_chrome::tideline_composer_geometry(area);
+                assert_eq!(
+                    widget.inner_area(area),
+                    Rect::new(1, 1, shell.content.right().saturating_sub(1), 1,),
+                    "width={width} panel input area must reserve the send control and breathing cell"
+                );
+                assert_eq!(buf[(area.left(), area.top())].symbol(), "\u{256d}");
+                assert_eq!(
+                    buf[(area.right().saturating_sub(1), area.top())].symbol(),
+                    "\u{256e}"
+                );
+                assert_eq!(
+                    buf[(area.left(), area.bottom().saturating_sub(1))].symbol(),
+                    "\u{2570}"
+                );
+                assert_eq!(
+                    buf[(
+                        area.right().saturating_sub(1),
+                        area.bottom().saturating_sub(1)
+                    )]
+                        .symbol(),
+                    "\u{256f}"
+                );
+                assert_eq!(
+                    buf[(area.left(), area.y.saturating_add(1))].symbol(),
+                    "\u{2502}"
+                );
+                assert_eq!(
+                    buf[(area.right().saturating_sub(1), area.y.saturating_add(1))].symbol(),
+                    "\u{2502}"
+                );
+            } else {
+                assert_eq!(
+                    widget.inner_area(area),
+                    Rect::new(area.x, area.y.saturating_add(1), area.width, 1),
+                    "width={width} compact fallback must keep its full input width"
+                );
+                assert_ne!(buf[(area.left(), area.top())].symbol(), "\u{256d}");
+            }
         }
+    }
+
+    #[test]
+    fn composer_height_wraps_to_the_rounded_panel_content_width() {
+        // At the minimum viable panel width, the side rails, prompt gutter,
+        // shared `[↑]` control, and its breathing cell leave three text
+        // columns. Measuring against the old width would render extra lines
+        // without allocating their rows.
+        let height = composer_height(
+            "123456789",
+            super::COMPOSER_PANEL_MIN_WIDTH,
+            8,
+            0,
+            ComposerDensity::Comfortable,
+            true,
+        );
+        assert_eq!(height, 6);
     }
 
     #[test]
@@ -5993,14 +6183,14 @@ mod tests {
         };
 
         // The two border rows carry independent permission/mode signals.
-        // inner_area: {x:0, y:1, w:40, h:3}
+        // inner_area: {x:1, y:1, w:38, h:3}
         // input_rows_budget = 3
         // The prompt and hint share one quiet row.
         assert_eq!(
             empty_composer_visual_rows(Some(COMPOSER_PLACEHOLDER), 40, 3),
             1
         );
-        assert_eq!(widget.cursor_pos(area), Some((2, 2)));
+        assert_eq!(widget.cursor_pos(area), Some((3, 2)));
     }
 
     #[test]
@@ -6019,17 +6209,17 @@ mod tests {
             height: 5,
         };
 
-        // inner_area: {x:0, y:1, w:14, h:3}
+        // inner_area: {x:1, y:1, w:12, h:3}
         // input_rows_budget = 3
-        // placeholder_visual_lines(14) = 2
+        // placeholder_visual_lines(12) = 3
         // The narrow fallback still reserves one composer row; Paragraph
         // clipping keeps it from growing the shell.
-        assert_eq!(placeholder_visual_lines(14), 2);
+        assert_eq!(placeholder_visual_lines(12), 3);
         assert_eq!(
             empty_composer_visual_rows(Some(COMPOSER_PLACEHOLDER), 14, 3),
             1
         );
-        assert_eq!(widget.cursor_pos(area), Some((2, 2)));
+        assert_eq!(widget.cursor_pos(area), Some((3, 2)));
     }
 
     #[test]
@@ -6079,12 +6269,24 @@ mod tests {
             row_text(&buf, area, cursor_y).contains(&placeholder),
             "prompt and hint should share one row: {rendered}"
         );
+        let inner = widget.inner_area(area);
+        let quiet_row = cursor_y.saturating_add(1);
+        // The quiet row hosts exactly one thing: the shared `[↑]` affordance
+        // on its recorded hitbox cells. Every other cell stays blank.
+        let submit = active_composer_submit_rect(&app, area).expect("enclosed composer submit");
         assert!(
-            row_text(&buf, area, cursor_y.saturating_add(1))
-                .trim()
-                .is_empty(),
-            "comfortable composer should keep a quiet row before the footer: {rendered}"
+            quiet_row < inner.bottom()
+                && (inner.x..inner.right()).all(|x| {
+                    let on_submit =
+                        submit.y == quiet_row && x >= submit.x && x < submit.x + submit.width;
+                    on_submit || buf[(x, quiet_row)].symbol() == " "
+                }),
+            "comfortable composer should keep a quiet content row before the footer, hosting only the shared [↑]: {rendered}"
         );
+        let painted: String = (submit.x..submit.x + submit.width)
+            .map(|x| buf[(x, submit.y)].symbol().to_string())
+            .collect();
+        assert_eq!(painted, "[↑]", "the quiet row hosts the shared send cells");
     }
 
     #[test]
@@ -6104,9 +6306,9 @@ mod tests {
             .cursor_pos(area)
             .expect("composer with input should expose a cursor");
 
-        assert_eq!(buf[(0, cursor_y)].symbol(), "❯");
-        assert_eq!(buf[(2, cursor_y)].symbol(), "h");
-        assert_eq!(cursor_x, 7, "cursor keeps the prompt gutter reserved");
+        assert_eq!(buf[(1, cursor_y)].symbol(), "❯");
+        assert_eq!(buf[(3, cursor_y)].symbol(), "h");
+        assert_eq!(cursor_x, 8, "cursor keeps the prompt gutter reserved");
     }
 
     fn render_composer(app: &App, width: u16, height: u16) -> String {
@@ -6337,6 +6539,128 @@ mod tests {
         assert!(
             buffer_text(&search_buf, area)
                 .contains(&*search_app.tr(crate::localization::MessageId::HistorySearchTitle))
+        );
+    }
+
+    #[test]
+    fn enclosed_composer_paints_the_shared_send_hitbox() {
+        let mut app = create_test_app();
+        app.composer_border = true;
+        app.input = "ship it".to_string();
+        app.cursor_position = app.input.chars().count();
+        for (width, height) in [(40_u16, 12), (60, 16), (80, 24), (100, 32), (120, 32)] {
+            let rendered = render_composer(&app, width, height);
+            assert!(
+                rendered.contains("[↑]"),
+                "missing send affordance at {width}x{height}:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains("▚△▞"),
+                "retired crown must stay gone at {width}x{height}:\n{rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn enclosed_composer_send_hitbox_matches_painted_cells() {
+        let mut app = create_test_app();
+        app.composer_border = true;
+        app.input = "x".repeat(240);
+        app.cursor_position = app.input.chars().count();
+        let slash_menu_entries = Vec::<SlashMenuEntry>::new();
+        let mention_menu_entries = Vec::<String>::new();
+        let widget = ComposerWidget::new(&app, 8, &slash_menu_entries, &mention_menu_entries);
+        let area = Rect::new(0, 0, 80, 8);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let submit = active_composer_submit_rect(&app, area).expect("enclosed composer submit");
+        let painted: String = (submit.x..submit.x + submit.width)
+            .map(|x| buf[(x, submit.y)].symbol().to_string())
+            .collect();
+        assert_eq!(painted, "[↑]", "geometry must cover the painted send cells");
+    }
+
+    #[test]
+    fn enclosed_composer_reserves_submit_cells_for_a_74_character_draft() {
+        let mut app = create_test_app();
+        app.composer_border = true;
+        let draft = "x".repeat(74);
+        app.input = draft.clone();
+        app.cursor_position = app.input.chars().count();
+        let slash_menu_entries = Vec::<SlashMenuEntry>::new();
+        let mention_menu_entries = Vec::<String>::new();
+        let widget = ComposerWidget::new(&app, 8, &slash_menu_entries, &mention_menu_entries);
+        let area = Rect::new(0, 0, 80, 8);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf);
+
+        let submit = active_composer_submit_rect(&app, area).expect("enclosed composer submit");
+        let input_plane = widget.inner_area(area);
+        let text_area = composer_content_geometry(input_plane, false).text_area;
+        assert_eq!(
+            text_area.right(),
+            submit.x.saturating_sub(1),
+            "one blank cell must remain between draft text and submit"
+        );
+
+        let (cursor_x, cursor_y) = widget.cursor_pos(area).expect("draft cursor");
+        assert!(
+            cursor_x < submit.x || cursor_x >= submit.right() || cursor_y != submit.y,
+            "cursor {cursor_x},{cursor_y} must not land in submit {submit:?}"
+        );
+        assert_eq!(app.input, draft, "rendering must retain the full draft");
+
+        let first_line: String = (text_area.x..text_area.right())
+            .map(|x| buf[(x, cursor_y.saturating_sub(1))].symbol().to_string())
+            .collect();
+        let continuation: String = (text_area.x..text_area.x.saturating_add(3))
+            .map(|x| buf[(x, cursor_y)].symbol().to_string())
+            .collect();
+        assert_eq!(first_line, "x".repeat(71), "first wrapped draft row");
+        assert_eq!(
+            continuation, "xxx",
+            "draft continuation must remain visible"
+        );
+        let painted: String = (submit.x..submit.right())
+            .map(|x| buf[(x, submit.y)].symbol().to_string())
+            .collect();
+        assert_eq!(painted, "[↑]", "submit stays intact beside the draft");
+    }
+
+    #[test]
+    fn composer_send_hitbox_only_exists_where_the_panel_paints() {
+        let mut app = create_test_app();
+        app.composer_border = true;
+        // Widths 6–11 fail COMPOSER_PANEL_MIN_WIDTH: the painter sheds the
+        // enclosure there, so no invisible hit target may remain.
+        for width in 6..12_u16 {
+            let area = Rect::new(0, 0, width, 4);
+            assert!(
+                active_composer_submit_rect(&app, area).is_none(),
+                "no hitbox without the painted panel at width {width}"
+            );
+        }
+        let area = Rect::new(0, 0, 12, 4);
+        assert!(
+            active_composer_submit_rect(&app, area).is_some(),
+            "the minimum panel width hosts the hitbox"
+        );
+        // Short composer rows and the quiet opt-out shed the hitbox too.
+        assert!(active_composer_submit_rect(&app, Rect::new(0, 0, 80, 2)).is_none());
+        app.composer_border = false;
+        assert!(active_composer_submit_rect(&app, Rect::new(0, 0, 80, 4)).is_none());
+    }
+
+    #[test]
+    fn quiet_composer_does_not_paint_a_fake_send_control() {
+        let mut app = create_test_app();
+        app.composer_border = false;
+        app.input = "ship it".to_string();
+        app.cursor_position = app.input.chars().count();
+        let rendered = render_composer(&app, 80, 4);
+        assert!(
+            !rendered.contains("[↑]"),
+            "compact composer must shed the send chrome:\n{rendered}"
         );
     }
 
@@ -6594,59 +6918,6 @@ mod tests {
     }
 
     #[test]
-    fn idle_welcome_caustic_starts_when_the_empty_ocean_is_shown() {
-        let mut app = create_test_app();
-        app.low_motion = false;
-        app.fancy_animations = true;
-        app.onboarding = OnboardingState::None;
-        app.launch.visible = true;
-        let area = Rect::new(0, 0, 80, 24);
-
-        let _ = ChatWidget::new(&mut app, area);
-        assert!(
-            app.ocean_started_at.is_none(),
-            "launch sits in front of the idle whale, so the shine must wait"
-        );
-
-        app.launch.visible = false;
-        let _ = ChatWidget::new(&mut app, area);
-        let started = app
-            .ocean_started_at
-            .expect("the idle welcome shine starts once the empty ocean is on screen");
-
-        std::thread::sleep(Duration::from_millis(20));
-        let _ = ChatWidget::new(&mut app, area);
-        assert_eq!(
-            app.ocean_started_at,
-            Some(started),
-            "later idle frames keep the same welcome clock"
-        );
-    }
-
-    #[test]
-    fn idle_welcome_caustic_waits_behind_onboarding() {
-        let mut app = create_test_app();
-        app.low_motion = false;
-        app.fancy_animations = true;
-        app.onboarding = OnboardingState::Welcome;
-        app.launch.visible = false;
-        let area = Rect::new(0, 0, 80, 24);
-
-        let _ = ChatWidget::new(&mut app, area);
-        assert!(
-            app.ocean_started_at.is_none(),
-            "onboarding sits in front of the idle whale, so the shine must wait"
-        );
-
-        app.onboarding = OnboardingState::None;
-        let _ = ChatWidget::new(&mut app, area);
-        assert!(
-            app.ocean_started_at.is_some(),
-            "the idle welcome shine starts once onboarding hands off the ocean"
-        );
-    }
-
-    #[test]
     fn empty_state_shows_startup_context() {
         let mut app = create_test_app();
         app.onboarding_needs_api_key = false;
@@ -6705,7 +6976,7 @@ mod tests {
         // the treatment it is actually asserting instead of inheriting a
         // transient Flat/Terminal choice from the process.
         app.ui_theme = palette::UI_THEME;
-        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Ombre;
+        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Deepsea;
         app.low_motion = false;
         app.fancy_animations = true;
         app.workspace = PathBuf::from("codewhale-test-workspace");
@@ -6754,7 +7025,7 @@ mod tests {
     }
 
     #[test]
-    fn flat_treatment_keeps_theme_surface_and_ambient_life() {
+    fn flat_treatment_keeps_theme_surface_without_ambient_life() {
         let mut app = create_test_app();
         app.ocean_treatment = crate::tui::ocean::OceanTreatment::Flat;
         app.low_motion = false;
@@ -6762,22 +7033,24 @@ mod tests {
         let area = Rect::new(0, 0, 100, 20);
         let base = app.ui_theme.surface_bg;
         let mut buf = Buffer::empty(area);
-        ChatWidget::new(&mut app, area).render(area, &mut buf);
+        let widget = ChatWidget::new(&mut app, area);
+        assert!(!widget.ambient_life);
+        widget.render(area, &mut buf);
 
         assert_eq!(buf[(0, 0)].bg, base);
         assert_eq!(buf[(0, 19)].bg, base, "flat keeps the plain theme surface");
         let rendered = buffer_text(&buf, area);
         assert!(
-            rendered.contains("><>") || rendered.contains("<><"),
-            "flat means a plain surface, not a lifeless ocean — idle fish must survive:\n{rendered}"
+            !rendered.contains("><>") && !rendered.contains("<><"),
+            "flat must preserve a normal host-owned shell without decorative fish:\n{rendered}"
         );
     }
 
     #[test]
-    fn solarized_light_ombre_keeps_canonical_surface_and_ambient_life() {
+    fn solarized_light_deepsea_keeps_canonical_surface_and_ambient_life() {
         let mut app = create_test_app();
         app.ui_theme = crate::palette::SOLARIZED_LIGHT_UI_THEME;
-        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Ombre;
+        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Deepsea;
         app.low_motion = false;
         app.fancy_animations = true;
         // The old cyan-tinted ramp produced the reported #e1e9da at row 16
@@ -6806,11 +7079,11 @@ mod tests {
     }
 
     #[test]
-    fn solarized_light_custom_background_keeps_ombre() {
+    fn solarized_light_custom_background_keeps_deepsea() {
         let mut app = create_test_app();
         let custom = Color::Rgb(0x1a, 0x1b, 0x26);
         app.ui_theme = crate::palette::SOLARIZED_LIGHT_UI_THEME.with_background_color(custom);
-        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Ombre;
+        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Deepsea;
 
         let area = Rect::new(0, 0, 100, 30);
         let mut buf = Buffer::empty(area);
@@ -6820,19 +7093,22 @@ mod tests {
         assert_ne!(
             buf[(0, 0)].bg,
             buf[(0, 29)].bg,
-            "custom Solarized Light backgrounds must retain ombre depth"
+            "custom Solarized Light backgrounds must retain Deepsea depth"
         );
     }
 
     #[test]
-    fn terminal_owned_background_still_carries_foreground_life() {
+    fn terminal_owned_background_stays_visually_quiet_without_deepsea() {
         let mut app = create_test_app();
         app.ui_theme = crate::palette::TERMINAL_UI_THEME;
+        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Flat;
         app.low_motion = false;
         app.fancy_animations = true;
         let area = Rect::new(0, 0, 100, 20);
         let mut buf = Buffer::empty(area);
-        ChatWidget::new(&mut app, area).render(area, &mut buf);
+        let widget = ChatWidget::new(&mut app, area);
+        assert!(!widget.ambient_life);
+        widget.render(area, &mut buf);
 
         assert!(
             (0..area.height).all(|y| (0..area.width).all(|x| buf[(x, y)].bg == Color::Reset)),
@@ -6840,8 +7116,8 @@ mod tests {
         );
         let rendered = buffer_text(&buf, area);
         assert!(
-            rendered.contains("><>") || rendered.contains("<><"),
-            "Terminal keeps foreground ambient life without owning the background:\n{rendered}"
+            !rendered.contains("><>") && !rendered.contains("<><"),
+            "Terminal must remain a quiet host-owned shell without the selected Deepsea scene:\n{rendered}"
         );
     }
 
@@ -6860,35 +7136,38 @@ mod tests {
         let mut transcript = Buffer::empty(transcript_area);
         ChatWidget::new(&mut app, transcript_area).render(transcript_area, &mut transcript);
 
-        // Pre-session launch menu.
+        // Pre-session launch stage (the Tideline startup surface).
         app.launch.visible = true;
         let launch_area = Rect::new(0, 0, 100, 32);
         let mut launch = Buffer::empty(launch_area);
-        crate::tui::underwater::render_launch_screen(launch_area, &mut launch, &app);
+        {
+            let startup = crate::tui::underwater::tideline_startup_from_app(&app).ascii_safe(true);
+            crate::tui::underwater::render_tideline_startup(launch_area, &mut launch, &startup);
+        }
         app.launch.visible = false;
 
-        // Header owns the route facts and the block context meter.
-        let header_area = Rect::new(0, 0, 100, 2);
-        let mut header = Buffer::empty(header_area);
-        crate::tui::underwater::render_header(header_area, &mut header, &app);
-
-        // Activity band while working carries the braille state marker;
-        // the identity band below the composer carries the route.
-        app.is_loading = true;
-        let activity_area = Rect::new(0, 0, 100, 1);
-        let mut activity = Buffer::empty(activity_area);
-        crate::tui::phase_strip::render_activity(activity_area, &mut activity, &mut app);
-        let identity_area = Rect::new(0, 0, 100, 1);
-        let mut identity = Buffer::empty(identity_area);
-        crate::tui::phase_strip::render_identity(identity_area, &mut identity, &mut app);
-        app.is_loading = false;
+        // Topbar (the shell's header surface since the Tideline wiring)
+        // owns the route facts and the block context meter.
+        let topbar_area = Rect::new(0, 0, 100, 1);
+        let mut topbar_buf = Buffer::empty(topbar_area);
+        {
+            let segments = crate::tui::ui::frame::topbar_segments(&app, topbar_area.width);
+            let clock = "27 Aug 2026 14:42:18".to_string();
+            let topbar = crate::tui::topbar::Topbar::new(
+                &app.ui_theme,
+                &clock,
+                crate::tui::ui::frame::topbar_context_percent(&app),
+                &segments,
+            )
+            .ascii_safe(true);
+            use ratatui::widgets::Widget;
+            Widget::render(topbar, topbar_area, &mut topbar_buf);
+        }
 
         for (surface, buf, rect) in [
             ("idle transcript", &transcript, transcript_area),
             ("launch", &launch, launch_area),
-            ("header", &header, header_area),
-            ("activity band", &activity, activity_area),
-            ("identity band", &identity, identity_area),
+            ("topbar", &topbar_buf, topbar_area),
         ] {
             for y in rect.y..rect.bottom() {
                 for x in rect.x..rect.right() {
@@ -6907,6 +7186,8 @@ mod tests {
     #[test]
     fn reduced_motion_freezes_the_ocean_without_removing_depth() {
         let mut app = create_test_app();
+        app.ui_theme = palette::UI_THEME;
+        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Deepsea;
         app.low_motion = true;
         app.fancy_animations = true;
         let area = Rect::new(0, 0, 100, 20);

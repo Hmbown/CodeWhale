@@ -1697,6 +1697,24 @@ pub struct TuiConfig {
     /// Per-SSE-chunk idle timeout in seconds. Defaults to 900 seconds when
     /// omitted. `0` maps to the default; values clamp to `1..=3600`.
     pub stream_chunk_timeout_secs: Option<u64>,
+    /// R1: ceiling on model steps in a single turn. Omitted or `0` resolve
+    /// to the finite default (200); explicit values clamp to
+    /// `1..=100_000`. There is deliberately no "unlimited" value — `0` is
+    /// an invalid setting, not a sentinel that disables the cap.
+    pub max_model_steps: Option<u32>,
+    /// R1: cumulative wall-clock budget for a single turn, in seconds.
+    /// Omitted or `0` resolve to the finite default (3600); explicit values
+    /// clamp to `30..=86_400`. Time blocked on a human approval decision is
+    /// excluded from the measurement.
+    pub turn_wall_clock_secs: Option<u64>,
+    /// R1: per-step cap on accumulated streamed content, in megabytes.
+    /// Omitted or `0` resolve to the default (10 MB); explicit values clamp
+    /// to `64 KiB..=512 MiB`.
+    pub stream_max_content_mb: Option<u64>,
+    /// R1: per-step cap on a single stream's wall-clock duration, in
+    /// seconds. Omitted or `0` resolve to the default (1800); explicit
+    /// values clamp to `10..=86_400`.
+    pub stream_max_duration_secs: Option<u64>,
     /// Ordered list of footer items the user wants visible. `None` (the field
     /// missing from `config.toml`) means "use the built-in default order"; an
     /// empty `Some(vec![])` means "show nothing in the footer".
@@ -2986,6 +3004,20 @@ pub struct Config {
     /// Example: `sandbox_denied_read_paths = ["~/.ssh", "~/.aws"]`.
     #[serde(default, alias = "sandboxDeniedReadPaths")]
     pub sandbox_denied_read_paths: Vec<std::path::PathBuf>,
+    /// Apply the built-in credential-store read deny-list (S1). Defaults to
+    /// `true`: `~/.ssh`, cloud credential dirs, keychains, browser profiles,
+    /// `.env` files, and Codewhale's own secret stores are unreadable by the
+    /// file-reading tools and by sandboxed shell commands. Set to `false` to
+    /// restore the pre-S1 full-disk-read behavior. See
+    /// `sandbox::read_guard` for the exact list and its honest limits — it is
+    /// defense-in-depth, not a security boundary.
+    #[serde(default, alias = "sandboxReadDenylistDefaults")]
+    pub sandbox_read_denylist_defaults: Option<bool>,
+    /// Subtract paths from the *built-in* deny-list defaults when a project
+    /// genuinely needs one of them. Has no effect on
+    /// `sandbox_denied_read_paths`: an explicit deny always wins.
+    #[serde(default, alias = "sandboxReadDenylistExempt")]
+    pub sandbox_read_denylist_exempt: Vec<std::path::PathBuf>,
     #[serde(alias = "managedConfigPath")]
     pub managed_config_path: Option<String>,
     #[serde(alias = "requirementsPath")]
@@ -4117,6 +4149,29 @@ pub(crate) fn approval_policy_baseline_from_permission_posture(
 // === Config Loading ===
 
 impl Config {
+    /// The read deny-list in force for this config (S1).
+    ///
+    /// Unions the built-in credential-store defaults (unless
+    /// `sandbox_read_denylist_defaults = false`) with
+    /// `sandbox_denied_read_paths`, minus `sandbox_read_denylist_exempt`.
+    /// Feeds both the in-process file-reading tools and the OS sandbox
+    /// wrappers, so a shell `cat` and a `read_file` call refuse the same paths.
+    #[must_use]
+    pub fn read_denylist(&self) -> crate::sandbox::read_guard::ReadDenylist {
+        crate::sandbox::read_guard::ReadDenylist::build(
+            self.sandbox_read_denylist_defaults.unwrap_or(true),
+            &self.sandbox_denied_read_paths,
+            &self.sandbox_read_denylist_exempt,
+        )
+    }
+
+    /// Every path the OS sandbox wrappers should deny reads under — the
+    /// deny-list's subtree rules, home-expanded and normalized.
+    #[must_use]
+    pub fn effective_sandbox_denied_read_paths(&self) -> Vec<std::path::PathBuf> {
+        self.read_denylist().subtree_paths()
+    }
+
     #[must_use]
     pub fn stop_words(&self) -> Vec<String> {
         self.stop_words.clone().unwrap_or_else(default_stop_words)
@@ -7357,6 +7412,65 @@ impl Config {
         raw.clamp(MIN_STREAM_CHUNK_TIMEOUT_SECS, MAX_STREAM_CHUNK_TIMEOUT_SECS)
     }
 
+    /// R1: resolved ceiling on model steps in a single turn.
+    ///
+    /// Reads `[tui].max_model_steps`, falling back to the
+    /// `CODEWHALE_MAX_MODEL_STEPS` env var, then to the finite default.
+    /// `0` — from either source — is treated as an invalid value and
+    /// resolves to the default; it never means "unlimited".
+    #[must_use]
+    pub fn max_model_steps(&self) -> u32 {
+        let raw = self
+            .tui
+            .as_ref()
+            .and_then(|cfg| cfg.max_model_steps)
+            .or_else(|| {
+                std::env::var(MAX_MODEL_STEPS_ENV)
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u32>().ok())
+            });
+        crate::core::engine::turn_budget::resolve_max_model_steps(raw)
+    }
+
+    /// R1: resolved cumulative per-turn wall-clock budget.
+    ///
+    /// Reads `[tui].turn_wall_clock_secs`, falling back to the
+    /// `CODEWHALE_TURN_WALL_CLOCK_SECS` env var, then to the finite
+    /// default. `0` resolves to the default; it never means "unlimited".
+    #[must_use]
+    pub fn turn_wall_clock(&self) -> std::time::Duration {
+        let raw = self
+            .tui
+            .as_ref()
+            .and_then(|cfg| cfg.turn_wall_clock_secs)
+            .or_else(|| {
+                std::env::var(TURN_WALL_CLOCK_ENV)
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+            });
+        crate::core::engine::turn_budget::resolve_turn_wall_clock(raw)
+    }
+
+    /// R1: resolved per-step cap on accumulated streamed content, in bytes.
+    #[must_use]
+    pub fn stream_max_content_bytes(&self) -> usize {
+        crate::core::engine::turn_budget::resolve_stream_max_content_bytes(
+            self.tui.as_ref().and_then(|cfg| cfg.stream_max_content_mb),
+        )
+    }
+
+    /// R1: resolved per-step cap on a single stream's wall-clock duration.
+    #[must_use]
+    pub fn stream_max_duration(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(
+            crate::core::engine::turn_budget::resolve_stream_max_duration_secs(
+                self.tui
+                    .as_ref()
+                    .and_then(|cfg| cfg.stream_max_duration_secs),
+            ),
+        )
+    }
+
     /// Raw sub-agent model override map. Values are validated at spawn time
     /// so an invalid role/type model fails before any partial agent spawn.
     #[must_use]
@@ -10198,6 +10312,14 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         } else {
             override_cfg.sandbox_denied_read_paths
         },
+        sandbox_read_denylist_defaults: override_cfg
+            .sandbox_read_denylist_defaults
+            .or(base.sandbox_read_denylist_defaults),
+        sandbox_read_denylist_exempt: if override_cfg.sandbox_read_denylist_exempt.is_empty() {
+            base.sandbox_read_denylist_exempt
+        } else {
+            override_cfg.sandbox_read_denylist_exempt
+        },
         managed_config_path: override_cfg
             .managed_config_path
             .or(base.managed_config_path),
@@ -11067,13 +11189,20 @@ pub fn active_provider_has_config_api_key(config: &Config) -> bool {
     if provider == ApiProvider::OpenaiCodex && !custom_endpoint {
         // The persistent Codex login is the OAuth credential file, analogous to
         // a stored config key. Token env overrides are scored separately by
-        // active_provider_has_env_api_key.
-        let path = crate::oauth::auth_file_path();
+        // active_provider_has_env_api_key. #5772: a consent record alone is not
+        // a credential — the exact consented path (never an ambient candidate)
+        // is read through the secure adapter and must still hold a live token.
+        let Some(consent) = config
+            .provider_config_for(provider)
+            .and_then(|entry| entry.external_credentials.as_ref())
+        else {
+            return false;
+        };
         return config
             .external_credential_read_grant(
                 provider,
                 codewhale_config::ExternalCredentialSource::CodexCli,
-                &path,
+                &consent.path,
             )
             .is_ok_and(|grant| crate::oauth::stored_credentials_present(&grant));
     }
@@ -11673,9 +11802,58 @@ pub(crate) fn save_provider_context_window_for_identity(
     Ok(config_path)
 }
 
+/// Grant-time validation (#5772): read the exact file the user just confirmed,
+/// through the same secure adapter the request path uses, and require it to
+/// hold a usable credential.
+///
+/// This runs *after* the confirmation disclosure and *before* any consent
+/// record is written, which is the whole ordering the consent model depends
+/// on. Persisting first would leave a record claiming a credential exists for
+/// a file that is missing, malformed, or expired — and every status surface
+/// downstream would then have to trust it. Nothing here refreshes, rewrites,
+/// or makes a network request, and no credential value escapes this function.
+fn validate_external_credential_before_consent(
+    consent_provider: codewhale_config::ProviderKind,
+    source: codewhale_config::ExternalCredentialSource,
+    path: &Path,
+) -> Result<()> {
+    let grant = codewhale_config::ExternalCredentialConsentToml::read_only(
+        consent_provider,
+        source,
+        path.to_path_buf(),
+    )
+    .read_grant(consent_provider, source, path)?;
+    match source {
+        codewhale_config::ExternalCredentialSource::CodexCli => {
+            crate::oauth::get_credentials(&grant).map(|_| ())
+        }
+        codewhale_config::ExternalCredentialSource::GrokCli => {
+            crate::xai_oauth::validate_external_credentials(&grant)
+        }
+        codewhale_config::ExternalCredentialSource::DshCli => {
+            crate::dsh_credentials::deepseek_api_key_from_grant(&grant)?
+                .map(|_| ())
+                .context("the DeepSeek Harness credentials file holds no DEEPSEEK_API_KEY")
+        }
+        codewhale_config::ExternalCredentialSource::AgyCli => {
+            crate::agy_credentials::antigravity_oauth_token_from_grant(&grant)?
+                .map(|_| ())
+                .context("the Antigravity credential store holds no OAuth token")
+        }
+        codewhale_config::ExternalCredentialSource::KimiCodeCli => anyhow::bail!(
+            "Kimi CLI credentials are never imported; configure a Kimi API key instead"
+        ),
+    }
+}
+
 /// Persist an explicitly confirmed read-only external credential grant and
 /// update the live mirror only after the comment-preserving disk mutation
-/// succeeds. This function never inspects the external path.
+/// succeeds.
+///
+/// Order is load-bearing (#5772): the caller has already shown the
+/// confirmation disclosure, this function then reads and validates the exact
+/// consented file, and only a usable credential is allowed to produce a
+/// persisted consent record.
 pub(crate) fn persist_external_credential_consent_for_at(
     config_path: Option<&Path>,
     live_config: &mut Config,
@@ -11706,6 +11884,14 @@ pub(crate) fn persist_external_credential_consent_for_at(
     let path = codewhale_config::resolve_external_credential_path(path)?;
     let path_value = path.to_str().context(
         "external credential path cannot be persisted losslessly because it is not valid UTF-8",
+    )?;
+    validate_external_credential_before_consent(consent_provider, source, &path).with_context(
+        || {
+            format!(
+                "no usable {} credential was found, so read-only consent was not saved",
+                source.owner_label()
+            )
+        },
     )?;
     let config_path = match config_path {
         Some(path) => path.to_path_buf(),

@@ -100,7 +100,7 @@ pub struct TaskRequest {
     /// Bounded repair attempts after a failed `responseSchema` decode
     /// (#5583): re-ask the same route with the schema and the failed reply.
     /// `None` uses the default of one attempt; `Some(0)` disables repair.
-    /// Clamped at parse time to [`SCHEMA_REPAIR_MAX_ATTEMPTS`]. The driver
+    /// Clamped at parse time to [`crate::SCHEMA_REPAIR_MAX_ATTEMPTS`]. The driver
     /// treats a repair spawn like any other task — same admission, budget,
     /// and usage accounting.
     pub schema_repair_attempts: Option<u32>,
@@ -196,7 +196,7 @@ pub enum ProgressEvent {
         /// The validation error already surfaced to JS.
         message: String,
         /// Raw reply text of the failed attempt, bounded by
-        /// [`SCHEMA_RAW_CARRY_CHARS`]; the host writes the durable artifact.
+        /// [`crate::SCHEMA_RAW_CARRY_CHARS`]; the host writes the durable artifact.
         raw: String,
         /// True when `raw` was capped at the carry limit.
         raw_truncated: bool,
@@ -216,7 +216,7 @@ pub enum ProgressEvent {
         /// The decode error of that attempt.
         message: String,
         /// Raw reply text of that attempt, bounded by
-        /// [`SCHEMA_RAW_CARRY_CHARS`].
+        /// [`crate::SCHEMA_RAW_CARRY_CHARS`].
         raw: String,
         /// True when `raw` was capped at the carry limit.
         raw_truncated: bool,
@@ -234,6 +234,34 @@ pub enum ProgressEvent {
         phase: Option<String>,
         /// The rejection already surfaced to JS.
         message: String,
+    },
+    /// A `parallel()` / `pipeline()` fan-out resolved with every slot failed
+    /// and nothing surviving (R9). Emitted by the prelude beside its run-log
+    /// breadcrumb. A fan-out of thunks that throw without calling `task()`
+    /// leaves no task record and no dispatch failure behind, so a log line
+    /// was the only trace — and a log line cannot feed the status
+    /// classifier. This event is the structured twin of that breadcrumb:
+    /// drivers count it so the terminal-status ledger can refuse to record
+    /// such a run as a plain success.
+    FanoutAllSlotsFailed {
+        /// Which fan-out construct died: `parallel` or `pipeline`.
+        construct: String,
+        /// Slots that failed (always equal to `total`).
+        failed: u32,
+        /// Total slots the fan-out declared.
+        total: u32,
+    },
+    /// ONE slot of a settled fan-out dropped to null while other slots
+    /// survived. The structured twin of the per-slot breadcrumb: the ledger
+    /// counts these so a PARTIALLY failed fan-out records Degraded instead
+    /// of a clean Completed with silently lost work.
+    FanoutSlotDropped {
+        /// Which fan-out construct dropped it: `parallel` or `pipeline`.
+        construct: String,
+        /// Typed failure kind (`script`, `task`, `schema`, ...).
+        kind: String,
+        /// Zero-based slot index.
+        slot: u32,
     },
 }
 

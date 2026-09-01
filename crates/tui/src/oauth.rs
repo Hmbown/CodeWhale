@@ -146,6 +146,11 @@ pub fn credentials_from_env() -> Option<CodexCredentials> {
 
 /// Validate only the stored OAuth file, excluding token environment
 /// overrides so config-vs-env provenance remains truthful.
+///
+/// This consumes a grant, so it can only run for a path the user explicitly
+/// consented to. Consent is not a credential (#5772): status surfaces call
+/// this to find out whether the consented file *still* holds a usable token,
+/// because a record that outlives its token would otherwise read as stored.
 #[must_use]
 pub fn stored_credentials_present(grant: &ExternalCredentialReadGrant) -> bool {
     load_credentials(grant)

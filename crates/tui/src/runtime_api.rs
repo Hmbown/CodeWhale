@@ -1515,7 +1515,7 @@ async fn create_fleet_run(
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     if request.target != FleetRuntimeTarget::ThisComputer {
         return Err(ApiError::not_implemented(format!(
-            "Fleet target {:?} is not available in this local Runtime; choose this_computer",
+            "Pod target {:?} is not available in this local Runtime; choose this_computer",
             request.target
         )));
     }
@@ -1523,14 +1523,14 @@ async fn create_fleet_run(
     let manager = open_fleet_manager(&state)?;
     let report = manager
         .create_queued_run_with_descriptor(document, max_workers, descriptor)
-        .map_err(|error| ApiError::bad_request(format!("Failed to create Fleet run: {error}")))?;
+        .map_err(|error| ApiError::bad_request(format!("Failed to create Pod run: {error}")))?;
     let ledger_state = manager
         .rebuild_state()
-        .map_err(|error| ApiError::internal(format!("Failed to rebuild Fleet state: {error}")))?;
+        .map_err(|error| ApiError::internal(format!("Failed to rebuild Pod state: {error}")))?;
     let run = ledger_state
         .runs
         .get(&report.run_id.0)
-        .ok_or_else(|| ApiError::internal("Created Fleet run was missing from its ledger"))?;
+        .ok_or_else(|| ApiError::internal("Created Pod run was missing from its ledger"))?;
     Ok((
         StatusCode::CREATED,
         Json(json!({
@@ -1546,17 +1546,17 @@ fn prepare_managed_fleet_run(
 ) -> Result<(FleetTaskSpecDocument, ManagedFleetRunDescriptor, usize), ApiError> {
     if request.security_policy.is_some() {
         return Err(ApiError::not_implemented(
-            "Managed Fleet security_policy overrides are not executable yet; use named roles and bounded task workspace/tool scopes",
+            "Managed Pod security_policy overrides are not executable yet; use named roles and bounded task workspace/tool scopes",
         ));
     }
     if !request.worker_specs.is_empty() {
         return Err(ApiError::not_implemented(
-            "Managed Fleet custom worker_specs are not available yet; local Runtime worker IDs are generated per run so worker controls cannot collide across Fleets",
+            "Managed Pod custom worker_specs are not available yet; local Runtime worker IDs are generated per run so worker controls cannot collide across Pods",
         ));
     }
     if request.roles.is_empty() {
         return Err(ApiError::bad_request(
-            "roles must declare at least one named Fleet role",
+            "roles must declare at least one named Pod role",
         ));
     }
     if request.roles.len() > 128 {
@@ -1589,7 +1589,7 @@ fn prepare_managed_fleet_run(
             .transpose()?;
         if roles.insert(normalized.clone(), agent_profile).is_some() {
             return Err(ApiError::bad_request(format!(
-                "duplicate Fleet role '{normalized}'"
+                "duplicate Pod role '{normalized}'"
             )));
         }
     }
@@ -1599,20 +1599,20 @@ fn prepare_managed_fleet_run(
     for task in &mut tasks {
         let worker = task.worker.as_mut().ok_or_else(|| {
             ApiError::bad_request(format!(
-                "Fleet task '{}' must select one named role through worker.role",
+                "Pod task '{}' must select one named role through worker.role",
                 task.id
             ))
         })?;
         let role = worker.role.as_deref().ok_or_else(|| {
             ApiError::bad_request(format!(
-                "Fleet task '{}' must select one named role through worker.role",
+                "Pod task '{}' must select one named role through worker.role",
                 task.id
             ))
         })?;
         let role = canonical_public_role_name(&managed_fleet_token("task.worker.role", role)?);
         let declared_profile = roles.get(&role).ok_or_else(|| {
             ApiError::bad_request(format!(
-                "Fleet task '{}' references undeclared role '{role}'",
+                "Pod task '{}' references undeclared role '{role}'",
                 task.id
             ))
         })?;
@@ -1620,7 +1620,7 @@ fn prepare_managed_fleet_run(
             match worker.agent_profile.as_deref() {
                 Some(task_profile) if task_profile != profile => {
                     return Err(ApiError::bad_request(format!(
-                        "Fleet task '{}' overrides role '{role}' agent_profile '{profile}' with '{task_profile}'",
+                        "Pod task '{}' overrides role '{role}' agent_profile '{profile}' with '{task_profile}'",
                         task.id
                     )));
                 }
@@ -1638,7 +1638,7 @@ fn prepare_managed_fleet_run(
         .collect::<Vec<_>>();
     if !unused_roles.is_empty() {
         return Err(ApiError::bad_request(format!(
-            "Every declared Fleet role must own a Workflow task; unused roles: {}",
+            "Every declared Pod role must own a Workflow task; unused roles: {}",
             unused_roles.join(", ")
         )));
     }
@@ -1693,7 +1693,7 @@ fn reject_parallel_write_collisions(tasks: &[FleetTaskSpec]) -> Result<(), ApiEr
     for task in tasks {
         let write_roots = fleet_write_roots(task).map_err(|error| {
             ApiError::bad_request(format!(
-                "Fleet task '{}' has an invalid write scope: {error}",
+                "Pod task '{}' has an invalid write scope: {error}",
                 task.id
             ))
         })?;
@@ -1736,32 +1736,32 @@ async fn start_fleet_run(
     let manager = open_fleet_manager(&state)?;
     let durable = manager
         .rebuild_state()
-        .map_err(|error| ApiError::internal(format!("Failed to rebuild Fleet state: {error}")))?;
+        .map_err(|error| ApiError::internal(format!("Failed to rebuild Pod state: {error}")))?;
     let run = durable
         .runs
         .get(&run_id)
-        .ok_or_else(|| ApiError::not_found(format!("fleet run '{run_id}' not found")))?;
+        .ok_or_else(|| ApiError::not_found(format!("Pod run '{run_id}' not found")))?;
     match run.target {
         Some(FleetRuntimeTarget::ThisComputer) => {}
         Some(target) => {
             return Err(ApiError::not_implemented(format!(
-                "Fleet target {target:?} is not available in this local Runtime"
+                "Pod target {target:?} is not available in this local Runtime"
             )));
         }
         None => {
             return Err(ApiError::bad_request(
-                "Fleet run has no explicit Runtime target and cannot be started through the managed API",
+                "Pod run has no explicit Runtime target and cannot be started through the managed API",
             ));
         }
     }
     if run.workflow.is_none() || run.roles.is_empty() {
         return Err(ApiError::bad_request(
-            "Fleet run has no managed Workflow/role descriptor and cannot be started through the managed API",
+            "Pod run has no managed Workflow/role descriptor and cannot be started through the managed API",
         ));
     }
     let run_id = FleetRunId::from(run_id);
     let report = manager.activate_run(&run_id).map_err(|error| {
-        let message = format!("Failed to start Fleet run '{}': {error}", run_id.0);
+        let message = format!("Failed to start Pod run '{}': {error}", run_id.0);
         if message.contains("already terminal") {
             ApiError::conflict(message)
         } else {
@@ -1792,7 +1792,7 @@ async fn start_fleet_run(
             tracing::error!(
                 run_id = %execution_run_id.0,
                 error = %error,
-                "Runtime API Fleet manager exited with an error"
+                "Runtime API Pod manager exited with an error"
             );
         }
     });
@@ -1889,7 +1889,7 @@ fn replay_live_fleet_events(
                     tracing::warn!(
                         run_id = %run_id.0,
                         error = %error,
-                        "Fleet event stream stopped while reading durable history"
+                        "Pod event stream stopped while reading durable history"
                     );
                     yield Ok(sse_json(
                         "fleet.stream.error",
@@ -1917,7 +1917,7 @@ async fn load_fleet_event_replay(
     })
     .await
     .map_err(|error| FleetEventReplayError::Storage {
-        message: format!("Fleet replay worker failed: {error}"),
+        message: format!("Pod replay worker failed: {error}"),
     })?
 }
 
@@ -1936,7 +1936,7 @@ fn validate_fleet_events_query(
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
     }) {
         return Err(ApiError::bad_request(
-            "after is not a valid Fleet event cursor",
+            "after is not a valid Pod event cursor",
         ));
     }
     let limit = query.limit.unwrap_or(DEFAULT_FLEET_EVENT_REPLAY_LIMIT);
@@ -1969,7 +1969,7 @@ async fn list_fleet_runs(State(state): State<RuntimeApiState>) -> Result<Json<Va
     let manager = open_fleet_manager(&state)?;
     let ledger_state = manager
         .rebuild_state()
-        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild Pod state: {err}")))?;
     let runs: Vec<_> = ledger_state
         .runs
         .values()
@@ -1977,7 +1977,7 @@ async fn list_fleet_runs(State(state): State<RuntimeApiState>) -> Result<Json<Va
         .collect::<Result<Vec<_>, _>>()?;
     let status = manager
         .status()
-        .map_err(|err| ApiError::internal(format!("Failed to read fleet status: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to read Pod status: {err}")))?;
     Ok(Json(json!({
         "status": fleet_status_json(&status),
         "runs": runs,
@@ -1991,11 +1991,11 @@ async fn get_fleet_run(
     let manager = open_fleet_manager(&state)?;
     let ledger_state = manager
         .rebuild_state()
-        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild Pod state: {err}")))?;
     let run = ledger_state
         .runs
         .get(&run_id)
-        .ok_or_else(|| ApiError::not_found(format!("fleet run '{run_id}' not found")))?;
+        .ok_or_else(|| ApiError::not_found(format!("Pod run '{run_id}' not found")))?;
     Ok(Json(fleet_run_detail_json(&manager, run, &ledger_state)?))
 }
 
@@ -2006,11 +2006,11 @@ async fn list_fleet_run_workers(
     let manager = open_fleet_manager(&state)?;
     let ledger_state = manager
         .rebuild_state()
-        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild Pod state: {err}")))?;
     let run = ledger_state
         .runs
         .get(&run_id)
-        .ok_or_else(|| ApiError::not_found(format!("fleet run '{run_id}' not found")))?;
+        .ok_or_else(|| ApiError::not_found(format!("Pod run '{run_id}' not found")))?;
     let workers = run
         .worker_specs
         .iter()
@@ -2019,10 +2019,7 @@ async fn list_fleet_run_workers(
                 .inspect_worker(&worker.id)
                 .map(|inspection| fleet_worker_json(&inspection))
                 .map_err(|err| {
-                    ApiError::internal(format!(
-                        "Failed to inspect fleet worker {}: {err}",
-                        worker.id
-                    ))
+                    ApiError::internal(format!("Failed to inspect Pod worker {}: {err}", worker.id))
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -2037,9 +2034,9 @@ async fn get_fleet_worker(
     Path(worker_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let manager = open_fleet_manager(&state)?;
-    let inspection = manager.inspect_worker(&worker_id).map_err(|err| {
-        ApiError::not_found(format!("fleet worker '{worker_id}' not found: {err}"))
-    })?;
+    let inspection = manager
+        .inspect_worker(&worker_id)
+        .map_err(|err| ApiError::not_found(format!("Pod worker '{worker_id}' not found: {err}")))?;
     Ok(Json(fleet_worker_json(&inspection)))
 }
 
@@ -2050,7 +2047,7 @@ async fn interrupt_fleet_worker(
     let manager = open_fleet_manager(&state)?;
     let inspection = manager.interrupt_worker(&worker_id).map_err(|err| {
         ApiError::bad_request(format!(
-            "Failed to interrupt fleet worker '{worker_id}': {err}"
+            "Failed to interrupt Pod worker '{worker_id}': {err}"
         ))
     })?;
     Ok(Json(json!({
@@ -2065,7 +2062,7 @@ async fn stop_fleet_worker(
 ) -> Result<Json<Value>, ApiError> {
     let manager = open_fleet_manager(&state)?;
     let inspection = manager.interrupt_worker(&worker_id).map_err(|err| {
-        ApiError::bad_request(format!("Failed to stop fleet worker '{worker_id}': {err}"))
+        ApiError::bad_request(format!("Failed to stop Pod worker '{worker_id}': {err}"))
     })?;
     Ok(Json(json!({
         "action": "stop",
@@ -2079,9 +2076,7 @@ async fn restart_fleet_worker(
 ) -> Result<Json<Value>, ApiError> {
     let manager = open_fleet_manager(&state)?;
     let report = manager.restart_worker(&worker_id).map_err(|err| {
-        ApiError::bad_request(format!(
-            "Failed to restart fleet worker '{worker_id}': {err}"
-        ))
+        ApiError::bad_request(format!("Failed to restart Pod worker '{worker_id}': {err}"))
     })?;
     let worker = fleet_worker_json(&report.inspection);
     let run_id = report.run_id.clone();
@@ -2104,7 +2099,7 @@ async fn restart_fleet_worker(
             tracing::error!(
                 run_id = %run_id.0,
                 error = %err,
-                "Runtime API Fleet restart manager exited with an error"
+                "Runtime API Pod restart manager exited with an error"
             );
         }
     });
@@ -2123,11 +2118,11 @@ async fn stop_fleet_run(
     let manager = open_fleet_manager(&state)?;
     let run_id = FleetRunId::from(run_id);
     let stopped = manager.stop_run(&run_id).map_err(|err| {
-        ApiError::bad_request(format!("Failed to stop fleet run '{}': {err}", run_id.0))
+        ApiError::bad_request(format!("Failed to stop Pod run '{}': {err}", run_id.0))
     })?;
     let status = manager
         .run_status(&run_id)
-        .map_err(|err| ApiError::internal(format!("Failed to read fleet run status: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to read Pod run status: {err}")))?;
     Ok(Json(json!({
         "action": "stop",
         "run_id": run_id.0,
@@ -2146,11 +2141,9 @@ async fn list_fleet_run_receipts(
     let manager = open_fleet_manager(&state)?;
     let ledger_state = manager
         .rebuild_state()
-        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild Pod state: {err}")))?;
     if !ledger_state.runs.contains_key(&run_id) {
-        return Err(ApiError::not_found(format!(
-            "fleet run '{run_id}' not found"
-        )));
+        return Err(ApiError::not_found(format!("Pod run '{run_id}' not found")));
     }
     let run_id_parsed = FleetRunId::from(run_id.clone());
     let receipts: Vec<Value> = ledger_state
@@ -2172,7 +2165,7 @@ async fn get_fleet_run_receipt(
     let manager = open_fleet_manager(&state)?;
     let ledger_state = manager
         .rebuild_state()
-        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild Pod state: {err}")))?;
     let key = format!("{run_id}:{task_id}");
     let receipt = ledger_state.receipts.get(&key).ok_or_else(|| {
         ApiError::not_found(format!(
@@ -2189,7 +2182,7 @@ async fn inspect_fleet_run_receipt_evidence(
     let manager = open_fleet_manager(&state)?;
     let ledger_state = manager
         .rebuild_state()
-        .map_err(|err| ApiError::internal(format!("Failed to rebuild fleet state: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to rebuild Pod state: {err}")))?;
     let key = format!("{run_id}:{task_id}");
     let receipt = ledger_state.receipts.get(&key).ok_or_else(|| {
         ApiError::not_found(format!(
@@ -2264,7 +2257,7 @@ fn open_fleet_manager(state: &RuntimeApiState) -> Result<FleetManager, ApiError>
                 .with_session_model(session_model)
                 .with_route_config(route_config)
         })
-        .map_err(|err| ApiError::internal(format!("Failed to open fleet manager: {err}")))
+        .map_err(|err| ApiError::internal(format!("Failed to open Pod manager: {err}")))
 }
 
 fn fleet_run_summary_json(
@@ -2274,7 +2267,7 @@ fn fleet_run_summary_json(
 ) -> Result<Value, ApiError> {
     let status = manager
         .run_status(&run.id)
-        .map_err(|err| ApiError::internal(format!("Failed to read fleet run status: {err}")))?;
+        .map_err(|err| ApiError::internal(format!("Failed to read Pod run status: {err}")))?;
     let task_statuses = ledger_state
         .tasks
         .values()

@@ -7479,6 +7479,10 @@ mod tests {
             api_key: Some("sk-test".to_string()),
             tui: Some(crate::config::TuiConfig {
                 stream_chunk_timeout_secs: Some(777),
+                max_model_steps: None,
+                turn_wall_clock_secs: None,
+                stream_max_content_mb: None,
+                stream_max_duration_secs: None,
                 ..crate::config::TuiConfig::default()
             }),
             ..Config::default()

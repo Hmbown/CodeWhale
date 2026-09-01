@@ -124,10 +124,22 @@ impl SandboxPolicy {
         }
     }
 
-    /// Returns true if the policy allows reading any file on the filesystem.
-    pub fn has_full_disk_read_access() -> bool {
-        // All current policies allow full disk read access
-        true
+    /// Returns true when the sandbox really does grant read of every file on
+    /// disk — i.e. no read deny-list is in force.
+    ///
+    /// Every posture, `read-only` included, grants full-disk *read*: the
+    /// postures differ only in what they may write and whether they may reach
+    /// the network. The read deny-list (S1, `super::read_guard`) is the only
+    /// thing that narrows this, and it is defense-in-depth rather than a
+    /// boundary — a hardlink or an indirect read (`ssh-agent`, `security`)
+    /// walks around it.
+    ///
+    /// Note the Seatbelt profile still emits the broad `(allow file-read*)`
+    /// even when this returns `false`: SBPL is last-match-wins, so the deny
+    /// rules appended after it are what actually narrow the grant. This
+    /// function reports the *posture*, for labels and telemetry.
+    pub fn has_full_disk_read_access(denied_read_subpaths: &[PathBuf]) -> bool {
+        denied_read_subpaths.is_empty()
     }
 
     /// Returns true if the policy allows writing to any file on the filesystem.
@@ -226,6 +238,56 @@ impl SandboxPolicy {
             }
             SandboxEnforcement::LocalOs | SandboxEnforcement::Unavailable => label,
             SandboxEnforcement::ExternalBackend => unreachable!("handled above"),
+        }
+    }
+
+    /// Posture label with the no-new-privileges kernel flag's effect on
+    /// privilege escalation named, for surfaces that can observe the live
+    /// flag state.
+    ///
+    /// `no_new_privs_active` is `Some(true)` when the irreversible flag is set
+    /// on this process tree, `Some(false)` when startup relaxed it, and `None`
+    /// on platforms without the flag (see
+    /// [`super::process_hardening::no_new_privs_active`]). Only the full-access
+    /// posture gains a clause: it is the posture whose name promises
+    /// unrestricted privilege transitions (#5723), so a residual setuid block
+    /// there is a lie of omission. Narrower postures keep the plain label —
+    /// setuid was never expected to work inside them.
+    #[must_use]
+    pub fn posture_label_with_no_new_privs(&self, no_new_privs_active: Option<bool>) -> String {
+        match (self, no_new_privs_active) {
+            (SandboxPolicy::DangerFullAccess, Some(true)) => format!(
+                "{}; sudo/setuid still blocked by the no-new-privs kernel flag set at startup",
+                self.posture_label()
+            ),
+            (SandboxPolicy::DangerFullAccess, Some(false)) => format!(
+                "{}; sudo/setuid allowed (no-new-privs relaxed at startup)",
+                self.posture_label()
+            ),
+            _ => self.posture_label(),
+        }
+    }
+
+    /// Render the policy together with the session-pinned execution boundary
+    /// and the live no-new-privileges flag state.
+    ///
+    /// The setuid clause only describes privilege transitions in *this*
+    /// process tree, so an external execution backend — where commands run on
+    /// the configured service — keeps the plain enforcement label.
+    #[must_use]
+    pub fn posture_label_with_enforcement_and_no_new_privs(
+        &self,
+        enforcement: SandboxEnforcement,
+        no_new_privs_active: Option<bool>,
+    ) -> String {
+        match (self, enforcement) {
+            (SandboxPolicy::DangerFullAccess, SandboxEnforcement::ExternalBackend) => {
+                self.posture_label_with_enforcement(enforcement)
+            }
+            (SandboxPolicy::DangerFullAccess, _) => {
+                self.posture_label_with_no_new_privs(no_new_privs_active)
+            }
+            _ => self.posture_label_with_enforcement(enforcement),
         }
     }
 
@@ -602,6 +664,78 @@ mod tests {
         assert_eq!(
             full_unavailable,
             SandboxPolicy::DangerFullAccess.posture_label()
+        );
+    }
+
+    #[test]
+    fn posture_labels_disclose_the_no_new_privs_flag_for_full_access() {
+        // #5723: "full access" promises unrestricted privilege transitions, so
+        // the label must say when the irreversible kernel flag still blocks
+        // sudo/setuid — and when the startup posture relaxed it.
+        let blocked = SandboxPolicy::DangerFullAccess.posture_label_with_no_new_privs(Some(true));
+        assert!(
+            blocked.contains("full access (sandbox disabled)"),
+            "{blocked}"
+        );
+        assert!(blocked.contains("sudo/setuid still blocked"), "{blocked}");
+        assert!(blocked.contains("no-new-privs"), "{blocked}");
+
+        let relaxed = SandboxPolicy::DangerFullAccess.posture_label_with_no_new_privs(Some(false));
+        assert!(relaxed.contains("sudo/setuid allowed"), "{relaxed}");
+
+        // No flag on this platform → the plain label, byte-identical.
+        let unknown = SandboxPolicy::DangerFullAccess.posture_label_with_no_new_privs(None);
+        assert_eq!(unknown, SandboxPolicy::DangerFullAccess.posture_label());
+
+        // Narrower postures never promised setuid; the clause is full-access
+        // only, in either flag state.
+        for flag in [Some(true), Some(false), None] {
+            assert_eq!(
+                SandboxPolicy::default().posture_label_with_no_new_privs(flag),
+                SandboxPolicy::default().posture_label(),
+            );
+            assert_eq!(
+                SandboxPolicy::ReadOnly.posture_label_with_no_new_privs(flag),
+                SandboxPolicy::ReadOnly.posture_label(),
+            );
+        }
+    }
+
+    #[test]
+    fn enforcement_and_no_new_privs_labels_compose_only_where_they_apply() {
+        // The setuid clause describes this process tree; an external backend
+        // runs commands on its own service, so its label stays untouched.
+        let external = SandboxPolicy::DangerFullAccess
+            .posture_label_with_enforcement_and_no_new_privs(
+                SandboxEnforcement::ExternalBackend,
+                Some(true),
+            );
+        assert_eq!(
+            external,
+            SandboxPolicy::DangerFullAccess
+                .posture_label_with_enforcement(SandboxEnforcement::ExternalBackend),
+            "{external}"
+        );
+
+        let local_blocked = SandboxPolicy::DangerFullAccess
+            .posture_label_with_enforcement_and_no_new_privs(
+                SandboxEnforcement::LocalOs,
+                Some(true),
+            );
+        assert!(
+            local_blocked.contains("sudo/setuid still blocked"),
+            "{local_blocked}"
+        );
+
+        // Other postures keep exactly the enforcement label.
+        let workspace = SandboxPolicy::default().posture_label_with_enforcement_and_no_new_privs(
+            SandboxEnforcement::LocalOs,
+            Some(false),
+        );
+        assert_eq!(
+            workspace,
+            SandboxPolicy::default().posture_label_with_enforcement(SandboxEnforcement::LocalOs),
+            "{workspace}"
         );
     }
 

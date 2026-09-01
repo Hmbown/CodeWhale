@@ -2,7 +2,8 @@
 //!
 //! This module is a metadata foundation for collapsing provider drift over
 //! time. It deliberately does not mutate request bodies or choose fallback
-//! providers; runtime routing remains in `ConfigToml::resolve_runtime_options`.
+//! providers; `ConfigToml::resolve_runtime_options` now mints the executable
+//! route through `RouteResolver` (Phase 1). Auth/key resolution stays here.
 
 use super::{
     DEFAULT_ANTIGRAVITY_BASE_URL, DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_ARCEE_BASE_URL,
@@ -529,7 +530,9 @@ pub fn migrates_legacy_ollama_cloud_route(kind: ProviderKind, base_url: &str) ->
 /// neighboring Moonshot paths do not inherit direct-K3 wire semantics.
 #[must_use]
 pub fn is_exact_moonshot_platform_route(kind: ProviderKind, base_url: &str) -> bool {
-    kind == ProviderKind::Moonshot && is_exact_https_route(base_url, "api.moonshot.ai", "v1")
+    kind == ProviderKind::Moonshot
+        && (is_exact_https_route(base_url, "api.moonshot.ai", "v1")
+            || is_exact_https_route(base_url, "api.moonshot.cn", "v1"))
 }
 
 /// Whether a configured route is exactly xAI's first-party OpenAI-compatible
@@ -1961,10 +1964,12 @@ mod tests {
 
     #[test]
     fn direct_moonshot_route_matching_is_exact() {
-        assert!(is_exact_moonshot_platform_route(
-            ProviderKind::Moonshot,
-            "HTTPS://API.MOONSHOT.AI/v1/"
-        ));
+        for route in ["HTTPS://API.MOONSHOT.AI/v1/", "HTTPS://API.MOONSHOT.CN/v1/"] {
+            assert!(is_exact_moonshot_platform_route(
+                ProviderKind::Moonshot,
+                route
+            ));
+        }
         for neighboring_route in [
             "https://api.moonshot.ai/V1",
             "http://api.moonshot.ai/v1",
@@ -1973,6 +1978,7 @@ mod tests {
             "https://api.moonshot.ai/v1#fragment",
             "https://api.moonshot.ai/v1//",
             "https://api.moonshot.ai/v1/chat/completions",
+            "https://api.moonshot.cn/v1/chat/completions",
             "https://api.kimi.com/coding/v1",
         ] {
             assert!(
@@ -1982,7 +1988,7 @@ mod tests {
         }
         assert!(!is_exact_moonshot_platform_route(
             ProviderKind::Openai,
-            DEFAULT_MOONSHOT_BASE_URL
+            crate::MOONSHOT_CN_BASE_URL
         ));
     }
 

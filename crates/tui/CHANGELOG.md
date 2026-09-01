@@ -7,7 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Public roster language is Pod. `/pod` is the customer surface; fleet remains
+  the internal wire, storage, and migration name (#5776).
+
+- Provider selection no longer probes or adopts an external CLI credential on
+  ordinary picker use. Reuse requires an explicit "Use external CLI credentials"
+  choice, exact-path confirmation, and Codewhale-owned revoke (#5772).
+
+- TUI: startup no longer presents an approximate ASCII or block-glyph whale as
+  the product mark. It keeps the direct Tideline prompt while exact-raster
+  surfaces remain responsible for the canonical asset.
+
+- TUI: the active-session composer paints the same three-cell `[↑]` send
+  target as Startup and clicks it through the existing Enter submit
+  dispatcher (#5771). Compact/quiet composers still omit the control.
+
+- TUI/CLI: Pod is the public roster surface. User-facing Fleet wording
+  moves to Pod; durable receipt keys stay compatible (#5776).
+
 ### Added
+
+- Computer session records now count only time a provider actually accepted the
+  session as active, at per-second granularity. Idle, queued, stopped, and
+  teardown time are excluded, and a session whose allocation does not match a
+  standard profile is refused rather than recorded approximately. Covered by
+  hermetic fixtures; no live provider call and no deploy (#5781).
+
+- Website: the public site moves to the Tideline deep-ocean design language
+  (dark by default with an opt-in light documentation sheet, palette grounded
+  in the TUI's WHALE_* tokens) and the new whale brand mark across the favicon,
+  app icons, web manifest, nav wordmark, and social card (#5573).
 
 - Add `codewhale dispatch` / `/dispatch` so a local session can propose a
   Codewhale cloud agent against an explicit `github`, `cnb`, or `gitee` remote.
@@ -17,7 +48,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `/login` reports the Codewhale account session and provider-key next
   steps. The internal cloud-agent credential is not user surface: there is
   no `auth set-slot`/`auth clear-slot` command, no hint, and no completion
-  entry for it — membership (`codewhale login`) is the only door.
+  entry for it — signing in with `codewhale login` is the only door.
+- Add the Tideline component family from the ratatui translation spec
+  (#5698's screens, riding the #5699 work-strip layout): hero startup
+  surface with quick actions and option strip, notifications inbox, merged
+  footer band, pod ledger, receipt
+  stream, theme list with motion toggles, live preview, settings rail,
+  and the left rail — each a standalone render module pinned by 28 new
+  byte-exact golden buffers. Frame wiring follows the Tideline acceptance
+  gate; `NO_COLOR` is now honored by palette depth detection.
+- Route Contract Phase 1: `RouteResolver` is the runtime path for
+  `resolve_runtime_options`; `codewhale providers export --json` ships the
+  owned descriptor catalog; CLI `--provider` accepts any catalog route id
+  (the closed `ProviderArg` enum is deleted). Catalog layers are
+  bundled → models.dev → provider `/v1/models` → config.toml → user, with
+  policy DENY last and never overridden.
 - Add provider-native web search for documented Xiaomi MiMo 2.5 Pro and 2.5
   chat routes while keeping neighboring models and custom gateways fail-closed.
 - Add structured provider-native web search for exact Z.AI global and Zhipu
@@ -33,6 +78,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add provider-native web search for documented DeepSeek V4 routes through the
   Responses API, with fail-closed capability gating for compatible custom
   endpoints.
+- Add provider-native search for exact Moonshot K3 Formula, legacy K2.6
+  built-in search, and Kimi Code membership `/search` routes. Treat the exact
+  Moonshot China endpoint as a first-party direct route.
 - Z.ai `GLM-5.3-Flash` and OpenRouter `z-ai/glm-5.3-flash` are first-class
   picker rows (`/model GLM-5.3-Flash`). Flash is the faster/explore sibling
   of `GLM-5.3`; the Z.ai default stays `GLM-5.3`. List price is $0.15/$0.50
@@ -173,6 +221,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Website: `/signin`, `/signup`, and `/auth/callback` are locale-aware public
+  routes instead of localized 404s. Sign-in and create-account send the person
+  to the CWC app; OAuth callbacks hop to `app.codewhale.net` with the query
+  intact; `/login` and `/register` are aliases. Local CLI use is not presented
+  as requiring an account (#5767).
+- The sandbox read deny-list matches a rule's resolved path as well as its
+  literal spelling. On macOS `/etc` and `/var` are symlinks into `/private`,
+  so a read of `/private/etc/sudoers` walked around the `/etc/sudoers` rule,
+  and a rule written against a symlinked directory never fired for the real
+  path that `canonicalize` and the process cwd hand back.
 - Background shells are first-class work-strip rows (`▾ Shells N`) you can
   open, watch, and cancel by the `shell_*` id on the row. `/jobs cancel all`
   cancels running shells; it no longer looks up a task named `all`. The

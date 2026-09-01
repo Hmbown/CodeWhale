@@ -28,6 +28,41 @@ notes, and relevant issue/PR comments.
 ## Contributors by time
 
 <details open>
+<summary><strong>v0.9.12 — native search, live token truth, and runtime surfaces</strong></summary>
+
+**Merged or adapted contributions**
+
+- **[hexin / h3c-hexin](https://github.com/h3c-hexin)** — provider-native web
+  search across four routes: the DeepSeek adapter (#5683), Z.AI and BigModel
+  (#5685), and Xiaomi MiMo (#5687), each fail-closed for undocumented models,
+  plus the constraint enforcement that runs before any fallback (#5682); also
+  authoritative edit-last-turn boundaries (#5621), Kimi Code k3-256k support
+  (#5622), post-compaction input-token reporting (#5623), and preserving the
+  scheduled model selection in automations (#5650)
+- **[Isabel Wu / wuisabel-gif](https://github.com/wuisabel-gif)** — live
+  session token totals (#5624), persisted context-pressure warnings (#5629),
+  discoverable Fleet roster editing (#5604), the capability-gated cursor
+  accent (#5599), and `/copy` for the latest completed response (#5692)
+- **[Paulo Aboim Pinto / aboimpinto](https://github.com/aboimpinto)** —
+  preserved Windows verbatim-path operands through POSIX word splitting
+  (#5610) and moved the plugins group onto the command shapes (#5657)
+- **[Alex Musichen / musichen](https://github.com/musichen)** — fixed the
+  configured-view DeepSeek model picker so it shows a stable DeepSeek heading
+  and keeps every official catalog model for the active provider visible
+  (#5689)
+- **[gaord](https://github.com/gaord)** — added the `GET /v1/fleet/profiles`
+  runtime API endpoint, reusing the FleetManager validation path (#5688)
+- **[Sh1Zuku / SparkofSpike](https://github.com/SparkofSpike)** — corrected
+  English documentation inaccuracies and contributed the first zh_hans
+  translations for the Tier-2 docs (#5613)
+- **[M-Maciej](https://github.com/M-Maciej)** — goal continuation cadence fix
+  (#5591)
+- **[Serephus / serephus](https://github.com/serephus)** — nixpkgs update
+  (#5669)
+
+</details>
+
+<details>
 <summary><strong>v0.9.11 — portable command surfaces and turn-loop structure</strong></summary>
 
 **Merged or adapted contributions**

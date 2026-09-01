@@ -1,15 +1,13 @@
-//! Ocean Work Graph surface ownership — **this module is the top bar.**
+//! Ocean Work Graph surface ownership.
 //!
-//! Naming warning, because it has confused readers repeatedly: this is called
-//! the "rail" or the "work surface", but [`WorkSurfacePlacement`] defaults to
-//! `Top`, so by default it renders as a horizontal strip under the header and
-//! above the transcript. "The rail", "the work surface" and "the top bar" all
-//! name this module. It is not the header ([`crate::tui::underwater`]) and not
-//! the footer.
+//! This is called the "rail" or the "work surface". Fresh settings default to
+//! `Left`; `Top` remains a supported horizontal strip under the header and
+//! above the transcript. It is not the header ([`crate::tui::underwater`]) and
+//! not the footer.
 //!
 //! Two settings are orthogonal and are routinely mixed up:
 //!
-//! - **placement** — where it renders. `Top` (default) | `Left` | `Right` |
+//! - **placement** — where it renders. `Top` | `Left` (fresh default) | `Right` |
 //!   `Off`. Drag-resizing the divider persists `work_surface_top_height`
 //!   (5..=16) or `work_surface_side_width` (26..=80) to `settings.toml`.
 //! - **panel** — what it shows. [`RailPanel`]: `Tasks` (default) | `Agents` |
@@ -64,8 +62,10 @@
 mod input;
 mod interaction;
 mod model;
-mod panels;
+pub(crate) mod panels;
 mod render;
+#[allow(dead_code)] // Tideline rail rendering (spec §5a); wired by the landing slice
+pub mod tideline;
 
 pub use input::{enter_agents, handle_key, handle_mouse};
 pub(crate) use interaction::{agent_details_closed, release_focus};
@@ -117,6 +117,12 @@ mod tests {
         // panel. These tests exercise the Tasks panel's row machinery, so
         // pin it rather than depend on the host file.
         app.work_surface.panel = super::RailPanel::Tasks;
+        // Most tests in this module predate the fresh left-rail default and
+        // exercise the Top strip's height, divider, overflow, and row layout.
+        // Pin both requested and effective placement; dedicated placement
+        // tests override these fields explicitly.
+        app.work_surface.placement = WorkSurfacePlacement::Top;
+        app.work_surface.effective_placement = WorkSurfacePlacement::Top;
         app
     }
 

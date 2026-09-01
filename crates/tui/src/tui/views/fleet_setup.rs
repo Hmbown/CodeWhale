@@ -1,6 +1,6 @@
 //! Legacy-profile setup — a progressive "set up your agent team" flow.
 //!
-//! `/fleet setup` routes here only when no named v2 Fleet is selected. When a
+//! `/pod setup` routes here only when no named v2 Fleet is selected. When a
 //! v2 Fleet is selected, the host opens that Fleet's exact detail editor so a
 //! save can never appear to update a member while writing an ignored legacy
 //! `.codewhale/agents/*.toml` profile.
@@ -51,7 +51,7 @@ use crate::tui::views::{
 
 const PROFILE_DIR: &str = ".codewhale/agents";
 
-/// The only two truthful destinations for `/fleet setup`.
+/// The only two truthful destinations for `/pod setup`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FleetSetupEditTarget {
     /// No named v2 Fleet is selected, so the legacy profile wizard remains
@@ -65,7 +65,7 @@ pub(crate) enum FleetSetupEditTarget {
 }
 
 /// Resolve setup independently of project-profile trust. A broken explicit
-/// selection fails closed instead of being mistaken for "no Fleet" and
+/// selection fails closed instead of being mistaken for "no Pod" and
 /// silently opening the legacy profile writer.
 pub(crate) fn resolve_fleet_setup_edit_target(
     workspace: &Path,
@@ -77,7 +77,7 @@ pub(crate) fn resolve_fleet_setup_edit_target(
         }),
         Ok(None) => Ok(FleetSetupEditTarget::LegacyProfiles),
         Err(_) => Err(
-            "Selected Fleet is missing or unreadable; open /fleet fleets to repair or clear the selection. Legacy profiles were not opened."
+            "Selected Pod is missing or unreadable; open /pod pods to repair or clear the selection. Legacy profiles were not opened."
                 .to_string(),
         ),
     }
@@ -103,7 +103,7 @@ const ROLES: [Choice; 9] = [
         label: Cow::Borrowed("manager"),
         summary: Cow::Borrowed("Plan & split queued work"),
         description: Cow::Borrowed(
-            "Coordinates the Fleet run: plans the work, splits it into bounded tasks, and dispatches workers.",
+            "Coordinates the Pod run: plans the work, splits it into bounded tasks, and dispatches workers.",
         ),
     },
     Choice {
@@ -244,7 +244,7 @@ pub struct FleetSetupSnapshot {
     roster_members: Vec<(String, String)>,
     /// Saved (file-backed) roster members keyed by lowercased id: where the
     /// file lives and the route it pins, so reopening a saved profile from
-    /// `/fleet` starts from what is on disk instead of the wizard defaults.
+    /// `/pod` starts from what is on disk instead of the wizard defaults.
     roster_details: Vec<RosterMemberDetail>,
     /// Whether project-scope profiles are enabled for this launch
     /// (`--no-project-config` disables them). When false, "This project" is
@@ -784,7 +784,7 @@ impl FleetSetupView {
         Self::from_snapshot(FleetSetupSnapshot::from_app(app, config))
     }
 
-    /// Open setup for a role the operator already selected in `/fleet`.
+    /// Open setup for a role the operator already selected in `/pod`.
     /// Unknown/custom roster roles map to the explicit custom authoring row;
     /// Left or Esc still exposes Role so the carried choice is never sticky.
     #[must_use]
@@ -1486,7 +1486,7 @@ impl FleetSetupView {
             provider: route.map(|(provider, _)| provider),
             reasoning_effort: self.selected_reasoning_effort(),
             instructions: Some(format!(
-                "Role: {}. Work only within the assigned Fleet slice. Report concise evidence and stop when the assignment is complete. Do not widen permissions, trust, route configuration, or topology.",
+                "Role: {}. Work only within the assigned Pod slice. Report concise evidence and stop when the assignment is complete. Do not widen permissions, trust, route configuration, or topology.",
                 role.label
             )),
         })
@@ -1756,7 +1756,7 @@ impl ModalView for FleetSetupView {
         };
         let block = Block::default()
             .title(Line::from(Span::styled(
-                " Fleet setup — your agent team ",
+                " Pod setup — your agent team ",
                 Style::default()
                     .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
@@ -1791,7 +1791,7 @@ impl ModalView for FleetSetupView {
         match self.step {
             Step::Role => {
                 let mut context = vec![
-                    "Fleet runs sub-agents that delegate work. Pick the role this team member should play; the saved profile carries it as its role_hint.".to_string(),
+                    "Pod runs sub-agents that delegate work. Pick the role this team member should play; the saved profile carries it as its role_hint.".to_string(),
                 ];
                 if let Some(note) = self.roster_override_note() {
                     context.push(note);
@@ -1872,7 +1872,7 @@ impl FleetSetupView {
         let (title, subtitle): (Cow<'static, str>, Cow<'static, str>) = match self.step {
             Step::Role => (
                 Cow::Borrowed("Choose a team role"),
-                Cow::Borrowed("Each Fleet member plays one role in the delegation."),
+                Cow::Borrowed("Each Pod member plays one role in the delegation."),
             ),
             Step::Composition => (
                 Cow::Borrowed("Unratified composition suggestion"),
@@ -2172,7 +2172,7 @@ impl FleetSetupView {
             CompositionDecision::Accepted => section(
                 &mut lines,
                 "Composition",
-                "Accepted the configured-pool suggestion for this role. It remains unsaved until you save this profile; no Fleet was launched or changed.".to_string(),
+                "Accepted the configured-pool suggestion for this role. It remains unsaved until you save this profile; no Pod was launched or changed.".to_string(),
             ),
             CompositionDecision::Edited => section(
                 &mut lines,
@@ -2210,7 +2210,7 @@ impl FleetSetupView {
             &mut lines,
             "Workspace & org",
             format!(
-                "{} · sub-agents {} ({} concurrent, {} launch slots, {} admitted) · recursion agent {} / fleet {} (ceiling {})",
+                "{} · sub-agents {} ({} concurrent, {} launch slots, {} admitted) · recursion agent {} / Pod {} (ceiling {})",
                 self.snapshot.workspace.display(),
                 if self.snapshot.subagents_enabled {
                     "enabled"
@@ -2288,7 +2288,7 @@ impl FleetSetupView {
 
     fn review_policy_summary(&self) -> String {
         format!(
-            "Workers run without a token cap by default · {}s api, {}s heartbeat. Launch with Fleet → exec; /fleet workers (or /subagents) shows sub-agents in the current interactive session; /fleet status and codewhale fleet status both read the persistent .codewhale/fleet.jsonl ledger.",
+            "Workers run without a token cap by default · {}s api, {}s heartbeat. Launch with Pod → exec; /pod workers (or /subagents) shows sub-agents in the current interactive session; /pod status and codewhale pod status both read the persistent .codewhale/fleet.jsonl ledger.",
             self.snapshot.api_timeout_secs, self.snapshot.heartbeat_timeout_secs
         )
     }
@@ -2584,22 +2584,22 @@ mod tests {
         );
 
         let fleet =
-            crate::fleet::store::FleetFile::new("Launch".to_string(), None).expect("valid Fleet");
+            crate::fleet::store::FleetFile::new("Launch".to_string(), None).expect("valid Pod");
         let fleet_path = crate::fleet::store::save_fleet(
             &fleet,
             crate::fleet::store::FleetScope::Workspace,
             workspace.path(),
         )
-        .expect("save Fleet");
+        .expect("save Pod");
         crate::fleet::store::set_selected(
             "Launch",
             crate::fleet::store::FleetScope::Workspace,
             workspace.path(),
         )
-        .expect("select Fleet");
+        .expect("select Pod");
 
         assert_eq!(
-            resolve_fleet_setup_edit_target(workspace.path()).expect("selected Fleet"),
+            resolve_fleet_setup_edit_target(workspace.path()).expect("selected Pod"),
             FleetSetupEditTarget::SelectedFleet {
                 name: "Launch".to_string(),
                 scope: crate::fleet::store::FleetScope::Workspace,
@@ -3827,7 +3827,7 @@ mod tests {
             draft
                 .instructions
                 .as_deref()
-                .is_some_and(|text| text.contains("assigned Fleet slice"))
+                .is_some_and(|text| text.contains("assigned Pod slice"))
         );
     }
 
@@ -4034,7 +4034,7 @@ mod tests {
             .expect("selected role summary should render");
         let description_row = rows
             .iter()
-            .position(|row| row.contains("Coordinates the Fleet run"))
+            .position(|row| row.contains("Coordinates the Pod run"))
             .expect("selected role description should render");
 
         assert!(
@@ -4052,8 +4052,8 @@ mod tests {
         for row in &rows[manager_row..=custom_row] {
             assert!(
                 !row.contains("Plan & split queued work")
-                    && !row.contains("Coordinates the Fleet run")
-                    && !row.contains("Fleet runs sub-agents"),
+                    && !row.contains("Coordinates the Pod run")
+                    && !row.contains("Pod runs sub-agents"),
                 "role list row contains detail copy at 80 columns: {row:?}\n{text}"
             );
         }
@@ -4190,7 +4190,7 @@ mod tests {
             );
             let top = rows
                 .iter()
-                .position(|row| row.contains("Fleet setup — your agent team"))
+                .position(|row| row.contains("Pod setup — your agent team"))
                 .expect("fleet setup title");
             let bottom = rows
                 .iter()
@@ -4260,7 +4260,7 @@ mod tests {
         let policy = FleetSetupView::from_snapshot(snapshot()).review_policy_summary();
         for truth in [
             "current interactive session",
-            "codewhale fleet status",
+            "codewhale pod status",
             ".codewhale/fleet.jsonl",
         ] {
             assert!(policy.contains(truth), "review policy missing: {truth}");

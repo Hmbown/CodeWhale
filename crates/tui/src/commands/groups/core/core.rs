@@ -278,7 +278,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
                 .replace("{old}", &old_model)
                 .replace("{new}", "auto");
             message.push_str(
-                " (session only — /fleet save updates this Fleet, /fleet save-as saves a new Fleet, /model save-default remembers the default)",
+                " (session only — /pod save updates this Pod, /pod save-as saves a new Pod, /model save-default remembers the default)",
             );
             return CommandResult::with_message_and_action(
                 message,
@@ -371,7 +371,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
             .replace("{old}", &old_model)
             .replace("{new}", &model_id);
         message.push_str(
-            " (session only — /fleet save updates this Fleet, /fleet save-as saves a new Fleet, /model save-default remembers the default)",
+            " (session only — /pod save updates this Pod, /pod save-as saves a new Pod, /model save-default remembers the default)",
         );
         CommandResult::with_message_and_action(
             message,
@@ -1570,7 +1570,7 @@ mod tests {
         assert_eq!(app.view_stack.top_kind(), Some(ModalKind::SubAgents));
         assert_eq!(
             app.status_message,
-            Some("Fetching Fleet status...".to_string())
+            Some("Fetching current-session sub-agents...".to_string())
         );
     }
 

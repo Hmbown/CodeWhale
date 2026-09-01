@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use clap::Parser;
 
 use super::*;
-use crate::{AuthArgs, AuthCommand, Cli, Commands, ProviderArg, no_keyring_secrets};
+use crate::{AuthArgs, AuthCommand, Cli, Commands, no_keyring_secrets};
 
 const SENTINEL: &str = "cw-test-secret-never-log-7b30";
 const AMBIENT_SENTINEL: &str = "cw-test-ambient-openrouter-never-log-94cd";
@@ -48,7 +48,7 @@ fn command_parses_and_documents_the_pipe_only_boundary() {
         cli.command,
         Some(Commands::Auth(AuthArgs {
             command: AuthCommand::PrintApiKey {
-                provider: ProviderArg::Openrouter
+                provider: ProviderKind::Openrouter
             }
         }))
     ));
