@@ -3453,19 +3453,6 @@ impl RuntimeThreadManager {
         *self.automations.lock() = Some(automations);
     }
 
-    #[allow(dead_code)] // Public API for external callers (runtime API, task manager)
-    pub fn shutdown(&self) {
-        self.cancel_token.cancel();
-        self.pending_approvals.lock().clear();
-        self.pending_user_inputs.lock().clear();
-        self.pending_dynamic_tools.lock().clear();
-    }
-
-    #[allow(dead_code)] // Public API for external callers
-    pub fn is_shutdown(&self) -> bool {
-        self.cancel_token.is_cancelled()
-    }
-
     fn register_pending_approval(
         &self,
         thread_id: &str,
@@ -5670,23 +5657,6 @@ impl RuntimeThreadManager {
         let thread = self.get_thread(id).await?;
         self.ensure_engine_loaded(&thread).await?;
         Ok(thread)
-    }
-
-    /// Resume a thread and recover the sub-agent rebind hints needed to
-    /// reconstruct in-transcript cards (issue #128). Drains the persisted
-    /// `agent.*` event stream and collapses it into the latest known
-    /// status per `agent_id` — the UI consumes this to seed empty
-    /// `DelegateCard` / `FanoutCard` placeholders so subsequent live
-    /// mailbox envelopes mutate them in place.
-    #[allow(dead_code)] // exposed for the runtime API resume flow; consumed by #128 follow-up.
-    pub async fn resume_thread_with_agent_rebind(
-        &self,
-        id: &str,
-    ) -> Result<(ThreadRecord, Vec<AgentRebindHint>)> {
-        let thread = self.resume_thread(id).await?;
-        let events = self.events_since_async(&thread.id, None).await?;
-        let hints = collect_agent_rebind_hints(&events);
-        Ok((thread, hints))
     }
 
     pub async fn fork_thread(&self, id: &str) -> Result<ThreadRecord> {
@@ -9857,8 +9827,7 @@ fn tool_kind_for_name(name: &str) -> TurnItemKind {
 /// before fresh mailbox envelopes arrive on a re-attached engine.
 ///
 /// The helper is the testable contract here — actual TUI wire-up to the
-/// resume flow is a follow-up; the runtime API consumer (`runtime_api.rs`)
-/// can already call `resume_thread_with_agent_rebind` to drive it.
+/// resume flow is a follow-up.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)] // consumed by #128 follow-up TUI resume wiring; tested here.
 pub struct AgentRebindHint {

@@ -4885,6 +4885,9 @@ impl App {
     /// retains its existing "interrupt this turn" / "close modal" semantics.
     pub fn arm_quit(&mut self) {
         self.quit_armed_until = Some(Instant::now() + Self::QUIT_CONFIRMATION_WINDOW);
+        // The armed state must be spoken, not silent: surface the localized
+        // press-again hint so the user learns a second Ctrl+C exits.
+        self.status_message = Some(self.tr(MessageId::FooterPressCtrlCAgain).into_owned());
         self.needs_redraw = true;
     }
 

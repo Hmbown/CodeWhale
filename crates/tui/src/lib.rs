@@ -1834,7 +1834,7 @@ fn run_async_main(
 /// never applied where the depth actually is.
 ///
 /// A debug-build `agent` dispatch (turn_loop -> FuturesUnordered ->
-/// execute_full_with_context -> AgentTool::execute -> spawn_subagent_from_input)
+/// execute_rich_full_with_context -> AgentTool::execute -> spawn_subagent_from_input)
 /// measured a stack high-water mark between 2.25 and 2.5 MiB and aborted the
 /// whole process on the guard page. A Rust stack overflow is not a panic: it
 /// raises SIGABRT, so `spawn_supervised`'s `catch_unwind` cannot see it and the
@@ -1855,7 +1855,7 @@ fn run_async_main(
 /// never applied where the depth actually is.
 ///
 /// A debug-build `agent` dispatch (turn_loop -> FuturesUnordered ->
-/// execute_full_with_context -> AgentTool::execute -> spawn_subagent_from_input)
+/// execute_rich_full_with_context -> AgentTool::execute -> spawn_subagent_from_input)
 /// measured a stack high-water mark between 2.25 and 2.5 MiB and aborted the
 /// whole process on the guard page. A Rust stack overflow is not a panic: it
 /// raises SIGABRT, so `spawn_supervised`'s `catch_unwind` cannot see it and the

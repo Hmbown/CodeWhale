@@ -30,7 +30,6 @@ const HANDLE_STORE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 const DEFAULT_MAX_CHARS: usize = 12_000;
 const HARD_MAX_CHARS: usize = 50_000;
-#[allow(dead_code)] // Used by producers as they begin returning var_handle records.
 const REPR_PREVIEW_CHARS: usize = 160;
 
 pub type SharedHandleStore = Arc<Mutex<HandleStore>>;
@@ -80,14 +79,12 @@ pub struct HandleRecord {
     bytes: usize,
 }
 
-#[allow(dead_code)] // Producers land in later v0.8.33 slices; handle_read is first.
 #[derive(Debug, Clone)]
 pub enum HandleValue {
     Text(String),
     Json(Value),
 }
 
-#[allow(dead_code)] // Foundation methods used by upcoming RLM/agent session producers.
 impl HandleValue {
     fn length(&self) -> usize {
         match self {
@@ -132,7 +129,6 @@ pub struct HandleStore {
     retained_bytes: usize,
 }
 
-#[allow(dead_code)] // Insertors are for producer tools; this PR wires the reader first.
 impl HandleStore {
     #[must_use]
     pub fn insert_text(
@@ -233,7 +229,9 @@ impl HandleStore {
         }
     }
 
-    /// Bytes currently held across every session.
+    /// Bytes currently held across every session. Exercised from the
+    /// tests below; no production caller today.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub fn retained_bytes(&self) -> usize {
         self.retained_bytes
@@ -840,7 +838,6 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     out
 }
 
-#[allow(dead_code)] // Used when producer tools register handle payloads.
 fn sha256_hex(bytes: &[u8]) -> String {
     crate::hashing::sha256_hex(bytes)
 }

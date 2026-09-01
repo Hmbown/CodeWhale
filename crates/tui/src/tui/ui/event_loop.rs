@@ -4697,6 +4697,28 @@ pub(crate) async fn run_event_loop(
                     // the conversation composer match below handle this key
                     // exactly as they would in a live session.
                 } else {
+                    // Ctrl+C on the launch menu follows the same two-tap
+                    // contract as the session shell (`CtrlCDisposition`):
+                    // first press arms the visible exit prompt, the second
+                    // inside QUIT_CONFIRMATION_WINDOW exits. The worktree
+                    // name input keeps its own Ctrl+C = cancel-input meaning,
+                    // so it stays with `handle_launch_key` below. Selection
+                    // copy and turn cancel cannot apply before a session
+                    // exists, so every other disposition arms.
+                    if app.launch.worktree_input.is_none()
+                        && key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        match ctrl_c_disposition(app) {
+                            CtrlCDisposition::ConfirmExit => {
+                                let _ = engine_handle.send(Op::Shutdown).await;
+                                return Ok(());
+                            }
+                            _ => app.arm_quit(),
+                        }
+                        app.needs_redraw = true;
+                        continue;
+                    }
                     let action = crate::tui::underwater::handle_launch_key(
                         &mut app.launch,
                         key,

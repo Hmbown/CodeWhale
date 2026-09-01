@@ -13645,6 +13645,33 @@ fn ctrl_c_disposition_loading_beats_armed_quit() {
 }
 
 #[test]
+fn ctrl_c_disposition_launch_screen_arms_exit_prompt() {
+    // The pre-session launch menu has no transcript selection and no turn in
+    // flight, so Ctrl+C there must follow the same two-tap contract as the
+    // session shell: arm first, confirm inside the window.
+    let mut app = create_test_app();
+    app.launch.visible = true;
+    assert!(!app.is_loading);
+    assert_eq!(ctrl_c_disposition(&app), CtrlCDisposition::ArmExit);
+    app.arm_quit();
+    assert_eq!(ctrl_c_disposition(&app), CtrlCDisposition::ConfirmExit);
+}
+
+#[test]
+fn arm_quit_shows_press_again_hint() {
+    // The armed state must be visible: the first Ctrl+C surfaces the
+    // localized "Press Ctrl+C again to quit" hint, not a silent redraw.
+    let mut app = create_test_app();
+    app.arm_quit();
+    let hint = app.tr(MessageId::FooterPressCtrlCAgain).into_owned();
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some(hint.as_str()),
+        "arming the quit prompt must show the press-again hint"
+    );
+}
+
+#[test]
 fn ctrl_c_disposition_no_selection_means_no_copy() {
     // Regression guard for #1337: with no transcript selection, Ctrl+C must
     // NOT route to copy. (When selection is active, the copy branch wins;
