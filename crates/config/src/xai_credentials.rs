@@ -1689,6 +1689,18 @@ pub fn clear_all_chatgpt_oauth_credentials() -> Result<usize> {
     with_xai_oauth_lifecycle_lock(XaiOAuthCredentialStore::clear_chatgpt)
 }
 
+/// Clears every Codewhale-owned ChatGPT OAuth file without re-entering the
+/// lifecycle lock. Only for code already running inside
+/// [`with_xai_oauth_lifecycle_lock`] or [`with_xai_oauth_revocation_transaction`];
+/// everyone else must call [`clear_all_chatgpt_oauth_credentials`], which
+/// takes the lock. The lifecycle lock is a non-reentrant in-process mutex, so
+/// a nested call would deadlock the logout path (seen as CI hangs on the
+/// `logout_*` tests).
+pub fn clear_all_chatgpt_oauth_credentials_locked() -> Result<usize> {
+    let store = XaiOAuthCredentialStore::open()?;
+    XaiOAuthCredentialStore::clear_chatgpt(&store)
+}
+
 pub fn remove_chatgpt_oauth_generation(generation: &str) -> Result<bool> {
     let generation = validate_chatgpt_oauth_generation(generation)?;
     with_xai_oauth_lifecycle_lock(|store| store.remove(generation))

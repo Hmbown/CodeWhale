@@ -2444,7 +2444,9 @@ fn run_logout_command_with_secrets_unlocked(
         return Err(error);
     }
     let mut keyring_failures = clear_all_provider_api_keys_from_keyring(secrets);
-    if let Err(error) = codewhale_config::clear_all_chatgpt_oauth_credentials() {
+    // Already inside with_xai_oauth_revocation_transaction: the locked
+    // variant must not re-enter the non-reentrant lifecycle mutex.
+    if let Err(error) = codewhale_config::clear_all_chatgpt_oauth_credentials_locked() {
         keyring_failures.push(format!("chatgpt oauth: {error}"));
     }
     if let Err(error) = clear_daytona_slot(secrets) {
