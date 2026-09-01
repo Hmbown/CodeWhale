@@ -1110,6 +1110,7 @@ mod tests {
                 read_timeout: 5,
                 connected: true,
                 error: None,
+                auth_required: false,
                 capability_metadata: crate::mcp::McpServerCapabilityMetadata::LegacyFallback,
                 tools: vec![crate::mcp::McpDiscoveredItem {
                     name: "web_search".to_string(),

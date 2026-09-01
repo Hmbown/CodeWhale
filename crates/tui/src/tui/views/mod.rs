@@ -2175,7 +2175,8 @@ impl ConfigView {
                 ),
             },
             // `launch_screen` is a retired setting: accepted on load, dropped
-            // on save — no config row.
+            // on save — no config row (main's retirement wins over the
+            // branch's stale row).
             ConfigRow {
                 section: ConfigSection::Display,
                 key: "show_thinking".to_string(),

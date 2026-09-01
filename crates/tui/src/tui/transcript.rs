@@ -89,6 +89,7 @@ impl TranscriptBlockKind {
             HistoryCell::Tool(_) | HistoryCell::SubAgent(_) => Self::ToolAction,
             HistoryCell::System { .. }
             | HistoryCell::Error { .. }
+            | HistoryCell::Automation(_)
             | HistoryCell::ArchivedContext { .. } => Self::Notice,
         }
     }

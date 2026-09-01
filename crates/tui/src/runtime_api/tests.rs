@@ -10537,3 +10537,21 @@ async fn skill_lifecycle_runtime_info_advertises_skill_lifecycle_capability() ->
     handle.abort();
     Ok(())
 }
+
+#[test]
+fn receipt_evidence_paths_must_stay_confined_to_the_workspace() {
+    use std::path::Path;
+
+    assert!(super::receipt_evidence_path_is_confined(Path::new(
+        "receipts/run-1/task-a.json"
+    )));
+    assert!(!super::receipt_evidence_path_is_confined(Path::new(
+        "/etc/passwd"
+    )));
+    assert!(!super::receipt_evidence_path_is_confined(Path::new(
+        "receipts/../../escape.json"
+    )));
+    assert!(!super::receipt_evidence_path_is_confined(Path::new(
+        "../escape.json"
+    )));
+}

@@ -945,6 +945,8 @@ fn mcp_model(app: &App, locale: Locale) -> ExtensionsTabModel {
                 Cow::Borrowed("connecting")
             } else if observed.is_some_and(|server| server.connected) {
                 tr(locale, MessageId::ExtensionsStateConnected)
+            } else if observed.is_some_and(|server| server.auth_required) {
+                Cow::Owned(crate::tui::session_boot::mcp_auth_required_state_label())
             } else if observed.is_some_and(|server| server.error.is_some()) {
                 tr(locale, MessageId::ExtensionsStateError)
             } else if observed.is_none() {
@@ -954,13 +956,10 @@ fn mcp_model(app: &App, locale: Locale) -> ExtensionsTabModel {
             }
             .into_owned();
             let oauth_capable = config.is_some_and(crate::mcp::mcp_server_oauth_capable);
-            let recovery = crate::mcp::mcp_recovery_kind(
-                enabled,
-                observed.is_some(),
-                observed.is_some_and(|server| server.connected),
-                observed.and_then(|server| server.error.as_deref()),
-                oauth_capable,
-            );
+            let recovery = match observed {
+                Some(server) => server.recovery_kind(oauth_capable),
+                None => crate::mcp::mcp_recovery_kind(enabled, false, false, None, oauth_capable),
+            };
             let action = if initializing {
                 ExtensionAction::Status {
                     label: state.clone(),

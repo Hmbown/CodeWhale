@@ -53,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- TUI: scheduled automations project into the top strip
+  (`⏱ N scheduled · M running`, compact `⏱ N·M`) with typed
+  `HistoryCell::Automation` receipts when a run this session watched settle.
+  `/automation` acknowledges failures. The merged footer does not carry the
+  work fact (#5748).
 - The app-server can listen on a unix domain socket and advertise a
   `daemon/attach` handshake, so a local client can attach to an already-running
   engine instead of spawning its own. The socket is created with

@@ -2099,6 +2099,17 @@ pub struct App {
     pub memory_size_hint: Option<String>,
     /// Cached background tasks for sidebar rendering.
     pub task_panel: Vec<TaskPanelEntry>,
+    /// Live scheduled-work projection for the activity band
+    /// (AUTOMATION-VISIBILITY-SPEC §2.1), refreshed on the task-panel cadence
+    /// by `refresh_automation_panel`. The band reads it;
+    /// `background_indicator` never learns about automations.
+    pub automation_panel: crate::tui::automation_panel::AutomationPanelState,
+    /// The automation store scan in flight for `automation_panel`, if any.
+    /// The scan reads every definition and run file, so it runs on a
+    /// blocking thread and the tick folds it once it has finished — the
+    /// async UI loop never parks behind the automation store's disk.
+    pub automation_scan:
+        Option<tokio::task::JoinHandle<crate::tui::automation_panel::AutomationScan>>,
     /// Session-local quieting and command detectors for event-driven tips.
     pub behavioral_tips: crate::tui::behavioral_tips::BehavioralTipState,
     /// Unified Workflow activity surface (#4121). Lives above the composer so

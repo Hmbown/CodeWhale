@@ -20,8 +20,8 @@ impl AppMode {
     /// `Auto` remains an internal variant while the real implementation is
     /// redesigned; do not expose it through user-facing mode selection (#3733).
     /// `Yolo` is kept for parse/back-compat only and is not in the Tab cycle.
-    /// Operate joins the visible cycle because ordinary messages can now
-    /// coordinate background workers without requiring a Workflow definition.
+    /// Operate joins the visible cycle as the always-on pod operation:
+    /// a lead plans slices, then workers execute against an optional burn rate.
     pub const CYCLE: [Self; 3] = [Self::Plan, Self::Agent, Self::Operate];
 
     #[must_use]
@@ -113,7 +113,9 @@ impl AppMode {
             }
             AppMode::Yolo => "Act mode with Full Access (legacy compatibility setting)",
             AppMode::Plan => "Plan mode - research and design before implementing",
-            AppMode::Operate => "Operate mode - send tasks while Fleet workers run in parallel",
+            AppMode::Operate => {
+                "Operate mode - always-on pod operation: lead plans, optional $/time burn rate, workers follow the plan"
+            }
         }
     }
 
