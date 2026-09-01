@@ -162,7 +162,17 @@ pub fn cache_path() -> Option<PathBuf> {
 /// Current quiet status (for UI / slash-command feedback).
 #[must_use]
 pub fn status() -> ModelsDevStatus {
-    STATUS.read().map(|guard| guard.clone()).unwrap_or_default()
+    let current = STATUS.read().map(|guard| guard.clone()).unwrap_or_default();
+    honor_bundled_staleness(current, crate::model_catalog::bundled_catalog_is_stale())
+}
+
+/// A Bundled-only report whose snapshot is itself past TTL reports `Stale`:
+/// rows stay visible for offline use, but never as a current catalog (#A2).
+fn honor_bundled_staleness(mut status: ModelsDevStatus, bundled_stale: bool) -> ModelsDevStatus {
+    if status.freshness == ModelsDevFreshness::Bundled && bundled_stale {
+        status.freshness = ModelsDevFreshness::Stale;
+    }
+    status
 }
 
 fn set_status(next: ModelsDevStatus) {
@@ -644,6 +654,26 @@ mod tests {
         }
 
         clear_live_snapshot();
+    }
+
+    #[test]
+    fn bundled_staleness_flips_only_bundled_reports() {
+        let bundled = ModelsDevStatus::default();
+        assert_eq!(bundled.freshness, ModelsDevFreshness::Bundled);
+        assert_eq!(
+            honor_bundled_staleness(bundled.clone(), true).freshness,
+            ModelsDevFreshness::Stale
+        );
+        assert_eq!(
+            honor_bundled_staleness(bundled, false).freshness,
+            ModelsDevFreshness::Bundled
+        );
+        let mut live = ModelsDevStatus::default();
+        live.freshness = ModelsDevFreshness::Live;
+        assert_eq!(
+            honor_bundled_staleness(live, true).freshness,
+            ModelsDevFreshness::Live
+        );
     }
 
     #[test]

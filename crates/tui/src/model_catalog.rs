@@ -108,6 +108,13 @@ impl MergedCatalog {
         }
         entry_for(&self.bundled.entries, model)
     }
+
+    /// The offline snapshot is past its own TTL. Rows still resolve — an
+    /// offline fallback that bricks offline is worse than a stale list — but
+    /// pickers must not present it as a current catalog.
+    pub(crate) fn bundled_stale(&self) -> bool {
+        self.bundled.is_stale(self.now)
+    }
 }
 
 fn entry_for<'a>(
@@ -164,6 +171,15 @@ pub fn resolved_usd_pricing(model: &str) -> Option<(f64, f64)> {
 
 pub fn bundled_catalog() -> CatalogCache {
     serde_json::from_str(BUNDLED_CATALOG_JSON).expect("bundled model catalog must parse")
+}
+
+/// Whether the bundled offline snapshot is past its TTL right now.
+#[must_use]
+pub fn bundled_catalog_is_stale() -> bool {
+    active_catalog()
+        .read()
+        .map(|catalog| catalog.bundled_stale())
+        .unwrap_or(true)
 }
 
 fn catalog_cache_read_path() -> Result<PathBuf> {
@@ -237,6 +253,31 @@ mod tests {
             ttl_secs,
             entries,
         }
+    }
+
+    #[test]
+    fn bundled_snapshot_ttl_is_bounded_to_a_month() {
+        // A ten-year TTL made staleness unfirable and shipped a frozen list
+        // as current (audit A2). Thirty days is the ceiling.
+        let bundled = bundled_catalog();
+        assert!(
+            bundled.ttl_secs <= 2_678_400,
+            "bundled ttl_secs {} exceeds 31 days",
+            bundled.ttl_secs
+        );
+    }
+
+    #[test]
+    fn stale_bundled_snapshot_still_resolves() {
+        let bundled = bundled_catalog();
+        let some_model = bundled.entries.keys().next().cloned().expect("entries");
+        let past = bundled.fetched_at + Duration::seconds(bundled.ttl_secs as i64 + 60);
+        let catalog = MergedCatalog::from_sources(BTreeMap::new(), None, bundled, past);
+        assert!(catalog.bundled_stale());
+        assert!(
+            catalog.resolve(&some_model).is_some(),
+            "offline fallback must keep resolving"
+        );
     }
 
     #[test]

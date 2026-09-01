@@ -1,399 +1,547 @@
 {
-  "schema_version": 1,
-  "source": "bundled",
-  "fetched_at": "2026-07-06T00:00:00Z",
-  "ttl_secs": 315360000,
   "entries": {
-    "deepseek-v4-pro": {
-      "id": "deepseek-v4-pro",
-      "context_window": 1000000,
-      "max_output": 384000,
-      "supports_reasoning": true,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "deepseek-v4-flash": {
-      "id": "deepseek-v4-flash",
-      "context_window": 1000000,
-      "max_output": 384000,
-      "supports_reasoning": true,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "deepseek-v4-flash-vision-exp": {
-      "id": "deepseek-v4-flash-vision-exp",
-      "context_window": 1000000,
-      "max_output": 384000,
-      "supports_reasoning": true,
-      "modalities": ["text", "image"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "gpt-5-codex": {
-      "id": "gpt-5-codex",
-      "context_window": 400000,
-      "max_output": 128000,
-      "supports_reasoning": true,
-      "input_usd_per_million": 1.25,
-      "output_usd_per_million": 10.0,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "gpt-5.3-codex": {
-      "id": "gpt-5.3-codex",
-      "context_window": 400000,
-      "max_output": 128000,
-      "supports_reasoning": true,
-      "input_usd_per_million": 1.75,
-      "output_usd_per_million": 14.0,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "gpt-5.6": {
-      "id": "gpt-5.6",
-      "context_window": 1050000,
-      "max_output": 128000,
-      "supports_reasoning": true,
-      "modalities": ["text", "image"],
-      "supported_parameters": ["reasoning"],
-      "provider_model_id": "gpt-5.6-sol",
-      "provenance": "bundled"
-    },
-    "gpt-5.6-sol": {
-      "id": "gpt-5.6-sol",
-      "context_window": 1050000,
-      "max_output": 128000,
-      "supports_reasoning": true,
-      "modalities": ["text", "image"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "gpt-5.6-terra": {
-      "id": "gpt-5.6-terra",
-      "context_window": 1050000,
-      "max_output": 128000,
-      "supports_reasoning": true,
-      "modalities": ["text", "image"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "gpt-5.6-luna": {
-      "id": "gpt-5.6-luna",
-      "context_window": 1050000,
-      "max_output": 128000,
-      "supports_reasoning": true,
-      "modalities": ["text", "image"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "muse-spark-1.1": {
-      "id": "muse-spark-1.1",
-      "context_window": 1000000,
-      "max_output": 32000,
-      "supports_reasoning": true,
-      "modalities": ["text", "image"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "muse-spark-1.2": {
-      "id": "muse-spark-1.2",
-      "context_window": 1000000,
-      "max_output": 32000,
-      "supports_reasoning": true,
-      "modalities": ["text", "image"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "muse-spark-1.2-contributor": {
-      "id": "muse-spark-1.2-contributor",
-      "context_window": 1000000,
-      "max_output": 32000,
-      "supports_reasoning": true,
-      "modalities": ["text", "image"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "kimi-k3": {
-      "id": "kimi-k3",
-      "context_window": 1048576,
-      "max_output": 131072,
-      "supports_reasoning": true,
-      "input_usd_per_million": 3.0,
-      "output_usd_per_million": 15.0,
-      "modalities": ["text", "image", "video"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "kimi-k2.7-code": {
-      "id": "kimi-k2.7-code",
-      "context_window": 262144,
-      "max_output": 32768,
-      "supports_reasoning": true,
-      "input_usd_per_million": 0.95,
-      "output_usd_per_million": 4.0,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "moonshotai/kimi-k2.7-code": {
-      "id": "moonshotai/kimi-k2.7-code",
-      "context_window": 262144,
-      "max_output": 32768,
-      "supports_reasoning": true,
-      "input_usd_per_million": 0.95,
-      "output_usd_per_million": 4.0,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "z-ai/glm-5.2": {
-      "id": "z-ai/glm-5.2",
-      "context_window": 1000000,
-      "max_output": 131072,
-      "supports_reasoning": true,
-      "input_usd_per_million": 1.4,
-      "output_usd_per_million": 4.4,
-      "modalities": ["text"],
-      "supported_parameters": [],
-      "provenance": "bundled"
-    },
-    "z-ai/glm-5.3": {
-      "id": "z-ai/glm-5.3",
-      "context_window": 1000000,
-      "max_output": 131072,
-      "supports_reasoning": true,
-      "modalities": ["text"],
-      "supported_parameters": [],
-      "provenance": "bundled"
-    },
-    "z-ai/glm-5.3-flash": {
-      "id": "z-ai/glm-5.3-flash",
-      "context_window": 1000000,
-      "max_output": 131072,
-      "supports_reasoning": true,
-      "input_usd_per_million": 0.15,
-      "output_usd_per_million": 0.5,
-      "modalities": ["text", "image", "video"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "glm-5.2": {
-      "id": "glm-5.2",
-      "context_window": 1000000,
-      "max_output": 131072,
-      "supports_reasoning": true,
-      "input_usd_per_million": 1.4,
-      "output_usd_per_million": 4.4,
-      "modalities": ["text"],
-      "supported_parameters": [],
-      "provenance": "bundled"
-    },
-    "glm-5.3": {
-      "id": "glm-5.3",
-      "context_window": 1000000,
-      "max_output": 131072,
-      "supports_reasoning": true,
-      "modalities": ["text"],
-      "supported_parameters": [],
-      "provenance": "bundled"
-    },
-    "glm-5.3-flash": {
-      "id": "glm-5.3-flash",
-      "context_window": 1000000,
-      "max_output": 131072,
-      "supports_reasoning": true,
-      "input_usd_per_million": 0.15,
-      "output_usd_per_million": 0.5,
-      "modalities": ["text", "image", "video"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "minimax/minimax-m3": {
-      "id": "minimax/minimax-m3",
-      "context_window": 1000000,
-      "max_output": 524288,
-      "supports_reasoning": true,
-      "modalities": ["text", "image"],
-      "supported_parameters": [],
-      "provenance": "bundled"
-    },
-    "minimax/minimax-m2.7": {
-      "id": "minimax/minimax-m2.7",
-      "context_window": 204800,
-      "max_output": 131072,
-      "supports_reasoning": true,
-      "input_usd_per_million": 0.3,
-      "output_usd_per_million": 1.2,
-      "modalities": ["text"],
-      "supported_parameters": [],
-      "provenance": "bundled"
-    },
-    "minimax-m2.7": {
-      "id": "minimax-m2.7",
-      "context_window": 204800,
-      "max_output": 131072,
-      "supports_reasoning": true,
-      "input_usd_per_million": 0.3,
-      "output_usd_per_million": 1.2,
-      "modalities": ["text"],
-      "supported_parameters": [],
-      "provenance": "bundled"
-    },
-    "qwen/qwen3.6-flash": {
-      "id": "qwen/qwen3.6-flash",
-      "context_window": 1000000,
-      "max_output": 65536,
-      "supports_reasoning": true,
-      "modalities": ["text"],
-      "supported_parameters": [],
-      "provenance": "bundled"
-    },
-    "trinity-large-thinking": {
-      "id": "trinity-large-thinking",
-      "context_window": 262144,
-      "max_output": 262144,
-      "supports_reasoning": true,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "trinity-mini": {
-      "id": "trinity-mini",
-      "context_window": 128000,
-      "supports_reasoning": true,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "claude-opus-4-8": {
-      "id": "claude-opus-4-8",
-      "context_window": 1000000,
-      "max_output": 128000,
-      "supports_reasoning": true,
-      "input_usd_per_million": 5.0,
-      "output_usd_per_million": 25.0,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "claude-opus-5": {
-      "id": "claude-opus-5",
-      "context_window": 1000000,
-      "max_output": 128000,
-      "supports_reasoning": true,
-      "input_usd_per_million": 5.0,
-      "output_usd_per_million": 25.0,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "claude-sonnet-5": {
-      "id": "claude-sonnet-5",
-      "context_window": 1000000,
-      "max_output": 128000,
-      "supports_reasoning": true,
-      "input_usd_per_million": 2.0,
-      "output_usd_per_million": 10.0,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
     "claude-fable-5": {
+      "context_window": 1000000,
       "id": "claude-fable-5",
-      "context_window": 1000000,
-      "max_output": 128000,
-      "supports_reasoning": true,
       "input_usd_per_million": 10.0,
-      "output_usd_per_million": 50.0,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
-    },
-    "claude-sonnet-4-6": {
-      "id": "claude-sonnet-4-6",
-      "context_window": 1000000,
       "max_output": 128000,
-      "supports_reasoning": true,
-      "input_usd_per_million": 3.0,
-      "output_usd_per_million": 15.0,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 50.0,
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
     },
     "claude-haiku-4-5": {
-      "id": "claude-haiku-4-5",
       "context_window": 200000,
-      "max_output": 64000,
-      "supports_reasoning": false,
+      "id": "claude-haiku-4-5",
       "input_usd_per_million": 1.0,
+      "max_output": 64000,
+      "modalities": [
+        "text"
+      ],
       "output_usd_per_million": 5.0,
-      "modalities": ["text"],
+      "provenance": "bundled",
       "supported_parameters": [],
-      "provenance": "bundled"
+      "supports_reasoning": false
     },
-    "step-3.7-flash": {
-      "id": "step-3.7-flash",
-      "context_window": 256000,
-      "max_output": 256000,
-      "supports_reasoning": false,
-      "input_usd_per_million": 0.2,
-      "output_usd_per_million": 1.15,
-      "modalities": ["text"],
-      "supported_parameters": [],
-      "provenance": "bundled"
-    },
-    "fugu-ultra-20260615": {
-      "id": "fugu-ultra-20260615",
+    "claude-opus-4-8": {
       "context_window": 1000000,
-      "max_output": 131000,
-      "supports_reasoning": true,
+      "id": "claude-opus-4-8",
       "input_usd_per_million": 5.0,
-      "output_usd_per_million": 30.0,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
+      "max_output": 128000,
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 25.0,
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "claude-opus-5": {
+      "context_window": 1000000,
+      "id": "claude-opus-5",
+      "input_usd_per_million": 5.0,
+      "max_output": 128000,
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 25.0,
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "claude-sonnet-4-6": {
+      "context_window": 1000000,
+      "id": "claude-sonnet-4-6",
+      "input_usd_per_million": 3.0,
+      "max_output": 128000,
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 15.0,
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "claude-sonnet-5": {
+      "context_window": 1000000,
+      "id": "claude-sonnet-5",
+      "input_usd_per_million": 2.0,
+      "max_output": 128000,
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 10.0,
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "deepseek-v4-flash": {
+      "context_window": 1000000,
+      "id": "deepseek-v4-flash",
+      "max_output": 384000,
+      "modalities": [
+        "text"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "deepseek-v4-flash-vision-exp": {
+      "context_window": 1000000,
+      "id": "deepseek-v4-flash-vision-exp",
+      "max_output": 384000,
+      "modalities": [
+        "text",
+        "image"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "deepseek-v4-pro": {
+      "context_window": 1000000,
+      "id": "deepseek-v4-pro",
+      "max_output": 384000,
+      "modalities": [
+        "text"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
     },
     "fugu-ultra": {
+      "context_window": 1000000,
       "id": "fugu-ultra",
-      "context_window": 1000000,
-      "max_output": 131000,
-      "supports_reasoning": true,
       "input_usd_per_million": 5.0,
+      "max_output": 131000,
+      "modalities": [
+        "text"
+      ],
       "output_usd_per_million": 30.0,
-      "modalities": ["text"],
-      "supported_parameters": ["reasoning"],
-      "provenance": "bundled"
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
     },
-    "mimo-v2.5-pro": {
-      "id": "mimo-v2.5-pro",
+    "fugu-ultra-20260615": {
       "context_window": 1000000,
-      "max_output": 131072,
-      "supports_reasoning": true,
-      "modalities": ["text", "image", "audio"],
-      "supported_parameters": [],
-      "provenance": "bundled"
+      "id": "fugu-ultra-20260615",
+      "input_usd_per_million": 5.0,
+      "max_output": 131000,
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 30.0,
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
     },
-    "mimo-v2.5-pro-ultraspeed": {
-      "id": "mimo-v2.5-pro-ultraspeed",
+    "glm-5.2": {
       "context_window": 1000000,
+      "id": "glm-5.2",
+      "input_usd_per_million": 1.4,
       "max_output": 131072,
-      "supports_reasoning": true,
-      "modalities": ["text"],
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 4.4,
+      "provenance": "bundled",
       "supported_parameters": [],
-      "provenance": "bundled"
+      "supports_reasoning": true
+    },
+    "glm-5.3": {
+      "context_window": 1000000,
+      "id": "glm-5.3",
+      "max_output": 131072,
+      "modalities": [
+        "text"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [],
+      "supports_reasoning": true
+    },
+    "glm-5.3-flash": {
+      "context_window": 1000000,
+      "id": "glm-5.3-flash",
+      "input_usd_per_million": 0.15,
+      "max_output": 131072,
+      "modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_usd_per_million": 0.5,
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "gpt-5-codex": {
+      "context_window": 400000,
+      "id": "gpt-5-codex",
+      "input_usd_per_million": 1.25,
+      "max_output": 128000,
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 10.0,
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "gpt-5.3-codex": {
+      "context_window": 400000,
+      "id": "gpt-5.3-codex",
+      "input_usd_per_million": 1.75,
+      "max_output": 128000,
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 14.0,
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "gpt-5.6": {
+      "context_window": 1050000,
+      "id": "gpt-5.6",
+      "max_output": 128000,
+      "modalities": [
+        "text",
+        "image"
+      ],
+      "provenance": "bundled",
+      "provider_model_id": "gpt-5.6-sol",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "gpt-5.6-luna": {
+      "context_window": 1050000,
+      "id": "gpt-5.6-luna",
+      "max_output": 128000,
+      "modalities": [
+        "text",
+        "image"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "gpt-5.6-sol": {
+      "context_window": 1050000,
+      "id": "gpt-5.6-sol",
+      "max_output": 128000,
+      "modalities": [
+        "text",
+        "image"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "gpt-5.6-terra": {
+      "context_window": 1050000,
+      "id": "gpt-5.6-terra",
+      "max_output": 128000,
+      "modalities": [
+        "text",
+        "image"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "kimi-k2.7-code": {
+      "context_window": 262144,
+      "id": "kimi-k2.7-code",
+      "input_usd_per_million": 0.95,
+      "max_output": 32768,
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 4.0,
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "kimi-k3": {
+      "context_window": 1048576,
+      "id": "kimi-k3",
+      "input_usd_per_million": 3.0,
+      "max_output": 131072,
+      "modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_usd_per_million": 15.0,
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
     },
     "mimo-v2.5": {
-      "id": "mimo-v2.5",
       "context_window": 1000000,
+      "id": "mimo-v2.5",
       "max_output": 131072,
-      "supports_reasoning": true,
-      "modalities": ["text", "image"],
+      "modalities": [
+        "text",
+        "image"
+      ],
+      "provenance": "bundled",
       "supported_parameters": [],
-      "provenance": "bundled"
+      "supports_reasoning": true
+    },
+    "mimo-v2.5-pro": {
+      "context_window": 1000000,
+      "id": "mimo-v2.5-pro",
+      "max_output": 131072,
+      "modalities": [
+        "text",
+        "image",
+        "audio"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [],
+      "supports_reasoning": true
+    },
+    "mimo-v2.5-pro-ultraspeed": {
+      "context_window": 1000000,
+      "id": "mimo-v2.5-pro-ultraspeed",
+      "max_output": 131072,
+      "modalities": [
+        "text"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [],
+      "supports_reasoning": true
+    },
+    "minimax-m2.7": {
+      "context_window": 204800,
+      "id": "minimax-m2.7",
+      "input_usd_per_million": 0.3,
+      "max_output": 131072,
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 1.2,
+      "provenance": "bundled",
+      "supported_parameters": [],
+      "supports_reasoning": true
+    },
+    "minimax/minimax-m2.7": {
+      "context_window": 204800,
+      "id": "minimax/minimax-m2.7",
+      "input_usd_per_million": 0.3,
+      "max_output": 131072,
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 1.2,
+      "provenance": "bundled",
+      "supported_parameters": [],
+      "supports_reasoning": true
+    },
+    "minimax/minimax-m3": {
+      "context_window": 1000000,
+      "id": "minimax/minimax-m3",
+      "max_output": 524288,
+      "modalities": [
+        "text",
+        "image"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [],
+      "supports_reasoning": true
+    },
+    "moonshotai/kimi-k2.7-code": {
+      "context_window": 262144,
+      "id": "moonshotai/kimi-k2.7-code",
+      "input_usd_per_million": 0.95,
+      "max_output": 32768,
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 4.0,
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "muse-spark-1.1": {
+      "context_window": 1000000,
+      "id": "muse-spark-1.1",
+      "max_output": 32000,
+      "modalities": [
+        "text",
+        "image"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "muse-spark-1.2": {
+      "context_window": 1000000,
+      "id": "muse-spark-1.2",
+      "max_output": 32000,
+      "modalities": [
+        "text",
+        "image"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "muse-spark-1.2-contributor": {
+      "context_window": 1000000,
+      "id": "muse-spark-1.2-contributor",
+      "max_output": 32000,
+      "modalities": [
+        "text",
+        "image"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "qwen/qwen3.6-flash": {
+      "context_window": 1000000,
+      "id": "qwen/qwen3.6-flash",
+      "max_output": 65536,
+      "modalities": [
+        "text"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [],
+      "supports_reasoning": true
+    },
+    "step-3.7-flash": {
+      "context_window": 256000,
+      "id": "step-3.7-flash",
+      "input_usd_per_million": 0.2,
+      "max_output": 256000,
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 1.15,
+      "provenance": "bundled",
+      "supported_parameters": [],
+      "supports_reasoning": false
+    },
+    "trinity-large-thinking": {
+      "context_window": 262144,
+      "id": "trinity-large-thinking",
+      "max_output": 262144,
+      "modalities": [
+        "text"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "trinity-mini": {
+      "context_window": 128000,
+      "id": "trinity-mini",
+      "modalities": [
+        "text"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
+    },
+    "z-ai/glm-5.2": {
+      "context_window": 1000000,
+      "id": "z-ai/glm-5.2",
+      "input_usd_per_million": 1.4,
+      "max_output": 131072,
+      "modalities": [
+        "text"
+      ],
+      "output_usd_per_million": 4.4,
+      "provenance": "bundled",
+      "supported_parameters": [],
+      "supports_reasoning": true
+    },
+    "z-ai/glm-5.3": {
+      "context_window": 1000000,
+      "id": "z-ai/glm-5.3",
+      "max_output": 131072,
+      "modalities": [
+        "text"
+      ],
+      "provenance": "bundled",
+      "supported_parameters": [],
+      "supports_reasoning": true
+    },
+    "z-ai/glm-5.3-flash": {
+      "context_window": 1000000,
+      "id": "z-ai/glm-5.3-flash",
+      "input_usd_per_million": 0.15,
+      "max_output": 131072,
+      "modalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "output_usd_per_million": 0.5,
+      "provenance": "bundled",
+      "supported_parameters": [
+        "reasoning"
+      ],
+      "supports_reasoning": true
     }
-  }
+  },
+  "fetched_at": "2026-07-06T00:00:00Z",
+  "schema_version": 1,
+  "source": "bundled",
+  "ttl_secs": 2592000
 }
