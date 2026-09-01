@@ -4996,6 +4996,23 @@ model = "openai/gpt-5.6-sol"
     let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
     assert_eq!(resolved.provider, ProviderKind::Concentrate);
     assert_eq!(resolved.base_url, DEFAULT_CONCENTRATE_BASE_URL);
+    let alias_table: ConfigToml = toml::from_str(
+        r#"
+provider = "concentrate"
+
+[providers.concentrateai]
+api_key = "concentrate-alias-table-key"
+model = "openai/gpt-5.6-sol"
+"#,
+    )
+    .expect("[providers.concentrateai] must deserialize onto the concentrate table");
+    let alias_resolved = alias_table.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(alias_resolved.provider, ProviderKind::Concentrate);
+    assert_eq!(
+        alias_resolved.api_key.as_deref(),
+        Some("concentrate-alias-table-key"),
+        "[providers.concentrateai] must not be silently ignored"
+    );
     assert_eq!(
         resolved.model, "openai/gpt-5.6-sol",
         "provider/model ids pass through verbatim"

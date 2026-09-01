@@ -473,7 +473,8 @@ pub struct ProvidersToml {
         default,
         skip_serializing_if = "ProviderConfigToml::is_empty",
         alias = "concentrate-ai",
-        alias = "concentrate_ai"
+        alias = "concentrate_ai",
+        alias = "concentrateai"
     )]
     pub concentrate: ProviderConfigToml,
     /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible endpoint).

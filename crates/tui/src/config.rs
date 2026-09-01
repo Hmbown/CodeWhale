@@ -3965,7 +3965,12 @@ pub struct ProvidersConfig {
     #[serde(default, alias = "eden-ai", alias = "eden_ai")]
     pub edenai: ProviderConfig,
     /// Concentrate — OpenAI Responses-compatible AI gateway (aggregator).
-    #[serde(default, alias = "concentrate-ai", alias = "concentrate_ai")]
+    #[serde(
+        default,
+        alias = "concentrate-ai",
+        alias = "concentrate_ai",
+        alias = "concentrateai"
+    )]
     pub concentrate: ProviderConfig,
     /// Alibaba Cloud Model Studio — Token Plan (OpenAI-compatible Chat Completions).
     #[serde(default, alias = "modelstudio-token-plan")]
@@ -8641,16 +8646,9 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
             .edenai
             .base_url = Some(value);
     }
-    if matches!(config.api_provider(), ApiProvider::Concentrate)
-        && let Ok(value) = std::env::var("CONCENTRATE_BASE_URL")
-        && !value.trim().is_empty()
-    {
-        config
-            .providers
-            .get_or_insert_with(ProvidersConfig::default)
-            .concentrate
-            .base_url = Some(value);
-    }
+    // Concentrate has no inline block here on purpose: CONCENTRATE_BASE_URL
+    // is already served by `provider_env_base_url_override`, which the route
+    // resolver consults — a second inline assignment was a duplicate.
     if matches!(
         config.api_provider(),
         ApiProvider::ModelstudioTokenPlan | ApiProvider::ModelstudioTokenPlanAnthropic

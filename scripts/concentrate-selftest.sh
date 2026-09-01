@@ -132,10 +132,10 @@ assert "done" in types, f"no done receipt in stream-json: {types}"
 text = "".join(e.get("text") or e.get("content") or "" for e in events if e.get("type") == "content")
 print("ok: POST /v1/responses once, Bearer header matched, model %r verbatim, stream:true, system item first, only documented fields" % expected_model)
 print("ok: completed-turn receipt types = %s" % types)
-if "ok from the concentrate stub" in text:
-    print("ok: reply text reached the CLI output")
-else:
-    print("note: reply text not found in `content` events (types above are the receipt); raw events kept for inspection")
+if "ok from the concentrate stub" not in text:
+    print("missing reply text in content events; types = %s; text = %r" % (types, text), file=sys.stderr)
+    sys.exit(1)
+print("ok: reply text reached the CLI output")
 PY
 
 # 5. Wrong key → documented 401 → non-zero exit.

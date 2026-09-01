@@ -1804,7 +1804,14 @@ fn wire_config_prefers_responses(wire: Option<&str>) -> bool {
 }
 
 fn api_provider_skips_models_probe(api_provider: ApiProvider) -> bool {
-    matches!(api_provider, ApiProvider::DeepseekAnthropic)
+    // Concentrate's `GET /v1/models` is explicitly unauthenticated
+    // (docs/PROVIDERS.md): a 2xx proves nothing about the key, so guided
+    // setup must not count it as verification — the key is observed on the
+    // first authenticated call instead.
+    matches!(
+        api_provider,
+        ApiProvider::DeepseekAnthropic | ApiProvider::Concentrate
+    )
 }
 
 #[must_use]
@@ -1864,10 +1871,8 @@ pub async fn verify_provider_api_key(
         // malformed; in that case failure-preserving catalog semantics keep the
         // existing/static rows.
         let body = response.text().await.unwrap_or_default();
-        if matches!(
-            provider,
-            ApiProvider::Telecomjs | ApiProvider::Edenai | ApiProvider::Concentrate
-        ) && let Some(kind) = provider.kind()
+        if matches!(provider, ApiProvider::Telecomjs | ApiProvider::Edenai)
+            && let Some(kind) = provider.kind()
             && let Ok(offerings) = named_gateway_catalog_offerings_from_body(
                 &body,
                 kind,
@@ -6543,6 +6548,25 @@ mod tests {
                 "HTTP {status}: {message}"
             );
         }
+    }
+
+    /// Concentrate's `GET /v1/models` is unauthenticated, so a 2xx must not
+    /// count as key verification. Guided setup treats the probe as unobserved;
+    /// health_check must not issue the request either.
+    #[tokio::test]
+    async fn concentrate_health_check_does_not_treat_unauthenticated_models_as_key_proof() {
+        let server = MockServer::start().await;
+        let client = concentrate_client(&server, DEFAULT_CONCENTRATE_MODEL);
+
+        assert!(client.health_check().await.expect("health check"));
+        assert!(!provider_api_key_verification_is_observed(
+            ApiProvider::Concentrate
+        ));
+        let requests = server.received_requests().await.expect("recorded requests");
+        assert!(
+            requests.is_empty(),
+            "Concentrate must not treat unauthenticated GET /v1/models as key verification"
+        );
     }
 
     /// `GET /v1/models` needs no key and answers the OpenAI list shape; rows
