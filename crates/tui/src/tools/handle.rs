@@ -228,7 +228,6 @@ impl HandleStore {
             }
         }
     }
-
 }
 
 pub struct HandleReadTool;
