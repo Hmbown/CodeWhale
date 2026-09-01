@@ -5700,7 +5700,10 @@ impl Engine {
         }
         self.commit_compaction_checkpoint(summary_prompt);
 
-        let trimmed = self.trim_oldest_messages_to_budget(target_budget);
+        // Trim with hysteresis: landing exactly on the input budget leaves the
+        // session a few hundred tokens under the preflight line, so the next
+        // step's output re-crosses it and recovery runs again.
+        let trimmed = self.trim_oldest_messages_to_budget(emergency_trim_budget(target_budget));
         self.emit_session_updated().await;
         let after_tokens = self.estimated_input_tokens();
         let after_count = self.session.messages.len();
@@ -5731,10 +5734,24 @@ impl Engine {
             return true;
         }
 
-        let message = format!(
-            "Emergency context compaction failed to reduce request below model limit \
-             (estimate ~{after_tokens} tokens, budget ~{target_budget})."
-        );
+        // Two distinct failures were previously conflated into one banner.
+        // When the provider rejected the request (its bill counts framing we
+        // cannot see), our estimate may already sit within the budget while
+        // the pass removed nothing — reporting that as "failed to reduce
+        // below model limit" with an estimate printed *under* the budget
+        // reads as self-contradictory. Name the actual outcome instead.
+        let message = if after_tokens > target_budget {
+            format!(
+                "Emergency context compaction failed to reduce request below model limit \
+                 (estimate ~{after_tokens} tokens, budget ~{target_budget})."
+            )
+        } else {
+            format!(
+                "Emergency context compaction made no progress (estimate ~{after_tokens} tokens \
+                 is already within the ~{target_budget} budget; the provider may count the \
+                 request differently). Run /compact or /clear."
+            )
+        };
         self.emit_compaction_failed(id.clone(), true, message.clone())
             .await;
         let _ = self.tx_event.send(Event::status(message)).await;
@@ -7580,8 +7597,9 @@ pub use context::context_input_budget_for_route;
 use context::route_context_budget_for_provider;
 use context::{
     MAX_CONTEXT_RECOVERY_ATTEMPTS, MIN_RECENT_MESSAGES_TO_KEEP,
-    effective_max_output_tokens_for_route, extract_compaction_summary_prompt,
-    is_context_length_error_message, route_context_budget_for_route, summarize_text,
+    effective_max_output_tokens_for_route, emergency_trim_budget,
+    extract_compaction_summary_prompt, is_context_length_error_message,
+    route_context_budget_for_route, summarize_text,
 };
 #[cfg(test)]
 use context::{context_input_budget_for_provider, effective_max_output_tokens};
