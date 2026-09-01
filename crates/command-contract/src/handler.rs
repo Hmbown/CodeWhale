@@ -6,8 +6,9 @@
 
 use crate::facets::{
     CommandCostContext, CommandMediaContext, CommandModePolicyContext, CommandModelContext,
-    CommandPresentationContext, CommandProjectContext, CommandSessionContext, CommandSkillsContext,
-    CommandSystemPromptContext, CommandWorkspaceContext,
+    CommandPresentationContext, CommandProjectContext, CommandSessionContext,
+    CommandSkillGroupContext, CommandSkillsContext, CommandSystemPromptContext,
+    CommandWorkspaceContext,
 };
 /// A command handler that is either argument-only or capability-scoped.
 #[derive(Clone, Copy)]
@@ -28,6 +29,7 @@ pub struct CommandContexts<'a> {
     presentation: Option<&'a mut dyn CommandPresentationContext>,
     media: Option<&'a mut dyn CommandMediaContext>,
     project: Option<&'a mut dyn CommandProjectContext>,
+    skill_group: Option<&'a mut dyn CommandSkillGroupContext>,
 }
 
 /// Consumed envelope used when one handler needs several independent facets.
@@ -42,6 +44,7 @@ pub struct ContextParts<'a> {
     pub presentation: Option<&'a mut dyn CommandPresentationContext>,
     pub media: Option<&'a mut dyn CommandMediaContext>,
     pub project: Option<&'a mut dyn CommandProjectContext>,
+    pub skill_group: Option<&'a mut dyn CommandSkillGroupContext>,
 }
 
 impl<'a> CommandContexts<'a> {
@@ -57,6 +60,7 @@ impl<'a> CommandContexts<'a> {
             presentation: None,
             media: None,
             project: None,
+            skill_group: None,
         }
     }
 
@@ -72,6 +76,7 @@ impl<'a> CommandContexts<'a> {
             presentation: self.presentation,
             media: self.media,
             project: self.project,
+            skill_group: self.skill_group,
         }
     }
 
@@ -148,6 +153,14 @@ impl<'a> CommandContexts<'a> {
         assert!(
             self.project.replace(value).is_none(),
             "project facet already set"
+        );
+        self
+    }
+
+    pub fn with_skill_group(mut self, value: &'a mut dyn CommandSkillGroupContext) -> Self {
+        assert!(
+            self.skill_group.replace(value).is_none(),
+            "skill_group facet already set"
         );
         self
     }

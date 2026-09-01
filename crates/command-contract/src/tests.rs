@@ -498,3 +498,439 @@ fn envelope_rejects_duplicate_project_slot_deterministically() {
     }));
     assert!(result.is_err(), "duplicate project slot must assert");
 }
+
+// ---------------------------------------------------------------------------
+// FEAT-022: skill-group facet (CommandSkillGroupContext)
+// ---------------------------------------------------------------------------
+
+struct FakeSkillGroup {
+    projection: SkillRegistryProjection,
+    activation_result: Result<SkillActivationOutcome, SkillActivationError>,
+    receipt: SkillMutationReceipt,
+    remote: Result<RemoteRegistryOutcome, String>,
+    sync: Result<SkillSyncOutcome, String>,
+    review: Result<ReviewOutcome, String>,
+    snapshots: Vec<SnapshotEntry>,
+    restore_ok: bool,
+    approval: CommandApprovalState,
+}
+
+impl FakeSkillGroup {
+    fn new() -> Self {
+        Self {
+            projection: SkillRegistryProjection {
+                workspace: "/ws".into(),
+                skills_dir: "/ws/.codewhale/skills".into(),
+                mode_label: "compatible".into(),
+                dirs: vec!["/ws/.codewhale/skills".into()],
+                entries: vec![SkillEntry {
+                    name: "demo".into(),
+                    description: "Demo skill".into(),
+                    source: SkillSourceKind::Native,
+                    path: Some("/ws/.codewhale/skills/demo/SKILL.md".into()),
+                    bundled_tier: None,
+                }],
+                warnings: vec!["one warning".into()],
+                total: 1,
+            },
+            activation_result: Ok(SkillActivationOutcome {
+                name: "demo".into(),
+                description: "Demo skill".into(),
+            }),
+            receipt: SkillMutationReceipt {
+                name: "demo".into(),
+                safe_target_path: "/ws/.codewhale/skills/demo".into(),
+                outcome: SkillMutationOutcome::Installed,
+            },
+            remote: Ok(RemoteRegistryOutcome::Loaded {
+                entries: vec![RemoteSkillEntry {
+                    name: "demo".into(),
+                    description: Some("Remote demo".into()),
+                    source: "github.com/acme/skills".into(),
+                }],
+            }),
+            sync: Ok(SkillSyncOutcome {
+                total: 1,
+                downloaded: 1,
+                fresh: 0,
+                failed: 0,
+                entries: vec![SkillSyncEntry::Downloaded {
+                    name: "demo".into(),
+                    path: "/cache/demo".into(),
+                }],
+            }),
+            review: Ok(ReviewOutcome::Ready {
+                name: "review".into(),
+                description: "Review skill".into(),
+                body: "Review the code".into(),
+                warnings: vec![],
+            }),
+            snapshots: vec![SnapshotEntry {
+                id: "abcdef123456".into(),
+                label: "pre-turn:1".into(),
+                timestamp: 1_700_000_000,
+            }],
+            restore_ok: true,
+            approval: CommandApprovalState {
+                yolo: true,
+                trust_mode: false,
+            },
+        }
+    }
+}
+
+impl CommandSkillGroupContext for FakeSkillGroup {
+    fn skill_registry_projection(&self) -> SkillRegistryProjection {
+        self.projection.clone()
+    }
+
+    fn activate_skill(
+        &mut self,
+        _name: &str,
+    ) -> Result<SkillActivationOutcome, SkillActivationError> {
+        self.activation_result.clone()
+    }
+
+    fn install_skill(
+        &mut self,
+        _scope: Option<SkillTargetScope>,
+        _spec: &str,
+    ) -> Result<SkillMutationReceipt, String> {
+        Ok(self.receipt.clone())
+    }
+
+    fn update_skill(
+        &mut self,
+        _scope: Option<SkillTargetScope>,
+        _name: &str,
+    ) -> Result<SkillMutationReceipt, String> {
+        Ok(self.receipt.clone())
+    }
+
+    fn uninstall_skill(
+        &mut self,
+        _scope: Option<SkillTargetScope>,
+        _name: &str,
+    ) -> Result<SkillMutationReceipt, String> {
+        Ok(self.receipt.clone())
+    }
+
+    fn trust_skill(
+        &mut self,
+        _scope: Option<SkillTargetScope>,
+        _name: &str,
+    ) -> Result<SkillMutationReceipt, String> {
+        Ok(self.receipt.clone())
+    }
+
+    fn fetch_remote_registry(&mut self) -> Result<RemoteRegistryOutcome, String> {
+        self.remote.clone()
+    }
+
+    fn recommend_skills(&mut self, task: &str) -> Result<Vec<SkillRecommendation>, String> {
+        Ok(vec![SkillRecommendation {
+            name: format!("rec-{task}"),
+            description: Some("Recommended".into()),
+            matched_terms: vec!["term".into()],
+        }])
+    }
+
+    fn sync_registry(&mut self) -> Result<SkillSyncOutcome, String> {
+        self.sync.clone()
+    }
+
+    fn run_review(&mut self, _target: &str) -> Result<ReviewOutcome, String> {
+        self.review.clone()
+    }
+
+    fn snapshot_list(&mut self, _limit: usize) -> Result<Vec<SnapshotEntry>, String> {
+        Ok(self.snapshots.clone())
+    }
+
+    fn restore_snapshot(&mut self, _id: &str) -> Result<(), String> {
+        if self.restore_ok {
+            Ok(())
+        } else {
+            Err("Restore failed: boom".into())
+        }
+    }
+
+    fn approval_state(&self) -> CommandApprovalState {
+        self.approval
+    }
+}
+
+#[test]
+fn skill_group_facet_is_object_safe_and_typed() {
+    fn project(_: &dyn CommandSkillGroupContext) {}
+    project(&FakeSkillGroup::new());
+
+    let group = FakeSkillGroup::new();
+    let projection = group.skill_registry_projection();
+    assert_eq!(projection.total, 1);
+    assert_eq!(projection.entries[0].name, "demo");
+    assert!(group.approval_state().yolo);
+}
+
+#[test]
+fn skill_registry_projection_preserves_semantic_values() {
+    let group = FakeSkillGroup::new();
+    let projection = group.skill_registry_projection();
+    assert_eq!(projection.workspace, "/ws");
+    assert_eq!(projection.skills_dir, "/ws/.codewhale/skills");
+    assert_eq!(projection.mode_label, "compatible");
+    assert_eq!(projection.dirs, vec!["/ws/.codewhale/skills"]);
+    assert_eq!(projection.warnings, vec!["one warning"]);
+    assert_eq!(projection.entries.len(), 1);
+    let entry = &projection.entries[0];
+    assert_eq!(entry.name, "demo");
+    assert_eq!(entry.description, "Demo skill");
+    assert_eq!(entry.source, SkillSourceKind::Native);
+    assert_eq!(
+        entry.path.as_deref(),
+        Some("/ws/.codewhale/skills/demo/SKILL.md")
+    );
+    assert_eq!(entry.bundled_tier, None);
+}
+
+#[test]
+fn skill_bundled_tier_headings_are_stable() {
+    assert_eq!(SkillBundledTier::CoreAgentic.heading(), "Core agentic");
+    assert_eq!(
+        SkillBundledTier::FormatTooling.heading(),
+        "Format & tooling"
+    );
+}
+
+#[test]
+fn skill_mutation_receipt_preserves_outcome_variants() {
+    let installed = FakeSkillGroup::new().receipt;
+    assert_eq!(installed.name, "demo");
+    assert_eq!(installed.outcome, SkillMutationOutcome::Installed);
+
+    let denied = SkillMutationReceipt {
+        outcome: SkillMutationOutcome::NetworkDenied("acme.com".into()),
+        ..installed.clone()
+    };
+    assert_eq!(
+        denied.outcome,
+        SkillMutationOutcome::NetworkDenied("acme.com".into())
+    );
+
+    let approval = SkillMutationReceipt {
+        outcome: SkillMutationOutcome::NeedsApproval("acme.com".into()),
+        ..installed.clone()
+    };
+    assert_eq!(
+        approval.outcome,
+        SkillMutationOutcome::NeedsApproval("acme.com".into())
+    );
+
+    assert_ne!(installed.outcome, denied.outcome);
+    assert_ne!(installed.outcome, approval.outcome);
+    assert_ne!(denied.outcome, approval.outcome);
+}
+
+#[test]
+fn skill_source_kind_variants_are_distinguishable() {
+    let native = SkillSourceKind::Native;
+    let plugin = SkillSourceKind::Plugin {
+        plugin_name: "acme".into(),
+        plugin_id: "acme-1".into(),
+    };
+    assert_ne!(native, plugin);
+    assert_eq!(
+        plugin,
+        SkillSourceKind::Plugin {
+            plugin_name: "acme".into(),
+            plugin_id: "acme-1".into(),
+        }
+    );
+}
+
+#[test]
+fn remote_registry_outcome_variants_are_distinguishable() {
+    let loaded = RemoteRegistryOutcome::Loaded {
+        entries: vec![RemoteSkillEntry {
+            name: "demo".into(),
+            description: None,
+            source: "acme".into(),
+        }],
+    };
+    let approval = RemoteRegistryOutcome::NeedsApproval("acme.com".into());
+    let denied = RemoteRegistryOutcome::Denied("acme.com".into());
+    assert_ne!(loaded, approval);
+    assert_ne!(loaded, denied);
+    assert_ne!(approval, denied);
+}
+
+#[test]
+fn skill_sync_outcome_preserves_all_entry_variants() {
+    let outcome = SkillSyncOutcome {
+        total: 4,
+        downloaded: 1,
+        fresh: 1,
+        failed: 2,
+        entries: vec![
+            SkillSyncEntry::Downloaded {
+                name: "a".into(),
+                path: "/cache/a".into(),
+            },
+            SkillSyncEntry::Fresh { name: "b".into() },
+            SkillSyncEntry::Failed {
+                name: "c".into(),
+                reason: "boom".into(),
+            },
+            SkillSyncEntry::Denied {
+                name: "d".into(),
+                host: "acme.com".into(),
+            },
+            SkillSyncEntry::NeedsApproval {
+                name: "e".into(),
+                host: "acme.com".into(),
+            },
+        ],
+    };
+    assert_eq!(outcome.total, 4);
+    assert_eq!(outcome.downloaded, 1);
+    assert_eq!(outcome.fresh, 1);
+    assert_eq!(outcome.failed, 2);
+    assert_eq!(outcome.entries.len(), 5);
+    assert!(matches!(
+        outcome.entries[0],
+        SkillSyncEntry::Downloaded { .. }
+    ));
+    assert!(matches!(outcome.entries[1], SkillSyncEntry::Fresh { .. }));
+    assert!(matches!(outcome.entries[2], SkillSyncEntry::Failed { .. }));
+    assert!(matches!(outcome.entries[3], SkillSyncEntry::Denied { .. }));
+    assert!(matches!(
+        outcome.entries[4],
+        SkillSyncEntry::NeedsApproval { .. }
+    ));
+}
+
+#[test]
+fn skill_activation_error_variants_are_distinguishable() {
+    let mut group = FakeSkillGroup::new();
+    group.activation_result = Err(SkillActivationError::NotFound {
+        requested: "missing".into(),
+        available: vec!["demo".into()],
+        warnings: vec![],
+    });
+    let not_found = group.activate_skill("missing").unwrap_err();
+    match &not_found {
+        SkillActivationError::NotFound {
+            requested,
+            available,
+            ..
+        } => {
+            assert_eq!(requested, "missing");
+            assert_eq!(available, &vec!["demo".to_string()]);
+        }
+        _ => panic!("expected NotFound"),
+    }
+
+    let mut group = FakeSkillGroup::new();
+    group.activation_result = Err(SkillActivationError::PluginRejected {
+        name: "plug".into(),
+        reason: "authority revoked".into(),
+    });
+    let rejected = group.activate_skill("plug").unwrap_err();
+    match rejected {
+        SkillActivationError::PluginRejected { name, reason } => {
+            assert_eq!(name, "plug");
+            assert_eq!(reason, "authority revoked");
+        }
+        _ => panic!("expected PluginRejected"),
+    }
+}
+
+#[test]
+fn review_outcome_variants_are_distinguishable() {
+    let mut group = FakeSkillGroup::new();
+    group.review = Ok(ReviewOutcome::NotFound {
+        skills_dir: "/ws/skills".into(),
+        global_dir: "/home/u/.codewhale/skills".into(),
+        warnings: vec!["w".into()],
+    });
+    let outcome = group.run_review("x.rs").unwrap();
+    match outcome {
+        ReviewOutcome::NotFound {
+            skills_dir,
+            global_dir,
+            warnings,
+        } => {
+            assert_eq!(skills_dir, "/ws/skills");
+            assert_eq!(global_dir, "/home/u/.codewhale/skills");
+            assert_eq!(warnings, vec!["w".to_string()]);
+        }
+        _ => panic!("expected NotFound"),
+    }
+}
+
+#[test]
+fn snapshot_and_approval_values_preserve_semantics() {
+    let mut group = FakeSkillGroup::new();
+    let snapshots = group.snapshot_list(20).unwrap();
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].id, "abcdef123456");
+    assert_eq!(snapshots[0].label, "pre-turn:1");
+    assert_eq!(snapshots[0].timestamp, 1_700_000_000);
+
+    let approval = group.approval_state();
+    assert!(approval.yolo);
+    assert!(!approval.trust_mode);
+}
+
+#[test]
+fn skill_group_facet_transports_through_envelope_when_declared() {
+    let mut group = FakeSkillGroup::new();
+    let parts = CommandContexts::empty()
+        .with_skill_group(&mut group)
+        .into_parts();
+    assert!(parts.skill_group.is_some());
+    assert!(parts.session.is_none());
+    assert!(parts.project.is_none());
+
+    // skill_group combined with the shared SKILLS facet (D4: /skill, /review).
+    let mut skills = Skills;
+    let parts = CommandContexts::empty()
+        .with_skill_group(&mut group)
+        .with_skills(&mut skills)
+        .into_parts();
+    assert!(parts.skill_group.is_some());
+    assert!(parts.skills.is_some());
+    assert!(parts.workspace.is_none());
+}
+
+#[test]
+fn envelope_rejects_duplicate_skill_group_slot_deterministically() {
+    let mut a = FakeSkillGroup::new();
+    let mut b = FakeSkillGroup::new();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CommandContexts::empty()
+            .with_skill_group(&mut a)
+            .with_skill_group(&mut b);
+    }));
+    assert!(result.is_err(), "duplicate skill_group slot must assert");
+}
+
+/// Regression: the shared FEAT-015 `CommandSkillsContext` surface is unchanged
+/// (getters + cache refresh only, no setter) and still transports through the
+/// envelope alongside the new skill-group facet (D2).
+#[test]
+fn shared_skills_facet_surface_remains_read_only_and_transportable() {
+    let mut skills = Skills;
+    let active = skills.active_skill();
+    assert_eq!(active, None);
+    assert_eq!(skills.active_skill_provenance(), None);
+    skills.refresh_skill_cache();
+
+    let mut group = FakeSkillGroup::new();
+    let parts = CommandContexts::empty()
+        .with_skills(&mut skills)
+        .with_skill_group(&mut group)
+        .into_parts();
+    assert!(parts.skills.is_some());
+    assert!(parts.skill_group.is_some());
+}
