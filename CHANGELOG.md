@@ -9,8 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Remote-control recovery gives every fresh pre-dispatch attempt a new lease
+  generation while preserving that generation across its typed start (#5605).
+
 - Public roster language is Pod. `/pod` is the customer surface; fleet remains
   the internal wire, storage, and migration name (#5776).
+
+- Provider catalogs: compatible hosts (Baseten, Groq, Cerebras, SenseNova,
+  Command Code) no longer compile a frozen model roster. Descriptors name the
+  wire, URL, and env; live `GET /v1/models` and a Codewhale-owned catalog
+  layer are the offering list. Command Code is a catalog/descriptor row, not
+  a `ProviderKind`. Catalog presence is not an availability, entitlement, or
+  provider-acceptance claim (#5783).
 
 - Provider selection no longer probes or adopts an external CLI credential on
   ordinary picker use. Reuse requires an explicit "Use external CLI credentials"
@@ -34,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record from the first turn instead of a reset one. Host-managed engines never
   self-continue: the host settles each completed turn and arms the next pass
   after the configured quiet period while the goal is still active (#5711).
+- Internal: `codewhale-config` gains `RouteAuthoritySnapshot`, one immutable
+  authority that owns a compiled provider catalog together with the route
+  resolver projected from it, so a picker, a readiness view, and an execution
+  path can no longer resolve against different catalog snapshots without a
+  type-level signal. Resolution still goes through the sole resolver; the
+  returned receipt distinguishes an exact catalog row, a custom-endpoint route
+  whose provider facts are deliberately not reused, and an allowed
+  pass-through route with no catalog row. All state is secret-free. No call
+  site changed and no user-visible behaviour changed yet (#5766).
 
 - Computer session records now count only time a provider actually accepted the
   session as active, at per-second granularity. Idle, queued, stopped, and

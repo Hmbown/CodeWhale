@@ -1726,6 +1726,19 @@ pub fn run_cli() -> std::process::ExitCode {
             for cause in err.chain().skip(1) {
                 eprintln!("  caused by: {cause}");
             }
+            // A Codewhale account failure carries a class: CI logs must be
+            // able to tell a bad credential from an unconfigured agent model
+            // without parsing English, and the machine-readable code beside
+            // it names the control-plane branch that was taken.
+            if let Some(machine) = err.downcast_ref::<cloud::machine::MachineError>() {
+                eprintln!(
+                    "  codewhale: code={} status={}",
+                    machine.code, machine.status
+                );
+                if let Ok(code) = u8::try_from(machine.exit_code) {
+                    return std::process::ExitCode::from(code);
+                }
+            }
             std::process::ExitCode::FAILURE
         }
     }
@@ -1910,7 +1923,17 @@ fn run() -> Result<()> {
         }
         Some(Commands::Lane(args)) => run_lane_command(args),
         Some(Commands::Review(args)) => {
-            let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &runtime_overrides);
+            // CI path: a machine token authenticates as the account with no
+            // local session and no browser. The account's own configured
+            // provider then disambiguates a model that maps to several
+            // configured routes, which review otherwise hard-errors on.
+            let mut overrides = runtime_overrides.clone();
+            if overrides.provider.is_none()
+                && let Some(provider) = cloud::machine_review_provider()?
+            {
+                overrides.provider = Some(provider);
+            }
+            let resolved_runtime = resolve_runtime_for_dispatch(&mut store, &overrides);
             run_tui_in_process(&cli, &resolved_runtime, tui_args("review", args))
         }
         Some(Commands::Apply(args)) => {
@@ -3444,14 +3467,23 @@ fn auth_list_lines_with_runtime(
     let mut lines = Vec::new();
     lines.push("provider     config store env  route".to_string());
     for provider in ProviderKind::ALL {
-        let slot = provider_slot(provider);
+        // Label the row by the provider, not by its credential slot. This
+        // table has one row per ProviderKind, but several kinds share a slot
+        // (ProviderKind::secret_store_slot): SiliconflowCN shares
+        // `siliconflow`, and the four Model Studio variants share
+        // `modelstudio-token-plan`. Labelling by slot printed `siliconflow`
+        // twice and `modelstudio-token-plan` four times, so the reader could
+        // not tell which row was which provider. The status columns still
+        // read the shared slot, which is what makes one saved key light up
+        // the whole family.
+        let label = provider.as_str();
         if provider == ProviderKind::Xai {
             let diagnostics = xai_auth_diagnostics(store, runtime_overrides);
             let api_key = diagnostics
                 .evaluates_runtime_api_key()
                 .then(|| xai_runtime_api_key(store, secrets, runtime_overrides));
             lines.push(format!(
-                "{slot:<12}  {}     {}      {}   {}",
+                "{label:<12}  {}     {}      {}   {}",
                 xai_list_storage_status(api_key.as_ref(), RuntimeApiKeySource::ConfigFile),
                 xai_list_storage_status(api_key.as_ref(), RuntimeApiKeySource::Keyring),
                 xai_list_storage_status(api_key.as_ref(), RuntimeApiKeySource::Env),
@@ -3484,7 +3516,7 @@ fn auth_list_lines_with_runtime(
             "missing"
         };
         lines.push(format!(
-            "{slot:<12}  {}     {}      {}   {active}",
+            "{label:<12}  {}     {}      {}   {active}",
             yes_no(file),
             keyring_status_short(keyring),
             yes_no(env)
@@ -8339,6 +8371,42 @@ verbosity = "project-imported"
             .unwrap_or_else(|| panic!("missing openai-codex row:\n{output}"));
         assert!(row.ends_with("external-consent"), "{row}");
         assert!(!output.contains("secret-token"));
+    }
+
+    #[test]
+    fn auth_list_labels_each_row_by_its_own_provider() {
+        // ProviderKind::secret_store_slot collapses families onto one durable
+        // slot -- SiliconflowCN onto `siliconflow`, the four Model Studio
+        // variants onto `modelstudio-token-plan` -- but this table has one row
+        // per kind. Labelling rows by slot printed `siliconflow` twice and
+        // `modelstudio-token-plan` four times, so a reader could not tell which
+        // row belonged to which provider.
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let store =
+            ConfigStore::load(Some(dir.path().join("config.toml"))).expect("store should load");
+        let secrets = Secrets::new(std::sync::Arc::new(
+            codewhale_secrets::InMemoryKeyringStore::new(),
+        ));
+
+        let lines = auth_list_lines(&store, &secrets);
+        let labels: Vec<&str> = lines
+            .iter()
+            .skip(1)
+            .filter_map(|line| line.split_whitespace().next())
+            .collect();
+
+        assert_eq!(
+            labels.len(),
+            ProviderKind::ALL.len(),
+            "one row per provider kind: {labels:?}"
+        );
+        let unique: std::collections::BTreeSet<&&str> = labels.iter().collect();
+        assert_eq!(
+            unique.len(),
+            labels.len(),
+            "every row must name its own provider, not a shared slot: {labels:?}"
+        );
     }
 
     #[test]

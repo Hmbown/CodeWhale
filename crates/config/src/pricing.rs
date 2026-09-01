@@ -53,6 +53,8 @@ pub enum PricingProvenance {
     UserOverride,
     /// No sourced price.
     Unknown,
+    /// From the Codewhale-owned signed/bundled catalog.
+    CodewhaleCatalog,
 }
 
 impl PricingProvenance {
@@ -65,6 +67,7 @@ impl PricingProvenance {
             Self::ProviderDocs => "provider_docs",
             Self::UserOverride => "user_override",
             Self::Unknown => "unknown",
+            Self::CodewhaleCatalog => "codewhale_catalog",
         }
     }
 
@@ -79,7 +82,10 @@ impl PricingProvenance {
     pub fn is_authoritative_without_freshness_check(&self) -> bool {
         matches!(
             self,
-            Self::ModelsDevBundled | Self::ProviderDocs | Self::UserOverride
+            Self::ModelsDevBundled
+                | Self::ProviderDocs
+                | Self::UserOverride
+                | Self::CodewhaleCatalog
         )
     }
 }
@@ -505,17 +511,21 @@ fn provenance_from_source(source: &CatalogSource) -> PricingProvenance {
         CatalogSource::ConfigOverride | CatalogSource::UserOverride => {
             PricingProvenance::UserOverride
         }
+        CatalogSource::CodewhaleBundled { .. } | CatalogSource::CodewhaleLive { .. } => {
+            PricingProvenance::CodewhaleCatalog
+        }
     }
 }
 
 fn effective_at_from_source(source: &CatalogSource) -> Option<u64> {
     match source {
-        CatalogSource::Live { fetched_at, .. } | CatalogSource::ModelsDevLive { fetched_at } => {
-            Some(*fetched_at)
-        }
-        CatalogSource::Bundled | CatalogSource::ConfigOverride | CatalogSource::UserOverride => {
-            None
-        }
+        CatalogSource::Live { fetched_at, .. }
+        | CatalogSource::ModelsDevLive { fetched_at }
+        | CatalogSource::CodewhaleLive { fetched_at, .. } => Some(*fetched_at),
+        CatalogSource::Bundled
+        | CatalogSource::ConfigOverride
+        | CatalogSource::UserOverride
+        | CatalogSource::CodewhaleBundled { .. } => None,
     }
 }
 
@@ -528,7 +538,9 @@ fn endpoint_fingerprint_from_source(source: &CatalogSource) -> Option<String> {
         CatalogSource::Bundled
         | CatalogSource::ModelsDevLive { .. }
         | CatalogSource::ConfigOverride
-        | CatalogSource::UserOverride => None,
+        | CatalogSource::UserOverride
+        | CatalogSource::CodewhaleBundled { .. }
+        | CatalogSource::CodewhaleLive { .. } => None,
     }
 }
 

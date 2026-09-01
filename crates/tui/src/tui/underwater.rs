@@ -6,6 +6,7 @@
 //! one place prevents the default UI from drifting back into a header +
 //! sidebar + dashboard + footer composition with four owners for one fact.
 
+use crate::tui::mark::MarkSize;
 use std::borrow::Cow;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -3008,6 +3009,16 @@ use crate::palette::UiTheme;
 /// Static wave rule between the hero and the quick actions (spec §5b). Dim,
 /// never animated — decoration is opt-in and this is not decoration that
 /// carries state.
+/// How long the hero mark takes to surface.
+const MARK_SURFACE_MS: u128 = 640;
+
+/// Rows the hero owes its type block: heading + subtitle. The mark is only
+/// drawn when it fits *above* these, so the words never lose to the picture.
+const HERO_TEXT_ROWS: u16 = 2;
+/// One blank row between the mark and the heading. Without it the fluke's
+/// stem and the cap-height of the heading collide into one shape.
+const HERO_MARK_GAP: u16 = 1;
+
 const WAVE_RULE: &str = "⋯ ∼∼∼ ⋯";
 
 /// One QUICK ACTIONS row: icon · label · description · command + `›`.
@@ -3131,6 +3142,12 @@ pub struct TidelineStartup<'a> {
     pub composer: LaunchComposerDisplay<'a>,
     /// ASCII-safe / NO_COLOR mode: every glyph through `ascii_fallback`.
     pub ascii_safe: bool,
+    /// How far the hero mark has surfaced, in `[0,1]`. Injected rather than
+    /// read from a clock in here so golden buffers stay deterministic and so
+    /// the reduced-motion path is the *same* drawing at its endpoint rather
+    /// than a second, drift-prone still frame. Callers pass `1.0` for a
+    /// settled mark.
+    pub surface_progress: f32,
 }
 
 impl<'a> TidelineStartup<'a> {
@@ -3147,7 +3164,15 @@ impl<'a> TidelineStartup<'a> {
             status_line: None,
             composer: LaunchComposerDisplay::default(),
             ascii_safe: false,
+            surface_progress: 1.0,
         }
+    }
+
+    /// Set the hero mark's surface progress (`0.0` submerged → `1.0` settled).
+    #[must_use]
+    pub fn surface_progress(mut self, progress: f32) -> Self {
+        self.surface_progress = progress.clamp(0.0, 1.0);
+        self
     }
 
     #[must_use]
@@ -3236,8 +3261,6 @@ struct StartupLayout {
     dock: Rect,
     /// Row within `quick` where the first action row paints.
     quick_rows_start: u16,
-    /// Row within `hero` where the centered hero block starts.
-    hero_top: u16,
     /// Row within `strip` where labels start. Medium-height stages reclaim the
     /// purely decorative top padding so the compact composer can keep its hint.
     strip_content_start: u16,
@@ -3273,7 +3296,6 @@ fn startup_layout(stage: Rect) -> StartupLayout {
         height: dock_h,
         ..tail
     };
-    let block_h = u16::min(hero.height, 2);
     StartupLayout {
         hero,
         rule_a,
@@ -3282,7 +3304,6 @@ fn startup_layout(stage: Rect) -> StartupLayout {
         strip,
         dock,
         quick_rows_start: quick.height.saturating_sub(3),
-        hero_top: hero.height.saturating_sub(block_h) / 2,
         strip_content_start: u16::from(strip_len > 2),
         strip_columns: 4,
     }
@@ -3297,11 +3318,30 @@ pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &Tideline
     let theme = startup.theme;
     let layout = startup_layout(stage);
 
-    // Hero: one direct heading and one dim subtitle (first-run vs returning)
-    // as a vertically centered block. The terminal does not approximate the
-    // canonical raster mark; surfaces capable of rendering that exact asset
-    // own the brand image.
-    let hero_row = layout.hero_top;
+    // Hero: fluke over heading + subtitle, as one centered block. The mark is
+    // identity, not scenery, so it does not wait for the opt-in ocean
+    // treatment; it lerps out of the theme's own surface colour instead.
+    let mark_size = MarkSize::for_area(layout.hero, HERO_TEXT_ROWS);
+    let mark_rows = mark_size.map_or(0, |size| size.cells().1 + HERO_MARK_GAP);
+    let block_rows = mark_rows + HERO_TEXT_ROWS;
+    let hero_row = layout.hero.height.saturating_sub(block_rows) / 2;
+    if let Some(size) = mark_size {
+        let mark_area = Rect {
+            y: layout.hero.y + hero_row,
+            height: layout.hero.height.saturating_sub(hero_row),
+            ..layout.hero
+        };
+        crate::tui::mark::render_fluke(
+            mark_area,
+            buf,
+            size,
+            theme.accent_action,
+            theme.surface_bg,
+            startup.surface_progress,
+            startup.ascii_safe,
+        );
+    }
+    let hero_row = hero_row + mark_rows;
     let heading = "What are we working on?";
     centered(
         buf,
@@ -3668,7 +3708,15 @@ pub fn tideline_startup_from_app(app: &App) -> TidelineStartup<'_> {
     .locale(app.ui_locale)
     .ascii_safe(ascii_safe)
     .composer(LaunchComposerDisplay::from_app(app))
-    .status_line(launch_status_line(app, ascii_safe));
+    .status_line(launch_status_line(app, ascii_safe))
+    // The app opens on this screen, so the ambient clock is already
+    // launch-relative. Reduced motion asks for the settled mark, which is the
+    // same drawing at its endpoint.
+    .surface_progress(if app.motion_policy().allows_decorative() {
+        crate::tui::mark::surface_progress(app.ambient_clock_ms, MARK_SURFACE_MS)
+    } else {
+        1.0
+    });
     // Keyboard parity with the launch table: a quick action holds the
     // marker when the selected table row is one of QUICK_ACTION_ROWS; a
     // tile holds it when the row is that tile's; row 0 (Connect) rests
