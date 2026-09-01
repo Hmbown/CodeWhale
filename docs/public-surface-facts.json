@@ -6,7 +6,7 @@
     "positioning": "Terminal-native, model/provider-neutral, local-first coding agent",
     "license": "MIT",
     "terminology": {
-      "Fleet": "who is in the roster and which member is selected",
+      "Pod": "who is in the roster and which member is selected",
       "Workflow": "what order the work follows",
       "Lane": "one running Workflow instance",
       "Runtime": "where, how, and with what authority selected work executes"
@@ -162,7 +162,7 @@
       "Web client",
       "Runtime API",
       "MCP",
-      "Fleet"
+      "Pod"
     ],
     "sources": [
       "docs/GUIDE.md",

@@ -1,11 +1,11 @@
 ---
 name: codew-release-qa-sweep
-description: "Use before claiming CodeWhale release work is done: run the full gate sweep and list the manual QA targets."
+description: "Use before claiming Codewhale release work is done: run the full gate sweep and list the manual QA targets."
 ---
 
-# CodeWhale Release QA Sweep
+# Codewhale Release QA Sweep
 
-Run this before claiming any CodeWhale release work is "done." A green automated
+Run this before claiming any Codewhale release work is "done." A green automated
 gate sweep plus the three manual QA targets is the evidence bar. No sweep, no
 "done" — report exactly what was run and the result of each step.
 

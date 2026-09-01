@@ -300,7 +300,14 @@ fn kill_process_group(pid: i32) {
 }
 
 fn wait_for_pid_file(path: &Path) -> i32 {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // Staging latency is setup, not the assertion under test, and 30s was
+    // tuned against a lightly loaded host. On a machine running the whole
+    // 14k-test suite at once, staging a real child process past 30s is
+    // ordinary, and the suite reported it as "service pid file never
+    // appeared" -- a product failure that was not one. Bound it to the same
+    // budget the run itself uses so a service that genuinely never starts is
+    // still a failure, and load alone is not.
+    let deadline = Instant::now() + RUN_TIMEOUT;
     loop {
         if let Ok(contents) = std::fs::read_to_string(path)
             && let Ok(pid) = contents.trim().parse::<i32>()
@@ -395,6 +402,20 @@ async fn failed_exec_kills_pending_service_and_exits_nonzero() {
         .expect("spawn codewhale-tui exec");
     let stdout_reader = read_pipe_in_background(child.stdout.take().expect("stdout pipe"));
     let stderr_reader = read_pipe_in_background(child.stderr.take().expect("stderr pipe"));
+
+    // Observe the pid file while the exec is still running, exactly as
+    // `terminating_signal_kills_pending_service_and_exits_nonzero` does. Read
+    // after the wait, this raced the very teardown under test: a failing exec
+    // kills its pending service on the way out, so the file could be gone (or
+    // never written) by the time the process had exited. Isolated, staging won
+    // the race; under a loaded CI host it lost, and the suite reported
+    // "service pid file never appeared" as a product failure.
+    //
+    // The order also states the precondition properly: this case is about
+    // killing a service that *was* pending, so the staging must be observed
+    // before the exit, not inferred after it.
+    let service_pid = wait_for_pid_file(&workspace.path().join("service.pid"));
+
     let status = match child.wait_timeout(RUN_TIMEOUT).expect("wait for exec") {
         Some(status) => status,
         None => {
@@ -407,8 +428,6 @@ async fn failed_exec_kills_pending_service_and_exits_nonzero() {
     };
     let stdout = join_pipe(stdout_reader, "stdout");
     let stderr = join_pipe(stderr_reader, "stderr");
-
-    let service_pid = wait_for_pid_file(&workspace.path().join("service.pid"));
     assert!(
         !status.success(),
         "provider incomplete stop must fail the exec\nstdout:\n{stdout}\nstderr:\n{stderr}"

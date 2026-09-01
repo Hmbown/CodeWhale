@@ -28,6 +28,10 @@ pub mod events;
 #[path = "runtime_contract/model.rs"]
 pub mod model_client;
 pub mod ops;
+// Phase A1 of the core/protocol extraction: exhaustive projections of the
+// engine's `Op` / `Event` onto `codewhale_protocol::{op::Op, EventMsg}`.
+// A new engine variant without a protocol twin fails to compile there.
+pub mod protocol_parity;
 pub mod session;
 #[path = "runtime_contract/termination.rs"]
 pub mod termination;

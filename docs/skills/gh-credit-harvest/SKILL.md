@@ -50,7 +50,7 @@ this skill lands a credited commit and posts thanks; the workflow closes the PR.
    ```bash
    cargo fmt --all
    cargo test -p <crate>            # the crate(s) the PR touched, not the whole workspace
-   python3 scripts/check-coauthor-trailers.py --author-map .github/AUTHOR_MAP --range HEAD~1..HEAD --check-authors
+   git log -1 --format='%an <%ae>%n%(trailers:key=Co-authored-by)'  # credit the human, from .github/AUTHOR_MAP
    ```
 7. Post a brief, warm, specific thank-you on the PR — name what the change fixed, no drama. Leave the PR open; the workflow closes it with credit when the commit lands on `main`:
    ```bash

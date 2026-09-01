@@ -1,4 +1,0 @@
-Lookalike agent trailers that must still fail the gate.
-
-Co-authored-by: Claude Fable 5 Bot <noreply@anthropic.com>
-Co-authored-by: codewhale agent <codewhale-agent@evil.example>

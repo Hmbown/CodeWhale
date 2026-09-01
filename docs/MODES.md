@@ -14,8 +14,8 @@ a concrete model and thinking level; they are not TUI modes and are not part of
 the `Tab` cycle.
 
 Workflow is also separate from the mode itself. It is the visible ordered
-orchestration layer for repeatable workflows and Fleet workers. High fan-out
-routes through durable Fleet-backed workers instead of prompt-only sub-agent
+orchestration layer for repeatable workflows and Pod workers. High fan-out
+routes through durable Pod-backed workers instead of prompt-only sub-agent
 fanout. The active mode
 still controls permissions; Workflow controls whether a large task is planned
 into a resumable workflow with its own progress view.
@@ -47,7 +47,7 @@ still normalize to the internal value `agent`.
 | `agent` | yes, subject to child-depth authority | yes, subject to child-depth authority | yes, subject to child-depth authority |
 | Deferred native, MCP, and plugin tools | discoverable through `tool_search` when policy permits | same | same |
 | Paid or external-service tools | follows permission posture | follows permission posture | follows permission posture |
-| Access outside the workspace root | explicit trusted paths only | only through trusted paths or trust mode | same trusted-path/trust policy as Work; Fleet profiles never widen it |
+| Access outside the workspace root | explicit trusted paths only | only through trusted paths or trust mode | same trusted-path/trust policy as Work; Pod profiles never widen it |
 
 Operate changes scheduling emphasis, not authority. It neither adds a
 mode-specific tool denial nor bypasses the active approval, sandbox, shell,
@@ -258,7 +258,7 @@ narrowed before metadata is built and cannot invent approval authority. An
 explicit Full Access sub-agent handoff preserves the parent's standing posture
 so ordinary child work does not begin prompting again.
 
-### Children (sub-agents and Fleet workers)
+### Children (sub-agents and Pod workers)
 
 Children inherit the session posture faithfully rather than a bare
 auto-approve bit:

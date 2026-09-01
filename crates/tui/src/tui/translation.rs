@@ -14,7 +14,6 @@
 //!   shared `DeepSeekClient` to translate text to the current locale. The dedicated
 //!   translation agent receives only the source text and returns only the
 //!   translation — no tool calls, no conversation history.
-//! - `TranslationStatus` — tracks per-message translation status in the UI.
 
 use anyhow::Result;
 
@@ -98,21 +97,6 @@ pub async fn translate_text(
     target_language: &str,
 ) -> Result<String> {
     client.translate(text, model, target_language).await
-}
-
-/// Status of a translation operation for a single message.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
-pub enum TranslationStatus {
-    /// No translation needed (already Chinese or not enough text).
-    NotNeeded,
-    /// Translation is pending — the original English is still displayed
-    /// with an indicator.
-    Pending,
-    /// Translation completed successfully.
-    Done,
-    /// Translation failed — original English displayed with fallback note.
-    Failed,
 }
 
 #[cfg(test)]

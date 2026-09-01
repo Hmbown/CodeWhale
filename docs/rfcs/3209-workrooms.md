@@ -1,4 +1,4 @@
-# RFC: CodeWhale Workrooms — Chat-native Threaded Agent Work
+# RFC: Codewhale Workrooms — Chat-native Threaded Agent Work
 
 **Issue:** #3209
 **Status:** Future RFC — Phase 1 shipped (protocol types + link parser in
@@ -14,7 +14,7 @@ integration, persistent state, and model-visible tools remain follow-up work.
 
 ## 1. Problem
 
-CodeWhale agent work currently lives in transient TUI sessions, local Runtime API
+Codewhale agent work currently lives in transient TUI sessions, local Runtime API
 threads, Fleet runs, and chat-bridge message loops — each with its own lifecycle,
 state representation, and context boundary. There is no first-class abstraction
 that:
@@ -190,7 +190,7 @@ should not be registered until the backing runtime resolution behavior exists.
 ## 4. Security Model
 
 - **Local-first by default.** Persisted workroom state should live under the
-  CodeWhale home directory alongside existing state. No cloud service is
+  Codewhale home directory alongside existing state. No cloud service is
   assumed.
 - **Runtime API auth required.** Planned workroom endpoints must use the same
   `Authorization: Bearer <token>` protection as other runtime surfaces.
@@ -245,7 +245,7 @@ context resolution.
 
 ## 7. Non-goals for Phase 1
 
-- No hosted public CodeWhale cloud service
+- No hosted public Codewhale cloud service
 - No default-on Slack/Discord/Feishu/Telegram/GitHub App integration
 - No arbitrary public share links without explicit auth story
 - No model-specific workroom format

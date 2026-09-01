@@ -14,7 +14,10 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-use crate::compaction::estimate_input_tokens_for_pressure;
+use crate::compaction::{
+    CompactionPath, estimate_input_tokens_for_pressure, inspect_compaction_keep,
+    last_round_kept_count, last_round_start, pinned_anchors_text,
+};
 use crate::localization::{Locale, MessageId, tr};
 use crate::models::{SystemPrompt, Tool};
 use crate::palette;
@@ -213,6 +216,12 @@ pub fn build_context_inspector_text(app: &App, locale: Locale) -> String {
         app.api_messages.len(),
         label = tr(locale, MessageId::CtxInspTranscript),
     );
+    if let Some(kept) = last_round_kept_count(&app.api_messages) {
+        let _ = writeln!(
+            out,
+            "Last compaction: kept last round verbatim ({kept} messages); earlier turns summarized."
+        );
+    }
     let _ = writeln!(
         out,
         "{}: {}",
@@ -222,6 +231,8 @@ pub fn build_context_inspector_text(app: &App, locale: Locale) -> String {
             .unwrap_or(&*tr(locale, MessageId::CtxInspNotSampledYet))
     );
 
+    let _ = writeln!(out);
+    push_compaction_and_anchors(&mut out, app, locale);
     let _ = writeln!(out);
     push_system_prompt_structure(&mut out, app, locale);
     let _ = writeln!(out);
@@ -275,6 +286,84 @@ fn context_status(percent: f64) -> ContextPressure {
     } else {
         ContextPressure::Ok
     }
+}
+
+fn compaction_path_label(path: CompactionPath, locale: Locale) -> Cow<'static, str> {
+    match path {
+        CompactionPath::Summary => tr(locale, MessageId::CtxInspCompactionPathSummary),
+        CompactionPath::PruneOnly => tr(locale, MessageId::CtxInspCompactionPathPrune),
+    }
+}
+
+fn compaction_assistant_clause(kept: bool, locale: Locale) -> Cow<'static, str> {
+    if kept {
+        tr(locale, MessageId::CtxInspCompactionAssistantKept)
+    } else {
+        Cow::Borrowed("")
+    }
+}
+
+fn last_round_messages(messages: &[crate::models::Message]) -> &[crate::models::Message] {
+    let start = last_round_start(messages).min(messages.len());
+    &messages[start..]
+}
+
+fn compaction_detail_for_app(app: &App, locale: Locale) -> (String, usize) {
+    let keep = inspect_compaction_keep(&app.api_messages);
+    let assistant = compaction_assistant_clause(keep.last_round_assistant, locale);
+    let last_round_tokens =
+        estimate_input_tokens_for_pressure(last_round_messages(&app.api_messages), None);
+    let detail = if let Some(snapshot) = app.last_compaction.as_ref() {
+        tr(locale, MessageId::CtxInspCompactionDetail)
+            .replace(
+                "{path}",
+                &compaction_path_label(snapshot.coverage.path, locale),
+            )
+            .replace("{before}", &snapshot.messages_before.to_string())
+            .replace("{after}", &snapshot.messages_after.to_string())
+            .replace(
+                "{round}",
+                &snapshot.coverage.last_round_messages.to_string(),
+            )
+            .replace(
+                "{tools}",
+                &snapshot.coverage.last_round_tool_results.to_string(),
+            )
+            .replace("{assistant}", &assistant)
+    } else if keep.has_checkpoint {
+        tr(locale, MessageId::CtxInspCompactionRestored)
+            .replace("{round}", &keep.last_round_messages.to_string())
+            .replace("{tools}", &keep.last_round_tool_results.to_string())
+            .replace("{assistant}", &assistant)
+    } else {
+        tr(locale, MessageId::CtxInspCompactionNever).into_owned()
+    };
+    (detail, last_round_tokens)
+}
+
+fn anchors_detail_for_app(app: &App, locale: Locale) -> (String, usize) {
+    match pinned_anchors_text(Some(&app.workspace)) {
+        Some(text) => {
+            let chars = text.chars().count();
+            (
+                tr(locale, MessageId::CtxInspAnchorsPresent).replace("{chars}", &chars.to_string()),
+                chars.div_ceil(3),
+            )
+        }
+        None => (tr(locale, MessageId::CtxInspAnchorsNone).into_owned(), 0),
+    }
+}
+
+fn push_compaction_and_anchors(out: &mut String, app: &App, locale: Locale) {
+    let (compaction_detail, _) = compaction_detail_for_app(app, locale);
+    let (anchors_detail, _) = anchors_detail_for_app(app, locale);
+    let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspRowCompaction));
+    let _ = writeln!(out, "----------");
+    let _ = writeln!(out, "{compaction_detail}");
+    let _ = writeln!(out);
+    let _ = writeln!(out, "{}", tr(locale, MessageId::CtxInspRowAnchors));
+    let _ = writeln!(out, "-------");
+    let _ = writeln!(out, "{anchors_detail}");
 }
 
 /// Inspect the system prompt structure, split into cache-friendly stable
@@ -695,6 +784,8 @@ impl ContextInspectorView {
         self.threshold = app.auto_compact_threshold_percent;
         self.locale = app.ui_locale;
         let max_f = f64::from(max.max(1));
+        let (compaction_detail, compaction_tokens) = compaction_detail_for_app(app, self.locale);
+        let (anchors_detail, anchors_tokens) = anchors_detail_for_app(app, self.locale);
         self.rows = vec![
             ContextBucket {
                 label: tr(self.locale, MessageId::CtxInspRowSystemPrompt).into_owned(),
@@ -716,8 +807,25 @@ impl ContextInspectorView {
                     .replace("{free}", &free_tokens.to_string())
                     .replace("{threshold}", &format!("{:.0}", self.threshold)),
             },
+            ContextBucket {
+                label: tr(self.locale, MessageId::CtxInspRowCompaction).into_owned(),
+                tokens: compaction_tokens,
+                percent: (compaction_tokens as f64 / max_f) * 100.0,
+                detail: compaction_detail,
+            },
+            ContextBucket {
+                label: tr(self.locale, MessageId::CtxInspRowAnchors).into_owned(),
+                tokens: anchors_tokens,
+                percent: (anchors_tokens as f64 / max_f) * 100.0,
+                detail: anchors_detail,
+            },
         ];
         self.selected = self.selected.min(self.rows.len().saturating_sub(1));
+    }
+
+    #[cfg(test)]
+    fn row_labels(&self) -> Vec<String> {
+        self.rows.iter().map(|row| row.label.clone()).collect()
     }
 
     fn move_selection(&mut self, delta: isize) {
@@ -1306,5 +1414,58 @@ mod tests {
         assert!(!text.contains("cache-friendly"), "EN cache-friendly leaked");
         assert!(!text.contains("more reference"), "EN more refs leaked");
         assert!(!text.contains("no output yet"), "EN no output leaked");
+        assert!(text.contains("压缩"), "compaction row: {text}");
+        assert!(text.contains("锚点"), "anchors row: {text}");
+    }
+
+    #[test]
+    fn inspector_meter_matches_compaction_pressure_signal() {
+        let mut app = test_app();
+        app.api_messages.push(Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text {
+                text: "x".repeat(4_000),
+                cache_control: None,
+            }],
+        });
+        app.last_billed_input_tokens = Some(12_000);
+        let estimated =
+            estimate_input_tokens_for_pressure(&app.api_messages, app.system_prompt.as_ref());
+        let (used, _, _) = context_usage(&app);
+        assert_eq!(used, estimated.max(12_000));
+        app.last_billed_input_tokens = None;
+        let (estimated_only, _, _) = context_usage(&app);
+        assert_eq!(estimated_only, estimated);
+        assert_ne!(
+            estimated_only,
+            crate::compaction::estimate_input_tokens_conservative(
+                &app.api_messages,
+                app.system_prompt.as_ref()
+            )
+        );
+    }
+
+    #[test]
+    fn inspector_rows_name_compaction_and_anchors() {
+        let mut app = test_app();
+        app.last_compaction = Some(crate::compaction::LastCompactionSnapshot {
+            auto: true,
+            coverage: crate::compaction::CompactionCoverage {
+                path: crate::compaction::CompactionPath::Summary,
+                last_round_messages: 4,
+                last_round_tool_results: 1,
+                last_round_assistant: true,
+                dropped_messages: 12,
+                anchors_chars: 0,
+            },
+            messages_before: 16,
+            messages_after: 4,
+        });
+        let text = build_context_inspector_text(&app, Locale::En);
+        assert!(text.contains("compaction"), "{text}");
+        assert!(text.contains("16 → 4 messages"), "{text}");
+        let view = ContextInspectorView::new(&app);
+        assert!(view.row_labels().iter().any(|label| label == "compaction"));
+        assert!(view.row_labels().iter().any(|label| label == "anchors"));
     }
 }

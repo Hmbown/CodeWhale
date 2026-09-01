@@ -135,10 +135,10 @@ pub struct FleetExecutorTickReport {
 #[derive(Debug, thiserror::Error)]
 pub enum FleetControlError {
     /// The exact worker exists (or does not) but has no leased task to cancel.
-    #[error("worker {worker_id} has no running fleet task")]
+    #[error("worker {worker_id} has no running Pod task")]
     NoActiveTask { worker_id: String },
     /// No durable run with that exact id in this workspace's ledger.
-    #[error("no fleet run with id {run_id}")]
+    #[error("no Pod run with id {run_id}")]
     UnknownRun { run_id: String },
 }
 
@@ -371,7 +371,7 @@ impl FleetManager {
         validate_task_spec_document(&doc)?;
         let roster = self.agent_roster();
         if let Some(error) = roster.load_error() {
-            bail!("cannot create Fleet run: {error}");
+            bail!("cannot create Pod run: {error}");
         }
         worker_runtime::freeze_fleet_task_members(
             &mut doc.tasks,
@@ -474,7 +474,7 @@ impl FleetManager {
             lifecycle,
             FleetRunStatus::Completed | FleetRunStatus::Failed | FleetRunStatus::Cancelled
         ) {
-            bail!("fleet run {} is already terminal ({lifecycle:?})", run_id.0);
+            bail!("Pod run {} is already terminal ({lifecycle:?})", run_id.0);
         }
         if !matches!(lifecycle, FleetRunStatus::Running) {
             self.ledger
@@ -539,7 +539,7 @@ impl FleetManager {
             .runs
             .get(&run_id.0)
             .cloned()
-            .ok_or_else(|| anyhow!("fleet run {} does not exist", run_id.0))?;
+            .ok_or_else(|| anyhow!("Pod run {} does not exist", run_id.0))?;
         let worker_ids = worker_ids_for_run(&run, max_workers);
 
         for task in active_tasks_for_run(&state, run_id) {
@@ -626,7 +626,7 @@ impl FleetManager {
                 &record.spec.worker_id,
                 status,
                 Some(format!(
-                    "Fleet task {} is {}",
+                    "Pod task {} is {}",
                     current.entry.task_id, status_label
                 )),
             );
@@ -688,7 +688,7 @@ impl FleetManager {
             Some(manager) => Some(
                 manager
                     .try_write()
-                    .map_err(|_| anyhow!("Fleet coordination state is busy; retry resume"))?,
+                    .map_err(|_| anyhow!("Pod coordination state is busy; retry resume"))?,
             ),
             None => None,
         };
@@ -727,7 +727,7 @@ impl FleetManager {
         let manager_lock_path = self.manager_lock_path(run_id);
         if let Some(parent) = manager_lock_path.parent() {
             std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating fleet manager lock dir {}", parent.display()))?;
+                .with_context(|| format!("creating Pod manager lock dir {}", parent.display()))?;
         }
         let lock_file = OpenOptions::new()
             .create(true)
@@ -735,9 +735,7 @@ impl FleetManager {
             .read(true)
             .write(true)
             .open(&manager_lock_path)
-            .with_context(|| {
-                format!("opening fleet manager lock {}", manager_lock_path.display())
-            })?;
+            .with_context(|| format!("opening Pod manager lock {}", manager_lock_path.display()))?;
         let mut manager_lock = fd_lock::RwLock::new(lock_file);
         let standby_interval = tick_interval
             .min(Duration::from_millis(100))
@@ -749,7 +747,7 @@ impl FleetManager {
                     if observed_owner {
                         if self.run_has_open_work(run_id)? {
                             bail!(
-                                "fleet manager for run {} exited with open work; wait for stale reconciliation before resuming",
+                                "Pod manager for run {} exited with open work; wait for stale reconciliation before resuming",
                                 run_id.0
                             );
                         }
@@ -772,7 +770,7 @@ impl FleetManager {
                 Err(err) => {
                     return Err(err).with_context(|| {
                         format!(
-                            "locking fleet manager ownership {}",
+                            "locking Pod manager ownership {}",
                             manager_lock_path.display()
                         )
                     });
@@ -793,7 +791,7 @@ impl FleetManager {
                 if executor.worker_ids().is_empty() {
                     return Err(error).with_context(|| {
                         format!(
-                            "scheduling Fleet run {} after draining owned workers",
+                            "scheduling Pod run {} after draining owned workers",
                             run_id.0
                         )
                     });
@@ -801,7 +799,7 @@ impl FleetManager {
                 tracing::warn!(
                     run_id = %run_id.0,
                     error = %error,
-                    "Fleet scheduling paused while already-leased workers continue"
+                    "Pod scheduling paused while already-leased workers continue"
                 );
             }
             // A separate `fleet interrupt` process can make the ledger
@@ -1038,7 +1036,7 @@ impl FleetManager {
             Some("operator"),
         )?;
         if !cancelled {
-            bail!("worker {worker_id} no longer has that running fleet task");
+            bail!("worker {worker_id} no longer has that running Pod task");
         }
         self.refresh_run_status(&task.entry.run_id)?;
         self.inspect_worker(worker_id)
@@ -1049,12 +1047,12 @@ impl FleetManager {
         let Some(task) = active_task_for_worker(&state, worker_id)
             .or_else(|| latest_task_for_worker(&state, worker_id))
         else {
-            bail!("worker {worker_id} has no fleet task to restart");
+            bail!("worker {worker_id} has no Pod task to restart");
         };
         let run = state
             .runs
             .get(&task.entry.run_id.0)
-            .ok_or_else(|| anyhow!("fleet run {} does not exist", task.entry.run_id.0))?;
+            .ok_or_else(|| anyhow!("Pod run {} does not exist", task.entry.run_id.0))?;
         let max_workers = run
             .max_workers
             .unwrap_or_else(|| run.worker_specs.len().max(1))
@@ -1062,7 +1060,7 @@ impl FleetManager {
         let mut coordination_guard = match &self.sub_agent_manager {
             Some(manager) => {
                 let Ok(guard) = manager.try_write() else {
-                    bail!("Fleet worker {worker_id} coordination state is busy; retry restart");
+                    bail!("Pod worker {worker_id} coordination state is busy; retry restart");
                 };
                 Some(guard)
             }
@@ -1099,9 +1097,7 @@ impl FleetManager {
                         .task_specs
                         .iter()
                         .find(|spec| spec.id == task.entry.task_id)
-                        .ok_or_else(|| {
-                            anyhow!("fleet task {} does not exist", task.entry.task_id)
-                        })?;
+                        .ok_or_else(|| anyhow!("Pod task {} does not exist", task.entry.task_id))?;
                     self.prepare_registered_restart_generation(
                         guard, &state, task, task_spec, worker_id,
                     )?;
@@ -1136,7 +1132,7 @@ impl FleetManager {
         let run = state
             .runs
             .get(&task.entry.run_id.0)
-            .ok_or_else(|| anyhow!("fleet run {} does not exist", task.entry.run_id.0))?;
+            .ok_or_else(|| anyhow!("Pod run {} does not exist", task.entry.run_id.0))?;
         let worker_spec = run
             .worker_specs
             .iter()
@@ -1165,17 +1161,17 @@ impl FleetManager {
         );
         let record = coordination
             .get_worker_record(worker_id)
-            .ok_or_else(|| anyhow!("Fleet worker {worker_id} has no registered launch spec"))?;
+            .ok_or_else(|| anyhow!("Pod worker {worker_id} has no registered launch spec"))?;
         let current_generation = task.entry.attempts.max(1);
         let next_generation = current_generation
             .checked_add(1)
-            .ok_or_else(|| anyhow!("Fleet worker {worker_id} exhausted launch generations"))?;
+            .ok_or_else(|| anyhow!("Pod worker {worker_id} exhausted launch generations"))?;
         let registered_generation = record
             .spec
             .launch_manifest
             .as_ref()
             .map(|manifest| manifest.generation)
-            .ok_or_else(|| anyhow!("Fleet worker {worker_id} has no persisted launch manifest"))?;
+            .ok_or_else(|| anyhow!("Pod worker {worker_id} has no persisted launch manifest"))?;
 
         match registered_generation {
             generation if generation == current_generation => {
@@ -1198,7 +1194,7 @@ impl FleetManager {
             }
             generation => {
                 bail!(
-                    "Fleet worker {worker_id} persisted launch generation {generation} does not match ledger attempt {current_generation} or its prepared retry {next_generation}"
+                    "Pod worker {worker_id} persisted launch generation {generation} does not match ledger attempt {current_generation} or its prepared retry {next_generation}"
                 );
             }
         }
@@ -1243,7 +1239,7 @@ impl FleetManager {
     pub fn stop_run(&self, run_id: &FleetRunId) -> Result<usize> {
         let state = self.ledger.rebuild_state()?;
         if !state.runs.contains_key(&run_id.0) {
-            bail!("fleet run {} does not exist", run_id.0);
+            bail!("Pod run {} does not exist", run_id.0);
         }
         let now = timestamp();
         let mut stopped = 0usize;
@@ -1288,7 +1284,7 @@ impl FleetManager {
             .runs
             .get(&entry.run_id.0)
             .cloned()
-            .ok_or_else(|| anyhow!("fleet run {} does not exist", entry.run_id.0))?;
+            .ok_or_else(|| anyhow!("Pod run {} does not exist", entry.run_id.0))?;
         let worker_spec = run
             .worker_specs
             .iter()
@@ -1333,7 +1329,7 @@ impl FleetManager {
                         run_id = %entry.run_id.0,
                         task_id = %entry.task_id,
                         error = %error,
-                        "Fleet worker coordination is not currently admissible"
+                        "Pod worker coordination is not currently admissible"
                     );
                     return Ok(false);
                 }
@@ -1406,7 +1402,7 @@ impl FleetManager {
             .runs
             .get(&run_id.0)
             .cloned()
-            .ok_or_else(|| anyhow!("fleet run {} does not exist", run_id.0))?;
+            .ok_or_else(|| anyhow!("Pod run {} does not exist", run_id.0))?;
         let roster = self.agent_roster();
         let mut started = 0usize;
         for task in active_tasks_for_run(&state, run_id) {
@@ -1464,7 +1460,7 @@ impl FleetManager {
                         record.spec
                     }
                     Some(None) => {
-                        bail!("Fleet worker {worker_id} has no coordination-registered launch spec")
+                        bail!("Pod worker {worker_id} has no coordination-registered launch spec")
                     }
                     None => expected_launch_spec,
                 };
@@ -1674,7 +1670,7 @@ impl FleetManager {
             FleetWorkerEventPayload::Completed { .. } => FleetTaskLedgerStatus::Completed,
             FleetWorkerEventPayload::Failed { .. } => FleetTaskLedgerStatus::Failed,
             FleetWorkerEventPayload::Cancelled { .. } => FleetTaskLedgerStatus::Cancelled,
-            _ => bail!("fleet executor outcome must contain a terminal worker event"),
+            _ => bail!("Pod executor outcome must contain a terminal worker event"),
         };
         for tail_payload in tail_payloads {
             if is_terminal_payload(&tail_payload) {
@@ -1970,14 +1966,14 @@ impl FleetManager {
         let abs_path = self.workspace.join(&rel_path);
         if let Some(parent) = abs_path.parent() {
             std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating fleet artifact dir {}", parent.display()))?;
+                .with_context(|| format!("creating Pod artifact dir {}", parent.display()))?;
         }
         let contents = format!(
             "run_id={}\ntask_id={}\ntask_name={}\nworker_id={}\nstatus=started\n",
             run_id.0, task_spec.id, task_spec.name, worker_id
         );
         std::fs::write(&abs_path, contents)
-            .with_context(|| format!("writing fleet worker log {}", abs_path.display()))?;
+            .with_context(|| format!("writing Pod worker log {}", abs_path.display()))?;
         let size_bytes = std::fs::metadata(&abs_path).ok().map(|m| m.len());
         Ok(FleetArtifactRef {
             kind: FleetArtifactKind::Log,
@@ -2022,7 +2018,7 @@ impl FleetManager {
         };
         self.ledger
             .update_run_status(run_id, status, &timestamp())
-            .context("updating fleet run status")
+            .context("updating Pod run status")
     }
 
     fn status_from_state(
@@ -2109,7 +2105,7 @@ fn default_local_worker_with_name(worker_id: &str, index: usize) -> FleetWorkerS
         id: worker_id.to_string(),
         name: format!("Local worker {index}"),
         host: FleetHostSpec::Local,
-        // Legacy ledgers may carry `trust_level`; new Fleet workers leave
+        // Legacy ledgers may carry `trust_level`; new Pod workers leave
         // execution authority entirely to Runtime policy.
         trust_level: None,
         labels: BTreeMap::new(),
@@ -2383,7 +2379,7 @@ fn validate_registered_launch_spec(
 ) -> Result<()> {
     let Some(registered_manifest) = registered.launch_manifest.as_ref() else {
         bail!(
-            "Fleet worker {} has no persisted launch manifest",
+            "Pod worker {} has no persisted launch manifest",
             registered.worker_id
         );
     };
@@ -2391,7 +2387,7 @@ fn validate_registered_launch_spec(
         || !registered_prompt_matches_expected(&registered.objective, &expected.objective)
     {
         bail!(
-            "Fleet worker {} has an inconsistent persisted prompt",
+            "Pod worker {} has an inconsistent persisted prompt",
             registered.worker_id
         );
     }
@@ -2411,7 +2407,7 @@ fn validate_registered_launch_spec(
     }
     if registered_identity != expected_identity {
         bail!(
-            "Fleet worker {} persisted launch spec does not match the exact task lease and attempt",
+            "Pod worker {} persisted launch spec does not match the exact task lease and attempt",
             registered.worker_id
         );
     }
@@ -2455,7 +2451,7 @@ fn validate_task_cwd_for_host(
     .map_err(anyhow::Error::new)?;
     if task_cwd != workspace_root {
         bail!(
-            "SSH Fleet workers do not yet support nested workspace.root values; task cwd '{}' cannot be mapped safely beneath the remote working_directory",
+            "SSH Pod workers do not yet support nested workspace.root values; task cwd '{}' cannot be mapped safely beneath the remote working_directory",
             task_cwd.display()
         );
     }
@@ -5217,7 +5213,7 @@ esac
         assert!(
             error
                 .to_string()
-                .contains("Selected folder Fleet `Broken` is invalid or unreadable"),
+                .contains("Selected folder Pod `Broken` is invalid or unreadable"),
             "{error:#}"
         );
         assert!(manager.rebuild_state().unwrap().runs.is_empty());

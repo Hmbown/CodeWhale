@@ -1684,11 +1684,11 @@ Common settings keys:
   context panel, `/cost`, `/tokens`, and long-turn notification summaries. The
   aliases `rmb` and `yuan` normalize to `cny`.
 - `default_mode` (`agent`, `plan`, or `operate`; legacy values are accepted for migration but are not live mode vocabulary)
-- `launch_screen` (`on`/`off`; default `off`): show the pre-session Work/Chat/
-  Resume/Worktree menu. Work uses the current folder under the configured
-  approval policy; Chat starts a read-only conversation. With the launch
-  screen off, Codewhale enters a new session directly; resume remains
-  available in-session.
+- `launch_screen` (legacy, migration-only): this historical `on`/`off` value
+  is still accepted when reading an existing settings file, but it no longer
+  changes behavior and is omitted from new saves. A fresh interactive launch
+  always opens Tideline Startup; only an explicit resume or an explicit
+  initial prompt enters the live session directly.
 - `sidebar_focus` (legacy, migration-only): the classic right sidebar this key
   configured was removed in the 0.9.4 rail unification. The key is still read
   once so old settings carry forward, then folds into the live keys:
@@ -2149,7 +2149,7 @@ reasoning contract, and all four membership ids omit generic sampling fields.
   `~/.claude/skills`. First launch installs versioned bundled skills for common
   workflows including skill creation, delegation, MCP/plugin scaffolding,
   documents, presentations, spreadsheets, PDFs, and Feishu/Lark. Only
-  CodeWhale-owned roots (`<workspace>/.codewhale/skills` and
+  Codewhale-owned roots (`<workspace>/.codewhale/skills` and
   `~/.codewhale/skills`) are writable install/import targets; compatible harness
   roots stay read-only. Bare `/skills` opens the Skills Manager (owned-only,
   zero network). See [SKILLS.md](SKILLS.md) for the manager, audit statuses,

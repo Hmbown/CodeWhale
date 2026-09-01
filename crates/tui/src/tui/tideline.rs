@@ -164,12 +164,19 @@ pub struct InteractionTargetId(&'static str);
 
 impl InteractionTargetId {
     pub const HEADER_CONTEXT: Self = Self("header.context");
+    /// The rendered route/model segment. This is intentionally an affordance
+    /// id only: the provider picker remains the owner of route catalog and
+    /// readiness facts.
+    pub const HEADER_ROUTE: Self = Self("header.route");
 }
 
 /// Typed destination shared by keyboard and mouse input routes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InteractionAction {
     InspectContext,
+    /// Open the existing provider/route picker without making this chrome
+    /// target another source of catalog or runtime authority.
+    OpenProviderPicker,
 }
 
 /// Focus metadata for a selectable target.
@@ -189,6 +196,9 @@ pub enum InteractionFocus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InspectDetail {
     ContextBudget(ContextBudgetSnapshot),
+    /// The topbar exposes a route entry point, not a copied route snapshot.
+    /// `ProviderPickerView` remains the authoritative presentation owner.
+    Route,
 }
 
 /// A selectable region painted in the current frame.
@@ -259,6 +269,26 @@ mod tests {
                 percent_basis_points: 3_000,
             }),
         }
+    }
+
+    #[test]
+    fn topbar_route_target_is_typed_without_copying_route_facts() {
+        let target = InteractionTarget {
+            id: InteractionTargetId::HEADER_ROUTE,
+            area: Rect::new(20, 0, 24, 1),
+            focus: InteractionFocus::Direct,
+            keyboard_action: Some(InteractionAction::OpenProviderPicker),
+            mouse_action: Some(InteractionAction::OpenProviderPicker),
+            inspect_detail: InspectDetail::Route,
+        };
+
+        assert_eq!(target.id, InteractionTargetId::HEADER_ROUTE);
+        assert_eq!(
+            target.keyboard_action,
+            Some(InteractionAction::OpenProviderPicker)
+        );
+        assert_eq!(target.mouse_action, target.keyboard_action);
+        assert_eq!(target.inspect_detail, InspectDetail::Route);
     }
 
     #[test]

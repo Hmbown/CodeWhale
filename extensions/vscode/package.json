@@ -5,6 +5,7 @@
   "version": "0.9.11",
   "publisher": "codewhale",
   "license": "MIT",
+  "icon": "media/icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/Hmbown/CodeWhale.git",
