@@ -380,22 +380,36 @@ pub async fn run_stdio(config_path: Option<PathBuf>) -> Result<()> {
     let state = build_state_with_transport(config_path, None, AppTransport::Stdio)?;
     let reader = BufReader::new(tokio::io::stdin()).lines();
     let writer = tokio::io::BufWriter::new(tokio::io::stdout());
-    run_stdio_loop(&state, reader, writer, StdioLoopPolicy::process_stdio())
-        .await
-        .map(|_exit| ())
+    run_stdio_loop(
+        &state,
+        reader,
+        writer,
+        StdioLoopPolicy::process_stdio(),
+        None::<()>,
+    )
+    .await
+    .map(|_exit| ())
 }
 
 /// The stdio JSON-RPC loop, generic over its transport so it can be driven by
 /// a duplex pipe in tests rather than the process's real stdin/stdout.
-async fn run_stdio_loop<R, W>(
+async fn run_stdio_loop<R, W, C>(
     state: &AppState,
     mut reader: tokio::io::Lines<R>,
     mut writer: W,
     policy: StdioLoopPolicy,
+    // Dropped the moment input closes, not when the in-flight turn ends. The
+    // socket transport passes its owner claim here: a `thread/message` can run
+    // for minutes, and an owner who disconnects mid-turn must not keep the
+    // daemon claimed for the rest of it, or a relaunched client is locked out
+    // with `daemon_already_claimed` and cannot even shut the daemon down.
+    // Process stdio has no claim and passes `None`.
+    mut input_claim: Option<C>,
 ) -> Result<StdioLoopExit>
 where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
+    C: Send,
 {
     // Work that arrived while a turn was streaming. The turn owns the writer
     // for its whole duration, so these wait for it rather than interleaving
@@ -454,7 +468,12 @@ where
                     outcome = &mut dispatch => break outcome,
                     line = reader.next_line(), if stdin_open => {
                         match line? {
-                            None => stdin_open = false,
+                            None => {
+                                stdin_open = false;
+                                // Release the claim here, not after `dispatch`
+                                // resolves.
+                                drop(input_claim.take());
+                            }
                             Some(line) => {
                                 handle_line_during_turn(state, &line, &mut pending, policy).await;
                             }
@@ -3288,6 +3307,7 @@ mod tests {
                 BufReader::new(rx).lines(),
                 tx,
                 StdioLoopPolicy::process_stdio(),
+                None::<()>,
             )
             .await
         });

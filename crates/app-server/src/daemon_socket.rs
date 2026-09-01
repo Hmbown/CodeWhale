@@ -588,8 +588,9 @@ mod platform {
                 AttachRole::Attached => ShutdownAuthority::Denied,
             },
         };
-        let exit = run_stdio_loop(&context.state, lines, writer, policy).await;
-        drop(guard);
+        // The guard moves into the loop so the claim is released when the
+        // socket closes, not when a long-running turn finally returns.
+        let exit = run_stdio_loop(&context.state, lines, writer, policy, Some(guard)).await;
         match exit {
             Ok(StdioLoopExit::Shutdown) => context.shutdown.trigger(),
             Ok(StdioLoopExit::InputClosed) => {}
