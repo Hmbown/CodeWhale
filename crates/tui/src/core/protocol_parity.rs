@@ -299,13 +299,18 @@ fn mcp_snapshot_to_wire(snapshot: &McpManagerSnapshot) -> wire::McpManagerSnapsh
 /// keeps the program name and elides the arguments, because a secret there can
 /// be positional and is not reliably recognizable by key.
 fn redacted_command_or_url(raw: &str) -> String {
-    if raw.contains("://") {
-        return crate::client::redact_url_for_display(raw);
-    }
     // No `match` here on purpose: `projections_have_no_wildcard_arms` scans
     // this whole file for wildcard arms, and a `_ =>` would trip it even in a
     // helper that projects no engine variant.
     let trimmed = raw.trim();
+    // A URL never contains whitespace; an argv line does. `://` alone is not
+    // enough to route here: `redact_url_for_display` returns its input
+    // verbatim when `Url::parse` fails, so a stdio command that merely
+    // mentions a URL — `docker run -e TOKEN=… img --url https://…` — would
+    // reach the wire with its positional secret intact.
+    if !trimmed.is_empty() && !trimmed.contains(char::is_whitespace) && trimmed.contains("://") {
+        return crate::client::redact_url_for_display(trimmed);
+    }
     if let Some((program, rest)) = trimmed.split_once(char::is_whitespace)
         && !rest.trim().is_empty()
     {
@@ -1150,6 +1155,17 @@ mod tests {
         );
         // Nothing to hide, nothing changed.
         assert_eq!(redacted_command_or_url("npx"), "npx");
+        // A stdio command that merely mentions a URL must still collapse to
+        // the program name. Routing it to the URL redactor returns it verbatim
+        // (`Url::parse` rejects the spaces), leaking the positional token.
+        let mentions_url = redacted_command_or_url(
+            "docker run -e TOKEN=sk-live-abc img --url https://mcp.example.com",
+        );
+        assert_eq!(mentions_url, "docker …");
+        assert!(
+            !mentions_url.contains("sk-live-abc"),
+            "argv secret reached the wire: {mentions_url}"
+        );
     }
 
     use super::*;
