@@ -17,6 +17,9 @@ export function FeedRetry({ label }: { label: string }) {
       onRetry={async () => {
         try {
           await fetch("/api/github/feed/retry", { method: "POST", cache: "no-store" });
+        } catch {
+          // Offline or unreachable: the refresh below is still the real
+          // retry signal; a rejected POST must not escape to RetryAction.
         } finally {
           router.refresh();
         }
