@@ -245,6 +245,9 @@ jobs:
             MARK="<!-- codewhale-review-nonrun -->"
             # Single printf: column-0 continuation lines would terminate the
             # YAML block scalar (actionlint syntax-check failure at :249).
+            # The backticks below are literal Markdown for the PR comment, not
+            # command substitution; the format string must stay single-quoted.
+            # shellcheck disable=SC2016
             BODY=$(printf '%s\n\n## Codewhale review did not run\n\n`codewhale review --pr %s` (provider: `%s`) could not reach the model: `%s`.\n%s' "$MARK" "$PR_NUMBER" "$PROVIDER" "$REASON" "This is a provider funding/config problem, not a finding about this PR. The check stays advisory; a maintainer with secret access needs to fund or rotate the review key (see \`.github/workflows/codewhale-review.yml\`). Re-run the workflow after that.")
             EXISTING=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate --jq ".[] | select(.body | startswith(\"${MARK}\")) | .id" 2>/dev/null | head -1 || true)
             if [ -n "$EXISTING" ]; then
