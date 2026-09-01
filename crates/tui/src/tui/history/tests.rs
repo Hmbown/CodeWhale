@@ -2347,10 +2347,11 @@ fn the_card_helpers_accept_their_documented_forms_and_decline_the_rest() {
 }
 
 /// The card rail is the block's border, so it carries the cell's own state.
-/// Property, not token: every status paints a distinct rail, the rail agrees
-/// with the header glyph beside it, and the rail is never left unstyled — an
-/// unstyled rail is what shipped before, and it made a failed card look
-/// exactly like a finished one from the border in.
+/// Property, not token: every status paints a distinct rail, the rail is never
+/// left unstyled — an unstyled rail is what shipped before, and it made a
+/// failed card look exactly like a finished one from the border in — and it
+/// agrees with the glyph beside it on everything that needs attention while
+/// receding on a settled card, which is the whole point of the split.
 #[test]
 fn card_rail_carries_the_cell_status() {
     let mut rails = Vec::new();
@@ -2379,10 +2380,18 @@ fn card_rail_carries_the_cell_status() {
             .style
             .fg
             .expect("header status glyph must be styled");
-        assert_eq!(
-            rail_color, glyph_color,
-            "{status:?} paints its rail and its header glyph differently"
-        );
+        if status == ToolStatus::Success {
+            // A settled card dims its border but keeps an identifying glyph.
+            assert_ne!(
+                rail_color, glyph_color,
+                "a settled card must not dim its glyph along with its rail"
+            );
+        } else {
+            assert_eq!(
+                rail_color, glyph_color,
+                "{status:?} must read the same on the rail and the glyph"
+            );
+        }
 
         rails.push((status, rail_color));
     }
@@ -2395,6 +2404,35 @@ fn card_rail_carries_the_cell_status() {
             );
         }
     }
+}
+
+/// The header glyph reports identity, not just lifecycle: a passed `verify`
+/// card keeps its green tick where a finished `read` keeps the family accent
+/// the mockup draws as a blue magnifier. Relationship, not token — the two must
+/// simply not collapse into one another.
+#[test]
+fn a_settled_verify_glyph_does_not_read_as_a_settled_read() {
+    let verify = generic_tool("run_tests", ToolStatus::Success);
+    let read = generic_tool("read_file", ToolStatus::Success);
+
+    let glyph_color = |cell: &GenericToolCell| {
+        cell.lines_with_mode_and_locale(
+            80,
+            /*low_motion*/ true,
+            RenderMode::Live,
+            crate::localization::Locale::En,
+        )[0]
+        .spans[1]
+            .style
+            .fg
+            .expect("header status glyph must be styled")
+    };
+
+    assert_ne!(
+        glyph_color(&verify),
+        glyph_color(&read),
+        "a passed verify and a finished read must not share a glyph colour"
+    );
 }
 
 /// An exploring cell rolls its parallel entries up into one state, and a

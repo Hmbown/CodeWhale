@@ -15,6 +15,7 @@ use ratatui::widgets::{BorderType, Borders, Padding};
 use crate::palette;
 use crate::palette::PaletteMode;
 use crate::tui::history::ToolStatus;
+use crate::tui::widgets::tool_card::ToolFamily;
 
 /// Visual variant exposed by the theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +69,7 @@ impl Theme {
             tool_value_color: palette::TEXT_MUTED,
             tool_label_color: palette::TEXT_DIM,
             tool_running_accent: palette::WHALE_ACTION,
-            tool_success_accent: palette::TEXT_MUTED,
+            tool_success_accent: palette::STATUS_SUCCESS,
             tool_warning_accent: palette::WHALE_HUMAN,
             tool_failed_accent: palette::WHALE_ERROR,
         }
@@ -89,7 +90,7 @@ impl Theme {
             tool_value_color: palette::LIGHT_TEXT_MUTED,
             tool_label_color: palette::LIGHT_TEXT_HINT,
             tool_running_accent: palette::LIGHT_ACTION,
-            tool_success_accent: palette::LIGHT_TEXT_MUTED,
+            tool_success_accent: palette::LIGHT_SUCCESS_FG,
             tool_warning_accent: palette::LIGHT_WARNING,
             tool_failed_accent: palette::LIGHT_DANGER,
         }
@@ -110,7 +111,7 @@ impl Theme {
             tool_value_color: palette::SOLARIZED_TEXT_MUTED,
             tool_label_color: palette::SOLARIZED_TEXT_DIM,
             tool_running_accent: palette::SOLARIZED_BLUE,
-            tool_success_accent: palette::SOLARIZED_TEXT_MUTED,
+            tool_success_accent: palette::SOLARIZED_CYAN,
             tool_warning_accent: palette::SOLARIZED_YELLOW,
             tool_failed_accent: palette::SOLARIZED_RED,
         }
@@ -147,23 +148,53 @@ impl Theme {
         }
     }
 
-    /// The one place a tool cell's lifecycle state becomes ink.
+    /// Colour of a tool cell's **rail** — the card border.
     ///
-    /// Every surface that paints a tool cell — the header glyph, the family
-    /// glyph, the state word, the card rail, and the exploring fan-out dots —
-    /// reads its colour from here, so a running tool reads as running and a
-    /// failed one as failed without any neighbouring row narrating it.
-    /// Modelled on OMP's `output-block.ts`, where a block's `state` drives its
-    /// border colour: in-flight takes the action accent, a settled success
-    /// recedes into muted text, and only warning and failure keep a loud
-    /// colour of their own. `Hydrated` is a stalled "tool loaded — retry
-    /// required", not live work, so it takes the hint colour rather than
-    /// borrowing the running accent and reading as in-flight.
+    /// This is OMP's `output-block.ts` rule verbatim: a block takes a state and
+    /// its border colour follows it. In-flight takes the action accent, a
+    /// settled success recedes into muted text so finished work stops competing
+    /// for the eye, and only warning and failure keep a loud colour. `Hydrated`
+    /// is a stalled "tool loaded — retry required", not live work, so it takes
+    /// the hint colour instead of borrowing the running accent and reading as
+    /// in-flight.
+    ///
+    /// Deliberately *not* the same function as [`Self::tool_glyph_color`]: the
+    /// border reports lifecycle, the glyph reports identity. They agree
+    /// wherever it matters — running, warning and failure are the same ink in
+    /// both, so the two can never disagree about trouble.
     #[must_use]
-    pub const fn tool_status_color(self, status: ToolStatus) -> Color {
+    pub const fn tool_rail_color(self, status: ToolStatus) -> Color {
         match status {
             ToolStatus::Running => self.tool_running_accent,
-            ToolStatus::Success => self.tool_success_accent,
+            ToolStatus::Success => self.tool_value_color,
+            ToolStatus::Hydrated => self.tool_label_color,
+            ToolStatus::Warning => self.tool_warning_accent,
+            ToolStatus::Failed => self.tool_failed_accent,
+        }
+    }
+
+    /// Colour of a tool cell's **status glyph** and the state word beside it.
+    ///
+    /// Follows the accepted mockup (`tideline-mockups/tideline-01`) rather than
+    /// the border rule: a finished verify row keeps its green `✓`, and a
+    /// finished read or search keeps the family accent that identifies it — the
+    /// blue magnifier in that mockup. A settled card therefore still says *what
+    /// it was* even while its border has receded to muted.
+    ///
+    /// Everything that needs attention reads identically to the rail.
+    #[must_use]
+    pub const fn tool_glyph_color(self, status: ToolStatus, family: ToolFamily) -> Color {
+        match status {
+            ToolStatus::Running => self.tool_running_accent,
+            // Verified work earns Working Green; every other family keeps the
+            // action accent it wore while running, which is what makes a
+            // completed `read` row still read as a read.
+            ToolStatus::Success => match family {
+                ToolFamily::Verify => self.tool_success_accent,
+                _ => self.tool_running_accent,
+            },
+            // A hydrated cell has not succeeded at anything yet, so it never
+            // borrows the verified or family accent.
             ToolStatus::Hydrated => self.tool_label_color,
             ToolStatus::Warning => self.tool_warning_accent,
             ToolStatus::Failed => self.tool_failed_accent,
@@ -178,10 +209,11 @@ impl Theme {
             .add_modifier(Modifier::BOLD)
     }
 
-    /// Right-side status text ("running", "done", "issue") style.
+    /// Right-side status text ("running", "done", "issue") style. Reads as the
+    /// glyph it sits beside, not as the rail.
     #[must_use]
-    pub fn tool_status_style(self, status: ToolStatus) -> Style {
-        Style::default().fg(self.tool_status_color(status))
+    pub fn tool_status_style(self, status: ToolStatus, family: ToolFamily) -> Style {
+        Style::default().fg(self.tool_glyph_color(status, family))
     }
 
     /// Detail label style ("command:", "time:", step markers).
@@ -208,6 +240,7 @@ mod tests {
     use super::{Theme, Variant, active_theme};
     use crate::palette;
     use crate::tui::history::ToolStatus;
+    use crate::tui::widgets::tool_card::ToolFamily;
 
     #[test]
     fn active_theme_returns_dark() {
@@ -225,7 +258,7 @@ mod tests {
         assert_eq!(theme.tool_value_color, palette::TEXT_MUTED);
         assert_eq!(theme.tool_label_color, palette::TEXT_DIM);
         assert_eq!(theme.tool_running_accent, palette::WHALE_ACTION);
-        assert_eq!(theme.tool_success_accent, palette::TEXT_MUTED);
+        assert_eq!(theme.tool_success_accent, palette::STATUS_SUCCESS);
         assert_eq!(theme.tool_failed_accent, palette::WHALE_ERROR);
     }
 
@@ -239,7 +272,7 @@ mod tests {
         assert_eq!(theme.tool_value_color, palette::LIGHT_TEXT_MUTED);
         assert_eq!(theme.section_title_color, palette::LIGHT_ACTION);
         assert_eq!(theme.tool_running_accent, palette::LIGHT_ACTION);
-        assert_eq!(theme.tool_success_accent, palette::LIGHT_TEXT_MUTED);
+        assert_eq!(theme.tool_success_accent, palette::LIGHT_SUCCESS_FG);
     }
 
     #[test]
@@ -252,14 +285,13 @@ mod tests {
         assert_eq!(theme.tool_failed_accent, palette::GRAYSCALE_TEXT_BODY);
     }
 
-    /// The whole point of "tool cells carry their own state": every variant
-    /// maps to a distinct WHALE token, so a running card, a failed one and a
-    /// settled one are told apart by ink alone. Asserted against the tokens
-    /// rather than the theme's own fields — a field-to-field assertion passes
-    /// no matter what the fields hold, which is how `Hydrated` sat on the
-    /// running accent and read as live work.
+    /// The rail is the block's border and follows OMP's rule: every status is a
+    /// distinct WHALE token and a settled success recedes into muted text.
+    /// Asserted against the tokens rather than the theme's own fields — a
+    /// field-to-field assertion passes no matter what the fields hold, which is
+    /// how `Hydrated` sat on the running accent and read as live work.
     #[test]
-    fn tool_status_color_maps_each_status() {
+    fn tool_rail_color_maps_each_status() {
         let theme = Theme::dark();
         let table = [
             (ToolStatus::Running, palette::WHALE_ACTION),
@@ -270,22 +302,89 @@ mod tests {
         ];
         for (status, expected) in table {
             assert_eq!(
-                theme.tool_status_color(status),
+                theme.tool_rail_color(status),
                 expected,
-                "dark theme paints {status:?} with the wrong token"
+                "dark theme borders {status:?} with the wrong token"
             );
         }
 
-        // Nothing in the table may collide: two statuses sharing a colour is
-        // the failure this mapping exists to prevent.
+        // Nothing in the table may collide: two statuses sharing a border
+        // colour is the failure this mapping exists to prevent.
         for (i, (status, color)) in table.iter().enumerate() {
             for (other_status, other_color) in &table[i + 1..] {
                 assert_ne!(
                     color, other_color,
-                    "{status:?} and {other_status:?} paint the same colour"
+                    "{status:?} and {other_status:?} draw the same rail"
                 );
             }
         }
+    }
+
+    /// The glyph follows the accepted mockup, not the border rule: a settled
+    /// verify row keeps Working Green, a settled read keeps the family accent
+    /// that identifies it, and everything needing attention reads exactly as
+    /// the rail does.
+    #[test]
+    fn tool_glyph_color_maps_each_status_and_family() {
+        let theme = Theme::dark();
+        // `STATUS_SUCCESS` is built from `WHALE_WORKING_GREEN_RGB`.
+        let working_green = palette::STATUS_SUCCESS;
+        let table = [
+            (ToolStatus::Running, ToolFamily::Read, palette::WHALE_ACTION),
+            (
+                ToolStatus::Running,
+                ToolFamily::Verify,
+                palette::WHALE_ACTION,
+            ),
+            (ToolStatus::Success, ToolFamily::Verify, working_green),
+            (ToolStatus::Success, ToolFamily::Read, palette::WHALE_ACTION),
+            (ToolStatus::Success, ToolFamily::Find, palette::WHALE_ACTION),
+            (ToolStatus::Success, ToolFamily::Run, palette::WHALE_ACTION),
+            (
+                ToolStatus::Success,
+                ToolFamily::Generic,
+                palette::WHALE_ACTION,
+            ),
+            (ToolStatus::Hydrated, ToolFamily::Verify, palette::TEXT_DIM),
+            (ToolStatus::Hydrated, ToolFamily::Read, palette::TEXT_DIM),
+            (ToolStatus::Warning, ToolFamily::Read, palette::WHALE_HUMAN),
+            (ToolStatus::Failed, ToolFamily::Verify, palette::WHALE_ERROR),
+            (ToolStatus::Failed, ToolFamily::Read, palette::WHALE_ERROR),
+        ];
+        for (status, family, expected) in table {
+            assert_eq!(
+                theme.tool_glyph_color(status, family),
+                expected,
+                "dark theme paints the {status:?}/{family:?} glyph with the wrong token"
+            );
+        }
+    }
+
+    /// The two mappings are separate on purpose, and each half of that claim is
+    /// load-bearing: a settled card must dim its border while keeping an
+    /// identifying glyph, and the two must never disagree about trouble.
+    #[test]
+    fn rail_and_glyph_split_only_where_the_card_has_settled() {
+        let theme = Theme::dark();
+        for family in [ToolFamily::Read, ToolFamily::Verify] {
+            for status in [ToolStatus::Running, ToolStatus::Warning, ToolStatus::Failed] {
+                assert_eq!(
+                    theme.tool_rail_color(status),
+                    theme.tool_glyph_color(status, family),
+                    "{status:?} must read the same on the rail and the glyph"
+                );
+            }
+            assert_ne!(
+                theme.tool_rail_color(ToolStatus::Success),
+                theme.tool_glyph_color(ToolStatus::Success, family),
+                "a settled {family:?} card must dim its border without dimming its glyph"
+            );
+        }
+        assert_ne!(
+            theme.tool_glyph_color(ToolStatus::Success, ToolFamily::Verify),
+            theme.tool_glyph_color(ToolStatus::Success, ToolFamily::Read),
+            "a passed verify and a finished read must not share a glyph colour"
+        );
     }
 
     /// The load-bearing separations hold in every palette, not just the active
@@ -302,18 +401,18 @@ mod tests {
         ] {
             let theme = Theme::for_palette_mode(mode);
             assert_ne!(
-                theme.tool_status_color(ToolStatus::Running),
-                theme.tool_status_color(ToolStatus::Failed),
+                theme.tool_rail_color(ToolStatus::Running),
+                theme.tool_rail_color(ToolStatus::Failed),
                 "{mode:?} paints running and failed alike"
             );
             assert_ne!(
-                theme.tool_status_color(ToolStatus::Running),
-                theme.tool_status_color(ToolStatus::Success),
+                theme.tool_rail_color(ToolStatus::Running),
+                theme.tool_rail_color(ToolStatus::Success),
                 "{mode:?} paints running and success alike"
             );
             assert_ne!(
-                theme.tool_status_color(ToolStatus::Failed),
-                theme.tool_status_color(ToolStatus::Success),
+                theme.tool_rail_color(ToolStatus::Failed),
+                theme.tool_rail_color(ToolStatus::Success),
                 "{mode:?} paints failed and success alike"
             );
         }

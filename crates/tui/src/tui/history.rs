@@ -1247,7 +1247,10 @@ impl ExploringCell {
                     ToolStatus::Running => "\u{25D0}",
                     ToolStatus::Failed => "\u{2715}",
                 };
-                Span::styled(glyph, Style::default().fg(tool_state_color(e.status)))
+                Span::styled(
+                    glyph,
+                    Style::default().fg(tool_glyph_color(e.status, family)),
+                )
             }));
             let counts = format!(
                 "  {done} done, {running} running{}",
@@ -1259,7 +1262,7 @@ impl ExploringCell {
             );
             dot_spans.push(Span::styled(
                 counts,
-                Style::default().fg(tool_state_color(status)),
+                Style::default().fg(tool_glyph_color(status, family)),
             ));
             lines.push(Line::from(dot_spans));
         }
@@ -2182,16 +2185,18 @@ fn render_compact_kv(label: &str, value: &str, style: Style, width: u16) -> Vec<
 /// Single-line cards get a single `─` prefix.
 ///
 /// The rail is the card's border, so it carries the cell's own state: it is
-/// painted with [`tool_state_color`], the single status→ink mapping. A running
-/// card is bordered in the action accent and a failed one in the error colour,
-/// which is what makes a tool cell legible without a neighbouring row
-/// narrating what the card already shows.
+/// painted with [`tool_rail_color`], OMP's border rule. A running card is
+/// bordered in the action accent, a failed one in the error colour, and a
+/// settled one recedes to muted — which is what makes a tool cell legible
+/// without a neighbouring row narrating what the card already shows. The
+/// header glyph inside it follows [`tool_glyph_color`] instead, so a finished
+/// card still says what it was.
 fn wrap_card_rail(mut lines: Vec<Line<'static>>, status: ToolStatus) -> Vec<Line<'static>> {
     let n = lines.len();
     if n == 0 {
         return lines;
     }
-    let rail_style = Style::default().fg(tool_state_color(status));
+    let rail_style = Style::default().fg(tool_rail_color(status));
     if n == 1 {
         lines[0].spans.insert(0, Span::styled("─ ", rail_style));
         return lines;
@@ -2557,18 +2562,16 @@ fn render_tool_header_with_family_and_summary(
     let glyph = crate::tui::widgets::tool_card::family_glyph(family);
     let verb = crate::tui::widgets::tool_card::family_label(family);
 
+    let glyph_style = Style::default().fg(tool_glyph_color(status, family));
     let mut spans = vec![
         Span::styled(
             format!("{} ", status_symbol(started_at, status, low_motion, family)),
-            Style::default().fg(tool_state_color(status)),
+            glyph_style,
         ),
-        Span::styled(
-            format!("{glyph} "),
-            Style::default().fg(tool_state_color(status)),
-        ),
+        Span::styled(format!("{glyph} "), glyph_style),
         Span::styled(verb.to_string(), tool_title_style()),
         Span::styled(" ", Style::default()),
-        Span::styled(state_owned, tool_status_style(status)),
+        Span::styled(state_owned, tool_status_style(status, family)),
     ];
 
     // #4148: don't let the summary echo the verb it sits next to — an
@@ -2681,16 +2684,28 @@ fn tool_title_style() -> Style {
     active_theme().tool_title_style()
 }
 
-fn tool_status_style(status: ToolStatus) -> Style {
-    active_theme().tool_status_style(status)
+fn tool_status_style(
+    status: ToolStatus,
+    family: crate::tui::widgets::tool_card::ToolFamily,
+) -> Style {
+    active_theme().tool_status_style(status, family)
 }
 
 fn tool_detail_label_style() -> Style {
     active_theme().tool_label_style()
 }
 
-fn tool_state_color(status: ToolStatus) -> Color {
-    active_theme().tool_status_color(status)
+/// Card border ink — OMP's border rule. See [`Theme::tool_rail_color`].
+fn tool_rail_color(status: ToolStatus) -> Color {
+    active_theme().tool_rail_color(status)
+}
+
+/// Status-glyph ink — the mockup's reading. See [`Theme::tool_glyph_color`].
+fn tool_glyph_color(
+    status: ToolStatus,
+    family: crate::tui::widgets::tool_card::ToolFamily,
+) -> Color {
+    active_theme().tool_glyph_color(status, family)
 }
 
 fn tool_status_label(status: ToolStatus) -> &'static str {
