@@ -3467,14 +3467,23 @@ fn auth_list_lines_with_runtime(
     let mut lines = Vec::new();
     lines.push("provider     config store env  route".to_string());
     for provider in ProviderKind::ALL {
-        let slot = provider_slot(provider);
+        // Label the row by the provider, not by its credential slot. This
+        // table has one row per ProviderKind, but several kinds share a slot
+        // (ProviderKind::secret_store_slot): SiliconflowCN shares
+        // `siliconflow`, and the four Model Studio variants share
+        // `modelstudio-token-plan`. Labelling by slot printed `siliconflow`
+        // twice and `modelstudio-token-plan` four times, so the reader could
+        // not tell which row was which provider. The status columns still
+        // read the shared slot, which is what makes one saved key light up
+        // the whole family.
+        let label = provider.as_str();
         if provider == ProviderKind::Xai {
             let diagnostics = xai_auth_diagnostics(store, runtime_overrides);
             let api_key = diagnostics
                 .evaluates_runtime_api_key()
                 .then(|| xai_runtime_api_key(store, secrets, runtime_overrides));
             lines.push(format!(
-                "{slot:<12}  {}     {}      {}   {}",
+                "{label:<12}  {}     {}      {}   {}",
                 xai_list_storage_status(api_key.as_ref(), RuntimeApiKeySource::ConfigFile),
                 xai_list_storage_status(api_key.as_ref(), RuntimeApiKeySource::Keyring),
                 xai_list_storage_status(api_key.as_ref(), RuntimeApiKeySource::Env),
@@ -3507,7 +3516,7 @@ fn auth_list_lines_with_runtime(
             "missing"
         };
         lines.push(format!(
-            "{slot:<12}  {}     {}      {}   {active}",
+            "{label:<12}  {}     {}      {}   {active}",
             yes_no(file),
             keyring_status_short(keyring),
             yes_no(env)
@@ -8362,6 +8371,42 @@ verbosity = "project-imported"
             .unwrap_or_else(|| panic!("missing openai-codex row:\n{output}"));
         assert!(row.ends_with("external-consent"), "{row}");
         assert!(!output.contains("secret-token"));
+    }
+
+    #[test]
+    fn auth_list_labels_each_row_by_its_own_provider() {
+        // ProviderKind::secret_store_slot collapses families onto one durable
+        // slot -- SiliconflowCN onto `siliconflow`, the four Model Studio
+        // variants onto `modelstudio-token-plan` -- but this table has one row
+        // per kind. Labelling rows by slot printed `siliconflow` twice and
+        // `modelstudio-token-plan` four times, so a reader could not tell which
+        // row belonged to which provider.
+        let _lock = env_lock();
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let store =
+            ConfigStore::load(Some(dir.path().join("config.toml"))).expect("store should load");
+        let secrets = Secrets::new(std::sync::Arc::new(
+            codewhale_secrets::InMemoryKeyringStore::new(),
+        ));
+
+        let lines = auth_list_lines(&store, &secrets);
+        let labels: Vec<&str> = lines
+            .iter()
+            .skip(1)
+            .filter_map(|line| line.split_whitespace().next())
+            .collect();
+
+        assert_eq!(
+            labels.len(),
+            ProviderKind::ALL.len(),
+            "one row per provider kind: {labels:?}"
+        );
+        let unique: std::collections::BTreeSet<&&str> = labels.iter().collect();
+        assert_eq!(
+            unique.len(),
+            labels.len(),
+            "every row must name its own provider, not a shared slot: {labels:?}"
+        );
     }
 
     #[test]
