@@ -185,15 +185,6 @@ pub(crate) fn hotbar_slot_from_key(app: &App, key: &event::KeyEvent) -> Option<u
     None
 }
 
-pub(crate) fn is_permission_cycle_shortcut(key: &KeyEvent) -> bool {
-    let forbidden = KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER;
-    if key.modifiers.intersects(forbidden) {
-        return false;
-    }
-    matches!(key.code, KeyCode::BackTab)
-        || (matches!(key.code, KeyCode::Tab) && key.modifiers.contains(KeyModifiers::SHIFT))
-}
-
 pub(crate) async fn cycle_permission_posture(
     app: &mut App,
     config: &mut Config,

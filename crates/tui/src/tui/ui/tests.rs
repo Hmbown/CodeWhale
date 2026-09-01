@@ -32,6 +32,7 @@ use crate::tui::history::{
 };
 use crate::tui::hotbar::actions::{HotbarActionCategory, HotbarDispatch};
 use crate::tui::provider_picker::ProviderPickerView;
+use crate::tui::shell_key_routing::is_permission_cycle_shortcut;
 use crate::tui::ui_text::truncate_line_to_width;
 use crate::tui::views::{HelpView, ModalView, ViewAction};
 use crate::working_set::Workspace;

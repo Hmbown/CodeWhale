@@ -45,6 +45,7 @@ use crate::tui::motion::MotionPolicy;
 use crate::tui::paste_burst::{FlushResult, PasteBurst};
 use crate::tui::scrolling::{MouseScrollState, TranscriptLineMeta, TranscriptScroll};
 use crate::tui::selection::{SelectionAutoscroll, TranscriptSelection};
+use crate::tui::shell_key_routing::Focus;
 use crate::tui::sidebar::SidebarWorkSummary;
 use crate::tui::streaming::StreamingState;
 use crate::tui::transcript::TranscriptViewCache;
@@ -2303,6 +2304,34 @@ fn push_enabled_provider_model(
 }
 
 impl App {
+    /// Who owns the keyboard right now.
+    ///
+    /// The single derivation of [`Focus`], mirroring the order in which the
+    /// event loop actually offers a key to each surface. Shell bindings ask
+    /// this; only genuine composer *editing* keys may ask whether the
+    /// composer has text.
+    #[must_use]
+    pub fn focus(&self) -> Focus {
+        if let Some(kind) = self.view_stack.top_kind() {
+            return Focus::Modal(kind);
+        }
+        if self.onboarding != OnboardingState::None {
+            return Focus::Onboarding;
+        }
+        if self.launch.visible {
+            return Focus::Launch;
+        }
+        if self.work_surface.focused
+            || self
+                .workflow_panel
+                .as_ref()
+                .is_some_and(|panel| panel.keyboard_focus)
+        {
+            return Focus::Panel;
+        }
+        Focus::Composer
+    }
+
     /// Persist the pending session route as the explicit choice (`/pod save`,
     /// `/pod save-as`, `/model save-default`). Returns the receipt
     /// message naming the exact file written — or an error message when the
