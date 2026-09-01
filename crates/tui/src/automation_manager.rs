@@ -2984,7 +2984,10 @@ mod tests {
             .map(|entry| entry.path())
             .find(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
             .expect("json run file");
-        let stem = json.file_stem().and_then(|stem| stem.to_str()).expect("stem");
+        let stem = json
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("stem");
         fs::write(dir.join(format!("{stem}.tmp")), "not-json").expect("write tmp noise");
         fs::write(dir.join(format!("{stem}.json.bak")), "not-json").expect("write bak noise");
 

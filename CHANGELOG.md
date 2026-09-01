@@ -53,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MCP servers and plugins can be connected self-serve from the session: a
+  unified auth flow with rotation-safe token handling, a spoken authorization
+  URL, and catalog refresh when stored credentials stop working (#5747).
+- `/operate` reads match the landed CWC `OperateRecord` contract: fetching an
+  absent record returns a truthful not-found view instead of a fabricated
+  operation, and an empty evidence path is rejected rather than resolving to
+  the workspace directory (#5703).
 - TUI: scheduled automations project into the top strip
   (`⏱ N scheduled · M running`, compact `⏱ N·M`) with typed
   `HistoryCell::Automation` receipts when a run this session watched settle.
