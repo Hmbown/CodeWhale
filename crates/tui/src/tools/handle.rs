@@ -228,6 +228,14 @@ impl HandleStore {
             }
         }
     }
+
+    /// Bytes currently held across every session. Exercised from the
+    /// tests below; no production caller today.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[must_use]
+    pub fn retained_bytes(&self) -> usize {
+        self.retained_bytes
+    }
 }
 
 pub struct HandleReadTool;
