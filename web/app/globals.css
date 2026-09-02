@@ -469,27 +469,21 @@ mark.search-highlight {
 .paper-wordmark-mark {
   display: block;
   flex: 0 0 auto;
-}
-
-.paper-wordmark-mark img {
-  display: block;
-  width: auto;
+  width: 22px;
   height: 22px;
 }
 
+/* The traced wordmark is ~7.1:1; when the compact nav clamps its width the
+   glyphs scale down inside the box instead of squashing. */
 .paper-wordmark-logo {
   display: block;
   flex: 0 1 auto;
   width: auto;
   min-width: 0;
   max-width: 100%;
-}
-
-.paper-wordmark-logo img {
-  display: block;
-  width: auto;
-  max-width: 100%;
   height: 20px;
+  object-fit: contain;
+  object-position: left center;
 }
 
 .paper-star-badge {

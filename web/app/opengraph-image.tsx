@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ImageResponse } from "next/og";
-import { OG_ALT } from "@/lib/page-meta";
+import { IDENTITY_PHRASE, OG_ALT } from "@/lib/page-meta";
 
 export const alt = OG_ALT;
 export const size = { width: 1200, height: 630 };
@@ -19,6 +19,8 @@ export default async function OpengraphImage() {
   const markDataUrl = `data:image/svg+xml;base64,${Buffer.from(markSvg).toString("base64")}`;
   const wordmarkDataUrl = `data:image/svg+xml;base64,${Buffer.from(wordmarkSvg).toString("base64")}`;
 
+  // Brand navy ground, the white mark and inverted wordmark, and the identity
+  // phrase once — the wordmark is the name, so no second "Codewhale" heading.
   return new ImageResponse(
     (
       <div
@@ -29,12 +31,17 @@ export default async function OpengraphImage() {
           flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
-          gap: 36,
+          gap: 34,
           background: "#142352",
+          fontFamily: "sans-serif",
         }}
       >
-        <img src={markDataUrl} width={220} height={220} alt="Codewhale whale mark" />
-        <img src={wordmarkDataUrl} width={520} height={74} alt="Codewhale" />
+        <img src={markDataUrl} width={200} height={200} alt="" />
+        {/* The traced wordmark is 1874x264 (~7.1:1). */}
+        <img src={wordmarkDataUrl} width={532} height={75} alt="Codewhale" />
+        <div style={{ display: "flex", fontSize: 30, color: "#F6F2E8", marginTop: 14 }}>
+          {IDENTITY_PHRASE}
+        </div>
       </div>
     ),
     { ...size },

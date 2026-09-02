@@ -81,8 +81,8 @@ describe("Tideline public-surface contract", () => {
     expect(mobile).toMatch(
       /\.site-nav-actions select\s*\{[\s\S]*?width:\s*6\.75rem;[\s\S]*?min-width:\s*0/,
     );
-    expect(CSS).toMatch(/\.paper-wordmark-mark img\s*\{[^}]*height:\s*22px;/);
-    expect(CSS).toMatch(/\.paper-wordmark-logo img\s*\{[^}]*height:\s*20px;/);
+    expect(CSS).toMatch(/\.paper-wordmark-mark\s*\{[^}]*height:\s*22px;/);
+    expect(CSS).toMatch(/\.paper-wordmark-logo\s*\{[^}]*height:\s*20px;/);
     expect(CSS).toMatch(/\.site-nav-actions\s*\{[\s\S]*?flex-shrink:\s*0/);
     expect(CSS).toMatch(/\.site-nav-actions\s*>\s*\*\s*\{\s*flex-shrink:\s*0/);
     expect(CSS).toMatch(/@media \(max-width: 900px\)[\s\S]*?\.site-github-link\s*\{\s*display:\s*none/);

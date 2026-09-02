@@ -8,6 +8,7 @@ import { LocaleSwitcher } from "./locale-switcher";
 import { MobileMenu } from "./mobile-menu";
 import { NavLinks } from "./nav-links";
 import { ThemeToggle } from "./theme-toggle";
+import { Whale } from "./whale";
 
 /** Masthead + primary nav — the Tideline topbar on the web. */
 export async function Nav({ locale = "en" }: { locale?: Locale }) {
@@ -29,15 +30,18 @@ export async function Nav({ locale = "en" }: { locale?: Locale }) {
     <header className="site-nav paper-nav">
       <div className="site-nav-inner paper-nav-inner">
         <Link href={homeHref} className="site-wordmark paper-wordmark" aria-label={chrome.navHomeAria}>
+          {/* The nav sits on the dark Tideline field on every route (the
+              docs light sheet is scoped below it), so the mark is the white
+              brand ink and the wordmark is the inverted trace. */}
           <div className="paper-wordmark-text">
-            <picture className="paper-wordmark-mark">
-              <source media="(prefers-color-scheme: dark)" srcSet="/brand/mark-gradient.svg" />
-              <img src="/brand/mark.svg" alt="" />
-            </picture>
-            <picture className="paper-wordmark-logo">
-              <source media="(prefers-color-scheme: dark)" srcSet="/brand/wordmark-inverted.svg" />
-              <img src="/brand/wordmark.svg" alt="" />
-            </picture>
+            <Whale size={22} className="paper-wordmark-mark" />
+            <img
+              className="paper-wordmark-logo"
+              src="/brand/wordmark-inverted.svg"
+              alt=""
+              width={142}
+              height={20}
+            />
           </div>
         </Link>
 
