@@ -434,14 +434,12 @@ impl ModelPickerView {
             return Vec::new();
         };
         let provider = provider_entry.provider;
-        let identity = provider_entry.identity.as_deref();
         let query = self.query.trim();
         let mut rows: Vec<&ModelPickerRow> = self
             .model_rows
             .iter()
             .filter(|row| {
-                row.provider == Some(provider)
-                    && row_provider_identity(row) == identity
+                provider_entry_matches_row(row, provider_entry)
                     && model_row_visible_in_view(row, self.view, self.initial_provider)
                     && (query.is_empty()
                         || model_row_matches_query(row, query, self.initial_provider)
@@ -625,8 +623,7 @@ impl ModelPickerView {
             .iter()
             .filter(|entry| {
                 let view_allows = self.model_rows.iter().any(|row| {
-                    row.provider == Some(entry.provider)
-                        && row_provider_identity(row) == entry.identity.as_deref()
+                    provider_entry_matches_row(row, entry)
                         && model_row_visible_in_view(row, self.view, self.initial_provider)
                 });
                 let query_matches = !self.query.trim().is_empty()
@@ -635,8 +632,7 @@ impl ModelPickerView {
                     || query_matches
                     || (view_allows
                         && self.model_rows.iter().any(|row| {
-                            row.provider == Some(entry.provider)
-                                && row_provider_identity(row) == entry.identity.as_deref()
+                            provider_entry_matches_row(row, entry)
                                 && model_row_matches_query(
                                     row,
                                     self.query.trim(),
@@ -1949,7 +1945,9 @@ fn provider_entries_for_rows(
         let Some(provider) = row.provider else {
             continue;
         };
-        let identity = row_provider_identity(row).map(str::to_string);
+        let identity = (provider == ApiProvider::Custom)
+            .then(|| row_provider_identity(row).map(str::to_string))
+            .flatten();
         if let Some(entry) = entries
             .iter_mut()
             .find(|entry| entry.provider == provider && entry.identity == identity)
@@ -2102,6 +2100,9 @@ fn catalog_family_for(provider: ApiProvider, model_id: &str) -> Option<String> {
 }
 
 fn model_row_meta_chips(row: &ModelPickerRow) -> Vec<String> {
+    if row.provider.is_none() {
+        return vec![row.hint.clone()];
+    }
     let mut chips = Vec::new();
     chips.push(
         row.metadata
@@ -2261,6 +2262,12 @@ fn row_provider_identity(row: &ModelPickerRow) -> Option<&str> {
             .filter(|provider| *provider != ApiProvider::Custom)
             .map(ApiProvider::as_str)
     })
+}
+
+fn provider_entry_matches_row(row: &ModelPickerRow, entry: &ProviderEntry) -> bool {
+    row.provider == Some(entry.provider)
+        && (entry.provider != ApiProvider::Custom
+            || row_provider_identity(row) == entry.identity.as_deref())
 }
 
 fn offering_for_row(row: &ModelPickerRow) -> Option<codewhale_config::catalog::CatalogOffering> {
@@ -2678,442 +2685,6 @@ impl ModelPickerView {
             model: row.id.clone(),
             delta,
         })
-    }
-}
-
-#[cfg(any())]
-impl ModalView for ModelPickerView {
-    fn kind(&self) -> ModalKind {
-        ModalKind::ModelPicker
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
-    fn handle_key(&mut self, key: KeyEvent) -> ViewAction {
-        match key.code {
-            // Esc carries the browsing context out so the next open can
-            // restore it (#4109 picker memory).
-            KeyCode::Esc => ViewAction::EmitAndClose(ViewEvent::ModelPickerDismissed {
-                catalog_view: self.view.browses_all_providers(),
-                view: self.view.memory_name().to_string(),
-                selected_row_id: {
-                    let rows = self.visible_model_rows();
-                    rows.get(self.selected_model_idx).map(|row| row.id.clone())
-                },
-            }),
-            KeyCode::Enter if self.model_row_count() == 0 => ViewAction::None,
-            KeyCode::Enter if !self.selected_model_is_selectable() => {
-                // Never silently ignore Enter on locked models — surface the
-                // readiness reason and offer provider setup.
-                self.explain_unselectable_selection()
-            }
-            KeyCode::Enter => ViewAction::EmitAndClose(self.build_event()),
-            // Shift+D makes the visible provider/model pair the startup
-            // default. Plain Enter deliberately stays session-local, so a
-            // one-off route comparison cannot silently change the next launch.
-            KeyCode::Char(ch)
-                if key.modifiers.contains(KeyModifiers::SHIFT)
-                    && self.query.is_empty()
-                    && ch.eq_ignore_ascii_case(&'d')
-                    && self.selected_model_is_selectable() =>
-            {
-                ViewAction::EmitAndClose(self.build_event_with_startup_default(true))
-            }
-            KeyCode::Char(ch)
-                if key.modifiers.contains(KeyModifiers::SHIFT) && ch.eq_ignore_ascii_case(&'d') =>
-            {
-                self.explain_unselectable_selection()
-            }
-            // Pinning must never steal the first character of a route search:
-            // use the explicitly shifted key advertised in the footer.
-            KeyCode::Char('P') if key.modifiers == KeyModifiers::SHIFT && self.query.is_empty() => {
-                let rows = self.visible_model_rows();
-                let Some(row) = rows.get(self.selected_model_idx) else {
-                    return ViewAction::None;
-                };
-                let Some(provider) = row.provider else {
-                    return ViewAction::None;
-                };
-                ViewAction::Emit(ViewEvent::ModelPickerTogglePin {
-                    provider,
-                    provider_id: row.provider_identity.clone(),
-                    model: row.id.clone(),
-                })
-            }
-            // Same rule as pinning: a shifted key, never a search character.
-            KeyCode::Char('F') if key.modifiers == KeyModifiers::SHIFT && self.query.is_empty() => {
-                let rows = self.visible_model_rows();
-                let Some(row) = rows.get(self.selected_model_idx) else {
-                    return ViewAction::None;
-                };
-                let Some(provider) = row.provider else {
-                    return ViewAction::None;
-                };
-                ViewAction::Emit(ViewEvent::ModelPickerToggleFleet {
-                    provider,
-                    provider_id: row.provider_identity.clone(),
-                    model: row.id.clone(),
-                })
-            }
-            KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) && self.query.is_empty() => {
-                self.emit_pin_move(-1)
-            }
-            KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) && self.query.is_empty() => {
-                self.emit_pin_move(1)
-            }
-            // Cycle catalog views (#4115) without shadowing a typed provider
-            // name such as `anthropic` or `azure`.
-            KeyCode::Char('A') if key.modifiers == KeyModifiers::SHIFT && self.query.is_empty() => {
-                self.toggle_view();
-                ViewAction::None
-            }
-            KeyCode::Char(ch)
-                if self.focus == Pane::Model
-                    && !key
-                        .modifiers
-                        .contains(crossterm::event::KeyModifiers::CONTROL) =>
-            {
-                let mut query = self.query.clone();
-                query.push(ch);
-                self.update_query(query);
-                ViewAction::None
-            }
-            KeyCode::Backspace if self.focus == Pane::Model && !self.query.is_empty() => {
-                let mut query = self.query.clone();
-                query.pop();
-                self.update_query(query);
-                ViewAction::None
-            }
-            KeyCode::Up => {
-                self.move_up();
-                ViewAction::None
-            }
-            KeyCode::Down => {
-                self.move_down();
-                ViewAction::None
-            }
-            KeyCode::PageUp => {
-                for _ in 0..5 {
-                    self.move_up();
-                }
-                ViewAction::None
-            }
-            KeyCode::PageDown => {
-                for _ in 0..5 {
-                    self.move_down();
-                }
-                ViewAction::None
-            }
-            KeyCode::Home => {
-                match self.focus {
-                    Pane::Model => {
-                        self.selected_model_idx = 0;
-                        self.select_effort_for_current_model();
-                    }
-                    Pane::Effort => {
-                        self.selected_effort_idx = 0;
-                        self.selected_effort_request = self.resolved_effort();
-                    }
-                }
-                ViewAction::None
-            }
-            KeyCode::End => {
-                match self.focus {
-                    Pane::Model => {
-                        self.selected_model_idx = self.model_row_count().saturating_sub(1);
-                        self.select_effort_for_current_model();
-                    }
-                    Pane::Effort => {
-                        self.selected_effort_idx = self.current_efforts().len().saturating_sub(1);
-                        self.selected_effort_request = self.resolved_effort();
-                    }
-                }
-                ViewAction::None
-            }
-            KeyCode::Tab | KeyCode::Right | KeyCode::Left | KeyCode::BackTab => {
-                self.toggle_focus();
-                ViewAction::None
-            }
-            // Explicit readiness + catalog refresh (safe, non-destructive).
-            // Plain `r` remains a route-search character.
-            KeyCode::Char('r') | KeyCode::Char('R')
-                if key.modifiers == crossterm::event::KeyModifiers::CONTROL =>
-            {
-                ViewAction::Emit(ViewEvent::ModelPickerRefresh)
-            }
-            _ => ViewAction::None,
-        }
-    }
-
-    fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
-        match mouse.kind {
-            MouseEventKind::ScrollUp => {
-                self.last_mouse_selected = None;
-                self.move_up();
-                ViewAction::None
-            }
-            MouseEventKind::ScrollDown => {
-                self.last_mouse_selected = None;
-                self.move_down();
-                ViewAction::None
-            }
-            MouseEventKind::Down(MouseButton::Left) => {
-                let clicked = self
-                    .row_hitboxes
-                    .borrow()
-                    .iter()
-                    .find_map(|(rect, pane, idx)| {
-                        rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
-                            .then_some((*pane, *idx))
-                    });
-                let Some((pane, idx)) = clicked else {
-                    return ViewAction::None;
-                };
-                let apply = self.last_mouse_selected == Some((pane, idx))
-                    && self.focus == pane
-                    && match pane {
-                        Pane::Model => self.selected_model_idx == idx,
-                        Pane::Effort => self.selected_effort_idx == idx,
-                    };
-                self.focus = pane;
-                match pane {
-                    Pane::Model => {
-                        self.selected_model_idx = idx.min(self.model_row_count().saturating_sub(1));
-                        self.select_effort_for_current_model();
-                    }
-                    Pane::Effort => {
-                        self.selected_effort_idx =
-                            idx.min(self.current_efforts().len().saturating_sub(1));
-                        self.selected_effort_request = self.resolved_effort();
-                    }
-                }
-                self.last_mouse_selected = Some((pane, idx));
-                if apply && self.selected_model_is_selectable() {
-                    ViewAction::EmitAndClose(self.build_event())
-                } else if apply {
-                    self.explain_unselectable_selection()
-                } else {
-                    ViewAction::None
-                }
-            }
-            _ => ViewAction::None,
-        }
-    }
-
-    fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.render_route(area, buf);
-    }
-}
-
-#[cfg(any())]
-impl ModelPickerView {
-    fn render_route(&self, area: Rect, buf: &mut Buffer) {
-        self.row_hitboxes.borrow_mut().clear();
-        let inner = render_underwater_surface(
-            area,
-            buf,
-            tr(self.locale, MessageId::RouteSurfaceTitle)
-                .replace("{view}", self.view.title_label()),
-        );
-
-        // Say what the action does in model language. Provider changes are an
-        // implementation detail of applying a cross-provider model row.
-        let view_action: std::borrow::Cow<'static, str> = match self.view {
-            ModelListView::Configured => tr(self.locale, MessageId::RouteBrowseCatalog),
-            other => other.next().title_label().into(),
-        };
-        let mut footer_hints = vec![
-            ActionHint::new("↑↓", tr(self.locale, MessageId::PickerActionMove)),
-            ActionHint::new("Tab", tr(self.locale, MessageId::PickerActionSwitch)),
-            ActionHint::new(
-                tr(self.locale, MessageId::RouteActionType),
-                tr(self.locale, MessageId::RouteActionSearchAnyModel),
-            ),
-            ActionHint::new("Enter", tr(self.locale, MessageId::PickerActionApply)),
-            ActionHint::new(
-                "⇧D",
-                tr(self.locale, MessageId::PickerActionSetStartupDefault),
-            ),
-            ActionHint::new("⇧A", view_action),
-        ];
-        // Keep compact route modals focused on the core browse/apply actions;
-        // wider shells have room to disclose the pin action too.
-        if inner.width >= 72 {
-            footer_hints.push(ActionHint::new(
-                "⇧F",
-                tr(self.locale, MessageId::PickerActionFleet),
-            ));
-            footer_hints.push(ActionHint::new(
-                "⇧P",
-                tr(self.locale, MessageId::PickerActionPin),
-            ));
-        }
-        footer_hints.push(ActionHint::new(
-            "Esc",
-            tr(self.locale, MessageId::PickerActionCancel),
-        ));
-        let content = render_modal_footer(inner, buf, &footer_hints);
-
-        let shell = ratatui::layout::Layout::default()
-            .direction(ratatui::layout::Direction::Vertical)
-            .constraints([
-                ratatui::layout::Constraint::Length(3),
-                ratatui::layout::Constraint::Min(1),
-            ])
-            .split(content);
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled(
-                    format!("─ {} ", tr(self.locale, MessageId::RoutePanelHeader)),
-                    Style::default().fg(palette::WHALE_ACTION).bold(),
-                ),
-                Span::styled(
-                    "──────────────────────── ",
-                    Style::default().fg(palette::BORDER_COLOR),
-                ),
-                Span::styled(
-                    format!(
-                        "{}{}",
-                        self.view.title_label(),
-                        catalog_freshness_title_suffix(self.locale)
-                    ),
-                    Style::default().fg(palette::TEXT_MUTED),
-                ),
-                Span::styled(
-                    " ─────────────────",
-                    Style::default().fg(palette::BORDER_COLOR),
-                ),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    format!("  {} ", tr(self.locale, MessageId::RouteProviderLabel)),
-                    Style::default().fg(palette::WHALE_INFO),
-                ),
-                Span::styled(
-                    self.resolved_provider()
-                        .unwrap_or(self.initial_provider)
-                        .display_name(),
-                    Style::default().fg(palette::TEXT_PRIMARY),
-                ),
-                Span::styled(
-                    format!(" · {}", tr(self.locale, MessageId::RouteModelFirstAtomic)),
-                    Style::default().fg(palette::TEXT_MUTED),
-                ),
-            ]),
-        ])
-        .render(shell[0], buf);
-
-        let layout = widen_model_pane(ListDetailLayout::split(shell[1], 24));
-
-        let visible = self.visible_model_rows();
-        let route_labels = route_labels_for_rows(&visible);
-        let mut model_rows: Vec<PaneRow> = visible
-            .iter()
-            .map(|row| {
-                let active = row.id == self.initial_model
-                    && (row.provider.is_none() || row.provider == Some(self.initial_provider));
-                match row.provider {
-                    // `auto` is not a catalog offering; it keeps its explanatory
-                    // prose, which now has the whole row to be truncated into
-                    // instead of being dropped for not fitting.
-                    None => PaneRow {
-                        primary: row.id.clone(),
-                        route: String::new(),
-                        meta: vec![row.hint.clone()],
-                        family: None,
-                        active,
-                        status: None,
-                    },
-                    Some(provider) => PaneRow {
-                        primary: row.id.clone(),
-                        route: route_labels
-                            .get(provider.as_str())
-                            .cloned()
-                            .unwrap_or_else(|| provider.display_name().to_string()),
-                        meta: model_row_meta_chips(row),
-                        family: catalog_family_for(provider, &row.id),
-                        active,
-                        status: None,
-                    },
-                }
-            })
-            .collect();
-        if let Some((model, provider)) = self.custom_model_row() {
-            model_rows.push(PaneRow {
-                primary: model,
-                family: None,
-                route: provider.display_name().to_string(),
-                meta: vec![if self.query.trim().is_empty() {
-                    "current (custom)".to_string()
-                } else {
-                    "custom route".to_string()
-                }],
-                active: false,
-                status: None,
-            });
-        }
-        let model_title = if self.query.trim().is_empty() {
-            format!("Model · {}", self.view.title_label())
-        } else {
-            format!("Model: {}", self.query.trim())
-        };
-        self.render_pane(
-            layout.list,
-            buf,
-            &model_title,
-            model_rows,
-            PaneRenderState {
-                pane: Pane::Model,
-                selected: self.selected_model_idx,
-                focused: self.focus == Pane::Model,
-            },
-        );
-
-        let effort_provider = self.resolved_provider().unwrap_or(self.initial_provider);
-        let current_efforts = self.current_efforts();
-        let selected_effort_idx = self
-            .selected_effort_idx
-            .min(current_efforts.len().saturating_sub(1));
-        let effort_rows: Vec<PaneRow> = current_efforts
-            .iter()
-            .map(|effort| {
-                let label = effort
-                    .display_label_for_provider(effort_provider)
-                    .to_string();
-                let hint = match effort {
-                    ReasoningEffort::Auto => "choose per turn".to_string(),
-                    ReasoningEffort::Off => "no extra reasoning".to_string(),
-                    ReasoningEffort::Minimal => "minimal reasoning".to_string(),
-                    ReasoningEffort::Low => "lighter reasoning".to_string(),
-                    ReasoningEffort::Medium => "balanced reasoning".to_string(),
-                    ReasoningEffort::High => "deeper reasoning".to_string(),
-                    ReasoningEffort::XHigh => "extra-high reasoning".to_string(),
-                    ReasoningEffort::Ultra => "ultra reasoning".to_string(),
-                    ReasoningEffort::Max => {
-                        if effort_provider == ApiProvider::OpenaiCodex {
-                            "extra-high reasoning".to_string()
-                        } else {
-                            "maximum reasoning".to_string()
-                        }
-                    }
-                };
-                PaneRow::effort(label, hint)
-            })
-            .collect();
-        self.render_pane(
-            layout.detail,
-            buf,
-            "Thinking",
-            effort_rows,
-            PaneRenderState {
-                pane: Pane::Effort,
-                selected: selected_effort_idx,
-                focused: self.focus == Pane::Effort,
-            },
-        );
     }
 }
 
