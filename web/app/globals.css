@@ -78,8 +78,8 @@
   --stage-dim: var(--whale-text-dim);
   --violet: var(--whale-mode-operate); /* 1px rules only, never text */
 
-  /* Type stacks. Space Mono carries the display voice; IBM Plex Sans carries
-     body copy, and JetBrains Mono carries terminal code. */
+  /* Type stacks. IBM Plex Sans Condensed carries the display voice; IBM Plex
+     Sans carries body copy, and JetBrains Mono carries terminal code. */
   --font-cjk: "PingFang SC", "Hiragino Sans GB", "Source Han Serif SC",
     "Noto Serif CJK SC", serif;
 
@@ -127,7 +127,7 @@ body {
 main, header, footer, nav { position: relative; z-index: 1; }
 
 /* ---------- type ---------- */
-.font-display { font-family: var(--font-display), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.font-display { font-family: var(--font-display), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-weight: 500; }
 .font-cjk { font-family: var(--font-cjk), "PingFang SC", "Source Han Serif SC", serif; }
 
 /* CJK paragraph rhythm — looser leading, wider tracking for body; tighter for headings */
@@ -183,14 +183,15 @@ html[lang="ko"] .dotline {
 
 h1, h2, h3, h4 {
   font-family: var(--font-display), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--ink);
 }
 
-h1 { font-size: clamp(2rem, 4.2vw, 3.6rem); line-height: 1.02; word-break: keep-all; overflow-wrap: anywhere; }
-h2 { font-size: clamp(1.3rem, 2.3vw, 2.05rem); line-height: 1.12; word-break: keep-all; overflow-wrap: anywhere; }
-h3 { font-size: 1.05rem; line-height: 1.25; }
+h1 { font-size: clamp(2.25rem, 4.8vw, 4.25rem); line-height: 1; word-break: keep-all; overflow-wrap: anywhere; }
+h2 { font-size: clamp(1.45rem, 2.6vw, 2.35rem); line-height: 1.08; word-break: keep-all; overflow-wrap: anywhere; }
+h3, h4 { font-size: 1.12rem; line-height: 1.25; font-weight: 500; }
+h1.font-display, h2.font-display { font-weight: 600; }
 
 /* `overflow-wrap: anywhere` keeps long English headings safe, but can strand
    CJK punctuation — or a lone numeral — on a line of its own. Strict CJK
@@ -1070,8 +1071,8 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 .portal-hero h1 {
   max-width: 41rem;
-  font-size: clamp(2rem, 4.2vw, 3.6rem);
-  line-height: 1.02;
+  font-size: clamp(2.3rem, 4.8vw, 3.75rem);
+  line-height: 1.01;
 }
 
 .portal-lede {
@@ -1990,9 +1991,9 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .paper-hero-copy h1 {
   color: var(--ink);
   max-width: 38rem;
-  font-size: clamp(2rem, 4.2vw, 3.6rem);
-  line-height: 1.02;
-  letter-spacing: -0.02em;
+  font-size: clamp(2.25rem, 4.6vw, 4.1rem);
+  line-height: 1;
+  letter-spacing: -0.01em;
 }
 
 .product-hero-copy,
@@ -2874,6 +2875,8 @@ html[lang="ko"] .ocean-column h2 {
   .paper-hero-copy h1 {
     max-width: 100%;
     font-size: clamp(2rem, 10vw, 3rem);
+    word-break: normal;
+    overflow-wrap: break-word;
   }
 
   .paper-install-cta {
