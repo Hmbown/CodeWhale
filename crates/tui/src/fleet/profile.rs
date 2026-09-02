@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 
 use crate::tui::app::ReasoningEffort;
@@ -412,12 +412,9 @@ fn agent_profile_from_toml(path: &Path, parsed: AgentProfileToml) -> Result<Agen
 ///
 /// Profile ids remain untouched so an older file can still be addressed by
 /// its saved id. Only the semantic role is migrated; every new receipt and UI
-/// label derived from it therefore says `consultant`.
+/// label derived from it therefore uses the canonical public token.
 pub(crate) fn canonical_public_role_name(role: &str) -> String {
-    match role.trim().to_ascii_lowercase().as_str() {
-        "oracle" | "advisor" => "consultant".to_string(),
-        _ => role.to_string(),
-    }
+    crate::tools::subagent::public_role_label(role)
 }
 
 fn reject_permission_expansion(
@@ -1029,8 +1026,8 @@ text = "Scout deeply."
             .unwrap();
             let loaded = load_agent_profile_file(&path).expect("load compatibility profile");
             assert_eq!(loaded.id, alias, "saved identity remains addressable");
-            assert_eq!(loaded.profile.role.name, "consultant");
-            assert_eq!(loaded.profile.slot.as_str(), "consultant");
+            assert_eq!(loaded.profile.role.name, "advisor");
+            assert_eq!(loaded.profile.slot.as_str(), "advisor");
         }
     }
 
@@ -1041,8 +1038,8 @@ text = "Scout deeply."
         ) else {
             panic!("expected a drafted profile");
         };
-        assert_eq!(draft.role_hint, "consultant");
-        assert!(draft.render_toml().contains("role_hint = \"consultant\""));
+        assert_eq!(draft.role_hint, "advisor");
+        assert!(draft.render_toml().contains("role_hint = \"advisor\""));
     }
 
     #[test]
@@ -1133,7 +1130,7 @@ concurrency = 2
         .expect("explicit fleet profile parses");
 
         assert_eq!(profile.slot, FleetSlot::Reviewer);
-        assert_eq!(profile.role.name, "verifier");
+        assert_eq!(profile.role.name, "test");
         assert_eq!(
             profile.role.instructions.as_deref(),
             Some("Review the patch and produce verification evidence.")
@@ -1160,7 +1157,7 @@ model = "deepseek-v4-flash"
         )
         .expect("compact fleet profile parses");
 
-        assert_eq!(profile.role.name, "scout");
+        assert_eq!(profile.role.name, "explore");
         assert_eq!(profile.loadout, FleetLoadout::Fast);
         assert_eq!(profile.model.as_deref(), Some("deepseek-v4-flash"));
         assert_eq!(profile.permissions, FleetProfilePermissions::default());

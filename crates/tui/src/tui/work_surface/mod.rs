@@ -1009,7 +1009,7 @@ mod tests {
         // (#36), and carries no `(+N)` while the agent is childless.
         assert_eq!(row.label, "Blue Whale");
         let facts = row.agent.as_ref().expect("agent row facts");
-        assert_eq!(facts.role_label, "worker");
+        assert_eq!(facts.role_label, "general");
         assert_eq!(facts.objective, "Wire settled file activity");
         assert_eq!(facts.elapsed_secs, Some(0));
         // No usage envelope has been seen, so there is no token figure at all.

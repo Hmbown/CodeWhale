@@ -3467,13 +3467,13 @@ mod tests {
     fn roster_role_handoff_starts_at_model_and_can_return_to_role() {
         let mut via_left = FleetSetupView::from_snapshot_for_role(snapshot(), "consultant");
         assert_eq!(via_left.step, Step::Model);
-        assert_eq!(via_left.selected_role(), "consultant");
+        assert_eq!(via_left.selected_role(), "advisor");
         assert!(matches!(
             via_left.handle_key(key(KeyCode::Left)),
             ViewAction::None
         ));
         assert_eq!(via_left.step, Step::Role);
-        assert_eq!(via_left.selected_role(), "consultant");
+        assert_eq!(via_left.selected_role(), "advisor");
 
         let mut via_esc = FleetSetupView::from_snapshot_for_role(snapshot(), "reviewer");
         assert_eq!(via_esc.step, Step::Model);
@@ -3695,7 +3695,7 @@ mod tests {
 
         assert_eq!(scope, FleetProfileScope::Personal);
         assert_eq!(draft.id, "builder");
-        assert_eq!(draft.role_hint, "builder");
+        assert_eq!(draft.role_hint, "implement");
         assert_eq!(draft.model.as_deref(), Some("deepseek-v4-pro"));
         assert_eq!(draft.provider.as_deref(), Some("deepseek"));
         assert_eq!(draft.reasoning_effort.as_deref(), Some("max"));

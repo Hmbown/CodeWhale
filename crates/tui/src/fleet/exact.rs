@@ -1868,11 +1868,11 @@ mod shell_ceiling_tests {
     fn the_existing_verifier_and_full_ceilings_are_unchanged() {
         let verifier = ChildAuthority::clamp(ceiling(false, ShellCeiling::Full), session());
         assert!(denies_raw_shell(&verifier));
-        assert_eq!(verifier.posture_role, "verifier");
+        assert_eq!(verifier.posture_role, "test");
 
         let full = ChildAuthority::clamp(ceiling(true, ShellCeiling::Full), session());
         assert!(!denies_raw_shell(&full));
-        assert_eq!(full.posture_role, "builder");
+        assert_eq!(full.posture_role, "implement");
     }
 
     #[test]
@@ -1963,7 +1963,7 @@ mod shell_ceiling_tests {
         assert!(!authority.ceiling.write);
         assert_eq!(authority.ceiling.shell, ShellCeiling::ReadOnly);
         assert_eq!(authority.write_authority, "read_only");
-        assert_eq!(authority.posture_role, "builder");
+        assert_eq!(authority.posture_role, "implement");
         assert!(denies_raw_shell(&authority));
         for mutating in ["write_file", "apply_patch"] {
             assert!(
@@ -2095,7 +2095,7 @@ permissions = "read_only"
         assert_eq!(launch.model, "glm-5");
         assert_eq!(launch.thinking, "max");
         assert_eq!(launch.member_id, "implementer");
-        assert_eq!(launch.member_role, "builder");
+        assert_eq!(launch.member_role, "implement");
         assert_eq!(launch.reasoning.requested(), RequestedReasoning::Auto);
         assert_eq!(
             launch.reasoning.source(),
@@ -2752,7 +2752,7 @@ permissions = "read_only"
         assert_eq!(authority.ceiling.delegation_depth, 0);
         assert_eq!(authority.write_authority, "read_only");
         assert_eq!(authority.max_depth, 0);
-        assert_eq!(authority.posture_role, "scout");
+        assert_eq!(authority.posture_role, "explore");
         assert!(!authority.disallowed_tools.is_empty());
     }
 
@@ -3192,7 +3192,7 @@ call_reasoning = "low"
         assert_eq!(receipt.fleet, "workspace/glm-pair");
         assert_eq!(receipt.schema_kind, "exact");
         assert_eq!(receipt.member_id, "implementer");
-        assert_eq!(receipt.member_role, "builder");
+        assert_eq!(receipt.member_role, "implement");
         assert_eq!(receipt.provider, "zai");
         assert_eq!(receipt.model, "glm-5");
         assert_eq!(receipt.requested_reasoning, "auto");

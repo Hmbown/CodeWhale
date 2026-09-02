@@ -23,6 +23,7 @@ use ratatui::text::Line;
 use crate::tui::app::App;
 use crate::tui::sidebar::{self, SidebarSubagentSummary, WorkPanelOpts};
 use crate::tui::subagent_routing::active_fanout_counts;
+use crate::tools::subagent::public_role_label;
 
 use super::model::RailPanel;
 
@@ -125,7 +126,7 @@ fn agents_panel_lines(app: &App, content_width: usize, max_rows: usize) -> Vec<L
         app.subagent_cache
             .iter()
             .fold(std::collections::BTreeMap::new(), |mut acc, agent| {
-                *acc.entry(agent.agent_type.as_str().to_string())
+                *acc.entry(public_role_label(agent.agent_type.as_str()))
                     .or_insert(0) += 1;
                 acc
             });

@@ -3698,7 +3698,7 @@ mod tests {
             let inspection = manager.inspect_worker(&report.worker_ids[0]).unwrap();
             assert_eq!(
                 inspection.role.as_deref(),
-                Some("consultant"),
+                Some("advisor"),
                 "inspection must not emit compatibility alias {alias}"
             );
             let state = manager.rebuild_state().unwrap();
@@ -3709,7 +3709,7 @@ mod tests {
                 .and_then(|worker| worker.role.as_deref());
             assert_eq!(
                 persisted_role,
-                Some("consultant"),
+                Some("advisor"),
                 "new durable task must not persist compatibility alias {alias}"
             );
         }
@@ -4859,11 +4859,11 @@ esac
                 "receipt {key} should record explicit tool names"
             );
             match route.role.as_deref() {
-                Some("builder") => {
+                Some("implement") | Some("builder") => {
                     assert!(permissions.write, "builder receipt {key} should write");
                     assert_eq!(permissions.shell, "full");
                 }
-                Some("scout") => {
+                Some("explore") | Some("scout") => {
                     assert!(
                         !permissions.write,
                         "scout receipt {key} must stay read-only"
@@ -4875,7 +4875,7 @@ esac
                     // profile, so headers and ledgers cannot overclaim.
                     assert_eq!(permissions.shell, "read_only");
                 }
-                Some("verifier") => {
+                Some("test") | Some("verifier") => {
                     assert!(
                         !permissions.write,
                         "verifier receipt {key} must stay read-only"

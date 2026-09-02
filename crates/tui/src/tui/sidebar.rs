@@ -15,11 +15,13 @@ use ratatui::{
 };
 
 use crate::palette;
-use crate::tools::subagent::{AgentWorkerStatus, SubAgentStatus, localized_whale_display_names};
+use crate::tools::subagent::{
+    localized_whale_display_names, public_role_label, AgentWorkerStatus, SubAgentStatus,
+};
 use crate::tools::todo::TodoStatus;
 
 use super::app::{AgentCurrentActivity, AgentCurrentActivityStatus, App, SidebarRowAction};
-use super::history::{HistoryCell, ToolCell, ToolStatus, summarize_tool_output};
+use super::history::{summarize_tool_output, HistoryCell, ToolCell, ToolStatus};
 use super::ui_text::truncate_line_to_width;
 
 /// Tolerance for floating-point cost comparison in the sidebar breakdown.
@@ -919,7 +921,7 @@ fn subagent_panel_rows(
         let mix: Vec<String> = summary
             .role_counts
             .iter()
-            .map(|(role, count)| format!("{count} {role}"))
+            .map(|(role, count)| format!("{count} {}", public_role_label(role)))
             .collect();
         let role_line = mix.join(" \u{00B7} ");
         lines.push(Line::from(Span::styled(
@@ -935,16 +937,37 @@ fn subagent_panel_rows(
         }
         let (marker, color) = agent_status_marker(row.status.as_str(), theme);
         let tree_prefix = agent_tree_prefix(row);
-        let label = format!(
-            "{tree_prefix}{marker} {}",
-            sidebar_agent_row_label(row, content_width.max(1))
-        );
-        let label = if sidebar_agent_status_is_running(row.status.as_str()) {
-            label_with_stop_target(&label, content_width.max(1))
+        let row_label = sidebar_agent_row_label(row, content_width.max(1));
+        let (name, detail) = row_label
+            .split_once(" — ")
+            .map_or((row_label.as_str(), ""), |(name, detail)| (name, detail));
+        let body = if detail.is_empty() {
+            name.to_string()
         } else {
-            truncate_line_to_width(&label, content_width.max(1))
+            format!("{name}  {detail}")
         };
-        lines.push(Line::from(Span::styled(label, Style::default().fg(color))));
+        let marker_prefix = format!("{tree_prefix}{marker} ");
+        let visible_prefix = truncate_line_to_width(&marker_prefix, content_width.max(1));
+        let body_width =
+            content_width
+                .max(1)
+                .saturating_sub(unicode_width::UnicodeWidthStr::width(
+                    visible_prefix.as_str(),
+                ));
+        let body = if sidebar_agent_status_is_running(row.status.as_str()) {
+            label_with_stop_target(&body, body_width)
+        } else {
+            truncate_line_to_width(&body, body_width)
+        };
+        let row_color = if sidebar_agent_status_is_terminal(row.status.as_str()) {
+            theme.text_muted
+        } else {
+            theme.text_primary
+        };
+        lines.push(Line::from(vec![
+            Span::styled(visible_prefix, Style::default().fg(color)),
+            Span::styled(body.to_string(), Style::default().fg(row_color)),
+        ]));
         actions.push(Some(SidebarRowAction::ToggleAgentDetails {
             agent_id: row.id.clone(),
         }));
@@ -1094,11 +1117,41 @@ fn agent_status_marker(
     theme: &palette::UiTheme,
 ) -> (&'static str, ratatui::style::Color) {
     match status {
-        "running" => ("[~]", theme.warning),
-        "done" => ("[✓]", theme.success),
-        "failed" => ("[!]", theme.error_fg),
-        "canceled" | "interrupted" => ("[-]", theme.text_muted),
-        _ => ("[ ]", theme.text_muted),
+        "running" | "tool" | "model wait" | "starting" => {
+            ("◐", crate::palette::grammar::ChromeInk::Active.color(theme))
+        }
+        "queued" => (
+            "○",
+            crate::palette::grammar::ChromeInk::Waiting.color(theme),
+        ),
+        "waiting" => (
+            "○",
+            crate::palette::grammar::ChromeInk::Attention.color(theme),
+        ),
+        "done" => (
+            "●",
+            crate::palette::grammar::ChromeInk::Outcome.color(theme),
+        ),
+        "failed" => (
+            "×",
+            crate::palette::grammar::ChromeInk::Failure.color(theme),
+        ),
+        "budget" => (
+            "×",
+            crate::palette::grammar::ChromeInk::Attention.color(theme),
+        ),
+        "canceled" => (
+            "⊘",
+            crate::palette::grammar::ChromeInk::Metadata.color(theme),
+        ),
+        "interrupted" => (
+            "◌",
+            crate::palette::grammar::ChromeInk::Attention.color(theme),
+        ),
+        _ => (
+            "○",
+            crate::palette::grammar::ChromeInk::Metadata.color(theme),
+        ),
     }
 }
 
@@ -1228,10 +1281,10 @@ fn context_panel_cost_line(app: &App) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        SidebarAgentRow, SidebarSubagentSummary, SidebarWorkChecklistItem, SidebarWorkSummary,
         cached_agent_activity_is_live, context_panel_cost_line, sidebar_agent_rows,
         sidebar_work_summary, subagent_output_handle, subagent_panel_lines, subagent_panel_rows,
-        work_panel_empty_hint, work_panel_lines,
+        work_panel_empty_hint, work_panel_lines, SidebarAgentRow, SidebarSubagentSummary,
+        SidebarWorkChecklistItem, SidebarWorkSummary,
     };
     use crate::config::Config;
     use crate::localization::Locale;
@@ -2483,7 +2536,7 @@ mod tests {
         }
 
         // At medium/usable widths the CJK name must not hide the running state:
-        // the status marker `[~]`, the compact stop target `[x]`, and the CJK
+        // the status marker `◐`, the compact stop target `[x]`, and the CJK
         // display name all survive, and the row still resolves to its agent id.
         for content_width in [40usize, 80] {
             let (lines, actions) = subagent_panel_rows(
@@ -2503,7 +2556,7 @@ mod tests {
                     panic!("width {content_width}: CJK display name dropped: {text:?}")
                 });
             assert!(
-                text[label_idx].contains("[~]"),
+                text[label_idx].contains("◐"),
                 "width {content_width}: running marker hidden by CJK name: {text:?}"
             );
             assert!(

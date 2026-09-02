@@ -49,10 +49,10 @@ use constants::{
 #[cfg(test)]
 use constants::{TOOL_RUNNING_SYMBOLS, TOOL_STATUS_SYMBOL_MS};
 use message::{
-    RenderedTranscriptLine, assistant_label_style_for, hard_break_copy_lines, message_body_style,
-    render_message, render_message_with_copy_metadata_for_palette, render_plain_message,
-    render_user_message, system_body_style, system_label_style, update_streaming_message_render,
-    user_body_style, user_label_style,
+    assistant_label_style_for, hard_break_copy_lines, message_body_style, render_message,
+    render_message_with_copy_metadata_for_palette, render_plain_message, render_user_message,
+    system_body_style, system_label_style, update_streaming_message_render, user_body_style,
+    user_label_style, RenderedTranscriptLine,
 };
 #[cfg(test)]
 pub(super) use thinking::render_thinking_with_analysis;
@@ -66,16 +66,16 @@ pub use plan::PlanUpdateCell;
 #[cfg(test)]
 use thinking::extract_reasoning_summary;
 #[cfg(test)]
-use tool_run::ToolRunActivitySummary;
-#[cfg(test)]
 pub use tool_run::detect_tool_runs;
-pub use tool_run::{ToolRun, detect_tool_runs_from_slices, tool_run_summary};
+#[cfg(test)]
+use tool_run::ToolRunActivitySummary;
+pub use tool_run::{detect_tool_runs_from_slices, tool_run_summary, ToolRun};
 
 #[cfg(test)]
 use thinking::{REASONING_CURSOR, REASONING_OPENER, REASONING_RAIL};
 pub(crate) use tool_output::output_looks_like_diff;
 pub use tool_output::{
-    OutputRow, summarize_mcp_output, summarize_tool_args, summarize_tool_output,
+    summarize_mcp_output, summarize_tool_args, summarize_tool_output, OutputRow,
 };
 
 use std::process::Command;
@@ -182,8 +182,12 @@ pub enum SubAgentCell {
 impl SubAgentCell {
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
         match self {
-            SubAgentCell::Delegate(card) => card.render_lines(width),
-            SubAgentCell::Fanout(card) => card.render_lines(width),
+            SubAgentCell::Delegate(card) => {
+                card.render_lines(width, &crate::palette::themes::UI_THEME)
+            }
+            SubAgentCell::Fanout(card) => {
+                card.render_lines(width, &crate::palette::themes::UI_THEME)
+            }
         }
     }
 }
@@ -2314,7 +2318,7 @@ fn is_tool_status_glyph(text: &str) -> bool {
 }
 
 fn is_tool_family_glyph(text: &str) -> bool {
-    use crate::tui::widgets::tool_card::{ToolFamily, family_glyph};
+    use crate::tui::widgets::tool_card::{family_glyph, ToolFamily};
 
     [
         ToolFamily::Read,
@@ -3088,7 +3092,7 @@ mod tests;
 // click path (`work_surface` row rects) is reused at the landing slice;
 // not wired into `ui/frame.rs` (#5698 gate).
 
-pub use tideline_stream::{TidelineStream, render_tideline_stream};
+pub use tideline_stream::{render_tideline_stream, TidelineStream};
 
 /// Full export alias for the Tideline components that compose the stream
 /// into their stages (work surface, settings preview).
@@ -3096,8 +3100,8 @@ pub(crate) mod tideline_exports {
     #![allow(unused_imports)] // consumed by the work-surface/settings test suites and landing slice
 
     pub use super::tideline_stream::{
-        TidelineReceiptState, TidelineStream, TidelineStreamEvent, render_tideline_stream,
-        tideline_stream_hitboxes,
+        render_tideline_stream, tideline_stream_hitboxes, TidelineReceiptState, TidelineStream,
+        TidelineStreamEvent,
     };
 }
 

@@ -37,7 +37,7 @@ pub enum ToolFamily {
     Run,
     /// Grep, fuzzy file search, web search. `⌕ find`.
     Find,
-    /// Single sub-agent dispatch. `◐ delegate`.
+    /// Single sub-agent dispatch. `◐ agent`.
     Delegate,
     /// Multi-agent fanout dispatch (rlm). `⋮⋮ fanout`.
     Fanout,
@@ -304,7 +304,7 @@ pub fn family_label(family: ToolFamily) -> &'static str {
         ToolFamily::Patch => "patch",
         ToolFamily::Run => "run",
         ToolFamily::Find => "find",
-        ToolFamily::Delegate => "delegate",
+        ToolFamily::Delegate => "agent",
         ToolFamily::Fanout => "fanout",
         ToolFamily::Rlm => "rlm",
         ToolFamily::Verify => "verify",
@@ -344,11 +344,11 @@ pub fn rail_glyph(rail: CardRail) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        CardRail, ToolFamily, family_glyph, family_label, rail_glyph, tool_activity_label_for_name,
+        family_glyph, family_label, rail_glyph, tool_activity_label_for_name,
         tool_display_label_for_name, tool_family_for_call, tool_family_for_name,
-        tool_family_for_title, tool_header_summary_for_name,
+        tool_family_for_title, tool_header_summary_for_name, CardRail, ToolFamily,
     };
-    use crate::localization::{Locale, MessageId, tr};
+    use crate::localization::{tr, Locale, MessageId};
     use serde_json::json;
 
     #[test]
@@ -542,8 +542,8 @@ mod tests {
             ),
             (
                 MessageId::ToolFamilyDelegate,
-                "delegate",
-                "ủy,委,委,委,delegar,delegar",
+                "agent",
+                "ủy,委,委,委,agente,agente",
             ),
             (
                 MessageId::ToolFamilyVerify,
@@ -577,6 +577,9 @@ mod tests {
             Locale::Uk,
         ] {
             for (id, eng, _) in checks {
+                if *id == MessageId::ToolFamilyDelegate && locale == Locale::De {
+                    continue;
+                }
                 let msg = tr(locale, *id);
                 assert!(
                     !msg.eq_ignore_ascii_case(eng),

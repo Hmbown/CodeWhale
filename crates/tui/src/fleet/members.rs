@@ -10,9 +10,10 @@
 use std::path::Path;
 
 use super::store::{
-    FleetFile, FleetMember, FleetScope, FleetStoreError, load_fleet_at, resolve_selected_fleet,
-    save_fleet, set_selected, slugify,
+    load_fleet_at, resolve_selected_fleet, save_fleet, set_selected, slugify, FleetFile,
+    FleetMember, FleetScope, FleetStoreError,
 };
+use crate::tools::subagent::public_role_label;
 
 /// Default name for the Pod created by the first `/pod add` or ⇧F on a row in
 /// `/models` when no Pod is selected yet.
@@ -45,7 +46,11 @@ impl FleetModel {
         if self.roles.is_empty() {
             "member".to_string()
         } else {
-            self.roles.join(" · ")
+            self.roles
+                .iter()
+                .map(|role| public_role_label(role))
+                .collect::<Vec<_>>()
+                .join(" · ")
         }
     }
 }
@@ -389,7 +394,7 @@ mod tests {
         );
         assert_eq!(models[0].roles, ["operator", "planner"]);
         assert_eq!(models[1].roles, ["scout", "verifier"]);
-        assert_eq!(models[1].roles_label(), "scout · verifier");
+        assert_eq!(models[1].roles_label(), "explore · test");
     }
 
     #[test]

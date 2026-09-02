@@ -19,25 +19,26 @@ use ratatui::{
 
 use crate::config::{ApiProvider, Config};
 use crate::fleet::store::{
-    FleetFile, FleetMember, FleetOperator, FleetScope, MemberCapability, load_fleet_in_scope,
-    save_fleet, set_selected,
+    load_fleet_in_scope, save_fleet, set_selected, FleetFile, FleetMember, FleetOperator,
+    FleetScope, MemberCapability,
 };
 use crate::palette;
+use crate::tools::subagent::public_role_label;
 use crate::tui::app::App;
 use crate::tui::views::{
-    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_footer,
+    render_modal_footer, ActionHint, ModalKind, ModalView, ViewAction, ViewEvent,
 };
 
 /// The built-in role vocabulary offered when adding a member, in a useful
 /// order. A Pod member is a role; the user can name anything, these are the
 /// known postures.
 const KNOWN_ROLES: [&str; 8] = [
-    "scout",
-    "builder",
+    "explore",
+    "implement",
     "reviewer",
-    "verifier",
+    "test",
     "manager",
-    "consultant",
+    "advisor",
     "summarizer",
     "general",
 ];
@@ -740,6 +741,7 @@ impl FleetDetailView {
                 } else {
                     role
                 };
+                let role = public_role_label(role);
                 let member_label = member
                     .display_name
                     .as_deref()
@@ -1058,13 +1060,12 @@ mod tests {
 
         // Vision requirement toggles on and off.
         view.handle_key(key(KeyCode::Char('v')));
-        assert!(
-            view.fleet
-                .member("scout")
-                .unwrap()
-                .requires
-                .contains(&"vision".to_string())
-        );
+        assert!(view
+            .fleet
+            .member("scout")
+            .unwrap()
+            .requires
+            .contains(&"vision".to_string()));
         view.handle_key(key(KeyCode::Char('v')));
         assert!(view.fleet.member("scout").unwrap().requires.is_empty());
     }

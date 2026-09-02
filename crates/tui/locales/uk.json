@@ -1099,7 +1099,7 @@
   "ToolFamilyPatch": "патч",
   "ToolFamilyRun": "запуск",
   "ToolFamilyFind": "пошук",
-  "ToolFamilyDelegate": "делегування",
+  "ToolFamilyDelegate": "агент",
   "ToolFamilyFanout": "розгалуження",
   "ToolFamilyRlm": "rlm",
   "ToolFamilyVerify": "перевірка",

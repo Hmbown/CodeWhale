@@ -522,7 +522,7 @@ mod tests {
         );
         let projected = roster.get("scout-one").expect("case-insensitive id");
         assert_eq!(projected.display_name.as_deref(), Some("Flash Scout"));
-        assert_eq!(projected.profile.role.name, "scout");
+        assert_eq!(projected.profile.role.name, "explore");
         assert_eq!(projected.profile.provider.as_deref(), Some("deepseek"));
         assert_eq!(
             projected.profile.model.as_deref(),

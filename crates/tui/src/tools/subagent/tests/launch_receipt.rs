@@ -120,7 +120,7 @@ async fn issue_5305_first_personal_profile_receipt_precedes_status_poll() {
     assert_eq!(receipt["requested_profile"], serde_json::Value::Null);
     assert_eq!(receipt["resolved_profile_id"], json!("consultant"));
     assert_eq!(receipt["profile_origin"], json!("personal"));
-    assert_eq!(receipt["canonical_role"], json!("consultant"));
+    assert_eq!(receipt["canonical_role"], json!("advisor"));
     assert_eq!(receipt["provider_id"], json!("openai-codex"));
     assert_eq!(receipt["model_id"], json!("gpt-5.6-sol"));
     assert_eq!(receipt["route_source"], json!("agent_profile.model"));

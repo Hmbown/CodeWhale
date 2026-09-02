@@ -1120,7 +1120,7 @@
   "ToolFamilyPatch": "parchear",
   "ToolFamilyRun": "ejecutar",
   "ToolFamilyFind": "buscar",
-  "ToolFamilyDelegate": "delegar",
+  "ToolFamilyDelegate": "agente",
   "ToolFamilyFanout": "fanout",
   "ToolFamilyRlm": "rlm",
   "ToolFamilyVerify": "verificar",

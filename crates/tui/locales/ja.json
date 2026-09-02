@@ -1120,7 +1120,7 @@
   "ToolFamilyPatch": "パッチ",
   "ToolFamilyRun": "実行",
   "ToolFamilyFind": "検索",
-  "ToolFamilyDelegate": "委任",
+  "ToolFamilyDelegate": "エージェント",
   "ToolFamilyFanout": "ファンアウト",
   "ToolFamilyRlm": "rlm",
   "ToolFamilyVerify": "検証",

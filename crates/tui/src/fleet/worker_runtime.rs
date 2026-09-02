@@ -1254,17 +1254,17 @@ fn fleet_route_model_selector_with_source(
 pub(crate) fn fleet_role_to_agent_type(role: Option<&str>) -> FleetRole {
     match role {
         Some("smoke-runner") => FleetRole::Verifier,
-        Some("scout") => FleetRole::Scout,
+        Some("explore") | Some("scout") => FleetRole::Scout,
         Some("read-only") => FleetRole::Scout,
         Some("reviewer") => FleetRole::Reviewer,
-        Some("builder") => FleetRole::Builder,
-        Some("verifier") | Some("tester") => FleetRole::Verifier,
+        Some("implement") | Some("builder") => FleetRole::Builder,
+        Some("test") | Some("verifier") | Some("tester") => FleetRole::Verifier,
         // Every canonical dispatch posture is also a seeded roster member
         // (#5285); the explicit arms keep the roster→runtime mapping 1:1.
         Some("planner") => FleetRole::Planner,
         Some("custom") => FleetRole::Custom,
-        // Advisory counsel (#4752). `oracle` and `advisor` are compatibility
-        // aliases for the canonical public role name, `consultant`.
+        // Advisory counsel (#4752). `oracle` and `consultant` are compatibility
+        // aliases for the canonical public role name, `advisor`.
         Some("consultant") | Some("oracle") | Some("advisor") => FleetRole::Consultant,
         Some("explorer") => FleetRole::Scout,
         // Coordination happens through delegation, which needs the full
@@ -2093,7 +2093,7 @@ mod tests {
         assert!(!route.provider_kind.is_empty());
         assert!(!route.wire_model_id.is_empty());
         assert_eq!(route.protocol, "chat_completions");
-        assert_eq!(route.role.as_deref(), Some("builder"));
+        assert_eq!(route.role.as_deref(), Some("implement"));
         assert_eq!(route.loadout.as_deref(), Some("fast"));
         assert_eq!(route.model_class, None);
         assert_eq!(route.model_route.as_deref(), Some("inherit"));
@@ -2147,7 +2147,7 @@ mod tests {
         let config = explicit_deepseek_config();
         let route = resolve_fleet_route_with_config(&task, &[], None, Some(&config))
             .expect("route should resolve");
-        assert_eq!(route.role.as_deref(), Some("scout"));
+        assert_eq!(route.role.as_deref(), Some("explore"));
         assert!(route.loadout.is_none());
         assert_eq!(route.loadout_source, None);
         assert_eq!(route.model_route.as_deref(), Some("inherit"));
@@ -2155,7 +2155,7 @@ mod tests {
     }
 
     #[test]
-    fn advisory_task_aliases_emit_consultant_in_prompts_and_route_receipts() {
+    fn advisory_task_aliases_emit_advisor_in_prompts_and_route_receipts() {
         for alias in ["oracle", "advisor"] {
             let task = fleet_task(
                 &format!("legacy-{alias}"),
@@ -2171,7 +2171,7 @@ mod tests {
 
             let prompt = fleet_task_prompt(&task);
             assert!(
-                prompt.contains("Pod member (consultant)"),
+                prompt.contains("Pod member (advisor)"),
                 "prompt must canonicalize {alias}: {prompt}"
             );
             assert!(
@@ -2182,7 +2182,7 @@ mod tests {
             let config = explicit_deepseek_config();
             let resolved = resolve_fleet_route_with_config(&task, &[], None, Some(&config))
                 .expect("compatibility role should resolve a receipt route");
-            assert_eq!(resolved.role.as_deref(), Some("consultant"));
+            assert_eq!(resolved.role.as_deref(), Some("advisor"));
             assert_eq!(resolved.role_source.as_deref(), Some("task.role"));
 
             let reported = resolve_fleet_route_from_worker_report(
@@ -2194,7 +2194,7 @@ mod tests {
                 "deepseek-v4-pro",
             )
             .expect("worker-reported route should retain canonical role metadata");
-            assert_eq!(reported.role.as_deref(), Some("consultant"));
+            assert_eq!(reported.role.as_deref(), Some("advisor"));
             assert_eq!(reported.role_source.as_deref(), Some("task.role"));
         }
     }
@@ -2458,7 +2458,7 @@ mod tests {
                 )
                 .expect("role-only consultant should produce a worker spec");
 
-                assert_eq!(spec.role.as_deref(), Some("consultant"));
+                assert_eq!(spec.role.as_deref(), Some("advisor"));
                 assert_eq!(spec.agent_type, FleetRole::Consultant);
                 assert_eq!(spec.model, "deepseek-v4-pro", "session model is inherited");
                 assert_eq!(spec.runtime_profile.model, ModelRoute::Inherit);
@@ -2492,7 +2492,7 @@ mod tests {
                     Some(&config),
                 )
                 .expect("receipt route resolves");
-                assert_eq!(route.role.as_deref(), Some("consultant"));
+                assert_eq!(route.role.as_deref(), Some("advisor"));
                 assert_eq!(route.reasoning_effort.as_deref(), Some("high"));
             }
         }
@@ -3465,7 +3465,7 @@ mod tests {
             )
             .expect("display-model selector should resolve");
             assert_eq!(spec.model, "deepseek-v4-flash");
-            assert_eq!(spec.role.as_deref(), Some("scout"));
+            assert_eq!(spec.role.as_deref(), Some("explore"));
             assert_eq!(spec.agent_type, FleetRole::Scout);
             assert!(spec.objective.contains("Pod profile: flash-scout"));
         }
@@ -3656,7 +3656,7 @@ mod tests {
         let resolved = resolve_task_agent_profile(&task, &edited_profiles)
             .unwrap()
             .expect("frozen member");
-        assert_eq!(resolved.profile.role.name, "scout");
+        assert_eq!(resolved.profile.role.name, "explore");
         assert_eq!(resolved.profile.provider.as_deref(), Some("deepseek"));
         assert_eq!(resolved.profile.model.as_deref(), Some("deepseek-v4-flash"));
         assert_eq!(resolved.profile.delegation.max_spawn_depth, Some(2));

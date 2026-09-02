@@ -21,10 +21,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use unicode_normalization::UnicodeNormalization;
@@ -33,22 +33,22 @@ use uuid::Uuid;
 use crate::client::DeepSeekClient;
 use crate::config::MAX_SUBAGENTS;
 use crate::core::engine::tool_catalog::{
-    TOOL_SEARCH_NAME, active_tools_for_request, apply_native_tool_deferral,
-    ensure_advanced_tooling, execute_tool_search_with_cache, initial_active_tools,
-    is_tool_search_tool, remove_evicted_cache_activations, tool_matches_any_rule,
-    touch_cached_tool_after_execution,
+    active_tools_for_request, apply_native_tool_deferral, ensure_advanced_tooling,
+    execute_tool_search_with_cache, initial_active_tools, is_tool_search_tool,
+    remove_evicted_cache_activations, tool_matches_any_rule, touch_cached_tool_after_execution,
+    TOOL_SEARCH_NAME,
 };
 use crate::core::events::{AgentProgressEventMeta, Event};
 use crate::core::session::ToolActivationCache;
 use crate::dependencies::{ExternalTool, Git};
 use crate::llm_client::{LlmClient, LlmError};
 use crate::models::{
-    ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt, Tool, Usage,
-    is_incomplete_stop_reason, is_output_limit_stop_reason, stop_reason_detail,
+    is_incomplete_stop_reason, is_output_limit_stop_reason, stop_reason_detail, ContentBlock,
+    Message, MessageRequest, MessageResponse, SystemPrompt, Tool, Usage,
 };
 use crate::request_tuning::RequestTuning;
 use crate::tools::canonical_action::{
-    CANONICAL_ACTION_ALIASES, canonical_action_alias, is_action_family,
+    canonical_action_alias, is_action_family, CANONICAL_ACTION_ALIASES,
 };
 use crate::tools::handle::VarHandle;
 use crate::tools::plan::{PlanState, SharedPlanState};
@@ -82,20 +82,20 @@ pub mod mailbox;
 mod naming;
 mod worktree;
 
-use worktree::{SubAgentWorktreeRequest, prepare_child_workspace};
 #[cfg(test)]
 use worktree::{create_isolated_worktree, git_repo_root};
+use worktree::{prepare_child_workspace, SubAgentWorktreeRequest};
 
 use crate::models::Role;
 #[allow(unused_imports)] // re-exported for hosts / tests; registration uses concrete types
 pub use advisor::{
-    AdvisorConfig, EmissionGuard, ToolCallPair, build_advisor_prompt, extract_tool_call_pairs,
-    run_advisor_for_turn,
+    build_advisor_prompt, extract_tool_call_pairs, run_advisor_for_turn, AdvisorConfig,
+    EmissionGuard, ToolCallPair,
 };
 #[allow(unused_imports)] // re-exported for hosts / tests; registration uses concrete types
 pub use coord::{
-    AgentsCoordinateTool, AgentsFollowupTool, AgentsInterruptTool, AgentsListTool,
-    AgentsMessageTool, AgentsWaitTool, CoordinationDetailProjection, register_coordination_tools,
+    register_coordination_tools, AgentsCoordinateTool, AgentsFollowupTool, AgentsInterruptTool,
+    AgentsListTool, AgentsMessageTool, AgentsWaitTool, CoordinationDetailProjection,
 };
 #[allow(unused_imports)]
 pub use mailbox::{Mailbox, MailboxEnvelope, MailboxMessage, MailboxReceiver};
@@ -103,7 +103,7 @@ use naming::generated_whale_name_base;
 pub(crate) use naming::localized_whale_display_names;
 #[allow(unused_imports)] // compatibility path; some consumers exist only in test builds today
 pub use naming::{
-    WHALE_NICKNAMES, assign_unique_whale_name_in_locale, whale_name_for_id_in_locale,
+    assign_unique_whale_name_in_locale, whale_name_for_id_in_locale, WHALE_NICKNAMES,
 };
 #[cfg(test)]
 use naming::{
@@ -381,28 +381,28 @@ fn subagent_perf_enabled() -> bool {
     })
 }
 
-const VALID_SUBAGENT_TYPES: &str = "worker, scout, planner, reviewer, builder, verifier, consultant, custom \
-     (legacy aliases remain accepted: general, explore/explorer, plan/awaiter, review, implementer, oracle/advisor)";
+const VALID_SUBAGENT_TYPES: &str = "general, explore, planner, reviewer, implement, test, advisor, custom \
+     (legacy aliases remain accepted: worker, scout, builder, verifier, consultant, general-purpose, general_purpose, default, exploration/explorer, plan/planning/awaiter, review/code-review/code_review, implementer/implementation, verify/verification/validator/tester, oracle)";
 /// Role aliases accepted by `normalize_role_alias`. Kept in sync with the
 /// match arms below so every input that `FleetRole::from_str` accepts also
 /// resolves to a canonical role (avoids the dual-validation rejection in #2649).
-const VALID_ROLE_ALIASES: &str = "default; worker; scout; planner; reviewer; builder; verifier; consultant; custom \
-     (legacy aliases remain accepted)";
+const VALID_ROLE_ALIASES: &str = "general; explore; planner; reviewer; implement; test; advisor; custom \
+     (legacy aliases remain accepted: worker; scout; builder; verifier; consultant; default; general-purpose; general_purpose; exploration; explorer; plan; planning; awaiter; review; code-review; code_review; implementer; implementation; verify; verification; validator; tester; oracle)";
 /// Canonical model-facing Pod role values, in schema order. This is the
 /// closed `enum` advertised on the Agent tool's `type` property. Legacy
 /// aliases are accepted only at replay/deserialization boundaries
 /// ([`migrate_legacy_role_token`]) and are never advertised to models.
 const FLEET_ROLE_SCHEMA_VALUES: [&str; 8] = [
-    "worker",
-    "scout",
+    "general",
+    "explore",
     "planner",
     "reviewer",
-    "builder",
-    "verifier",
-    "consultant",
+    "implement",
+    "test",
+    "advisor",
     "custom",
 ];
-const SUBAGENT_TYPE_DESCRIPTION: &str = "Pod role for this delegated worker. worker: full tool access for multi-step tasks. scout: fast read-only exploration. planner: grounded strategy with read-only probes. reviewer: reads and grades code. builder: lands focused code changes. verifier: runs tests/validation gates and reports evidence. consultant: read-only high-reasoning counsel for judgement calls and design critique. custom: the tools listed in allowed_tools on the parent's posture.";
+const SUBAGENT_TYPE_DESCRIPTION: &str = "Pod role for this delegated worker. general: full tool access for multi-step tasks. explore: fast read-only exploration. planner: grounded strategy with read-only probes. reviewer: reads and grades code. implement: lands focused code changes. test: runs tests/validation gates and reports evidence. advisor: read-only high-reasoning counsel for judgement calls and design critique. custom: the tools listed in allowed_tools on the parent's posture. Legacy aliases remain accepted at deserialization boundaries.";
 
 // === Types ===
 
@@ -423,11 +423,11 @@ impl SubAgentAssignment {
 /// Canonical Pod role for a delegated worker, with specialized behavior
 /// and tool access per role.
 ///
-/// **Public vocabulary is Pod roles** (`worker`, `scout`, `planner`,
-/// `reviewer`, `builder`, `verifier`, `custom`) and the variants match that
+/// **Public vocabulary is Pod roles** (`general`, `explore`, `planner`,
+/// `reviewer`, `implement`, `test`, `advisor`, `custom`) and the variants match that
 /// vocabulary one-to-one. Serialization, prompts, receipts, and UI always
-/// use [`Self::as_str`]. Legacy wire spellings (`general`, `explore`,
-/// `plan`, `review`, `implementer`, …) are accepted only through
+/// use [`Self::as_str`]. Legacy wire spellings (`worker`, `scout`, `plan`,
+/// `review`, `implementer`, …) are accepted only through
 /// [`migrate_legacy_role_token`] at deserialization / parse boundaries.
 ///
 /// This is the closed runtime role set. It is distinct from
@@ -500,13 +500,13 @@ impl<'de> Deserialize<'de> for FleetRole {
 #[must_use]
 pub fn migrate_legacy_role_token(token: &str) -> Option<&'static str> {
     match token.trim().to_ascii_lowercase().as_str() {
-        "general" | "general-purpose" | "general_purpose" | "default" => Some("worker"),
-        "explore" | "exploration" | "explorer" => Some("scout"),
+        "worker" | "general-purpose" | "general_purpose" | "default" => Some("general"),
+        "scout" | "exploration" | "explorer" => Some("explore"),
         "plan" | "planning" | "awaiter" => Some("planner"),
         "review" | "code-review" | "code_review" => Some("reviewer"),
-        "implementer" | "implement" | "implementation" => Some("builder"),
-        "verify" | "verification" | "validator" | "tester" => Some("verifier"),
-        "oracle" | "advisor" => Some("consultant"),
+        "builder" | "implementer" | "implementation" => Some("implement"),
+        "verifier" | "verify" | "verification" | "validator" | "tester" => Some("test"),
+        "consultant" | "oracle" => Some("advisor"),
         _ => None,
     }
 }
@@ -515,20 +515,20 @@ impl FleetRole {
     /// Parse a Pod role from user input or a serialized boundary.
     ///
     /// Accepts Pod role names and, at this parse boundary only, legacy
-    /// aliases (`explore` → scout, `plan` → planner, …).
+    /// aliases (`scout` → explore, `plan` → planner, …).
     #[must_use]
     pub fn from_str(s: &str) -> Option<Self> {
         let normalized = s.trim().to_ascii_lowercase();
         // Boundary migration first, then canonical Pod names.
         let token = migrate_legacy_role_token(&normalized).unwrap_or(normalized.as_str());
         match token {
-            "worker" => Some(Self::Worker),
-            "scout" => Some(Self::Scout),
+            "general" => Some(Self::Worker),
+            "explore" => Some(Self::Scout),
             "planner" => Some(Self::Planner),
             "reviewer" => Some(Self::Reviewer),
-            "builder" => Some(Self::Builder),
-            "verifier" => Some(Self::Verifier),
-            "consultant" => Some(Self::Consultant),
+            "implement" => Some(Self::Builder),
+            "test" => Some(Self::Verifier),
+            "advisor" => Some(Self::Consultant),
             "custom" => Some(Self::Custom),
             _ => None,
         }
@@ -538,13 +538,13 @@ impl FleetRole {
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Worker => "worker",
-            Self::Scout => "scout",
+            Self::Worker => "general",
+            Self::Scout => "explore",
             Self::Planner => "planner",
             Self::Reviewer => "reviewer",
-            Self::Builder => "builder",
-            Self::Verifier => "verifier",
-            Self::Consultant => "consultant",
+            Self::Builder => "implement",
+            Self::Verifier => "test",
+            Self::Consultant => "advisor",
             Self::Custom => "custom",
         }
     }
@@ -587,6 +587,17 @@ impl FleetRole {
             _ => format!("{role_intro}{SUBAGENT_OUTPUT_FORMAT}"),
         }
     }
+}
+
+/// Public label for any role token (canonical, legacy alias, or free-form
+/// profile role). Canonical/legacy tokens collapse to the advertised name;
+/// anything else passes through trimmed.
+#[must_use]
+pub fn public_role_label(token: &str) -> String {
+    FleetRole::from_str(token).map_or_else(
+        || token.trim().to_string(),
+        |role| role.as_str().to_string(),
+    )
 }
 
 /// Status of a sub-agent execution.
@@ -14059,14 +14070,13 @@ fn parse_optional_worktree_request(
 /// here by the second validation pass with a misleading four-value hint.
 fn normalize_role_alias(input: &str) -> Option<&'static str> {
     match input.to_ascii_lowercase().as_str() {
-        "default" => Some("default"),
-        "worker" | "general" | "general-purpose" | "general_purpose" => Some("worker"),
-        "scout" | "explorer" | "explore" | "exploration" => Some("scout"),
+        "default" | "worker" | "general" | "general-purpose" | "general_purpose" => Some("general"),
+        "scout" | "explorer" | "explore" | "exploration" => Some("explore"),
         "awaiter" | "plan" | "planner" | "planning" => Some("planner"),
         "reviewer" | "review" | "code-review" | "code_review" => Some("reviewer"),
-        "implementer" | "implement" | "implementation" | "builder" => Some("builder"),
-        "verifier" | "verify" | "verification" | "validator" | "tester" => Some("verifier"),
-        "consultant" | "oracle" | "advisor" => Some("consultant"),
+        "implementer" | "implement" | "implementation" | "builder" => Some("implement"),
+        "verifier" | "verify" | "verification" | "validator" | "tester" => Some("test"),
+        "consultant" | "oracle" | "advisor" => Some("advisor"),
         "custom" => Some("custom"),
         _ => None,
     }
@@ -14547,7 +14557,7 @@ impl SubAgentToolRegistry {
         name: &str,
         input: &Value,
     ) -> ChildGateVerdict {
-        use crate::core::engine::{AutoReviewPlanDecision, auto_review_plan_decision_for_context};
+        use crate::core::engine::{auto_review_plan_decision_for_context, AutoReviewPlanDecision};
         use crate::core::events::{ToolGate, ToolGateVerdict};
         use crate::tui::approval::ApprovalMode;
         use crate::tui::auto_review::{AutoReviewContext, RunOrigin};
@@ -14677,7 +14687,7 @@ impl SubAgentToolRegistry {
         review_context: &crate::tui::auto_review::AutoReviewContext<'_>,
         held_reason: &str,
     ) -> ChildGateVerdict {
-        use crate::core::engine::reviewer::{ReviewerOutcome, consult_reviewer};
+        use crate::core::engine::reviewer::{consult_reviewer, ReviewerOutcome};
         use crate::core::events::{ToolGate, ToolGateVerdict};
 
         let context_text =
@@ -14832,7 +14842,7 @@ impl SubAgentToolRegistry {
     }
 
     fn is_delegated_builtin_verification(name: &str, input: &Value) -> bool {
-        use crate::tools::execution_envelope::{VerificationBound, classify_verification};
+        use crate::tools::execution_envelope::{classify_verification, VerificationBound};
 
         // Reuse the same classifier as the execution envelope. This prevents a
         // second, looser notion of "test command" from growing in this module.
@@ -15652,7 +15662,7 @@ fn reject_network_reaching_input(name: &str, input: &Value) -> Result<()> {
 /// So the tools stay and the arbitrary arguments go. The default form — the one
 /// the deny list's comment actually promises is bounded — keeps working.
 fn reject_unbounded_verification(name: &str, input: &Value, shell: bool) -> Result<()> {
-    use crate::tools::execution_envelope::{VerificationBound, classify_verification};
+    use crate::tools::execution_envelope::{classify_verification, VerificationBound};
 
     match classify_verification(canonical_action_alias(name, input), input) {
         None | Some(VerificationBound::Default) => Ok(()),
@@ -15911,7 +15921,8 @@ const SUBAGENT_SUMMARY_TAIL_CHARS: usize = 4_000;
 /// One-line provenance suffix reinforcing that a sub-agent summary is a
 /// self-report (issue #2652). Appended only when the summary was NOT
 /// length-truncated, so every summary carries exactly one boundary marker.
-const SUBAGENT_SELF_REPORT_NOTE: &str = "\n[Sub-agent self-report — re-verify material claims (read changed files, \
+const SUBAGENT_SELF_REPORT_NOTE: &str =
+    "\n[Sub-agent self-report — re-verify material claims (read changed files, \
 run the relevant tests) before relying on it.]";
 
 /// Stamp a sub-agent summary with a provenance/clip marker (issue #2652).

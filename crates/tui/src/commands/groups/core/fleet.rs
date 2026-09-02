@@ -154,7 +154,7 @@ fn fleet_add(app: &App, target: Option<&str>) -> CommandResult {
     let mut words = target.unwrap_or_default().split_whitespace();
     let (Some(provider), Some(model)) = (words.next(), words.next()) else {
         return CommandResult::error(
-            "Usage: /pod add <provider> <model> [role…] — e.g. /pod add openrouter z-ai/glm-5.3-flash scout",
+            "Usage: /pod add <provider> <model> [role…] — e.g. /pod add openrouter z-ai/glm-5.3-flash explore",
         );
     };
     let roles: Vec<String> = words.map(str::to_string).collect();
@@ -307,10 +307,10 @@ mod tests {
             "got: {empty:?}"
         );
 
-        let added = FleetCmd::execute(&mut app, Some("add openrouter z-ai/glm-5.3-flash scout"));
+        let added = FleetCmd::execute(&mut app, Some("add openrouter z-ai/glm-5.3-flash explore"));
         let text = added.message.clone().unwrap_or_default();
         assert!(
-            text.contains("Added openrouter/z-ai/glm-5.3-flash as scout"),
+            text.contains("Added openrouter/z-ai/glm-5.3-flash as explore"),
             "got: {text}"
         );
         assert!(text.contains("new user-global Pod"), "got: {text}");
@@ -319,7 +319,7 @@ mod tests {
             .message
             .unwrap_or_default();
         assert!(
-            listed.contains("openrouter/z-ai/glm-5.3-flash · scout"),
+            listed.contains("openrouter/z-ai/glm-5.3-flash · explore"),
             "got: {listed}"
         );
 
@@ -329,7 +329,7 @@ mod tests {
                 .message
                 .as_deref()
                 .unwrap_or_default()
-                .contains("Removed openrouter/z-ai/glm-5.3-flash (scout)"),
+                .contains("Removed openrouter/z-ai/glm-5.3-flash (explore)"),
             "got: {removed:?}"
         );
         assert!(crate::fleet::members::fleet_models(&workspace).is_empty());
@@ -571,18 +571,14 @@ mod tests {
 
         assert!(result.is_error);
         assert!(result.action.is_none());
-        assert!(
-            result
-                .message
-                .as_deref()
-                .is_some_and(|message| message.contains("Unknown /pod target 'bogus'"))
-        );
-        assert!(
-            result
-                .message
-                .as_deref()
-                .is_some_and(|message| message.contains("Use members, setup, pods"))
-        );
+        assert!(result
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("Unknown /pod target 'bogus'")));
+        assert!(result
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("Use members, setup, pods")));
     }
 
     #[test]

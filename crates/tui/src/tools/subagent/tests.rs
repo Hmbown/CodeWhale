@@ -3,11 +3,11 @@ use crate::config::ApiProvider;
 use crate::fleet::roster::FleetRoster;
 use crate::tools::{AgentToolSurfaceOptions, ToolRegistryBuilder};
 use crate::worker_profile::ShellPolicy;
-use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::post};
+use axum::{http::StatusCode, response::IntoResponse, routing::post, Json, Router};
 use std::collections::HashSet;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tempfile::{Builder as TempDirBuilder, tempdir};
+use tempfile::{tempdir, Builder as TempDirBuilder};
 
 mod launch_receipt;
 
@@ -257,12 +257,10 @@ fn active_worker_records_are_never_pruned_by_history_retention() {
         MAX_AGENT_WORKER_RECORDS + 1
     );
     assert!(manager.get_worker_record("active-worker-000").is_some());
-    assert!(
-        manager
-            .list_worker_records()
-            .iter()
-            .all(|record| !record.status.is_terminal())
-    );
+    assert!(manager
+        .list_worker_records()
+        .iter()
+        .all(|record| !record.status.is_terminal()));
 }
 
 #[test]
@@ -334,20 +332,16 @@ fn headless_worker_record_tracks_lifecycle_without_tui_projection() {
         Some("handle_read")
     );
     assert!(record.takeover.supported);
-    assert!(
-        record
-            .takeover
-            .instructions
-            .contains("transcript_handle with handle_read")
-    );
+    assert!(record
+        .takeover
+        .instructions
+        .contains("transcript_handle with handle_read"));
     assert_eq!(record.usage.status, "unknown");
     assert_eq!(record.verification.status, "self_report_only");
-    assert!(
-        record
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.kind == "transcript")
-    );
+    assert!(record
+        .artifacts
+        .iter()
+        .any(|artifact| artifact.kind == "transcript"));
     let statuses: Vec<_> = record.events.iter().map(|event| event.status).collect();
     assert!(statuses.contains(&AgentWorkerStatus::Queued));
     assert!(statuses.contains(&AgentWorkerStatus::ModelWait));
@@ -362,12 +356,10 @@ fn headless_worker_record_tracks_lifecycle_without_tui_projection() {
         Some("worker summary".len() as u64),
         "persisted worker results become byte-count receipts, never raw graph output"
     );
-    assert!(
-        record
-            .events
-            .iter()
-            .any(|event| event.tool_name.as_deref() == Some("read_file"))
-    );
+    assert!(record
+        .events
+        .iter()
+        .any(|event| event.tool_name.as_deref() == Some("read_file")));
 }
 
 #[test]
@@ -747,12 +739,10 @@ fn headless_worker_records_persist_with_subagent_state() {
     assert_eq!(record.status, AgentWorkerStatus::Failed);
     assert_eq!(record.error.as_deref(), Some("boom"));
     assert_eq!(record.steps_taken, 3);
-    assert!(
-        record
-            .events
-            .iter()
-            .any(|event| event.status == AgentWorkerStatus::Failed)
-    );
+    assert!(record
+        .events
+        .iter()
+        .any(|event| event.status == AgentWorkerStatus::Failed));
 }
 
 #[test]
@@ -839,11 +829,9 @@ fn coordination_ledger_persists_and_replays_bounded_contracts() {
 
     let mut loaded = SubAgentManager::new(tmp.path().to_path_buf(), 4).with_state_path(state_path);
     loaded.load_state().expect("reload coordination");
-    assert!(
-        loaded
-            .validate_write_scope("agent_writer", &["src/lib.rs".into()])
-            .is_ok()
-    );
+    assert!(loaded
+        .validate_write_scope("agent_writer", &["src/lib.rs".into()])
+        .is_ok());
     let err = loaded
         .validate_write_scope("agent_writer", &["docs/readme.md".into()])
         .unwrap_err();
@@ -1035,15 +1023,13 @@ fn headless_worker_registration_enforces_live_claims_and_projects_context() {
         .get_worker_record("worker-a")
         .expect("worker record");
     assert!(record.spec.objective.contains("src-a-contract"));
-    assert!(
-        record
-            .spec
-            .launch_manifest
-            .as_ref()
-            .expect("launch manifest")
-            .prompt
-            .contains("src-a-contract")
-    );
+    assert!(record
+        .spec
+        .launch_manifest
+        .as_ref()
+        .expect("launch manifest")
+        .prompt
+        .contains("src-a-contract"));
 
     let overlap = manager
         .preflight_worker_coordination(&worker("worker-b", "src/a/nested"))
@@ -1849,13 +1835,11 @@ fn coordination_acceptance_preserves_scopes_candidates_and_replay() {
     assert_eq!(replayed.coordination.contentions.len(), 2);
     assert_eq!(replayed.coordination.projections.len(), 2);
     assert_eq!(replayed.coordination.reconciliations.len(), 1);
-    assert!(
-        replayed
-            .coordination
-            .write_claims
-            .iter()
-            .any(|claim| claim.claim.owner == agent_a)
-    );
+    assert!(replayed
+        .coordination
+        .write_claims
+        .iter()
+        .any(|claim| claim.claim.owner == agent_a));
     let sequences = replayed
         .coordination
         .decisions
@@ -2191,11 +2175,9 @@ async fn detached_interactive_usage_after_mailbox_seal_reaches_session_accountin
             worker.usage_source_fingerprints,
             [fingerprint.clone()].into()
         );
-        assert!(
-            session_usage
-                .usage_source_fingerprints
-                .contains(&fingerprint)
-        );
+        assert!(session_usage
+            .usage_source_fingerprints
+            .contains(&fingerprint));
     }
 }
 
@@ -2536,26 +2518,26 @@ fn test_agent_type_round_trips_via_as_str() {
 
 #[test]
 fn fleet_role_labels_are_canonical_while_legacy_snapshot_wire_stays_readable() {
-    assert_eq!(FleetRole::Scout.as_str(), "scout");
-    assert_eq!(FleetRole::Builder.as_str(), "builder");
+    assert_eq!(FleetRole::Scout.as_str(), "explore");
+    assert_eq!(FleetRole::Builder.as_str(), "implement");
     // Normal serialization writes Fleet role names only.
     assert_eq!(
         serde_json::to_string(&FleetRole::Scout).expect("serialize fleet role"),
-        "\"scout\""
+        "\"explore\""
     );
     assert_eq!(
         serde_json::to_string(&FleetRole::Builder).expect("serialize fleet role"),
-        "\"builder\""
+        "\"implement\""
     );
     // Legacy wire is accepted only at the deserialize boundary.
     assert_eq!(
-        serde_json::from_str::<FleetRole>("\"explore\"").expect("read legacy snapshot"),
+        serde_json::from_str::<FleetRole>("\"scout\"").expect("read legacy snapshot"),
         FleetRole::Scout
     );
     assert_eq!(
-        migrate_legacy_role_token("explore"),
-        Some("scout"),
-        "boundary helper maps explore → scout"
+        migrate_legacy_role_token("scout"),
+        Some("explore"),
+        "boundary helper maps scout → explore"
     );
     // Re-serializing a migrated load never re-emits the legacy token.
     let migrated: FleetRole = serde_json::from_str("\"explore\"").expect("migrate legacy explore");
@@ -3273,10 +3255,10 @@ fn consultant_round_trips_canonically_and_accepts_compatibility_aliases() {
     );
     assert_eq!(FleetRole::from_str("oracle"), Some(FleetRole::Consultant));
     assert_eq!(FleetRole::from_str("advisor"), Some(FleetRole::Consultant));
-    assert_eq!(FleetRole::Consultant.as_str(), "consultant");
+    assert_eq!(FleetRole::Consultant.as_str(), "advisor");
 
     let json = serde_json::to_string(&FleetRole::Consultant).expect("serialize");
-    assert_eq!(json, "\"consultant\"");
+    assert_eq!(json, "\"advisor\"");
     let back: FleetRole = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, FleetRole::Consultant);
 
@@ -3286,14 +3268,14 @@ fn consultant_round_trips_canonically_and_accepts_compatibility_aliases() {
         assert_eq!(migrated, FleetRole::Consultant);
         assert_eq!(
             serde_json::to_string(&migrated).expect("re-serialize canonical role"),
-            "\"consultant\""
+            "\"advisor\""
         );
     }
 
     // Advertised in the tool schema, so the model can actually pick it.
-    assert!(FLEET_ROLE_SCHEMA_VALUES.contains(&"consultant"));
+    assert!(FLEET_ROLE_SCHEMA_VALUES.contains(&"test"));
     assert!(!FLEET_ROLE_SCHEMA_VALUES.contains(&"oracle"));
-    assert!(!FLEET_ROLE_SCHEMA_VALUES.contains(&"advisor"));
+    assert!(FLEET_ROLE_SCHEMA_VALUES.contains(&"advisor"));
 }
 
 #[test]
@@ -3505,7 +3487,7 @@ fn test_parse_spawn_request_accepts_message_and_agent_type_aliases() {
     let parsed = parse_spawn_request(&input).expect("spawn request should parse");
     assert_eq!(parsed.prompt, "Find references to Foo");
     assert_eq!(parsed.agent_type, FleetRole::Scout);
-    assert_eq!(parsed.assignment.role.as_deref(), Some("scout"));
+    assert_eq!(parsed.assignment.role.as_deref(), Some("explore"));
 }
 
 #[test]
@@ -3667,10 +3649,9 @@ fn test_parse_spawn_request_rejects_invalid_model_strength() {
         "model_strength": "automatic"
     });
     let err = parse_spawn_request(&input).expect_err("invalid model_strength should fail");
-    assert!(
-        err.to_string()
-            .contains("model_strength must be one of: same, faster")
-    );
+    assert!(err
+        .to_string()
+        .contains("model_strength must be one of: same, faster"));
 }
 
 #[test]
@@ -3680,10 +3661,9 @@ fn test_parse_spawn_request_rejects_invalid_child_thinking() {
         "thinking": "forever"
     });
     let err = parse_spawn_request(&input).expect_err("invalid thinking should fail");
-    assert!(
-        err.to_string()
-            .contains("thinking must be one of: inherit, auto, off, low, medium, high, max")
-    );
+    assert!(err
+        .to_string()
+        .contains("thinking must be one of: inherit, auto, off, low, medium, high, max"));
 }
 
 #[test]
@@ -3719,10 +3699,9 @@ fn test_parse_spawn_request_rejects_out_of_range_max_depth() {
         "max_depth": ceiling + 1
     });
     let err = parse_spawn_request(&input).expect_err("max_depth should be capped at schema range");
-    assert!(
-        err.to_string()
-            .contains(&format!("max_depth must be between 0 and {ceiling}"))
-    );
+    assert!(err
+        .to_string()
+        .contains(&format!("max_depth must be between 0 and {ceiling}")));
 }
 
 fn fleet_roster_with(id: &str, profile: codewhale_config::FleetProfile) -> FleetRoster {
@@ -5033,11 +5012,11 @@ fn test_invalid_role_error_lists_real_aliases() {
         .expect_err("unknown fleet role should fail at runtime resolution")
         .to_string();
     assert!(err.contains("Unknown Pod role/profile 'nonsense'"), "{err}");
-    assert!(err.contains("scout"), "hint should list scout: {err}");
+    assert!(err.contains("explore"), "hint should list explore: {err}");
     assert!(err.contains("reviewer"), "hint should list reviewer: {err}");
-    assert!(err.contains("verifier"), "hint should list verifier: {err}");
+    assert!(err.contains("test"), "hint should list test: {err}");
     assert!(err.contains("custom"), "hint should list custom: {err}");
-    assert!(err.contains("worker"), "hint should list worker: {err}");
+    assert!(err.contains("general"), "hint should list general: {err}");
     assert!(
         err.contains("legacy aliases remain accepted"),
         "hint should explain compatibility aliases: {err}"
@@ -6195,10 +6174,9 @@ fn test_parse_spawn_request_rejects_conflicting_type_and_role() {
         "role": "worker"
     });
     let err = parse_spawn_request(&input).expect_err("conflicting type+role should fail");
-    assert!(
-        err.to_string()
-            .contains("Pod role conflicts with the explicit legacy agent type")
-    );
+    assert!(err
+        .to_string()
+        .contains("Pod role conflicts with the explicit legacy agent type"));
 }
 
 #[test]
@@ -9231,13 +9209,11 @@ async fn cleanup_auto_cancels_stale_running_agent_and_releases_slot() {
         .expect("agent should remain inspectable");
     assert_eq!(snapshot.status, SubAgentStatus::Cancelled);
     assert_eq!(manager.running_count(), 0);
-    assert!(
-        snapshot
-            .result
-            .as_deref()
-            .unwrap_or_default()
-            .contains("Auto-cancelled")
-    );
+    assert!(snapshot
+        .result
+        .as_deref()
+        .unwrap_or_default()
+        .contains("Auto-cancelled"));
     let completion = completion_rx
         .try_recv()
         .expect("stale cleanup should wake the immediate parent");
@@ -9305,12 +9281,10 @@ async fn status_projection_reconciles_stale_running_agent() {
     assert_eq!(agent["status"], "cancelled");
     assert_eq!(agent["terminal"], true);
     assert_eq!(agent["snapshot"]["status"], "Cancelled");
-    assert!(
-        agent["snapshot"]["result"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Auto-cancelled")
-    );
+    assert!(agent["snapshot"]["result"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Auto-cancelled"));
 }
 
 #[tokio::test]
@@ -10405,7 +10379,7 @@ fn subagent_done_sentinel_format_is_well_formed() {
     let parsed: serde_json::Value = serde_json::from_str(inner).expect("inner JSON parses");
     assert_eq!(parsed["agent_id"], "agent_xyz");
     assert_eq!(parsed["status"], "completed");
-    assert_eq!(parsed["agent_type"], "worker");
+    assert_eq!(parsed["agent_type"], "general");
     assert_eq!(parsed["summary_location"], "previous_line");
     // issue #2652: a complete (non-truncated) summary is tagged as such.
     assert_eq!(parsed["summary_kind"], "complete");
@@ -10468,19 +10442,15 @@ fn failed_subagent_completion_is_high_priority_and_retrievable() {
     assert!(completion.is_high_priority_failure());
     assert!(completion.payload.contains(r#""event":"subagent.failed""#));
     assert!(completion.payload.contains(r#""priority":"high""#));
-    assert!(
-        completion
-            .payload
-            .contains(r#""failure_class":"empty_turn""#)
-    );
+    assert!(completion
+        .payload
+        .contains(r#""failure_class":"empty_turn""#));
     assert!(completion.payload.contains(r#""name":"Tide""#));
     assert!(completion.payload.contains(r#""steps":7"#));
     assert!(completion.payload.contains(r#""elapsed_ms":12345"#));
-    assert!(
-        completion
-            .payload
-            .contains(r#""transcript_handle":"agent:agent_test/full_transcript""#)
-    );
+    assert!(completion
+        .payload
+        .contains(r#""transcript_handle":"agent:agent_test/full_transcript""#));
 
     let completed = subagent_completion_from_result(&make_snapshot(SubAgentStatus::Completed));
     assert!(!completed.is_high_priority_failure());
@@ -10492,16 +10462,12 @@ fn budget_exhaustion_is_a_high_priority_failure_event() {
         subagent_completion_from_result(&make_snapshot(SubAgentStatus::BudgetExhausted));
 
     assert!(completion.is_high_priority_failure());
-    assert!(
-        completion
-            .payload
-            .contains(r#""status":"budget_exhausted""#)
-    );
-    assert!(
-        completion
-            .payload
-            .contains(r#""failure_class":"token_budget""#)
-    );
+    assert!(completion
+        .payload
+        .contains(r#""status":"budget_exhausted""#));
+    assert!(completion
+        .payload
+        .contains(r#""failure_class":"token_budget""#));
 }
 
 #[test]
@@ -12585,12 +12551,10 @@ async fn turn_owned_descendants_join_and_park_with_the_same_foreground_registry(
     assert_eq!(registry.active_count(), 0);
 
     let detached = root.background_runtime();
-    assert!(
-        detached
-            .foreground_child_registration("agent_detached_park")
-            .expect("detached admission does not consult the foreground barrier")
-            .is_none()
-    );
+    assert!(detached
+        .foreground_child_registration("agent_detached_park")
+        .expect("detached admission does not consult the foreground barrier")
+        .is_none());
     assert!(!detached.cancel_token.is_cancelled());
 }
 
@@ -12626,13 +12590,11 @@ fn derived_child_cancellation_reaches_tool_context_while_detached_stays_independ
     let rebound = stub_runtime().with_cancel_token(replacement.clone());
     replacement.cancel();
     assert!(rebound.cancel_token.is_cancelled());
-    assert!(
-        rebound
-            .context
-            .cancel_token
-            .as_ref()
-            .is_some_and(CancellationToken::is_cancelled)
-    );
+    assert!(rebound
+        .context
+        .cancel_token
+        .as_ref()
+        .is_some_and(CancellationToken::is_cancelled));
 }
 
 #[tokio::test]
@@ -12970,7 +12932,7 @@ fn persisted_advisory_assignment_roles_replay_and_repersist_as_consultant() {
             .get_result(&format!("agent_{alias}"))
             .expect("loaded consultant is visible");
         assert_eq!(result.agent_type, FleetRole::Consultant);
-        assert_eq!(result.assignment.role.as_deref(), Some("consultant"));
+        assert_eq!(result.assignment.role.as_deref(), Some("advisor"));
 
         manager
             .persist_state()
@@ -12983,9 +12945,9 @@ fn persisted_advisory_assignment_roles_replay_and_repersist_as_consultant() {
         .expect("parse canonical state");
         assert_eq!(
             repersisted["agents"][0]["assignment"]["role"],
-            json!("consultant")
+            json!("advisor")
         );
-        assert_eq!(repersisted["agents"][0]["agent_type"], json!("consultant"));
+        assert_eq!(repersisted["agents"][0]["agent_type"], json!("advisor"));
     }
 }
 
@@ -13651,11 +13613,9 @@ fn spawn_child_client_inherits_session_provider_without_pin() {
         same_client.api_provider(),
         crate::config::ApiProvider::Deepseek
     );
-    assert!(
-        same_client
-            .base_url()
-            .contains("session-provider.example.com")
-    );
+    assert!(same_client
+        .base_url()
+        .contains("session-provider.example.com"));
 }
 
 fn coexisting_ollama_cloud_config(active_provider: &str) -> crate::config::Config {
@@ -13999,11 +13959,9 @@ fn active_session_owns_every_roster_and_control_resolution() {
             .cancel_agent_for_session("session-b", &agent_a)
             .expect_err("foreign cancel"),
     ];
-    assert!(
-        foreign_errors
-            .iter()
-            .all(|error| { error.to_string() == "Agent not found in the active session" })
-    );
+    assert!(foreign_errors
+        .iter()
+        .all(|error| { error.to_string() == "Agent not found in the active session" }));
     assert_eq!(
         manager
             .get_result(&agent_a)
@@ -14067,16 +14025,12 @@ fn ownerless_legacy_rows_fail_closed_and_scoped_close_preserves_foreign_workers(
     manager.register_worker(make_worker_spec("legacy", workspace.path().to_path_buf()));
     let legacy = "legacy".to_string();
     assert!(manager.list_for_session("session-a").is_empty());
-    assert!(
-        manager
-            .list_worker_records_for_session("session-a")
-            .is_empty()
-    );
-    assert!(
-        manager
-            .get_result_by_ref_for_session("session-a", &legacy)
-            .is_err()
-    );
+    assert!(manager
+        .list_worker_records_for_session("session-a")
+        .is_empty());
+    assert!(manager
+        .get_result_by_ref_for_session("session-a", &legacy)
+        .is_err());
 
     let agent_a = manager.insert_test_running_agent("close_a", workspace.path());
     let agent_b = manager.insert_test_running_agent("keep_b", workspace.path());
@@ -14096,13 +14050,11 @@ fn ownerless_legacy_rows_fail_closed_and_scoped_close_preserves_foreign_workers(
             .status,
         SubAgentStatus::Running
     );
-    assert!(
-        !manager
-            .get_worker_record(&agent_b)
-            .expect("foreign B worker retained")
-            .status
-            .is_terminal()
-    );
+    assert!(!manager
+        .get_worker_record(&agent_b)
+        .expect("foreign B worker retained")
+        .status
+        .is_terminal());
 }
 
 #[test]
@@ -16075,12 +16027,10 @@ async fn queued_turn_owned_child_parks_without_a_false_start_transition() {
         .get_result(&agent_id)
         .expect("parked queued child remains inspectable");
     assert!(matches!(snapshot.status, SubAgentStatus::Interrupted(_)));
-    assert!(
-        snapshot
-            .checkpoint
-            .as_ref()
-            .is_some_and(|checkpoint| checkpoint.continuable)
-    );
+    assert!(snapshot
+        .checkpoint
+        .as_ref()
+        .is_some_and(|checkpoint| checkpoint.continuable));
     let worker = manager
         .get_worker_record(&agent_id)
         .expect("parked queued worker remains inspectable");
@@ -16097,12 +16047,10 @@ async fn queued_turn_owned_child_parks_without_a_false_start_transition() {
             .any(|event| event.status == AgentWorkerStatus::Starting && event.seq > queued_seq),
         "parking must not emit a second Starting transition after Queued: {worker:?}"
     );
-    assert!(
-        !worker
-            .events
-            .iter()
-            .any(|event| event.status == AgentWorkerStatus::Cancelled)
-    );
+    assert!(!worker
+        .events
+        .iter()
+        .any(|event| event.status == AgentWorkerStatus::Cancelled));
 
     drop(manager);
     drop(held_launch_permit);
@@ -17614,12 +17562,10 @@ async fn agent_wait_returns_immediately_with_no_children() {
     let payload: serde_json::Value =
         serde_json::from_str(&result.content).expect("wait payload should be json");
     assert_eq!(payload["running"], json!(0));
-    assert!(
-        payload["settled"]
-            .as_array()
-            .expect("settled array")
-            .is_empty()
-    );
+    assert!(payload["settled"]
+        .as_array()
+        .expect("settled array")
+        .is_empty());
 }
 
 #[tokio::test]
@@ -17678,12 +17624,10 @@ async fn agent_wait_times_out_and_reports_running_child() {
         serde_json::from_str(&result.content).expect("wait payload should be json");
     assert_eq!(payload["timed_out"], json!(true));
     assert_eq!(payload["running"], json!(1));
-    assert!(
-        payload["settled"]
-            .as_array()
-            .expect("settled array")
-            .is_empty()
-    );
+    assert!(payload["settled"]
+        .as_array()
+        .expect("settled array")
+        .is_empty());
 }
 
 #[tokio::test]
@@ -18520,7 +18464,7 @@ async fn a_read_only_inspection_member_gets_only_bounded_web_search() {
         tools: true,
     };
     let authority = crate::fleet::exact::ChildAuthority::from_runtime_role("scout", parent);
-    assert_eq!(authority.posture_role, "scout");
+    assert_eq!(authority.posture_role, "explore");
     assert!(!authority.ceiling.network_tool);
 
     let mut runtime =
@@ -18873,7 +18817,7 @@ async fn a_parent_read_only_session_narrows_a_full_exact_member_in_the_child_reg
     assert!(!authority.ceiling.write);
     assert!(!authority.ceiling.network_tool);
     assert_eq!(authority.write_authority, "read_only");
-    assert_eq!(authority.posture_role, "scout");
+    assert_eq!(authority.posture_role, "explore");
 
     let mut runtime =
         stub_runtime().with_agent_tool_surface_options(enabled_agent_surface_options());
@@ -19904,10 +19848,9 @@ fn spawn_receipt_route_names_the_provider_and_model_the_child_actually_got() {
         .keys()
         .map(String::as_str)
         .collect();
-    assert!(
-        keys.iter()
-            .all(|key| { !matches!(*key, "base_url" | "api_key" | "workspace" | "source_path") })
-    );
+    assert!(keys
+        .iter()
+        .all(|key| { !matches!(*key, "base_url" | "api_key" | "workspace" | "source_path") }));
 
     // The receipt exposes the resolved wire id and route source, without a
     // mutable config reference that could reveal path or credential data.
@@ -19965,7 +19908,7 @@ async fn spawn_receipt_route_survives_compaction_for_a_type_only_spawn() {
         json!("deepseek-v4-flash")
     );
     assert_eq!(receipt["child_route"]["route_source"], json!("run.model"));
-    assert_eq!(receipt["child_route"]["requested_type"], json!("scout"));
+    assert_eq!(receipt["child_route"]["requested_type"], json!("explore"));
     assert!(
         receipt.get("fleet_profile").is_none(),
         "a type-only spawn resolves no profile: {receipt}"
@@ -20711,19 +20654,15 @@ mod child_permission_gate {
                 }
                 let approval_id = approval_id.expect("child prompt must reach the host");
                 assert_eq!(manager_for_answer.read().await.pending_child_approvals(), 1);
-                assert!(
-                    manager_for_answer
-                        .write()
-                        .await
-                        .resolve_child_approval(&approval_id, answer)
-                );
+                assert!(manager_for_answer
+                    .write()
+                    .await
+                    .resolve_child_approval(&approval_id, answer));
                 // Answering twice finds no waiter.
-                assert!(
-                    !manager_for_answer
-                        .write()
-                        .await
-                        .resolve_child_approval(&approval_id, answer)
-                );
+                assert!(!manager_for_answer
+                    .write()
+                    .await
+                    .resolve_child_approval(&approval_id, answer));
             });
             let result = registry
                 .execute("agent_gate", "bash", json!({"command": "echo gated"}))
