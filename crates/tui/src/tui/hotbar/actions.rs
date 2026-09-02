@@ -1026,8 +1026,8 @@ impl HotbarAction for AppHotbarAction {
                 if app.work_surface.placement == crate::tui::work_surface::WorkSurfacePlacement::Off
                 {
                     app.work_surface.placement =
-                        crate::tui::work_surface::WorkSurfacePlacement::Top;
-                    app.status_message = Some("Rail: top placement".to_string());
+                        crate::tui::work_surface::WorkSurfacePlacement::Bottom;
+                    app.status_message = Some("Rail: bottom placement".to_string());
                 } else {
                     app.work_surface.placement =
                         crate::tui::work_surface::WorkSurfacePlacement::Off;
@@ -2597,7 +2597,8 @@ mod tests {
         sidebar.dispatch(&mut app).expect("dispatch rail show");
         assert_eq!(
             app.work_surface.placement,
-            crate::tui::work_surface::WorkSurfacePlacement::Top
+            crate::tui::work_surface::WorkSurfacePlacement::Bottom,
+            "toggling the rail back on restores the round-3 default"
         );
         assert!(sidebar.is_active(&app));
     }

@@ -567,9 +567,10 @@ impl Default for Settings {
             // painted over every terminal the user brings.
             ocean_treatment: "flat".to_string(),
             focus_texture: "off".to_string(),
-            // Side rail on spacious terminals; the typed layout falls back to
-            // the compact top strip before it steals transcript width.
-            work_surface_placement: "left".to_string(),
+            // Round 3 (2026-09-01): the bar's information lives under the
+            // composer. Side rails are opt-in and fall back to the top strip
+            // on narrow terminals.
+            work_surface_placement: "bottom".to_string(),
             // Cap, not fixed height: the top strip auto-fits its rows and
             // only grows to this many lines (user request, 2026-07-23).
             work_surface_top_height: 8,
@@ -655,10 +656,14 @@ fn normalize_ocean_treatment(value: &str) -> &'static str {
 
 fn normalize_work_surface_placement(value: &str) -> &'static str {
     match value.trim().to_ascii_lowercase().as_str() {
+        "top" => "top",
+        "bottom" => "bottom",
         "left" => "left",
         "right" => "right",
         "off" => "off",
-        _ => "top",
+        // Round 3 (2026-09-01): unknown values fall back to the product
+        // default — the bar lives under the composer.
+        _ => "bottom",
     }
 }
 
@@ -1345,9 +1350,12 @@ impl Settings {
             }
             "work_surface_placement" | "work_surface" | "work_rail" => {
                 let normalized = value.trim().to_ascii_lowercase();
-                if !matches!(normalized.as_str(), "top" | "left" | "right" | "off") {
+                if !matches!(
+                    normalized.as_str(),
+                    "top" | "bottom" | "left" | "right" | "off"
+                ) {
                     anyhow::bail!(
-                        "Failed to update setting: invalid work surface placement '{value}'. Expected: top, left, right, or off."
+                        "Failed to update setting: invalid work surface placement '{value}'. Expected: top, bottom, left, right, or off."
                     );
                 }
                 self.work_surface_placement = normalized;
@@ -1770,7 +1778,7 @@ impl Settings {
             ),
             (
                 "work_surface_placement",
-                "Ocean Tasks/To-do/Workers rail placement: top/left/right",
+                "Ocean Tasks/To-do/Workers rail placement: bottom (default)/top/left/right",
             ),
             (
                 "work_surface_top_height",
@@ -3163,11 +3171,13 @@ mod tests {
     }
 
     #[test]
-    fn work_surface_placement_persists_top_left_right_and_off() {
+    fn work_surface_placement_persists_all_placements_with_bottom_default() {
         let mut settings = Settings::default();
-        assert_eq!(settings.work_surface_placement, "left");
+        // Round 3 (2026-09-01): the bar's information lives under the
+        // composer, so Bottom is the default.
+        assert_eq!(settings.work_surface_placement, "bottom");
 
-        for placement in ["left", "right", "top", "off"] {
+        for placement in ["bottom", "top", "left", "right", "off"] {
             settings
                 .set("work_surface_placement", placement)
                 .expect("valid placement");
@@ -3178,9 +3188,9 @@ mod tests {
         }
 
         let err = settings
-            .set("work_surface_placement", "bottom")
-            .expect_err("bottom is owned by composer/footer");
-        assert!(err.to_string().contains("top, left, right, or off"));
+            .set("work_surface_placement", "diagonal")
+            .expect_err("nonsense placement");
+        assert!(err.to_string().contains("top, bottom, left, right, or off"));
         assert_eq!(settings.work_surface_placement, "off");
     }
 
@@ -3591,14 +3601,15 @@ mod tests {
         migrate_sidebar_settings_to_rail(&mut explicit);
         assert_eq!(explicit.rail_panel, "tasks");
         // Placement panels keep their placement when the rail hides.
-        let mut left = Settings {
+        let mut bottom = Settings {
             sidebar_focus: "hidden".to_string(),
-            work_surface_placement: "left".to_string(),
+            work_surface_placement: "bottom".to_string(),
             work_surface_placement_explicit: true,
             ..Settings::default()
         };
-        migrate_sidebar_settings_to_rail(&mut left);
-        assert_eq!(left.work_surface_placement, "left");
+        migrate_sidebar_settings_to_rail(&mut bottom);
+        // Bottom is a valid explicit placement now, so migration keeps it.
+        assert_eq!(bottom.work_surface_placement, "bottom");
     }
 
     #[test]
@@ -5089,7 +5100,7 @@ mod tests {
         // A settings.toml that only names `sidebar_focus = "auto"` — the
         // shipped default — must not silently earn an always-on rail strip.
         assert_eq!(loaded.rail_panel, "tasks");
-        assert_eq!(loaded.work_surface_placement, "left");
+        assert_eq!(loaded.work_surface_placement, "bottom");
     }
 
     #[test]

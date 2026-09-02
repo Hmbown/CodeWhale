@@ -1411,8 +1411,8 @@ mod tests {
         assert!(!result.is_error);
         assert_eq!(
             app.work_surface.placement,
-            WorkSurfacePlacement::Top,
-            "on restores the default top rail"
+            WorkSurfacePlacement::Bottom,
+            "on restores the default bottom rail (round 3)"
         );
 
         let result = execute("/sidebar none", &mut app);

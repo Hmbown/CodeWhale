@@ -602,11 +602,12 @@ pub fn sidebar(app: &mut App, arg: Option<&str>) -> CommandResult {
         [value] => {
             let value = value.to_ascii_lowercase();
             // Legacy focus words map onto the closest rail concept so muscle
-            // memory keeps working: "on" restores the default top rail,
+            // memory keeps working: "on" restores the default bottom rail,
             // "off" hides it, panel names select panels.
             let placement = match value.as_str() {
-                "top" | "on" | "show" | "visible" => {
-                    Some(crate::tui::work_surface::WorkSurfacePlacement::Top)
+                "top" => Some(crate::tui::work_surface::WorkSurfacePlacement::Top),
+                "bottom" | "on" | "show" | "visible" => {
+                    Some(crate::tui::work_surface::WorkSurfacePlacement::Bottom)
                 }
                 "left" => Some(crate::tui::work_surface::WorkSurfacePlacement::Left),
                 "right" => Some(crate::tui::work_surface::WorkSurfacePlacement::Right),
@@ -671,7 +672,8 @@ fn rail_status_message(app: &App) -> String {
 
     let placement = app.work_surface.placement;
     if placement == WorkSurfacePlacement::Off {
-        return "Rail is off — no panel renders (/rail top|left|right to show it)".to_string();
+        return "Rail is off — no panel renders (/rail bottom|top|left|right to show it)"
+            .to_string();
     }
     let panel = app.work_surface.panel;
     let mut message = format!(
@@ -3492,7 +3494,7 @@ mod tests {
     }
 
     #[test]
-    fn work_surface_config_applies_live_and_rejects_bottom() {
+    fn work_surface_config_applies_live_and_accepts_bottom() {
         let mut app = create_test_app();
 
         let result = set_config_value(&mut app, "work_surface_placement", "left", false);
@@ -3508,15 +3510,15 @@ mod tests {
         );
 
         let result = set_config_value(&mut app, "work_surface_placement", "bottom", false);
-        assert!(result.is_error);
+        assert!(!result.is_error, "{:?}", result.message);
         assert_eq!(
             app.work_surface.placement,
-            crate::tui::work_surface::WorkSurfacePlacement::Left
+            crate::tui::work_surface::WorkSurfacePlacement::Bottom
         );
     }
 
     #[test]
-    fn rail_command_on_restores_default_top_placement() {
+    fn rail_command_on_restores_default_bottom_placement() {
         let mut app = create_test_app();
         app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Off;
 
@@ -3525,10 +3527,10 @@ mod tests {
         assert!(!result.is_error);
         assert_eq!(
             app.work_surface.placement,
-            crate::tui::work_surface::WorkSurfacePlacement::Top
+            crate::tui::work_surface::WorkSurfacePlacement::Bottom
         );
         let message = result.message.unwrap_or_default();
-        assert!(message.contains("top placement"), "got: {message}");
+        assert!(message.contains("bottom placement"), "got: {message}");
     }
 
     #[test]

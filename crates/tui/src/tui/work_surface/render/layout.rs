@@ -18,7 +18,13 @@ fn effective_placement(configured: WorkSurfacePlacement, host_width: u16) -> Wor
     if configured == WorkSurfacePlacement::Off {
         return WorkSurfacePlacement::Off;
     }
-    if host_width < SIDE_RAIL_MIN_HOST_WIDTH {
+    // Only the side rails need width; strip placements work at any host
+    // width, and a narrow host keeps the user's Bottom default.
+    if matches!(
+        configured,
+        WorkSurfacePlacement::Left | WorkSurfacePlacement::Right
+    ) && host_width < SIDE_RAIL_MIN_HOST_WIDTH
+    {
         WorkSurfacePlacement::Top
     } else {
         configured
@@ -51,7 +57,7 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
     // to-do or finished sub-agent still occupies a row.) Side placements
     // reserve via `split_chat` and take no top strip.
     if app.work_surface.panel == RailPanel::Context {
-        if app.work_surface.effective_placement != WorkSurfacePlacement::Top {
+        if !app.work_surface.effective_placement.is_strip() {
             return 0;
         }
         if !panels::panel_has_useful_content(app, app.work_surface.panel) {
@@ -85,10 +91,8 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
     }
 
     let rows = visible_rows_for_panel(app);
-    let goal_rows = u16::from(
-        app.work_surface.effective_placement == WorkSurfacePlacement::Top
-            && top_goal_title(app).is_some(),
-    );
+    let goal_rows =
+        u16::from(app.work_surface.effective_placement.is_strip() && top_goal_title(app).is_some());
     if rows.is_empty() {
         // A live goal alone still deserves a strip: title + divider.
         if goal_rows == 0 {
@@ -99,7 +103,7 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
             app.work_surface.scroll_offset = 0;
             return 0;
         }
-        if app.work_surface.effective_placement != WorkSurfacePlacement::Top {
+        if !app.work_surface.effective_placement.is_strip() {
             return 0;
         }
         let cap = top_cap(app, terminal_height, rail_budget);
@@ -109,7 +113,7 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
         }
         return (goal_rows.saturating_add(1)).clamp(model::TOP_HEIGHT_MIN, cap);
     }
-    if app.work_surface.effective_placement != WorkSurfacePlacement::Top {
+    if !app.work_surface.effective_placement.is_strip() {
         return 0;
     }
     // The strip auto-fits its content: the literal selectable list plus the
@@ -248,7 +252,9 @@ pub fn split_chat(app: &mut App, area: Rect, min_chat_width: u16) -> (Rect, Opti
                 ..area
             }),
         ),
-        WorkSurfacePlacement::Top | WorkSurfacePlacement::Off => (area, None),
+        WorkSurfacePlacement::Top | WorkSurfacePlacement::Bottom | WorkSurfacePlacement::Off => {
+            (area, None)
+        }
     }
 }
 

@@ -119,13 +119,13 @@ pub(crate) fn apply_alt_4_shortcut(app: &mut App, _modifiers: KeyModifiers) {
 }
 
 pub(crate) fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {
-    // Ctrl+Alt+0 toggles the rail off and back to the default top
+    // Ctrl+Alt+0 toggles the rail off and back to the default bottom
     // placement. Plain Alt+0 is unbound: it used to select the retired
     // auto-collapse mode.
     if modifiers.contains(KeyModifiers::CONTROL) {
         if app.work_surface.placement == crate::tui::work_surface::WorkSurfacePlacement::Off {
-            app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Top;
-            app.status_message = Some("Rail: top placement".to_string());
+            app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Bottom;
+            app.status_message = Some("Rail: bottom placement".to_string());
         } else {
             app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Off;
             app.status_message = Some("Rail is off".to_string());

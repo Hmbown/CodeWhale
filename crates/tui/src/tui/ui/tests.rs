@@ -3829,13 +3829,18 @@ fn tool_path_relevance_extracts_paths_from_command_text() {
 }
 
 fn create_test_app() -> App {
-    crate::test_support::test_app_with_options(TuiOptions {
+    let mut app = crate::test_support::test_app_with_options(TuiOptions {
         // Keep UI tests independent from the developer's saved
         // `default_mode` setting.
         start_in_agent_mode: true,
         skip_onboarding: false,
         ..crate::test_support::test_tui_options(PathBuf::from("."))
-    })
+    });
+    // These suites assert legacy strip geometry (work surface above the
+    // transcript). The Bottom default (round 3, 2026-09-01) has dedicated
+    // coverage in work_surface::rail_panels_render_in_all_placements.
+    app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Top;
+    app
 }
 
 #[test]
@@ -4401,6 +4406,92 @@ fn failed_mcp_is_a_footer_chip_not_multiline_chat_boot_output() {
     );
     assert!(!rendered.contains("alpha · failed"), "{rendered}");
     assert!(!rendered.contains("/mcp retry alpha"), "{rendered}");
+}
+
+#[test]
+fn bottom_placement_draws_the_work_strip_under_the_composer() {
+    // Round 3 (2026-09-01): the bar's information lives under the composer.
+    // `top` keeps the strip above the transcript; `bottom` (the default)
+    // moves the same strip below the composer and above the footer.
+    for (placement, below) in [
+        (crate::tui::work_surface::WorkSurfacePlacement::Bottom, true),
+        (crate::tui::work_surface::WorkSurfacePlacement::Top, false),
+    ] {
+        let mut app = create_test_app();
+        app.onboarding_workspace_trust_gate = false;
+        app.onboarding = OnboardingState::None;
+        app.work_surface.placement = placement;
+        app.goal.objective = Some("ship the release".to_string());
+        let config = Config::default();
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).expect("test terminal");
+        terminal
+            .draw(|frame| {
+                let _ = render(frame, &mut app, &config);
+            })
+            .expect("render frame");
+        let strip = app
+            .work_surface
+            .last_area
+            .expect("a live goal draws a strip in every strip placement");
+        let composer = app
+            .viewport
+            .last_composer_area
+            .expect("frame records the composer area");
+        if below {
+            assert!(
+                strip.y >= composer.bottom(),
+                "bottom strip must sit under the composer: strip {strip:?}, composer {composer:?}"
+            );
+        } else {
+            assert!(
+                strip.bottom() <= composer.y,
+                "top strip must sit above the composer: strip {strip:?}, composer {composer:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn bottom_placement_keeps_the_stage_and_queued_preview_at_twelve_rows() {
+    // Regression (#5809 Buildkite 1535): the Bottom layout reordered the
+    // frame slots, so the stage, preview and background chip — addressed by
+    // slot index — drew into zero-height slots: a blank transcript and a
+    // queued message with no `Queued #1:` preview at 40x12.
+    let mut app = create_test_app();
+    app.onboarding_workspace_trust_gate = false;
+    app.onboarding = OnboardingState::None;
+    app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Bottom;
+    app.add_message(HistoryCell::User {
+        content: "stage row survives bottom".to_string(),
+    });
+    app.queue_message(crate::tui::app::QueuedMessage::new(
+        "qa pointer draft 40x12".to_string(),
+        None,
+    ));
+    let config = Config::default();
+    let mut terminal = Terminal::new(TestBackend::new(40, 12)).expect("test terminal");
+    terminal
+        .draw(|frame| {
+            let _ = render(frame, &mut app, &config);
+        })
+        .expect("render frame");
+    let buffer = terminal.backend().buffer();
+    let text = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("Queued #1: qa pointer draft"),
+        "queued preview must render under Bottom at 40x12; got:\n{text}"
+    );
+    assert!(
+        text.contains("stage row survives bottom"),
+        "transcript must render under Bottom at 40x12; got:\n{text}"
+    );
 }
 
 #[test]
@@ -11816,7 +11907,7 @@ fn ctrl_alt_0_turns_rail_off() {
 }
 
 #[test]
-fn ctrl_alt_0_restores_top_rail_when_already_off() {
+fn ctrl_alt_0_restores_bottom_rail_when_already_off() {
     let mut app = create_test_app();
     app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Off;
 
@@ -11824,9 +11915,12 @@ fn ctrl_alt_0_restores_top_rail_when_already_off() {
 
     assert_eq!(
         app.work_surface.placement,
-        crate::tui::work_surface::WorkSurfacePlacement::Top
+        crate::tui::work_surface::WorkSurfacePlacement::Bottom
     );
-    assert_eq!(app.status_message.as_deref(), Some("Rail: top placement"));
+    assert_eq!(
+        app.status_message.as_deref(),
+        Some("Rail: bottom placement")
+    );
 }
 
 #[test]

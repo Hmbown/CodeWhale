@@ -167,6 +167,9 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> MouseOutcome {
                 && mouse.column >= area.x
                 && mouse.column < area.right()
         }
+        WorkSurfacePlacement::Bottom => {
+            mouse.row == area.y && mouse.column >= area.x && mouse.column < area.right()
+        }
         WorkSurfacePlacement::Left => {
             mouse.column == area.right().saturating_sub(1)
                 && mouse.row >= area.y
@@ -196,7 +199,7 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> MouseOutcome {
             app.work_surface.resize_anchor_column = mouse.column;
             app.work_surface.resize_anchor_row = mouse.row;
             app.work_surface.resize_anchor_size = match placement {
-                WorkSurfacePlacement::Top => area.height,
+                WorkSurfacePlacement::Top | WorkSurfacePlacement::Bottom => area.height,
                 WorkSurfacePlacement::Left | WorkSurfacePlacement::Right => area.width,
                 WorkSurfacePlacement::Off => area.width,
             };
@@ -212,6 +215,15 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> MouseOutcome {
                 WorkSurfacePlacement::Top => {
                     let delta =
                         i32::from(mouse.row) - i32::from(app.work_surface.resize_anchor_row);
+                    app.work_surface.top_height = (anchor + delta)
+                        .clamp(i32::from(TOP_HEIGHT_MIN), i32::from(TOP_HEIGHT_MAX))
+                        as u16;
+                }
+                // The bottom strip's divider is its TOP edge: dragging up
+                // grows the strip, so the delta is inverted from Top.
+                WorkSurfacePlacement::Bottom => {
+                    let delta =
+                        i32::from(app.work_surface.resize_anchor_row) - i32::from(mouse.row);
                     app.work_surface.top_height = (anchor + delta)
                         .clamp(i32::from(TOP_HEIGHT_MIN), i32::from(TOP_HEIGHT_MAX))
                         as u16;
