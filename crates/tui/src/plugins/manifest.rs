@@ -2301,4 +2301,30 @@ args = ["server.js", "--mode=worker", "-e", "console.log('ready')"]
             assert!(PluginManifest::validate_from_path(&path).is_err());
         }
     }
+
+    #[test]
+    fn bundled_computer_use_plugin_validates() {
+        use crate::plugins::agent_plugin;
+        let root = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../plugins/computer-use"
+        ));
+        let validated = PluginManifest::validate_from_path(&root.join("plugin.json"))
+            .expect("in-repo computer-use bundle must validate");
+        assert_eq!(validated.manifest.plugin.name, "computer-use");
+        assert_eq!(validated.inventory.skills, 1);
+        assert_eq!(validated.components.commands.len(), 1);
+        assert!(validated.warnings.is_empty(), "{:?}", validated.warnings);
+
+        let mcp_text = fs::read_to_string(root.join("mcp.json")).unwrap();
+        let servers =
+            agent_plugin::parse_mcp_json(&mcp_text).expect("computer-use mcp.json must parse");
+        let computer = servers.get("computer").expect("computer server");
+        assert_eq!(computer.command.as_deref(), Some("python3"));
+        assert!(
+            computer.args.iter().any(|arg| arg.ends_with("server.py")),
+            "{:?}",
+            computer.args
+        );
+    }
 }
