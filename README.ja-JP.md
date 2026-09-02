@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:a56bca473dbd -->
+<!-- source: README.md sha256:e421b94e9f7e -->
 # Codewhale
 
 Codewhale は Rust で構築された、ターミナル向けのオープンソース・コーディングエージェントです。利用者とともに、公開の場で改善を続けています。

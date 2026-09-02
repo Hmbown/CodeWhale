@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:a56bca473dbd -->
+<!-- source: README.md sha256:e421b94e9f7e -->
 # Codewhale
 
 Codewhale, terminaliniz için Rust ile geliştirilmiş ve kullanıcılarıyla birlikte açık biçimde iyileştirilen açık kaynaklı bir kodlama ajanıdır.

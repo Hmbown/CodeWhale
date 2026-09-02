@@ -138,6 +138,11 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     // test nothing. Readiness comes from the control stream, not the frame.
     wait_for_mouse_capture(&mut tui, &size);
 
+    // Baseline the queue depth while the composer is empty: the pending
+    // preview row paints only then, and the later proof needs the exact
+    // pre-click depth.
+    let queued_before = queued_count(&normalized_text(tui.frame()));
+
     // Type a unique draft and let the composer settle before recording
     // coordinates, so no late layout shift moves the cells under us.
     let draft = format!("qa pointer draft {size}");
@@ -168,7 +173,6 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     let receipt = queue_receipt_needle(cols);
     tui.pump();
     let before = normalized_text(tui.frame());
-    let queued_before = queued_count(&before);
     assert!(
         !before.contains(receipt),
         "{size}: queue receipt already visible before any submit\n{}",

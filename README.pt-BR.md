@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:a56bca473dbd -->
+<!-- source: README.md sha256:e421b94e9f7e -->
 # Codewhale
 
 Codewhale é um agente de programação de código aberto para o seu terminal, desenvolvido em Rust e aprimorado publicamente com as pessoas que o utilizam.

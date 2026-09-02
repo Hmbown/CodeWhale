@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:a56bca473dbd -->
+<!-- source: README.md sha256:e421b94e9f7e -->
 # Codewhale
 
 Codewhale आपके टर्मिनल के लिए Rust में बना एक ओपन सोर्स कोडिंग एजेंट है, जिसे इसके उपयोगकर्ताओं के साथ सार्वजनिक रूप से बेहतर बनाया जाता है।
