@@ -238,7 +238,7 @@ pub async fn install(
     max_size: u64,
     network: &NetworkPolicy,
     update: bool,
-    name_conflict: &dyn Fn(&str) -> Option<String>,
+    name_conflict: &(dyn Fn(&str) -> Option<String> + Send + Sync),
 ) -> Result<PluginInstallOutcome> {
     install_inner(
         source,
@@ -260,7 +260,7 @@ pub async fn install_with_expected_content_hash(
     user_plugins_dir: &Path,
     max_size: u64,
     network: &NetworkPolicy,
-    name_conflict: &dyn Fn(&str) -> Option<String>,
+    name_conflict: &(dyn Fn(&str) -> Option<String> + Send + Sync),
     expected_content_hash: &str,
 ) -> Result<PluginInstallOutcome> {
     install_inner(
@@ -281,7 +281,7 @@ async fn install_inner(
     max_size: u64,
     network: &NetworkPolicy,
     update: bool,
-    name_conflict: &dyn Fn(&str) -> Option<String>,
+    name_conflict: &(dyn Fn(&str) -> Option<String> + Send + Sync),
     expected_content_hash: Option<&str>,
 ) -> Result<PluginInstallOutcome> {
     match &source {
@@ -356,7 +356,7 @@ fn install_remote_bytes(
     user_plugins_dir: &Path,
     max_size: u64,
     update: bool,
-    name_conflict: &dyn Fn(&str) -> Option<String>,
+    name_conflict: &(dyn Fn(&str) -> Option<String> + Send + Sync),
     expected_content_hash: Option<&str>,
 ) -> Result<PluginInstallOutcome> {
     let checksum = sha256_hex(bytes);

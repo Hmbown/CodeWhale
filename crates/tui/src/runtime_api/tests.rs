@@ -10555,3 +10555,417 @@ fn receipt_evidence_paths_must_stay_confined_to_the_workspace() {
         "../escape.json"
     )));
 }
+
+// ─── Plugin management API tests ────────────────────────────────────────────
+
+/// Write a minimal but real plugin bundle: manifest plus one skill, so the
+/// bundle has a supported declarative component and can be trusted+enabled.
+fn write_plugin_source_bundle(dir: &Path, name: &str) -> Result<PathBuf> {
+    let bundle = dir.join(name);
+    fs::create_dir_all(bundle.join("skills").join("greet"))?;
+    fs::write(
+        bundle.join("plugin.toml"),
+        format!(
+            "schema_version = 1\n[plugin]\nname = \"{name}\"\nversion = \"1.0.0\"\n\
+             description = \"test bundle\"\n\n[skills]\npath = \"skills\"\n"
+        ),
+    )?;
+    fs::write(
+        bundle.join("skills").join("greet").join("SKILL.md"),
+        "---\nname: greet\ndescription: Greets a person\n---\nSay hi.\n",
+    )?;
+    Ok(bundle)
+}
+
+/// An isolated plugin discovery context: user plugins, workspace plugins,
+/// state, and marketplaces all live under the test root instead of the real
+/// `~/.codewhale`.
+fn isolated_plugin_discovery(
+    root: &Path,
+    workspace: &Path,
+) -> Arc<crate::plugins::PluginDiscoveryContext> {
+    crate::plugins::PluginDiscoveryContext::from_config_and_environment(
+        &crate::plugins::discovery::DiscoveryConfig {
+            workspace: workspace.to_path_buf(),
+            user_plugins_dir: root.join("plugins"),
+            workspace_plugins_dir: crate::plugins::discovery::default_workspace_plugins_dir(
+                workspace,
+            ),
+            builtin_plugin_dirs: Vec::new(),
+            state_path: root.join("plugins").join("state.json"),
+        },
+        crate::plugins::HostEnvironment::from_entries(Vec::new()),
+    )
+}
+
+async fn spawn_plugin_api_server(
+    root: PathBuf,
+    workspace: PathBuf,
+) -> Result<Option<(SocketAddr, tokio::task::JoinHandle<()>)>> {
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_root_token_mobile_workspace_and_overrides(
+            root.clone(),
+            root.join("sessions"),
+            None,
+            false,
+            workspace.clone(),
+            TestServerOverrides {
+                plugin_discovery: Some(isolated_plugin_discovery(&root, &workspace)),
+                ..TestServerOverrides::default()
+            },
+        )
+        .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some((addr, handle)))
+}
+
+#[tokio::test]
+async fn runtime_info_advertises_plugin_management_capability() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let info: serde_json::Value = client
+        .get(format!("http://{addr}/v1/runtime/info"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(
+        info["capabilities"]["plugin_management"], true,
+        "runtime/info must advertise plugin_management capability"
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_lifecycle_over_http_installs_reviews_enables_and_uninstalls() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runtime");
+    let workspace = tmp.path().join("ws");
+    fs::create_dir_all(&root)?;
+    let source = write_plugin_source_bundle(tmp.path(), "demo")?;
+
+    let Some((addr, handle)) = spawn_plugin_api_server(root, workspace).await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+    let base = format!("http://{addr}/v1/apps/plugins");
+
+    // Empty inventory to start.
+    let list: serde_json::Value = client
+        .get(&base)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert!(list["plugins"].as_array().is_some_and(Vec::is_empty));
+
+    // Install from a local path: lands disabled and untrusted.
+    let install: serde_json::Value = client
+        .post(format!("{base}/install"))
+        .json(&serde_json::json!({
+            "source": format!("path:{}", source.display())
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(install["outcome"], "installed");
+    assert_eq!(install["name"], "demo");
+    assert_eq!(install["plugin"]["state"], "disabled");
+    assert_eq!(install["plugin"]["trust_status"], "not-reviewed");
+    assert!(
+        install["note"]
+            .as_str()
+            .is_some_and(|n| n.contains("untrusted")),
+        "install note must route to review: {}",
+        install["note"]
+    );
+
+    // Detail carries the structured review payload and token. The summary is
+    // flattened into the detail object.
+    let detail: serde_json::Value = client
+        .get(format!("{base}/demo"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(detail["inventory"]["skills"], 1);
+    assert_eq!(detail["review"]["token"], {
+        let summary = &detail;
+        format!(
+            "{}.{}",
+            summary["content_hash"].as_str().unwrap(),
+            summary["capability_hash"].as_str().unwrap()
+        )
+    });
+    assert!(
+        detail["review"]["capabilities"]
+            .as_array()
+            .is_some_and(|c| c.iter().any(|label| label == "skills"))
+    );
+
+    // Trust requires the exact review token.
+    let wrong = client
+        .post(format!("{base}/demo/trust"))
+        .json(&serde_json::json!({"token": "not-the-token"}))
+        .send()
+        .await?;
+    assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
+
+    let token = detail["review"]["token"].as_str().unwrap().to_string();
+    let trusted: serde_json::Value = client
+        .post(format!("{base}/demo/trust"))
+        .json(&serde_json::json!({"token": token}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(trusted["action"], "trusted");
+    assert_eq!(trusted["state"], "disabled");
+
+    // Enable only works after trust; the bundle becomes active.
+    let enabled: serde_json::Value = client
+        .post(format!("{base}/demo/enable"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(enabled["action"], "enabled");
+    assert_eq!(enabled["state"], "active");
+
+    let disabled: serde_json::Value = client
+        .post(format!("{base}/demo/disable"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(disabled["action"], "disabled");
+    assert_eq!(disabled["state"], "disabled");
+
+    // Uninstall removes it.
+    let uninstalled: serde_json::Value = client
+        .delete(format!("{base}/demo"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(uninstalled["outcome"], "uninstalled");
+
+    let list: serde_json::Value = client
+        .get(&base)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert!(list["plugins"].as_array().is_some_and(Vec::is_empty));
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_api_404s_for_unknown_selector() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runtime");
+    let workspace = tmp.path().join("ws");
+    fs::create_dir_all(&root)?;
+
+    let Some((addr, handle)) = spawn_plugin_api_server(root, workspace).await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let detail = client
+        .get(format!("http://{addr}/v1/apps/plugins/ghost"))
+        .send()
+        .await?;
+    assert_eq!(detail.status(), StatusCode::NOT_FOUND);
+
+    let trust = client
+        .post(format!("http://{addr}/v1/apps/plugins/ghost/trust"))
+        .json(&serde_json::json!({"token": "x"}))
+        .send()
+        .await?;
+    assert_eq!(trust.status(), StatusCode::NOT_FOUND);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_catalog_lifecycle_over_http_lists_installs_and_removes() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runtime");
+    let workspace = tmp.path().join("ws");
+    fs::create_dir_all(&root)?;
+
+    // The catalog directory holds both the document and the bundle it points
+    // at via a relative `./demo` source.
+    let catalog_dir = tmp.path().join("catalog");
+    fs::create_dir_all(&catalog_dir)?;
+    write_plugin_source_bundle(&catalog_dir, "demo")?;
+    let catalog_path = catalog_dir.join("catalog.json");
+    fs::write(
+        &catalog_path,
+        r#"{
+            "name": "team",
+            "description": "Team plugins",
+            "version": "1",
+            "plugins": [
+                {"name": "demo", "source": "path:./demo", "description": "Demo bundle"}
+            ]
+        }"#,
+    )?;
+
+    let Some((addr, handle)) = spawn_plugin_api_server(root, workspace).await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+    let base = format!("http://{addr}/v1/apps/marketplaces");
+
+    let add_resp = client
+        .post(&base)
+        .json(&serde_json::json!({
+            "name": "team",
+            "path": catalog_path.display().to_string()
+        }))
+        .send()
+        .await?;
+    let add: serde_json::Value = add_resp.json().await?;
+    assert!(add["action"] == "added", "marketplace add failed: {add}");
+    assert_eq!(add["candidate_count"], 1);
+
+    // Listing shows the candidate with an honest, resolved install plan.
+    let list: serde_json::Value = client
+        .get(&base)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let candidate = &list["marketplaces"][0]["candidates"][0];
+    assert_eq!(candidate["name"], "demo");
+    assert_eq!(candidate["install"]["installable"], true);
+    assert!(
+        candidate["install"]["spec"]
+            .as_str()
+            .is_some_and(|spec| spec.contains("demo")),
+        "relative ./demo must resolve against the catalog directory: {}",
+        candidate["install"]["spec"]
+    );
+
+    // Install through the marketplace routes into the reviewed installer and
+    // lands disabled + untrusted, exactly like a direct install.
+    let install: serde_json::Value = client
+        .post(format!("{base}/team/install"))
+        .json(&serde_json::json!({"candidate": "demo"}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(install["outcome"], "installed");
+    assert_eq!(install["plugin"]["trust_status"], "not-reviewed");
+
+    // Unknown candidate and unknown catalog are honest 404s.
+    let missing = client
+        .post(format!("{base}/team/install"))
+        .json(&serde_json::json!({"candidate": "ghost"}))
+        .send()
+        .await?;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    // Removing the catalog never touches installed bundles.
+    let plugins: serde_json::Value = client
+        .get(format!("http://{addr}/v1/apps/plugins"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert!(
+        plugins["plugins"]
+            .as_array()
+            .is_some_and(|p| p.iter().any(|entry| entry["name"] == "demo"))
+    );
+
+    let removed: serde_json::Value = client
+        .delete(format!("{base}/team"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(removed["action"], "removed");
+
+    let plugins_after: serde_json::Value = client
+        .get(format!("http://{addr}/v1/apps/plugins"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert!(
+        plugins_after["plugins"]
+            .as_array()
+            .is_some_and(|p| p.iter().any(|entry| entry["name"] == "demo"))
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_add_rejects_symlink_documents_over_http() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runtime");
+    let workspace = tmp.path().join("ws");
+    fs::create_dir_all(&root)?;
+
+    let catalog_dir = tmp.path().join("catalog");
+    fs::create_dir_all(&catalog_dir)?;
+    let real = catalog_dir.join("real.json");
+    fs::write(&real, r#"{"plugins":[]}"#)?;
+    let link = catalog_dir.join("link.json");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&real, &link)?;
+    #[cfg(not(unix))]
+    let link = real;
+
+    let Some((addr, handle)) = spawn_plugin_api_server(root, workspace).await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let resp = client
+        .post(format!("http://{addr}/v1/apps/marketplaces"))
+        .json(&serde_json::json!({
+            "name": "team",
+            "path": link.display().to_string()
+        }))
+        .send()
+        .await?;
+    #[cfg(unix)]
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    #[cfg(not(unix))]
+    assert!(resp.status().is_success());
+
+    handle.abort();
+    Ok(())
+}

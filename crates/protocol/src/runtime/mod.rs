@@ -82,6 +82,12 @@ pub struct RuntimeCapabilities {
     /// are available via the HTTP API.
     #[serde(default)]
     pub skill_lifecycle: bool,
+    /// Plugin bundle and marketplace lifecycle operations (list/detail,
+    /// install/update/uninstall, trust/enable/disable/revoke, marketplace
+    /// add/remove/install) are available via the `/v1/apps/plugins` and
+    /// `/v1/apps/marketplaces` endpoint families.
+    #[serde(default)]
+    pub plugin_management: bool,
     /// Durable, workspace-scoped cross-task Agent Mail endpoints and events.
     #[serde(default)]
     pub agent_mail: bool,
@@ -386,6 +392,7 @@ mod tests {
             memory: true,
             mcp_server_management: false,
             skill_lifecycle: false,
+            plugin_management: false,
             agent_mail: true,
         };
         let value = serde_json::to_value(&caps).unwrap();
@@ -399,6 +406,7 @@ mod tests {
         assert_eq!(obj.get("fleet_event_stream").unwrap(), &json!(true));
         assert_eq!(obj.get("thread_goals").unwrap(), &json!(true));
         assert_eq!(obj.get("memory").unwrap(), &json!(true));
+        assert_eq!(obj.get("plugin_management").unwrap(), &json!(false));
         assert_eq!(obj.get("agent_mail").unwrap(), &json!(true));
     }
 

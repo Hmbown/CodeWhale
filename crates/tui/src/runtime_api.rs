@@ -88,6 +88,7 @@ use codewhale_protocol::fleet::{
 };
 
 mod auth;
+mod plugins;
 mod sessions;
 mod web;
 mod workspace;
@@ -548,6 +549,7 @@ fn default_runtime_capabilities() -> RuntimeCapabilities {
         memory: true,
         mcp_server_management: true,
         skill_lifecycle: true,
+        plugin_management: true,
         agent_mail: true,
     }
 }
@@ -1150,6 +1152,47 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/skills/{name}/trust", post(trust_skill_api))
         .route("/v1/skills/{name}/audit", get(audit_skill_api))
         .route("/v1/apps/mcp/tools", get(list_mcp_tools))
+        .route("/v1/apps/plugins", get(plugins::list_plugins))
+        .route(
+            "/v1/apps/plugins/install",
+            post(plugins::install_plugin_api),
+        )
+        .route(
+            "/v1/apps/plugins/{selector}",
+            get(plugins::get_plugin).delete(plugins::uninstall_plugin_api),
+        )
+        .route(
+            "/v1/apps/plugins/{selector}/update",
+            post(plugins::update_plugin_api),
+        )
+        .route(
+            "/v1/apps/plugins/{selector}/trust",
+            post(plugins::trust_plugin_api),
+        )
+        .route(
+            "/v1/apps/plugins/{selector}/enable",
+            post(plugins::enable_plugin_api),
+        )
+        .route(
+            "/v1/apps/plugins/{selector}/disable",
+            post(plugins::disable_plugin_api),
+        )
+        .route(
+            "/v1/apps/plugins/{selector}/revoke",
+            post(plugins::revoke_plugin_api),
+        )
+        .route(
+            "/v1/apps/marketplaces",
+            get(plugins::list_marketplaces).post(plugins::add_marketplace),
+        )
+        .route(
+            "/v1/apps/marketplaces/{name}",
+            get(plugins::get_marketplace).delete(plugins::remove_marketplace),
+        )
+        .route(
+            "/v1/apps/marketplaces/{name}/install",
+            post(plugins::install_marketplace_candidate_api),
+        )
         .route(
             "/v1/automations",
             get(list_automations).post(create_automation),
