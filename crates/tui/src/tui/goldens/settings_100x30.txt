@@ -27,4 +27,4 @@
                                                               │ the preview is the product▌        │
 ? help                                                        │                                [↑] │
 / file issue                                                  ╰────────────────────────────────────╯
-f feedback                                                    ▁▂▄▆▆∿∿∿∿ 61%1↑↓ nav · Enter apply · E
+f feedback                                                    <·> th↑↓ nav · Enter apply · Esc back

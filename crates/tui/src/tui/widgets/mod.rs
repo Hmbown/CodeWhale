@@ -7146,28 +7146,30 @@ mod tests {
         }
         app.launch.visible = false;
 
-        // Topbar (the shell's header surface since the Tideline wiring)
+        // The info line (the shell's bottom row since the placement move)
         // owns the route facts and the block context meter.
-        let topbar_area = Rect::new(0, 0, 100, 1);
-        let mut topbar_buf = Buffer::empty(topbar_area);
+        let info_area = Rect::new(0, 0, 100, 1);
+        let mut info_buf = Buffer::empty(info_area);
         {
-            let segments = crate::tui::ui::frame::topbar_segments(&app, topbar_area.width);
-            let clock = "27 Aug 2026 14:42:18".to_string();
-            let topbar = crate::tui::topbar::Topbar::new(
+            let segments = crate::tui::ui::frame::info_segments(&app, info_area.width);
+            let help_hint = crate::tui::shell_key_routing::info_help_hint(app.ui_locale);
+            let context_label = app.tr(crate::localization::MessageId::FooterHintContext);
+            let info = crate::tui::infoline::InfoLine::new(
                 &app.ui_theme,
-                &clock,
-                crate::tui::ui::frame::topbar_context_percent(&app),
+                &help_hint,
+                context_label.as_ref(),
+                crate::tui::ui::frame::info_context_percent(&app),
                 &segments,
             )
             .ascii_safe(true);
             use ratatui::widgets::Widget;
-            Widget::render(topbar, topbar_area, &mut topbar_buf);
+            Widget::render(info, info_area, &mut info_buf);
         }
 
         for (surface, buf, rect) in [
             ("idle transcript", &transcript, transcript_area),
             ("launch", &launch, launch_area),
-            ("topbar", &topbar_buf, topbar_area),
+            ("info line", &info_buf, info_area),
         ] {
             for y in rect.y..rect.bottom() {
                 for x in rect.x..rect.right() {

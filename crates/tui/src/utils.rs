@@ -62,18 +62,12 @@ pub fn redacted_identifier_for_log(identifier: &str) -> String {
     format!("<redacted:{hash:016x}>")
 }
 
-/// Win32 process-creation flag: detach the child from the console so helper
-/// exes don't flash a terminal window. One definition for every Command type.
-#[cfg(windows)]
-mod win32 {
-    pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-}
-
 #[cfg(windows)]
 pub(crate) fn suppress_console_window(cmd: &mut Command) {
     use std::os::windows::process::CommandExt;
 
-    cmd.creation_flags(win32::CREATE_NO_WINDOW);
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg(not(windows))]
@@ -81,7 +75,8 @@ pub(crate) fn suppress_console_window(_cmd: &mut Command) {}
 
 #[cfg(windows)]
 pub(crate) fn suppress_tokio_console_window(cmd: &mut tokio::process::Command) {
-    cmd.creation_flags(win32::CREATE_NO_WINDOW);
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg(not(windows))]

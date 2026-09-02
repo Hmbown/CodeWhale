@@ -244,7 +244,11 @@ fn normalized_text(frame: &Frame) -> String {
 
 fn assert_startup_contract(frame: &Frame, rows: u16, cols: u16, size: &str) {
     let text = frame.text();
-    for needle in ["CODEWHALE", "What are we working on?", "Theme", "Help"] {
+    // `context` is the info line's floor (it never sheds), so it proves the
+    // shell chrome painted at every size. The wordmark used to serve here;
+    // it left the row by design (SHELL-DESIGN-20260901 §2.0: the mark
+    // appears at launch and nowhere else).
+    for needle in ["context", "What are we working on?", "Theme", "Help"] {
         assert!(
             text.contains(needle),
             "{size}: startup misses {needle:?}\n{}",
@@ -281,12 +285,17 @@ fn assert_startup_contract(frame: &Frame, rows: u16, cols: u16, size: &str) {
 fn assert_live_shell_contract(frame: &Frame, cols: u16, size: &str) {
     let text = frame.text();
     assert!(
-        text.contains("CODEWHALE"),
-        "{size}: live shell misses wordmark\n{}",
+        text.contains("context "),
+        "{size}: live shell misses the info line\n{}",
         frame.debug_dump()
     );
+    // The shell advertises one help route per surface: the footer's full
+    // chorus (`F1:keys` at Compact), its compact `? help`, or the info
+    // line's `Ctrl+/ help`. Any of them proves help is discoverable.
     assert!(
-        text.contains("? help"),
+        ["? help", "Ctrl+/ help", ":keys"]
+            .iter()
+            .any(|route| text.contains(route)),
         "{size}: live shell hides help\n{}",
         frame.debug_dump()
     );

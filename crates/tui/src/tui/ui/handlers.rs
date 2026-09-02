@@ -5,10 +5,6 @@
 
 use super::*;
 
-/// How long a spawned constitution draft may run before the loop gives up
-/// (#3757 review: never await it inline on the event loop).
-const DRAFT_TIMEOUT: Duration = Duration::from_secs(20);
-
 /// Persist a `# foo` quick-add through the native memory store and surface
 /// a status note to the user. Errors land in the same status channel so a
 /// missing memory directory becomes visible without crashing the composer.
@@ -229,6 +225,7 @@ pub(crate) async fn handle_setup_constitution_model_draft(
     // Spawn the draft off the event loop (same pattern as the fleet drafter,
     // #3757 review): awaiting it inline parked the whole TUI for up to the
     // timeout. The loop polls constitution_draft_cell and delivers the result.
+    const DRAFT_TIMEOUT: Duration = Duration::from_secs(20);
     let model_label = app.model_display_label();
     let client = match DeepSeekClient::new(config) {
         Ok(client) => client,
@@ -304,6 +301,7 @@ pub(crate) async fn handle_fleet_profile_model_draft(
     // TUI for up to the timeout (#3757 review). Spawn it into the shared
     // fleet_draft_cell and let the loop poll + deliver the result, keeping
     // the wizard interactive with a drafting status.
+    const DRAFT_TIMEOUT: Duration = Duration::from_secs(20);
     let model_label = app.model_display_label();
     let client = match DeepSeekClient::new(config) {
         Ok(client) => client,

@@ -25,7 +25,7 @@
                     │                                                         │                                         
                     │                                                         │                                         
   system | terminal | dark | light | grayscale | catppuccin-mocha | tokyo-night | dracula | gruvbox-dark | claude |…    
-  Preview: <·> idle │ $0.00 · agent · ask                                                               ∿∿∿∿∿∿∿∿∿ 0%    
+  Preview: <·> idle │ $0.00 · agent · ask                                                                               
   type=filter, Up/Down=select, Enter/e=edit, Esc/q=close                                                                
                                                                                                                         
  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 

@@ -26,6 +26,7 @@ use crate::tui::{
     app::{App, AppMode, HeaderActionTarget, HeaderHitbox, OnboardingState},
     approval::ApprovalMode,
     footer_ui::format_token_count_compact,
+    ocean::COMPLETION_BREATH_MS,
     views::ModalKind,
 };
 
@@ -486,7 +487,6 @@ impl RunningToolFacts {
 }
 
 const WORKING_BUBBLE_FRAMES: [&str; 8] = ["⠀", "⢀", "⣀", "⣄", "⣤", "⣦", "⣶", "⣿"];
-use super::ocean::COMPLETION_BREATH_MS;
 const COMPLETION_RELEASE_MS: u128 = 560;
 // The idle whale portrait rows (IDLE_WHALE_ROWS / UWU_IDLE_WHALE_ROWS) and
 // their caustic shimmer were deleted per the 2026-08-29 founder directive:

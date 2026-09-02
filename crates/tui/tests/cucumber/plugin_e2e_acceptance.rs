@@ -780,7 +780,9 @@ fn wait_for_composer_ready(tui: &mut Harness) {
         .wait_for(
             |frame| {
                 let (row, _) = frame.cursor();
-                frame.any_visible_text() && row >= frame.rows().saturating_sub(3)
+                // The composer's cursor row sits above its bottom rule, the
+                // posture row, and the info line — four rows from the end.
+                frame.any_visible_text() && row >= frame.rows().saturating_sub(4)
             },
             BINARY_ACCEPTANCE_TIMEOUT,
         )

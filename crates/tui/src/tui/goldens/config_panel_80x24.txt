@@ -17,7 +17,7 @@
   system | terminal | dark | light | grayscale | catppuccin-mocha |…            
   Enter or click again: Enter opens choices · Theme: current terminal · saved   
   terminal · applies on save                                                    
-  Preview: <·> idle │ $0.00 · agent · ask                       ∿∿∿∿∿∿∿∿∿ 0%    
+  Preview: <·> idle │ $0.00 · agent · ask                                       
   type=filter, Up/Down=select, Enter/e=edit, PgUp/PgDn=scroll, Esc/q=close      
                                                                                 
  ────────────────────────────────────────────────────────────────────────────── 

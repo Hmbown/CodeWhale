@@ -194,6 +194,27 @@ pub const SHELL_BINDINGS: &[ShellBinding] = &[
     },
 ];
 
+/// The chord the info line advertises for help.
+///
+/// Not `F1`: tmux, screen, and several terminal emulators claim it before the
+/// shell ever sees the key, so an info line that printed `F1 help` would be
+/// advertising a key that does nothing for many users. Not `?` either — bare
+/// `?` is composer text in every focus state, and help only answers to
+/// `Alt+?`, which stays unadvertised until it is proven in real terminals
+/// (TUI-DOG-003). `Ctrl+/` is the chord [`is_help_shortcut`] accepts
+/// unconditionally, together with its legacy `Ctrl+7` / `Ctrl+_` encodings,
+/// so it is the one hint chrome can print honestly.
+pub const HELP_CHROME_CHORD: &str = "Ctrl+/";
+
+/// The info line's single right-hand key hint, e.g. `Ctrl+/ help`.
+#[must_use]
+pub fn info_help_hint(locale: crate::localization::Locale) -> String {
+    format!(
+        "{HELP_CHROME_CHORD} {}",
+        crate::localization::tr(locale, crate::localization::MessageId::InfoLineHelp)
+    )
+}
+
 #[must_use]
 pub fn binding(id: ShellBindingId) -> &'static ShellBinding {
     SHELL_BINDINGS
@@ -513,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn topbar_route_f3_requires_a_plain_function_key() {
+    fn infoline_route_f3_requires_a_plain_function_key() {
         assert!(is_provider_route_shortcut(&KeyEvent::new(
             KeyCode::F(3),
             KeyModifiers::NONE
