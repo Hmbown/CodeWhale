@@ -12,12 +12,9 @@ use ratatui::{buffer::Buffer, layout::Rect, style::Color, style::Style};
 /// Rungs of the mark's scale ladder, each sampled at its own size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarkSize {
-    /// 9x4 — the smallest rung that still reads as a side-view whale.
+    /// 9x4 — the launch mark. The hero owes its rows to the wordmark and
+    /// the heading, so there is no larger rung (shell design §2.0 item 4).
     Small,
-    /// 13x6 — the default hero mark.
-    Medium,
-    /// 19x8 — full hero mark for tall stages.
-    Large,
 }
 
 const SMALL_ROWS: [&str; 4] = [
@@ -25,26 +22,6 @@ const SMALL_ROWS: [&str; 4] = [
     "████████▄",
     "▀██▀ ▀██ ",
     "  ▀▀▀    ",
-];
-
-const MEDIUM_ROWS: [&str; 6] = [
-    "  ▄██████>   ", //
-    "▄██████████▄ ",
-    "█████████████",
-    "▀███▀   ▀██▀ ",
-    "   ▀▀▀▀▀     ",
-    "      ▀      ",
-];
-
-const LARGE_ROWS: [&str; 8] = [
-    "   ▄████████>      ", //
-    "▄████████████████▄ ",
-    "███████████████████",
-    "▀████▀     ▀████▀  ",
-    "    ▀▀▀▀▀▀▀        ",
-    "       ▀▀▀         ",
-    "        ▀          ",
-    "                   ",
 ];
 
 /// `'` and `,` carry the half-cell the block glyphs carried, so lobes slope.
@@ -55,34 +32,12 @@ const SMALL_ASCII: [&str; 4] = [
     "  '''    ",
 ];
 
-const MEDIUM_ASCII: [&str; 6] = [
-    "  ,######>   ", //
-    ",##########, ",
-    "#############",
-    "'###'   '##' ",
-    "   '''''     ",
-    "      '      ",
-];
-
-const LARGE_ASCII: [&str; 8] = [
-    "   ,########>      ", //
-    ",################, ",
-    "###################",
-    "'####'     '####'  ",
-    "    '''''''        ",
-    "       '''         ",
-    "        '          ",
-    "                   ",
-];
-
 impl MarkSize {
     /// Cell footprint as `(cols, rows)`.
     #[must_use]
     pub const fn cells(self) -> (u16, u16) {
         match self {
             Self::Small => (9, 4),
-            Self::Medium => (13, 6),
-            Self::Large => (19, 8),
         }
     }
 
@@ -91,25 +46,8 @@ impl MarkSize {
     pub const fn rows(self, ascii_safe: bool) -> &'static [&'static str] {
         match (self, ascii_safe) {
             (Self::Small, false) => &SMALL_ROWS,
-            (Self::Medium, false) => &MEDIUM_ROWS,
-            (Self::Large, false) => &LARGE_ROWS,
             (Self::Small, true) => &SMALL_ASCII,
-            (Self::Medium, true) => &MEDIUM_ASCII,
-            (Self::Large, true) => &LARGE_ASCII,
         }
-    }
-
-    /// Largest rung fitting `area` with `reserve_rows` left beneath it.
-    /// `None` → type alone; a clipped fluke reads as a different animal.
-    #[must_use]
-    pub fn for_area(area: Rect, reserve_rows: u16) -> Option<Self> {
-        let usable_h = area.height.saturating_sub(reserve_rows);
-        [Self::Large, Self::Medium, Self::Small]
-            .into_iter()
-            .find(|size| {
-                let (w, h) = size.cells();
-                area.width >= w && usable_h >= h
-            })
     }
 }
 
@@ -199,7 +137,7 @@ mod tests {
 
     #[test]
     fn every_rung_matches_its_declared_footprint() {
-        for size in [MarkSize::Small, MarkSize::Medium, MarkSize::Large] {
+        for size in [MarkSize::Small] {
             let (cols, rows) = size.cells();
             for ascii_safe in [false, true] {
                 let art = size.rows(ascii_safe);
@@ -221,7 +159,7 @@ mod tests {
     #[test]
     fn ascii_rungs_have_the_same_silhouette_as_the_block_rungs() {
         // Different drawing, same cells — else the mark shifts on downgrade.
-        for size in [MarkSize::Small, MarkSize::Medium, MarkSize::Large] {
+        for size in [MarkSize::Small] {
             let block = size.rows(false);
             let ascii = size.rows(true);
             for (b, a) in block.iter().zip(ascii.iter()) {
@@ -234,7 +172,7 @@ mod tests {
 
     #[test]
     fn ascii_rungs_use_no_glyph_the_ascii_lane_would_rewrite() {
-        for size in [MarkSize::Small, MarkSize::Medium, MarkSize::Large] {
+        for size in [MarkSize::Small] {
             for line in size.rows(true) {
                 for glyph in line.chars() {
                     assert!(
@@ -248,7 +186,7 @@ mod tests {
 
     #[test]
     fn the_mark_has_a_prompt_eye() {
-        for size in [MarkSize::Small, MarkSize::Medium, MarkSize::Large] {
+        for size in [MarkSize::Small] {
             for ascii_safe in [false, true] {
                 let art = size.rows(ascii_safe);
                 assert!(
@@ -257,40 +195,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn for_area_never_returns_a_rung_that_would_clip() {
-        for width in 0u16..40 {
-            for height in 0u16..20 {
-                let area = Rect::new(0, 0, width, height);
-                if let Some(size) = MarkSize::for_area(area, 3) {
-                    let (cols, rows) = size.cells();
-                    assert!(width >= cols, "{size:?} too wide for {width}");
-                    assert!(
-                        height.saturating_sub(3) >= rows,
-                        "{size:?} too tall for {height}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn for_area_prefers_the_largest_rung_that_fits() {
-        assert_eq!(
-            MarkSize::for_area(Rect::new(0, 0, 40, 20), 3),
-            Some(MarkSize::Large)
-        );
-        assert_eq!(
-            MarkSize::for_area(Rect::new(0, 0, 16, 12), 3),
-            Some(MarkSize::Medium)
-        );
-        assert_eq!(
-            MarkSize::for_area(Rect::new(0, 0, 10, 8), 3),
-            Some(MarkSize::Small)
-        );
-        assert_eq!(MarkSize::for_area(Rect::new(0, 0, 8, 8), 3), None);
     }
 
     #[test]
@@ -324,10 +228,10 @@ mod tests {
 
     #[test]
     fn render_centres_the_mark_and_leaves_blanks_untouched() {
-        let area = Rect::new(0, 0, 21, 8);
+        let area = Rect::new(0, 0, 17, 6);
         let mut buf = Buffer::empty(area);
-        for x in 0..21u16 {
-            for y in 0..8u16 {
+        for x in 0..17u16 {
+            for y in 0..6u16 {
                 if let Some(cell) = buf.cell_mut((x, y)) {
                     cell.set_symbol("~");
                 }
@@ -336,19 +240,18 @@ mod tests {
         let painted = render_fluke(
             area,
             &mut buf,
-            MarkSize::Medium,
+            MarkSize::Small,
             Color::Rgb(246, 196, 83),
             Color::Rgb(3, 7, 13),
             1.0,
             false,
         );
-        assert_eq!(painted, Rect::new(4, 0, 13, 6));
-        // Row 0 is `  ▄██████>   `; leading blanks keep the field.
-        assert_eq!(buf.cell((4, 0)).map(|c| c.symbol()), Some("~"));
-        assert_eq!(buf.cell((5, 0)).map(|c| c.symbol()), Some("~"));
-        assert_eq!(buf.cell((6, 0)).map(|c| c.symbol()), Some("▄"));
-        assert_eq!(buf.cell((13, 0)).map(|c| c.symbol()), Some(">"));
-        assert_eq!(buf.cell((14, 0)).map(|c| c.symbol()), Some("~"));
+        assert_eq!(painted, Rect::new(4, 0, 9, 4));
+        // Row 0 is `▄█████>  `; trailing blanks keep the field.
+        assert_eq!(buf.cell((3, 0)).map(|c| c.symbol()), Some("~"));
+        assert_eq!(buf.cell((4, 0)).map(|c| c.symbol()), Some("▄"));
+        assert_eq!(buf.cell((10, 0)).map(|c| c.symbol()), Some(">"));
+        assert_eq!(buf.cell((11, 0)).map(|c| c.symbol()), Some("~"));
     }
 
     #[test]
@@ -358,7 +261,7 @@ mod tests {
         let painted = render_fluke(
             area,
             &mut buf,
-            MarkSize::Medium,
+            MarkSize::Small,
             Color::Rgb(246, 196, 83),
             Color::Rgb(3, 7, 13),
             1.0,
