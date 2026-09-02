@@ -5216,7 +5216,7 @@ impl ToolSpec for BashTool {
                     }
                 } else if persist && result.status == ShellStatus::Running {
                     format!(
-                        "Persistent service staged: {task_id_str}. Probe readiness with a separate command. Codewhale will transfer ownership only if this exec finishes successfully."
+                        "Persistent service staged: {task_id_str}. Probe readiness with a separate command. codewhale will transfer ownership only if this exec finishes successfully."
                     )
                 } else if result.status == ShellStatus::Running {
                     let completion_contract = if context.owner_agent_id.is_some() {

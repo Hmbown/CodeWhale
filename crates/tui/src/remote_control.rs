@@ -4403,7 +4403,7 @@ fn parse_remote_command(value: &Value, expected_run_id: &str) -> Result<RemoteCo
                 // never downgrade into the permissive Work parser.
                 let prompt: RuntimeChatPrompt =
                     serde_json::from_value(value.clone()).map_err(|_| {
-                        "Codewhale sent an invalid Runtime Chat prompt contract.".to_string()
+                        "codewhale sent an invalid Runtime Chat prompt contract.".to_string()
                     })?;
                 prompt.validate_shape()?;
                 if prompt.run_id != expected_run_id {
@@ -4435,7 +4435,7 @@ fn parse_remote_command(value: &Value, expected_run_id: &str) -> Result<RemoteCo
                         .all(|key| record.contains_key(*key))
             });
             if !exact_approval {
-                return Err("Codewhale sent an invalid approval contract.".to_string());
+                return Err("codewhale sent an invalid approval contract.".to_string());
             }
             let gate = value
                 .get("gate")
@@ -4469,7 +4469,7 @@ fn parse_remote_command(value: &Value, expected_run_id: &str) -> Result<RemoteCo
                             && record.contains_key("runtimeThreadId")
                     })
                     .ok_or_else(|| {
-                        "Codewhale sent an invalid Runtime Chat interrupt contract.".to_string()
+                        "codewhale sent an invalid Runtime Chat interrupt contract.".to_string()
                     })?;
                 if record.get("action").and_then(Value::as_str) != Some("interrupt") {
                     return Err("Runtime Chat supports only an exact turn interrupt.".to_string());
@@ -4513,7 +4513,7 @@ fn parse_remote_command(value: &Value, expected_run_id: &str) -> Result<RemoteCo
                         .all(|key| record.contains_key(*key))
             });
             if !exact_legacy_control {
-                return Err("Codewhale sent an invalid run-control contract.".to_string());
+                return Err("codewhale sent an invalid run-control contract.".to_string());
             }
             let action = match value.get("action").and_then(Value::as_str) {
                 Some("interrupt") => RemoteControlRequest::Interrupt,
@@ -4532,7 +4532,7 @@ fn parse_remote_command(value: &Value, expected_run_id: &str) -> Result<RemoteCo
                 runtime_chat: None,
             })
         }
-        _ => Err("Codewhale sent an unsupported remote command.".to_string()),
+        _ => Err("codewhale sent an unsupported remote command.".to_string()),
     }
 }
 
@@ -4591,9 +4591,9 @@ async fn public_request(
         let excerpt = rejection_excerpt(response).await;
         return Err(match excerpt {
             Some(reason) => {
-                format!("Codewhale rejected remote-control enrollment ({status}): {reason}.")
+                format!("codewhale rejected remote-control enrollment ({status}): {reason}.")
             }
-            None => format!("Codewhale rejected remote-control enrollment ({status})."),
+            None => format!("codewhale rejected remote-control enrollment ({status})."),
         });
     }
     read_bounded_json(response).await
@@ -7181,7 +7181,7 @@ mod tests {
         controller.status = Status::Connecting;
         event_tx
             .send(RemoteEvent::FailedPreLease(
-                "Codewhale rejected remote-control enrollment (403): client version not accepted."
+                "codewhale rejected remote-control enrollment (403): client version not accepted."
                     .to_string(),
             ))
             .unwrap();

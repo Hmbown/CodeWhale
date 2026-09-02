@@ -131,7 +131,7 @@ mod tests {
         // states, not about where the lane happens to break them.
         let flat = body.split_whitespace().collect::<Vec<_>>().join(" ");
 
-        assert!(flat.contains("Know this workspace"), "{body}");
+        assert!(flat.contains("Can we trust this workspace?"), "{body}");
         assert!(flat.contains("instructions and files"), "{body}");
         assert!(flat.contains("prompt injection"), "{body}");
         assert!(flat.contains("tools and hooks"), "{body}");
@@ -171,7 +171,7 @@ mod tests {
         }
         assert!(rail.contains("trust and continue"), "{rail}");
         assert!(rail.contains("continue without trusting"), "{rail}");
-        assert!(rail.contains("quit Codewhale"), "{rail}");
+        assert!(rail.contains("quit codewhale"), "{rail}");
     }
 }
 

@@ -1607,7 +1607,7 @@ mod tests {
         let result = codewhale_links(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Codewhale & community"));
+        assert!(msg.contains("codewhale & community"));
         assert!(msg.contains("https://codewhale.net/en/docs"));
         assert!(msg.contains("https://codewhale.net/en/community"));
         assert!(msg.contains("https://github.com/Hmbown/CodeWhale"));
@@ -1700,7 +1700,7 @@ mod tests {
         let result = home_dashboard(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Codewhale"));
+        assert!(msg.contains("codewhale"));
         assert!(!msg.contains("codewhale Home Dashboard"));
         assert!(msg.contains("Model:"));
         assert!(msg.contains("Mode:"));
@@ -1753,7 +1753,7 @@ mod tests {
         assert!(msg.contains("/workspace   - Switch folders or worktrees"));
         assert!(msg.contains("/restore     - Roll files back to a turn snapshot"));
         assert!(msg.contains("/tokens      - Show session spend and context"));
-        assert!(msg.contains("/links       - Codewhale, community & provider links"));
+        assert!(msg.contains("/links       - codewhale, community & provider links"));
         assert!(msg.contains("/config      - Inspect and change settings"));
         assert!(
             !msg.lines()

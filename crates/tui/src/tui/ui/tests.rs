@@ -5392,8 +5392,8 @@ async fn session_denied_cache_auto_deny_explains_the_cached_rejection() {
     assert_eq!(toast.level, StatusToastLevel::Warning);
     assert_eq!(toast.ttl_ms, Some(12_000));
     assert!(toast.text.contains("matching request was denied earlier"));
-    assert!(toast.text.contains("during this Codewhale run"));
-    assert!(toast.text.contains("Restart Codewhale"));
+    assert!(toast.text.contains("during this codewhale run"));
+    assert!(toast.text.contains("Restart codewhale"));
     assert!(toast.text.contains("exec_shell"));
     let history_notice = app
         .history
@@ -5419,7 +5419,7 @@ async fn session_denied_cache_auto_deny_explains_the_cached_rejection() {
     let rendered = render_underwater_test_app(&mut app, 40, 12);
     assert!(rendered.contains("Auto-denied"), "{rendered:?}");
     assert!(
-        rendered.contains("Restart") && rendered.contains("Codewhale"),
+        rendered.contains("Restart") && rendered.contains("codewhale"),
         "{rendered:?}"
     );
 }
@@ -5670,8 +5670,8 @@ fn session_denied_notice_explains_cached_decision_and_recovery() {
 
     assert!(notice.contains("exec_shell"));
     assert!(notice.contains("matching request was denied earlier"));
-    assert!(notice.contains("during this Codewhale run"));
-    assert!(notice.contains("Restart Codewhale"));
+    assert!(notice.contains("during this codewhale run"));
+    assert!(notice.contains("Restart codewhale"));
 }
 
 #[tokio::test]
@@ -5740,7 +5740,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
                 cell,
                 HistoryCell::System { content }
                     if content.contains("Auto-denied exec_shell")
-                        && content.contains("Restart Codewhale")
+                        && content.contains("Restart codewhale")
             )
         })
         .expect("cached denial must leave a durable recovery receipt");
@@ -5777,7 +5777,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
         "cached-decision explanation disappeared after completion:\n{rendered}"
     );
     assert!(
-        rendered.contains("Restart Codewhale"),
+        rendered.contains("Restart codewhale"),
         "cached-denial recovery path disappeared after completion:\n{rendered}"
     );
     assert_eq!(

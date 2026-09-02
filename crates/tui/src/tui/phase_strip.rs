@@ -332,15 +332,15 @@ mod tests {
 
     #[test]
     fn a_notice_sheds_whole_clauses_and_never_dangles() {
-        const NOTICE: &str = "Anonymous usage counts are on. Conversations and code are never collected. Change this in /settings; schema: docs/TELEMETRY.md";
+        const NOTICE: &str = "Anonymous counts are on. Your conversations and code stay private. Change this in /settings; schema: docs/TELEMETRY.md";
         assert_eq!(fit_notice(NOTICE, 200).as_deref(), Some(NOTICE));
         assert_eq!(
             fit_notice(NOTICE, 80).as_deref(),
-            Some("Anonymous usage counts are on. Conversations and code are never collected.")
+            Some("Anonymous counts are on. Your conversations and code stay private.")
         );
         assert_eq!(
             fit_notice(NOTICE, 40).as_deref(),
-            Some("Anonymous usage counts are on.")
+            Some("Anonymous counts are on.")
         );
         assert_eq!(fit_notice("   ", 40), None);
     }

@@ -4046,7 +4046,7 @@ impl SetupWizardView {
         english_action: Option<&'static str>,
     ) -> Line<'static> {
         let hint = if self.locale == Locale::En {
-            let mut hint = "Enter records this setup snapshot.".to_string();
+            let mut hint = "Enter records it.".to_string();
             if let Some(action) = english_action {
                 hint.push(' ');
                 hint.push_str(action);

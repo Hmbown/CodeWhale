@@ -4099,7 +4099,7 @@ pub(crate) async fn run_event_loop(
                     Err(err) => {
                         tracing::warn!(error = %err, "failed to restart terminal input pump");
                         app.push_status_toast(
-                            "Terminal input stalled; recovery failed. Restart Codewhale if keys stop responding.",
+                            "Terminal input stalled; recovery failed. Restart codewhale if keys stop responding.",
                             StatusToastLevel::Error,
                             None,
                         );

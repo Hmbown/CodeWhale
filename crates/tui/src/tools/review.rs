@@ -29,7 +29,7 @@ const REVIEW_RECEIPT_SCHEMA_VERSION: u32 = 1;
 /// mechanical fix is small; anything larger is judgement wearing a
 /// suggestion fence, so it must degrade to prose.
 pub const MAX_COMMITTABLE_SUGGESTION_LINES: u32 = 25;
-const REVIEW_CLIENT_UNAVAILABLE: &str = "Review tool requires an active Codewhale model client";
+const REVIEW_CLIENT_UNAVAILABLE: &str = "Review tool requires an active codewhale model client";
 
 const REVIEW_SYSTEM_PROMPT: &str = "You are a senior code reviewer. Return ONLY valid JSON with \
 the following schema:\n\
@@ -1103,7 +1103,7 @@ mod tests {
 
         assert_eq!(
             error,
-            "Failed to locate tool: Review tool requires an active Codewhale model client"
+            "Failed to locate tool: Review tool requires an active codewhale model client"
         );
         assert!(!error.contains("DeepSeek"));
     }

@@ -959,10 +959,10 @@ pub(crate) fn parse_queue_send_command(input: &str) -> Option<Result<usize, Stri
         return Some(Err("Usage: /queue send <n>".to_string()));
     }
     let Ok(index) = raw_index.parse::<usize>() else {
-        return Some(Err("Index must be a positive number".to_string()));
+        return Some(Err("Use a positive number".to_string()));
     };
     if index == 0 {
-        return Some(Err("Index must be >= 1".to_string()));
+        return Some(Err("Use 1 or more".to_string()));
     }
     Some(Ok(index - 1))
 }
