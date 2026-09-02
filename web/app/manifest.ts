@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 import { SITE_NAME } from "@/lib/page-meta";
 
 /**
- * Web app manifest. Icons are the new Tideline whale mark: the white
- * silhouette on the deep-blue tile, rendered from the same master as
+ * Web app manifest. Icons are the new Tideline whale mark: the blue ombre
+ * silhouette on the white tile, rendered from the same master as
  * app/icon.svg. Static rasters live in public/ next to the other shipped
  * assets; the field naming follows the Next.js metadata-file convention
  * already used by app/icon.svg and app/opengraph-image.tsx.
