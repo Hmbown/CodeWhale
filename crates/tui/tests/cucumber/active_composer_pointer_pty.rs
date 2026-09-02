@@ -195,6 +195,8 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     // signal (toast seen, or the queue count grew) proves the dispatch.
     let expected = queued_before.map(|n| n + 1);
     let deadline = Instant::now() + qa_harness::harness::ci_scaled(SETTLE_WAIT);
+    let retry_at = Instant::now() + qa_harness::harness::ci_scaled(SETTLE_WAIT / 2);
+    let mut retried = false;
     loop {
         tui.pump();
         let text = normalized_text(tui.frame());
@@ -204,10 +206,12 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
         if text.contains(receipt) || grew {
             break;
         }
-        if Instant::now() >= deadline {
-            // One bounded retry: re-find the affordance (a redraw may have
-            // shifted cells between find and click under runner load) and
-            // click it again before failing.
+        // One bounded retry at the half-way point: re-find the affordance
+        // (a redraw may have shifted cells between find and click under
+        // runner load) and click it again. Keep polling after it — the app
+        // may take a beat to process the second gesture.
+        if !retried && Instant::now() >= retry_at {
+            retried = true;
             let (retry_row, retry_col) = tui.frame().find_text("[↑]").unwrap_or_else(|| {
                 panic!(
                     "{size}: [↑] submit affordance not painted on retry\n{}",
@@ -219,21 +223,15 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
             std::thread::sleep(Duration::from_millis(150));
             tui.send(keys::mouse::up(retry_row, retry_col + 1))
                 .expect("SGR mouse up on [↑] retry");
-            tui.wait_for_idle(Duration::from_millis(150), Duration::from_secs(2))
-                .expect("retry settles");
-            let retry_text = normalized_text(tui.frame());
-            let retry_grew = queued_count(&retry_text)
-                .zip(expected)
-                .is_some_and(|(seen, want)| seen == want);
-            assert!(
-                retry_text.contains(receipt) || retry_grew,
+        }
+        if Instant::now() >= deadline {
+            panic!(
                 "{size}: click on [↑] at ({send_row},{}) produced no queue receipt \
                  {receipt:?} and no queue growth — pointer submit did not reach the \
                  keyboard-submit dispatch path\n{}",
                 send_col + 1,
                 tui.diagnostics()
             );
-            break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
