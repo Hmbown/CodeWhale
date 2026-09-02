@@ -13,7 +13,7 @@ mod adapt;
 mod contrast;
 mod detect;
 pub mod grammar;
-mod osc11;
+pub(crate) mod osc11;
 mod themes;
 mod tokens;
 mod user_theme;

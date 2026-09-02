@@ -1,8 +1,8 @@
  ⣠⡾⠛⠷⠄   Codewhale v0.9.12                                                      
- ⣿⣄⣠⣤⣶⠶⡆ OpenRouter · deepseek-v4                                               
- ⠙⠿⣯⣿⡡⠞  Hmbown/CodeWhale · main                                                
+ ⣿⣄⣠⣤⣶⠶⡆ not connected                                                          
+ ⠙⠿⣯⣿⡡⠞  /Users/hunter/src/codewhale                                            
                                                                                 
- ● 2 MCP servers connected · 1 needs sign-in · run /mcp                         
+ ⚠ no model connected · run /provider                                           
                                                                                 
                                                                                 
                                                                                 

@@ -539,21 +539,15 @@ impl Default for LspRepairState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchState {
     pub visible: bool,
-    pub selected: usize,
     pub worktree_input: Option<String>,
     pub status: Option<String>,
     pub workspace_session_count: usize,
     pub worktree_available: bool,
-    /// Row hitboxes from the most recent launch render. Index order is
-    /// focus order: the three quick-action rows (`index == launch.selected`
-    /// for 0–2), so the mouse click path and the keyboard share dispatch.
-    pub row_areas: Vec<Rect>,
-    /// Option-strip tile hitboxes from the most recent launch render
-    /// (Tideline startup stage), with their dispatch intent.
-    pub option_areas: Vec<(crate::tui::underwater::LaunchOptionAction, Rect)>,
-    /// Whether launch keys type into the pre-session composer instead of
-    /// driving the menu. The composer itself is the session `App`'s own
-    /// `ComposerState` — this flag only decides where keystrokes go.
+    /// Whether launch keys type into the pre-session composer. The composer
+    /// is the launch screen's one focus owner, so this is `true` from first
+    /// paint; only the worktree-name prompt takes the keyboard while open.
+    /// The composer itself is the session `App`'s own `ComposerState` — this
+    /// flag only decides where keystrokes go.
     pub composer_focus: bool,
     /// Composer input-row hitbox from the most recent launch render (the
     /// docked strip below the option strip). A click here focuses the
@@ -590,14 +584,11 @@ impl LaunchState {
             .is_ok_and(|status| status.success());
         Self {
             visible,
-            selected: 0,
             worktree_input: None,
             status: None,
             workspace_session_count,
             worktree_available,
-            row_areas: Vec::new(),
-            option_areas: Vec::new(),
-            composer_focus: false,
+            composer_focus: true,
             composer_area: None,
             send_area: None,
         }
