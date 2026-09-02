@@ -1408,7 +1408,14 @@ mod tests {
 
         let result = execute("/rail pinned", &mut app);
         assert!(!result.is_error);
-        assert_eq!(app.work_surface.panel, RailPanel::Pinned);
+        assert_eq!(
+            app.work_surface.panel,
+            RailPanel::Tasks,
+            "pinned folded into the tasks view"
+        );
+        let result = execute("/rail files", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.work_surface.panel, RailPanel::Files);
 
         let result = execute("/sidebar on", &mut app);
         assert!(!result.is_error);

@@ -644,16 +644,19 @@ pub fn sidebar(app: &mut App, arg: Option<&str>) -> CommandResult {
                 _ => None,
             };
             let panel = match value.as_str() {
-                "tasks" | "activity" | "live" | "running" => {
-                    Some(crate::tui::work_surface::RailPanel::Tasks)
-                }
+                "tasks" | "activity" | "live" | "running" | "pinned" | "work" | "plan"
+                | "todos" => Some(crate::tui::work_surface::RailPanel::Tasks),
                 "agents" | "subagents" | "sub-agents" => {
                     Some(crate::tui::work_surface::RailPanel::Agents)
                 }
-                "context" | "session" => Some(crate::tui::work_surface::RailPanel::Context),
-                "pinned" | "work" | "plan" | "todos" => {
-                    Some(crate::tui::work_surface::RailPanel::Pinned)
+                "background" | "shells" | "jobs" => {
+                    Some(crate::tui::work_surface::RailPanel::Background)
                 }
+                "files" | "changes" => Some(crate::tui::work_surface::RailPanel::Files),
+                "notepad" | "notes" => Some(crate::tui::work_surface::RailPanel::Notepad),
+                "context" | "session" => Some(crate::tui::work_surface::RailPanel::Context),
+                "git" | "branch" => Some(crate::tui::work_surface::RailPanel::Git),
+                "price" | "cost" => Some(crate::tui::work_surface::RailPanel::Price),
                 _ => None,
             };
             match (placement, panel) {
@@ -673,7 +676,7 @@ pub fn sidebar(app: &mut App, arg: Option<&str>) -> CommandResult {
                     }
                 }
                 (None, Some(panel)) => {
-                    app.work_surface.panel = panel;
+                    crate::tui::work_surface::select_dock_panel(app, panel);
                     if persist {
                         let result = set_config_value(app, "rail_panel", panel.as_setting(), true);
                         if result.is_error {

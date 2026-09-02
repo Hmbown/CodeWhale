@@ -1266,7 +1266,7 @@ pub fn completed_turn_payload(
         &tr(app.ui_locale, MessageId::NotificationTurnComplete),
         include_summary,
         turn_elapsed,
-        turn_cost.map(|cost| crate::pricing::format_cost_estimate(cost, app.cost_currency)),
+        turn_cost.map(|cost| app.format_cost_estimate(cost)),
     );
 
     let preview =

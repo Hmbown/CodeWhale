@@ -10,6 +10,7 @@ use super::model::{RailPanel, WorkRowId};
 
 pub(crate) fn select_dock_panel(app: &mut App, panel: RailPanel) {
     app.work_surface.panel = panel;
+    app.work_surface.explicit_view = true;
     app.work_surface.dismissed = false;
     app.work_surface.focused = true;
     app.work_surface.scroll_offset = 0;
@@ -17,9 +18,16 @@ pub(crate) fn select_dock_panel(app: &mut App, panel: RailPanel) {
     app.needs_redraw = true;
 }
 
+/// Esc / the `×` tab: close the view. An explicitly opened view goes back to
+/// the auto rule; the dock stays down until new work arrives.
 pub(crate) fn dismiss_dock(app: &mut App) {
+    app.work_surface.explicit_view = false;
     app.work_surface.dismissed = true;
-    app.work_surface.dismissed_at_rows = app.work_surface.total_rows;
+    // Measure the view the auto rule will show next, not the one just
+    // closed: the dock re-opens when *that* view grows.
+    super::model::resolve_view(app);
+    app.work_surface.dismissed_view = app.work_surface.panel;
+    app.work_surface.dismissed_at_rows = super::model::visible_rows_for_panel(app).len();
     app.work_surface.focused = false;
     app.work_surface.selected = None;
     app.needs_redraw = true;

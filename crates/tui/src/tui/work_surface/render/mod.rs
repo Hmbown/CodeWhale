@@ -5,9 +5,11 @@
 //! - [`rows`] answers *what one row says* — the sub-agent column layout, its
 //!   degradation tiers, and row styling.
 //!
-//! What stays here is the paint itself: the Top strip, the side-rail panel,
-//! the divider and scrollbar chrome, and the strip header content (goal title,
-//! to-do receipt) that height and paint must both agree on.
+//! What stays here is the paint itself: the strip, the side rail, the dock
+//! tab row, the divider and scrollbar chrome, and the strip header content
+//! (goal title, to-do receipt) that height and paint must both agree on.
+//! Every view — work rows and fact rows alike — goes through the one row
+//! loop below; there is no second line-list renderer.
 
 use std::collections::HashMap;
 
@@ -91,25 +93,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         app.work_surface.hovered_tab = None;
     }
 
-    // Context is the one panel that is not a work-row surface: session facts
-    // render as a titled line list with nothing to click. Every other panel
-    // (Tasks, Agents, Pinned) routes through the row machinery below, so its
-    // rows keep hitboxes, selection, and primary actions — a work row is a
-    // door in every panel, not only in Tasks.
-    if app.work_surface.panel == RailPanel::Context {
-        render_panel(frame, area, body_area, app);
-        render_dock_tabs(frame, area, app);
-        register_dock_targets(app);
-        return;
-    }
-
-    let mut rows = visible_rows_for_panel(app);
-    if placement.is_strip() {
-        // Literal work list only: selectable to-dos/agents plus the
-        // GrokBuild-style `▾ Subagents N` group header. Generic graph chrome
-        // from the side/inspector projection stays out.
-        rows.retain(|row| row.selectable || row.id.0.starts_with("section:"));
-    }
+    super::model::resolve_view(app);
+    let rows = visible_rows_for_panel(app);
     let todo_ordinals = if placement.is_strip() {
         todo_ordinals(&rows)
     } else {
@@ -407,6 +392,20 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         }
     }
 
+    if visible.is_empty() && app.work_surface.explicit_view && content_area.height > 0 {
+        // An explicitly opened view with nothing in it says so, once, so
+        // cycling never lands on a blank band.
+        lines.push(Line::from(Span::styled(
+            truncate_line_to_width(
+                empty_view_hint(app.work_surface.panel),
+                usize::from(content_area.width),
+            ),
+            Style::default()
+                .fg(app.ui_theme.text_muted)
+                .bg(app.ui_theme.surface_bg),
+        )));
+    }
+
     if more_row {
         // Right-aligned under the receipt column, muted like every other
         // secondary figure. Scrolled to the bottom there is nothing below, so
@@ -456,114 +455,23 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         lines: visible.iter().map(|row| row.label.clone()).collect(),
         rows: hover_rows,
     });
+    // The tab badges projected the other views on the way here; the rows
+    // a click resolves against are the ones this frame painted.
+    app.work_surface.latest_rows = rows;
 }
 
-/// Render the Context panel as a titled line list in the same body area and
-/// with the same divider and scrollbar the row surface would use. Context is
-/// the only panel that renders here: its lines are session facts, not work
-/// rows, so there is nothing to click and no hitboxes to record. Every panel
-/// that shows work rows (Tasks, Agents, Pinned) goes through the row/hitbox
-/// machinery in [`render`] instead.
-fn render_panel(frame: &mut Frame, area: Rect, body_area: Rect, app: &mut App) {
-    let panel = app.work_surface.panel;
-    let placement = app.work_surface.effective_placement;
-
-    Block::default()
-        .style(Style::default().bg(app.ui_theme.surface_bg))
-        .render(area, frame.buffer_mut());
-
-    // Title row policy:
-    // - Top/Bottom: only an active goal (`Goal: …`). Never panel chrome ("Pinned").
-    // - Left/Right: muted panel name — a full-height column needs naming.
-    let goal = placement.is_strip().then(|| top_goal_title(app)).flatten();
-    let side_panel_title = matches!(
-        placement,
-        WorkSurfacePlacement::Left | WorkSurfacePlacement::Right
-    );
-
-    let title_rows = if let Some((goal_text, goal_style)) = goal.as_ref() {
-        let goal_text = truncate_line_to_width(goal_text, usize::from(body_area.width).max(1));
-        Paragraph::new(Line::from(Span::styled(
-            goal_text,
-            goal_style.bg(app.ui_theme.surface_bg),
-        )))
-        .render(
-            Rect {
-                height: 1,
-                ..body_area
-            },
-            frame.buffer_mut(),
-        );
-        1_u16
-    } else if side_panel_title {
-        Paragraph::new(Line::from(Span::styled(
-            truncate_line_to_width(panel.title(), usize::from(body_area.width).max(1)),
-            Style::default()
-                .fg(app.ui_theme.text_muted)
-                .bg(app.ui_theme.surface_bg),
-        )))
-        .render(
-            Rect {
-                height: 1,
-                ..body_area
-            },
-            frame.buffer_mut(),
-        );
-        1_u16
-    } else {
-        0
-    };
-
-    let content_area = Rect {
-        y: body_area.y.saturating_add(title_rows),
-        height: body_area.height.saturating_sub(title_rows),
-        ..body_area
-    };
-    let body_height = usize::from(content_area.height);
-    let lines = super::panels::panel_lines(
-        app,
-        panel,
-        usize::from(content_area.width),
-        body_height.max(1),
-        goal.is_some(),
-    )
-    .unwrap_or_default();
-
-    let max_offset = lines.len().saturating_sub(body_height.max(1));
-    app.work_surface.scroll_offset = app.work_surface.scroll_offset.min(max_offset);
-    let overflow = lines.len() > body_height;
-    let visible: Vec<Line> = lines
-        .iter()
-        .skip(app.work_surface.scroll_offset)
-        .take(body_height)
-        .cloned()
-        .collect();
-    Paragraph::new(visible).render(content_area, frame.buffer_mut());
-
-    render_divider(frame, area, placement, app);
-    if overflow {
-        render_scrollbar(
-            frame,
-            Rect {
-                x: body_area.right().saturating_sub(1),
-                y: content_area.y,
-                width: 1,
-                height: content_area.height,
-            },
-            app.work_surface.scroll_offset,
-            body_height,
-            lines.len(),
-            app,
-        );
+/// What an explicitly opened, empty view says on its one row.
+fn empty_view_hint(panel: RailPanel) -> &'static str {
+    match panel {
+        RailPanel::Agents => "no agents have run this session",
+        RailPanel::Tasks => "no to-dos yet",
+        RailPanel::Background => "nothing running in the background",
+        RailPanel::Files => "no files touched this session",
+        RailPanel::Notepad => "Enter to write a note",
+        RailPanel::Context => "context budget unknown",
+        RailPanel::Git => "not a git repository",
+        RailPanel::Price => "no priced turns yet",
     }
-
-    app.work_surface.last_area = Some(area);
-    app.work_surface.visible_rows = body_height;
-    app.work_surface.total_rows = lines.len();
-    app.work_surface.hitboxes.clear();
-    app.work_surface.selected = None;
-    app.work_surface.opened = None;
-    app.work_surface.hovered = None;
 }
 
 /// Active goal as the Top strip's only title. Uses the same
@@ -692,29 +600,15 @@ struct DockTab {
 fn render_dock_tabs(frame: &mut Frame, area: Rect, app: &mut App) {
     let width = usize::from(area.width);
     let mut entries = Vec::new();
-    for panel in [
-        RailPanel::Tasks,
-        RailPanel::Agents,
-        RailPanel::Context,
-        RailPanel::Pinned,
-    ] {
-        let useful = super::panels::panel_has_useful_content(app, panel);
+    for panel in RailPanel::ORDER {
+        let count = dock_tab_count(app, panel);
+        let useful =
+            count.is_some_and(|count| count > 0) || super::views::view_always_has_content(panel);
         if useful || panel == app.work_surface.panel {
-            let count = match panel {
-                RailPanel::Tasks | RailPanel::Agents => visible_rows_for(app, panel)
-                    .iter()
-                    .filter(|row| match panel {
-                        RailPanel::Tasks => row.id.0.starts_with("graph:"),
-                        RailPanel::Agents => row.id.0.starts_with("worker:"),
-                        RailPanel::Context | RailPanel::Pinned => false,
-                    })
-                    .count(),
-                RailPanel::Context | RailPanel::Pinned => 0,
-            };
             entries.push(DockTab {
                 target: DockTabTarget::Panel(panel),
                 label: panel.title(),
-                count,
+                count: count.unwrap_or(0),
             });
         }
     }
@@ -744,20 +638,12 @@ fn render_dock_tabs(frame: &mut Frame, area: Rect, app: &mut App) {
     if !fits(&entries, true) {
         show_counts = false;
     }
+    // Shed from the right (price, git, context, notepad, files… in reverse
+    // cycle order), never the active tab: a narrow dock keeps the work views.
     while !fits(&entries, show_counts) && entries.len() > 1 {
         let remove = entries
             .iter()
-            .rposition(|tab| {
-                matches!(
-                    tab.target,
-                    DockTabTarget::Panel(RailPanel::Pinned | RailPanel::Context)
-                ) && tab.target != DockTabTarget::Panel(app.work_surface.panel)
-            })
-            .or_else(|| {
-                entries
-                    .iter()
-                    .rposition(|tab| tab.target != DockTabTarget::Panel(app.work_surface.panel))
-            });
+            .rposition(|tab| tab.target != DockTabTarget::Panel(app.work_surface.panel));
         let Some(index) = remove else { break };
         entries.remove(index);
     }
@@ -836,18 +722,49 @@ fn render_dock_tabs(frame: &mut Frame, area: Rect, app: &mut App) {
     });
 }
 
+/// The badge on a view's tab: how many rows of *work* it holds. `None` for
+/// the fact views (context, git, price), which never badge.
+fn dock_tab_count(app: &mut App, panel: RailPanel) -> Option<usize> {
+    match panel {
+        RailPanel::Agents => Some(
+            visible_rows_for(app, panel)
+                .iter()
+                .filter(|row| row.id.0.starts_with("worker:"))
+                .count(),
+        ),
+        RailPanel::Tasks => Some(
+            visible_rows_for(app, panel)
+                .iter()
+                .filter(|row| row.id.0.starts_with("graph:"))
+                .count(),
+        ),
+        RailPanel::Background => Some(
+            visible_rows_for(app, panel)
+                .iter()
+                .filter(|row| row.selectable)
+                .count(),
+        ),
+        RailPanel::Files => Some(super::views::files_touched_count(app)),
+        RailPanel::Notepad => Some(usize::from(super::views::notepad_has_text(app))),
+        RailPanel::Context | RailPanel::Git | RailPanel::Price => None,
+    }
+}
+
 fn register_dock_targets(app: &mut App) {
     let targets = app.work_surface.dock_tabs.clone();
     for hitbox in targets {
         let (id, action) = match hitbox.target {
             DockTabTarget::Panel(panel) => {
+                use crate::tui::tideline::InteractionTargetId as Id;
                 let id = match panel {
-                    RailPanel::Tasks => crate::tui::tideline::InteractionTargetId::DOCK_TAB_TASKS,
-                    RailPanel::Agents => crate::tui::tideline::InteractionTargetId::DOCK_TAB_AGENTS,
-                    RailPanel::Context => {
-                        crate::tui::tideline::InteractionTargetId::DOCK_TAB_CONTEXT
-                    }
-                    RailPanel::Pinned => crate::tui::tideline::InteractionTargetId::DOCK_TAB_PINNED,
+                    RailPanel::Agents => Id::DOCK_TAB_AGENTS,
+                    RailPanel::Tasks => Id::DOCK_TAB_TASKS,
+                    RailPanel::Background => Id::DOCK_TAB_BACKGROUND,
+                    RailPanel::Files => Id::DOCK_TAB_FILES,
+                    RailPanel::Notepad => Id::DOCK_TAB_NOTEPAD,
+                    RailPanel::Context => Id::DOCK_TAB_CONTEXT,
+                    RailPanel::Git => Id::DOCK_TAB_GIT,
+                    RailPanel::Price => Id::DOCK_TAB_PRICE,
                 };
                 (
                     id,

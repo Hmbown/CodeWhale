@@ -4506,6 +4506,14 @@ pub(crate) async fn run_event_loop(
                     cycle_permission_posture(app, config, &engine_handle).await;
                     continue;
                 }
+                Some(ShellBindingId::ViewCycle) => {
+                    crate::tui::work_surface::cycle_view(app, true);
+                    continue;
+                }
+                Some(ShellBindingId::ViewCycleBack) => {
+                    crate::tui::work_surface::cycle_view(app, false);
+                    continue;
+                }
                 _ => {}
             }
 
@@ -5338,7 +5346,7 @@ pub(crate) async fn run_event_loop(
                     if key.modifiers.contains(KeyModifiers::ALT)
                         && !key.modifiers.contains(KeyModifiers::CONTROL) =>
                 {
-                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Pinned);
+                    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Files);
                     continue;
                 }
                 KeyCode::Char('0')

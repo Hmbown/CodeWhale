@@ -793,16 +793,6 @@ pub(crate) fn apply_sidebar_row_action(app: &mut App, action: SidebarRowAction) 
             app.needs_redraw = true;
             Vec::new()
         }
-        SidebarRowAction::ToggleAgentDetails { agent_id } => {
-            if !app.expanded_sidebar_agents.insert(agent_id.clone()) {
-                app.expanded_sidebar_agents.remove(&agent_id);
-                app.status_message = Some("Agent details collapsed".to_string());
-            } else {
-                app.status_message = Some("Agent details expanded".to_string());
-            }
-            app.needs_redraw = true;
-            Vec::new()
-        }
         SidebarRowAction::ShowSubagentsPanel => {
             use crate::tui::work_surface::RailPanel;
             // The register header is a two-way door: opening the Agents panel
@@ -940,30 +930,6 @@ pub(crate) fn resolve_agent_transcript_text(app: &App, agent_id: &str) -> Option
         return None;
     }
     Some(text)
-}
-
-pub(crate) fn resident_agent_transcript_available(app: &App, agent_id: &str) -> bool {
-    use crate::tools::handle::{HandleValue, VarHandle};
-
-    let lookup = VarHandle {
-        kind: "var_handle".to_string(),
-        session_id: format!("agent:{agent_id}"),
-        name: "full_transcript".to_string(),
-        type_name: String::new(),
-        length: 0,
-        repr_preview: String::new(),
-        sha256: String::new(),
-    };
-    let Ok(store) = app.runtime_services.handle_store.try_lock() else {
-        return false;
-    };
-    let Some(record) = store.get(&lookup) else {
-        return false;
-    };
-    match &record.value {
-        HandleValue::Json(payload) => !agent_transcript_text(payload).trim().is_empty(),
-        HandleValue::Text(_) => false,
-    }
 }
 
 pub(crate) fn agent_transcript_evidence_available(app: &App, agent_id: &str) -> bool {
@@ -2132,7 +2098,7 @@ mod tests {
                     full_text: "agent row".to_string(),
                     detail: None,
                     is_truncated: false,
-                    click_action: Some(SidebarRowAction::ToggleAgentDetails {
+                    click_action: Some(SidebarRowAction::OpenAgentDetail {
                         agent_id: "agent_123".to_string(),
                     }),
                     stop_action: None,
@@ -2154,7 +2120,7 @@ mod tests {
         );
         assert!(matches!(
             sidebar_click_action(&app, left_click(60, 7)),
-            Some(SidebarRowAction::ToggleAgentDetails { agent_id })
+            Some(SidebarRowAction::OpenAgentDetail { agent_id })
                 if agent_id == "agent_123"
         ));
         assert_eq!(
@@ -2203,7 +2169,7 @@ mod tests {
                 full_text: "[~] Agent 1 is working [x]".to_string(),
                 detail: None,
                 is_truncated: false,
-                click_action: Some(SidebarRowAction::ToggleAgentDetails {
+                click_action: Some(SidebarRowAction::OpenAgentDetail {
                     agent_id: "agent_123".to_string(),
                 }),
                 stop_action: Some(SidebarRowAction::CancelAgent {
@@ -2216,7 +2182,7 @@ mod tests {
 
         assert!(matches!(
             sidebar_click_action(&app, left_click(62, 4)),
-            Some(SidebarRowAction::ToggleAgentDetails { agent_id })
+            Some(SidebarRowAction::OpenAgentDetail { agent_id })
                 if agent_id == "agent_123"
         ));
         assert!(matches!(
