@@ -830,7 +830,6 @@ impl App {
             plugin_registry,
             config_path,
             config_profile,
-            config: config.clone(),
             legacy_plugin_tools_dir: config
                 .tools
                 .as_ref()
@@ -1068,6 +1067,7 @@ impl App {
             workflow_panel: None,
             session_started_at: chrono::Utc::now(),
             needs_redraw: true,
+            fleet_roster_stale: false,
             force_next_full_repaint: false,
             thinking_started_at: None,
             is_compacting: false,

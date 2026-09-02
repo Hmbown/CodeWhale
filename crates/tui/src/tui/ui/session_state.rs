@@ -999,9 +999,9 @@ pub(crate) fn resolve_loaded_session_route(app: &mut App, config: &Config) {
                 resolution.candidate.limits(),
                 resolution.context_window.source,
             );
-            crate::fleet::members::auto_enroll_fleet_model(
+            app.fleet_roster_stale |= crate::fleet::members::auto_enroll_fleet_model(
                 &app.workspace,
-                &app.provider_identity_for_persistence(),
+                app.provider_identity_for_persistence(),
                 &resolved_model,
             );
         }

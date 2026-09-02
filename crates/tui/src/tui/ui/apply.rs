@@ -754,9 +754,9 @@ pub(crate) async fn apply_model_picker_choice(
         }
         if !model_is_auto {
             apply_picker_effort_choice(app, engine_handle, effort, previous_effort).await;
-            crate::fleet::members::auto_enroll_fleet_model(
+            app.fleet_roster_stale |= crate::fleet::members::auto_enroll_fleet_model(
                 &app.workspace,
-                &app.provider_identity_for_persistence(),
+                app.provider_identity_for_persistence(),
                 &app.model,
             );
             if save_as_startup_default {
@@ -855,7 +855,7 @@ pub(crate) async fn apply_model_picker_choice(
     let route_provider = app.provider_identity_for_persistence().to_string();
     app.note_session_route_change(&route_provider, &resolved_model);
     if !model_is_auto {
-        crate::fleet::members::auto_enroll_fleet_model(
+        app.fleet_roster_stale |= crate::fleet::members::auto_enroll_fleet_model(
             &app.workspace,
             &route_provider,
             &resolved_model,
@@ -1504,6 +1504,7 @@ pub(crate) async fn apply_command_result(
                     Ok(models) => {
                         app.add_message(HistoryCell::System {
                             content: format_helpers::available_models_message(
+                                app.ui_locale,
                                 app.provider_identity_for_persistence(),
                                 &app.model,
                                 &models,
@@ -2023,6 +2024,58 @@ pub(crate) async fn apply_command_result(
             }
             AppAction::OpenFleetSetup => {
                 open_fleet_setup_target(app, config, None);
+            }
+            AppAction::FleetAddModel {
+                provider,
+                model,
+                roles,
+            } => {
+                use crate::commands::{fleet_catalog_rejection, fleet_provider_rejection};
+                let locale = app.ui_locale;
+                // The live `config` is the provider truth: the startup
+                // snapshot went stale after any in-session provider change.
+                let rejection = fleet_provider_rejection(app, config, &provider)
+                    .or_else(|| fleet_catalog_rejection(locale, &provider, &model));
+                let content = match rejection {
+                    Some(rejection) => rejection,
+                    None => match crate::fleet::members::add_fleet_model(
+                        &app.workspace,
+                        &provider,
+                        &model,
+                        &roles,
+                    ) {
+                        Ok(change) => {
+                            if !matches!(
+                                change,
+                                crate::fleet::members::FleetModelChange::Unchanged { .. }
+                            ) {
+                                app.fleet_roster_stale = true;
+                            }
+                            crate::fleet::members::change_receipt(
+                                locale, &provider, &model, &change,
+                            )
+                        }
+                        Err(error) => tr(locale, MessageId::FleetAddFailed)
+                            .replace("{error}", &error.message(locale)),
+                    },
+                };
+                app.add_message(HistoryCell::System { content });
+            }
+            AppAction::FleetRemoveModel { provider, model } => {
+                let locale = app.ui_locale;
+                let content = match crate::fleet::members::remove_fleet_model(
+                    &app.workspace,
+                    &provider,
+                    &model,
+                ) {
+                    Ok(change) => {
+                        app.fleet_roster_stale = true;
+                        crate::fleet::members::change_receipt(locale, &provider, &model, &change)
+                    }
+                    Err(error) => tr(locale, MessageId::FleetRemoveFailed)
+                        .replace("{error}", &error.message(locale)),
+                };
+                app.add_message(HistoryCell::System { content });
             }
             AppAction::OpenHotbarSetup => {
                 if app.view_stack.top_kind() != Some(ModalKind::HotbarSetup) {
