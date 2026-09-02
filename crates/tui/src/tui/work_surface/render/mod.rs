@@ -28,7 +28,7 @@ use crate::tui::ui_text::truncate_line_to_width;
 
 use super::model::{
     DockTabHitbox, DockTabTarget, RailPanel, WorkHitbox, WorkRow, WorkSurfacePlacement, WorkTone,
-    visible_rows_for_panel,
+    visible_rows_for, visible_rows_for_panel,
 };
 
 mod layout;
@@ -701,20 +701,14 @@ fn render_dock_tabs(frame: &mut Frame, area: Rect, app: &mut App) {
         let useful = super::panels::panel_has_useful_content(app, panel);
         if useful || panel == app.work_surface.panel {
             let count = match panel {
-                RailPanel::Tasks | RailPanel::Agents => {
-                    let saved = app.work_surface.panel;
-                    app.work_surface.panel = panel;
-                    let count = visible_rows_for_panel(app)
-                        .iter()
-                        .filter(|row| match panel {
-                            RailPanel::Tasks => row.id.0.starts_with("graph:"),
-                            RailPanel::Agents => row.id.0.starts_with("worker:"),
-                            RailPanel::Context | RailPanel::Pinned => false,
-                        })
-                        .count();
-                    app.work_surface.panel = saved;
-                    count
-                }
+                RailPanel::Tasks | RailPanel::Agents => visible_rows_for(app, panel)
+                    .iter()
+                    .filter(|row| match panel {
+                        RailPanel::Tasks => row.id.0.starts_with("graph:"),
+                        RailPanel::Agents => row.id.0.starts_with("worker:"),
+                        RailPanel::Context | RailPanel::Pinned => false,
+                    })
+                    .count(),
                 RailPanel::Context | RailPanel::Pinned => 0,
             };
             entries.push(DockTab {

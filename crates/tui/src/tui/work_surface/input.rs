@@ -97,10 +97,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Option<Option<SidebarRowActio
             let next = match key.code {
                 KeyCode::Left => Some((current + tabs.len() - 1) % tabs.len()),
                 KeyCode::Right => Some((current + 1) % tabs.len()),
-                KeyCode::Tab if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                    Some((current + tabs.len() - 1) % tabs.len())
-                }
-                KeyCode::Tab => Some((current + 1) % tabs.len()),
                 _ => None,
             };
             if let Some(next) = next {

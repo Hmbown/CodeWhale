@@ -720,7 +720,12 @@ fn plan_step_row_ids(app: &App) -> HashSet<String> {
 /// same sense the panel's name means (they survive completion — see the row
 /// lifetime rule in the module docs), so they belong here on their own terms.
 pub(super) fn visible_rows_for_panel(app: &mut App) -> Vec<WorkRow> {
-    match app.work_surface.panel {
+    let panel = app.work_surface.panel;
+    visible_rows_for(app, panel)
+}
+
+pub(super) fn visible_rows_for(app: &mut App, panel: RailPanel) -> Vec<WorkRow> {
+    match panel {
         RailPanel::Tasks => project_visible(app),
         RailPanel::Agents => {
             let rows = project(app);
