@@ -135,7 +135,7 @@ fn verify_status_success_uses_success_token() {
     );
     assert_ne!(
         crate::palette::STATUS_SUCCESS,
-        crate::palette::WHALE_ACCENT_PRIMARY,
+        crate::palette::WHALE_ACTION,
         "STATUS_SUCCESS should not regress to the primary accent"
     );
 }

@@ -2336,7 +2336,7 @@ fn review_severity_color(severity: &str) -> Color {
     match severity {
         "error" => palette::STATUS_ERROR,
         "warning" => palette::STATUS_WARNING,
-        _ => palette::STATUS_INFO,
+        _ => palette::WHALE_ACTION,
     }
 }
 

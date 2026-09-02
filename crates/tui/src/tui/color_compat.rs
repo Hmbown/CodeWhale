@@ -610,7 +610,7 @@ mod tests {
     #[test]
     fn grayscale_palette_maps_hued_cells_before_depth_adaptation() {
         let mut cell = Cell::default();
-        cell.set_fg(palette::WHALE_INFO);
+        cell.set_fg(palette::WHALE_ACTION);
         cell.set_bg(palette::WHALE_BG);
 
         adapt_cell_colors(

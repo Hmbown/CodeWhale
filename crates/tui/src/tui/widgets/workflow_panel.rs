@@ -1832,7 +1832,7 @@ impl WorkflowPanel {
                     content_width,
                 ),
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )));
 

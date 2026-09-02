@@ -320,9 +320,9 @@ pub(super) fn assistant_label_style_for(streaming: bool, low_motion: bool) -> St
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        palette::pulse_brightness(palette::WHALE_INFO, now_ms)
+        palette::pulse_brightness(palette::WHALE_ACTION, now_ms)
     } else {
-        palette::WHALE_INFO
+        palette::WHALE_ACTION
     };
     Style::default().fg(color)
 }

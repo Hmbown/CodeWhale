@@ -1904,7 +1904,7 @@ impl FleetSetupView {
         let chip_style = Style::default().fg(palette::TEXT_MUTED);
         let mut lines = vec![Line::from(Span::styled(
             title.into_owned(),
-            Style::default().fg(palette::WHALE_INFO).bold(),
+            Style::default().fg(palette::WHALE_ACTION).bold(),
         ))];
         if area.height >= 3 {
             lines.push(Line::from(Span::styled(
@@ -2088,7 +2088,7 @@ impl FleetSetupView {
         let section = |lines: &mut Vec<Line>, label: &str, body: String| {
             lines.push(Line::from(Span::styled(
                 label.to_string(),
-                Style::default().fg(palette::WHALE_INFO).bold(),
+                Style::default().fg(palette::WHALE_ACTION).bold(),
             )));
             lines.push(Line::from(Span::styled(
                 body,

@@ -134,7 +134,7 @@ impl ModalView for ModePickerView {
             .title(Line::from(Span::styled(
                 " Mode ",
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)

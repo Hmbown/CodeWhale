@@ -1760,7 +1760,7 @@ impl Renderable for ComposerWidget<'_> {
 
                 // Name column
                 let name_style = if entry.is_skill && !is_selected {
-                    Style::default().fg(palette::WHALE_INFO)
+                    Style::default().fg(palette::WHALE_ACTION)
                 } else {
                     sel_style
                 };
@@ -1981,7 +1981,7 @@ impl<'a> ApprovalWidget<'a> {
                     self.request.tool_name.clone()
                 },
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
@@ -2515,13 +2515,13 @@ fn approval_palette(stakes: crate::tui::approval::ApprovalStakes) -> ApprovalCol
         ApprovalStakes::Routine => ApprovalColors {
             border: palette::BORDER_COLOR,
             accent: palette::WHALE_HUMAN,
-            shortcut: palette::WHALE_INFO,
+            shortcut: palette::WHALE_ACTION,
         },
         // Ordinary state-touching work: a calm ask, not an alarm.
         ApprovalStakes::Elevated => ApprovalColors {
             border: palette::WHALE_HUMAN,
             accent: palette::WHALE_HUMAN,
-            shortcut: palette::WHALE_INFO,
+            shortcut: palette::WHALE_ACTION,
         },
         ApprovalStakes::Critical => ApprovalColors {
             border: palette::WHALE_ERROR,
@@ -2579,9 +2579,9 @@ fn category_label_for(category: ToolCategory, locale: Locale) -> (Cow<'static, s
         ToolCategory::FileWrite => palette::STATUS_WARNING,
         ToolCategory::Shell => palette::STATUS_ERROR,
         ToolCategory::Network => palette::STATUS_WARNING,
-        ToolCategory::McpRead => palette::WHALE_INFO,
+        ToolCategory::McpRead => palette::WHALE_ACTION,
         ToolCategory::McpAction => palette::STATUS_WARNING,
-        ToolCategory::Agent => palette::WHALE_INFO,
+        ToolCategory::Agent => palette::WHALE_ACTION,
         ToolCategory::Unknown => palette::STATUS_ERROR,
     };
     (label, color)
@@ -2609,7 +2609,7 @@ fn push_detail_line(lines: &mut Vec<Line<'static>>, label: &str, value: &str) {
         Span::styled(
             format!("{label:<7} "),
             Style::default()
-                .fg(palette::WHALE_INFO)
+                .fg(palette::WHALE_ACTION)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(value.to_string(), Style::default().fg(palette::TEXT_BODY)),
@@ -2684,7 +2684,7 @@ fn push_shell_command_lines(
         Span::styled(
             format!("{label}:"),
             Style::default()
-                .fg(palette::WHALE_INFO)
+                .fg(palette::WHALE_ACTION)
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -3071,7 +3071,7 @@ impl Renderable for ElevationWidget<'_> {
                 Span::styled(
                     &self.request.tool_name,
                     Style::default()
-                        .fg(palette::WHALE_INFO)
+                        .fg(palette::WHALE_ACTION)
                         .add_modifier(Modifier::BOLD),
                 ),
             ]),
@@ -3474,7 +3474,7 @@ pub(crate) fn composer_submit_hint(app: &App) -> Option<ComposerSubmitHint> {
             (
                 app.tr(MessageId::ComposerHintSendWithQueue)
                     .replace("{count}", &queue_count.to_string()),
-                palette::WHALE_INFO,
+                palette::WHALE_ACTION,
             )
         }
         ComposerSubmitAction::Submit(SubmitDisposition::Queue)
@@ -3490,22 +3490,22 @@ pub(crate) fn composer_submit_hint(app: &App) -> Option<ComposerSubmitHint> {
                 (
                     app.tr(MessageId::ComposerHintQueueWithCount)
                         .replace("{count}", &queue_count.saturating_add(1).to_string()),
-                    palette::WHALE_INFO,
+                    palette::WHALE_ACTION,
                 )
             } else {
                 (
                     app.tr(MessageId::ComposerHintQueue).into_owned(),
-                    palette::WHALE_INFO,
+                    palette::WHALE_ACTION,
                 )
             }
         }
         ComposerSubmitAction::Submit(SubmitDisposition::Steer) => (
             app.tr(MessageId::ComposerHintSendIntoTurn).into_owned(),
-            palette::WHALE_INFO,
+            palette::WHALE_ACTION,
         ),
         ComposerSubmitAction::SendQueuedNow => (
             app.tr(MessageId::ComposerHintSendNow).into_owned(),
-            palette::WHALE_INFO,
+            palette::WHALE_ACTION,
         ),
         ComposerSubmitAction::Noop => return None,
     };

@@ -649,7 +649,7 @@ fn file_line_style(text: &str) -> Option<Style> {
     {
         Some(
             Style::default()
-                .fg(palette::WHALE_INFO)
+                .fg(palette::WHALE_ACTION)
                 .add_modifier(ratatui::style::Modifier::UNDERLINED),
         )
     } else {
@@ -662,7 +662,7 @@ fn file_line_style(text: &str) -> Option<Style> {
 /// Returns the appropriate style for the line based on its prefix:
 /// - Lines starting with `+` (after trimming) => `palette::DIFF_ADDED` (green)
 /// - Lines starting with `-` (after trimming) => `palette::STATUS_ERROR` (red)
-/// - Lines starting with `@@` => `palette::WHALE_INFO` (cyan/blue)
+/// - Lines starting with `@@` => `palette::WHALE_ACTION` (cyan/blue)
 /// - All other lines => None (use default style)
 fn diff_line_style(text: &str) -> Option<Style> {
     let trimmed = text.trim_start();

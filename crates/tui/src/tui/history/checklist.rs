@@ -210,7 +210,7 @@ pub(super) fn render_checklist_change_card(
 fn checklist_status_marker(status: &str) -> (&'static str, Color) {
     match status.to_ascii_lowercase().as_str() {
         "completed" | "done" => ("\u{2611}", palette::STATUS_SUCCESS), // ☑
-        "in_progress" | "inprogress" | "running" => ("\u{25D0}", palette::WHALE_INFO), // ◐
+        "in_progress" | "inprogress" | "running" => ("\u{25D0}", palette::WHALE_ACTION), // ◐
         "blocked" | "failed" => ("\u{2717}", palette::STATUS_ERROR),   // ✗
         "cancelled" | "canceled" | "skipped" => ("\u{2298}", palette::TEXT_MUTED), // ⊘
         _ => ("\u{2610}", palette::TEXT_MUTED),                        // ☐ pending

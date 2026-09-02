@@ -127,7 +127,7 @@ impl ModalView for FeedbackPickerView {
             .title(Line::from(Span::styled(
                 " Feedback ",
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)

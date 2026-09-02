@@ -8,7 +8,7 @@
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::palette::WHALE_ACCENT_PRIMARY_RGB;
+use crate::palette::WHALE_ACTION_RGB;
 use ratatui::style::Color;
 
 const OSC12_RESET: &[u8] = b"\x1b]112\x07";
@@ -40,7 +40,7 @@ impl CursorAccentGuard {
 fn color_rgb(color: Color) -> (u8, u8, u8) {
     match color {
         Color::Rgb(red, green, blue) => (red, green, blue),
-        _ => WHALE_ACCENT_PRIMARY_RGB,
+        _ => WHALE_ACTION_RGB,
     }
 }
 
@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn non_rgb_themes_fall_back_to_the_existing_accent() {
-        assert_eq!(color_rgb(Color::Blue), WHALE_ACCENT_PRIMARY_RGB);
+        assert_eq!(color_rgb(Color::Blue), WHALE_ACTION_RGB);
         assert_eq!(color_rgb(Color::Rgb(1, 2, 3)), (1, 2, 3));
     }
 

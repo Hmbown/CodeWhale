@@ -278,7 +278,7 @@ impl ActionHint {
             Span::styled(
                 format!(" {} ", self.key),
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
@@ -3555,7 +3555,7 @@ fn render_config_editor_value_line(
 
     let cursor_style = Style::default()
         .fg(palette::WHALE_BG)
-        .bg(palette::WHALE_INFO)
+        .bg(palette::WHALE_ACTION)
         .bold();
     let selected_style = Style::default()
         .fg(palette::SELECTION_TEXT)
@@ -3880,7 +3880,7 @@ impl ModalView for ConfigView {
             };
             lines.push(Line::from(vec![Span::styled(
                 edit_title,
-                Style::default().fg(palette::WHALE_INFO).bold(),
+                Style::default().fg(palette::WHALE_ACTION).bold(),
             )]));
             if spacious {
                 lines.push(Line::from(""));
@@ -4527,7 +4527,7 @@ impl ConfigView {
         let mut lines = vec![
             Line::from(Span::styled(
                 semantic_truncate(&label, width),
-                Style::default().fg(palette::WHALE_INFO).bold(),
+                Style::default().fg(palette::WHALE_ACTION).bold(),
             )),
             Line::from(Span::styled(
                 semantic_truncate(&row.key, width),
@@ -5605,7 +5605,7 @@ impl ModalView for SubAgentsView {
                     self.locale,
                     MessageId::SubagentsCurrentSessionPodWorkersTitle,
                 ),
-                Style::default().fg(palette::WHALE_INFO).bold(),
+                Style::default().fg(palette::WHALE_ACTION).bold(),
             )));
             lines.push(Line::from(Span::styled(
                 tr(
@@ -5723,7 +5723,7 @@ impl ModalView for SubAgentsView {
                 ),
                 Span::styled(
                     tr(self.locale, MessageId::FleetRosterWorkers),
-                    Style::default().fg(palette::WHALE_INFO).bold(),
+                    Style::default().fg(palette::WHALE_ACTION).bold(),
                 ),
                 Span::styled(
                     " ─────────────────",
@@ -5883,7 +5883,7 @@ fn append_subagent_group(
                     tr(whale.locale, MessageId::SubagentsLabelRole),
                     Style::default().fg(palette::TEXT_MUTED),
                 ),
-                Span::styled(role, Style::default().fg(palette::WHALE_INFO)),
+                Span::styled(role, Style::default().fg(palette::WHALE_ACTION)),
             ]));
         }
 
@@ -5916,7 +5916,7 @@ fn append_subagent_group(
                     tr(whale.locale, MessageId::SubagentsLabelPosture),
                     Style::default().fg(palette::TEXT_MUTED),
                 ),
-                Span::styled(posture, Style::default().fg(palette::WHALE_INFO)),
+                Span::styled(posture, Style::default().fg(palette::WHALE_ACTION)),
             ]));
         }
 
@@ -5940,7 +5940,7 @@ fn append_subagent_group(
                     tr(whale.locale, MessageId::SubagentsLabelGit),
                     Style::default().fg(palette::TEXT_MUTED),
                 ),
-                Span::styled(branch_detail, Style::default().fg(palette::WHALE_INFO)),
+                Span::styled(branch_detail, Style::default().fg(palette::WHALE_ACTION)),
             ]));
         }
 
@@ -6015,7 +6015,7 @@ fn format_agent_status(
     match status {
         SubAgentStatus::Running => (
             tr(locale, MessageId::AutomationRunStatusRunning),
-            Style::default().fg(palette::WHALE_INFO),
+            Style::default().fg(palette::WHALE_ACTION),
             None,
         ),
         SubAgentStatus::Completed => (

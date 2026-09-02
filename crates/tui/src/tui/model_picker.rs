@@ -772,13 +772,13 @@ impl ModelPickerView {
         Paragraph::new(Line::from(vec![
             Span::styled(
                 if state.focused { "▸ " } else { "  " },
-                Style::default().fg(palette::WHALE_INFO),
+                Style::default().fg(palette::WHALE_ACTION),
             ),
             Span::styled(
                 title,
                 Style::default()
                     .fg(if state.focused {
-                        palette::WHALE_INFO
+                        palette::WHALE_ACTION
                     } else {
                         palette::TEXT_PRIMARY
                     })
@@ -2744,7 +2744,7 @@ impl ModelPickerView {
             Line::from(vec![
                 Span::styled(
                     format!("  {} ", tr(self.locale, MessageId::RouteProviderLabel)),
-                    Style::default().fg(palette::WHALE_INFO),
+                    Style::default().fg(palette::WHALE_ACTION),
                 ),
                 Span::styled(
                     self.resolved_provider()
