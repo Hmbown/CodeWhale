@@ -649,6 +649,10 @@ impl HistoryCell {
 /// Convert a message into history cells for rendering.
 #[must_use]
 pub fn history_cells_from_message(msg: &Message) -> Vec<HistoryCell> {
+    // Model-facing Operate contract; the live receipt is the goal line.
+    if crate::runtime_handoff::is_operate_contract_message(msg) {
+        return Vec::new();
+    }
     if let Some(display) = crate::runtime_handoff::restored_subagent_checkpoint_display(msg) {
         return vec![HistoryCell::System {
             content: display.to_string(),

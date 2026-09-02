@@ -172,6 +172,103 @@ fn normalize_explicit_goal_objective(raw: &str) -> Option<String> {
     (!objective.is_empty()).then(|| objective.to_string())
 }
 
+/// Operate's automatic goal: Operate turns an ordinary work prompt into the
+/// session goal when no unfinished goal exists (docs/MODES.md, "Operate loop").
+/// It feeds the same `GoalState::create` path as [`explicit_goal_directive`];
+/// an explicit `/goal` declaration always wins, and Plan and Work never call
+/// this.
+///
+/// The whole "is this real work?" rule lives here: the prompt is work when it
+/// has at least [`OPERATE_GOAL_MIN_WORDS`] words, or opens (after "please")
+/// with an imperative work verb and has at least three words. Greetings,
+/// acknowledgements, and short questions stay chat. The objective is the whole
+/// prompt, whitespace-collapsed and bounded so continuation prompts stay small;
+/// the transcript still holds the full text.
+#[must_use]
+pub fn operate_goal_from_prompt(input: &str) -> Option<ExplicitGoalDirective> {
+    let words: Vec<&str> = input.split_whitespace().collect();
+    if words.len() < 3 {
+        return None;
+    }
+    let normalize = |word: &str| {
+        word.trim_matches(|c: char| !c.is_alphanumeric())
+            .to_ascii_lowercase()
+    };
+    let head = words
+        .iter()
+        .map(|word| normalize(word))
+        .find(|word| word != "please")
+        .unwrap_or_default();
+    if OPERATE_CHAT_OPENERS.contains(&head.as_str()) {
+        return None;
+    }
+    let first_line = input.lines().find(|line| !line.trim().is_empty())?.trim();
+    if first_line.ends_with('?') && words.len() < OPERATE_GOAL_QUESTION_WORDS {
+        return None;
+    }
+    if words.len() < OPERATE_GOAL_MIN_WORDS && !OPERATE_WORK_VERBS.contains(&head.as_str()) {
+        return None;
+    }
+    let mut objective = words.join(" ");
+    if objective.chars().count() > OPERATE_GOAL_MAX_OBJECTIVE_CHARS {
+        objective = objective
+            .chars()
+            .take(OPERATE_GOAL_MAX_OBJECTIVE_CHARS)
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        objective.push('…');
+    }
+    Some(ExplicitGoalDirective { objective })
+}
+
+const OPERATE_GOAL_MIN_WORDS: usize = 8;
+const OPERATE_GOAL_QUESTION_WORDS: usize = 12;
+const OPERATE_GOAL_MAX_OBJECTIVE_CHARS: usize = 600;
+const OPERATE_CHAT_OPENERS: &[&str] = &[
+    "hi", "hello", "hey", "thanks", "thank", "ok", "okay", "yes", "no", "sure", "great", "cool",
+    "nice", "lol",
+];
+const OPERATE_WORK_VERBS: &[&str] = &[
+    "add",
+    "build",
+    "change",
+    "clean",
+    "convert",
+    "create",
+    "debug",
+    "deploy",
+    "design",
+    "document",
+    "extract",
+    "finish",
+    "fix",
+    "implement",
+    "improve",
+    "integrate",
+    "investigate",
+    "make",
+    "migrate",
+    "move",
+    "optimize",
+    "port",
+    "refactor",
+    "remove",
+    "rename",
+    "replace",
+    "resolve",
+    "rewrite",
+    "run",
+    "ship",
+    "split",
+    "test",
+    "update",
+    "upgrade",
+    "verify",
+    "wire",
+    "write",
+];
+
 /// Runtime status for a goal.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum GoalStatus {
@@ -1125,6 +1222,50 @@ mod tests {
                 "must not activate from: {input}"
             );
         }
+    }
+
+    #[test]
+    fn operate_goal_from_prompt_promotes_work_and_leaves_chat_alone() {
+        let goal = operate_goal_from_prompt(
+            "Migrate the settings loader to the new config crate\nand keep the old keys readable.",
+        )
+        .expect("multi-line work prompt");
+        assert_eq!(
+            goal.objective,
+            "Migrate the settings loader to the new config crate and keep the old keys readable."
+        );
+        assert_eq!(
+            operate_goal_from_prompt("Please fix the flaky CI test")
+                .expect("imperative after please")
+                .objective,
+            "Please fix the flaky CI test"
+        );
+        assert!(
+            operate_goal_from_prompt(
+                "Could you look at why the provider table drops rows after a reload and repair it?"
+            )
+            .is_some(),
+            "a long question is still work"
+        );
+        for chat in [
+            "hi",
+            "thanks, looks good",
+            "ok go ahead",
+            "hello there, how are you doing today my friend",
+            "what does /goal do?",
+            "why is the build slow?",
+            "the tests",
+        ] {
+            assert_eq!(
+                operate_goal_from_prompt(chat),
+                None,
+                "must stay chat: {chat}"
+            );
+        }
+        let long = "fix ".repeat(400);
+        let objective = operate_goal_from_prompt(&long).expect("bounded").objective;
+        assert!(objective.chars().count() <= OPERATE_GOAL_MAX_OBJECTIVE_CHARS + 1);
+        assert!(objective.ends_with('…'));
     }
 
     #[tokio::test]

@@ -47,7 +47,7 @@ use crate::route_runtime::{
 };
 use crate::tools::goal::{
     GoalPauseReason, GoalSnapshot, GoalStatus, SharedGoalState, explicit_goal_directive,
-    new_shared_goal_state,
+    new_shared_goal_state, operate_goal_from_prompt,
 };
 use crate::tools::plan::{SharedPlanState, new_shared_plan_state};
 use crate::tools::shell::{SharedShellManager, new_shared_shell_manager};
@@ -4634,25 +4634,40 @@ impl Engine {
         // runtime text, recalled memory, handoffs, and pasted multi-line
         // transcripts cannot create a goal.
         //
+        // Operate turns an ordinary work prompt into the goal through this
+        // same path when the host reports no unfinished goal
+        // (`operate_goal_from_prompt` owns the "is this real work?" rule).
+        // `GoalState::create` still refuses while an unfinished goal exists,
+        // so a paused or blocked goal is never silently replaced.
+        //
         // KV-cache effect: this only selects the already-existing volatile
         // <session_goal> contributor. It adds no new stable-prefix text.
-        let explicit_goal_result = if provenance.can_authorize_work() {
-            explicit_goal_directive(&content).map(|directive| {
-                self.config
-                    .goal_state
-                    .lock()
-                    .map_err(|_| "goal state lock poisoned".to_string())
-                    .and_then(|mut state| {
-                        state
-                            .create(directive.objective, None)
-                            .map_err(str::to_string)?;
-                        Ok(state.snapshot())
-                    })
-            })
+        let goal_request = if provenance.can_authorize_work() {
+            explicit_goal_directive(&content)
+                .map(|directive| (directive, true))
+                .or_else(|| {
+                    let host_goal_unfinished =
+                        goal_objective.is_some() && goal_status != GoalStatus::Complete;
+                    (mode == AppMode::Operate && !host_goal_unfinished)
+                        .then(|| operate_goal_from_prompt(&content))
+                        .flatten()
+                        .map(|directive| (directive, false))
+                })
         } else {
             None
         };
-        if let Some(result) = explicit_goal_result {
+        if let Some((directive, explicit)) = goal_request {
+            let result = self
+                .config
+                .goal_state
+                .lock()
+                .map_err(|_| "goal state lock poisoned".to_string())
+                .and_then(|mut state| {
+                    state
+                        .create(directive.objective, None)
+                        .map_err(str::to_string)?;
+                    Ok(state.snapshot())
+                });
             match result {
                 Ok(snapshot) => {
                     goal_objective.clone_from(&snapshot.objective);
@@ -4663,7 +4678,7 @@ impl Engine {
                     // even when this model would otherwise reply only in prose.
                     let _ = self.tx_event.send(Event::GoalUpdated { snapshot }).await;
                 }
-                Err(error) => {
+                Err(error) if explicit => {
                     let _ = self
                         .tx_event
                         .send(Event::status(format!(
@@ -4671,6 +4686,8 @@ impl Engine {
                         )))
                         .await;
                 }
+                // Operate keeps the unfinished goal it already has.
+                Err(_) => {}
             }
         }
 
@@ -4983,6 +5000,22 @@ impl Engine {
                     cache_control: None,
                 }],
             });
+        }
+
+        // The Operate contract (docs/MODES.md) precedes the first Operate
+        // prompt. KV-cache effect: append-only history, one user-role runtime
+        // message; it is derived from the session log rather than a flag so a
+        // cleared, restored, or compacted session gets it again exactly once
+        // and every later Operate turn does not repeat it.
+        if mode == AppMode::Operate
+            && !self
+                .session
+                .messages
+                .iter()
+                .any(crate::runtime_handoff::is_operate_contract_message)
+        {
+            self.session
+                .add_message(crate::runtime_handoff::operate_contract_runtime_message());
         }
 
         self.session

@@ -548,9 +548,16 @@ pub(crate) fn apply_goal_snapshot_to_app(app: &mut App, snapshot: &GoalSnapshot)
     // to stop it. `/goal <objective>` sets the objective before this snapshot lands,
     // so a user-declared goal does not repeat its own receipt.
     if objective_changed && verdict == GoalStatus::Active {
-        let content = app
-            .tr(crate::localization::MessageId::GoalReceiptSet)
-            .replace("{objective}", objective);
+        // Operate set it from the prompt (or the model did while operating);
+        // the objective is the prompt the user just typed, so the receipt
+        // says what Operate will do with it instead of echoing it.
+        let content = if app.mode == crate::tui::app::AppMode::Operate {
+            app.tr(crate::localization::MessageId::GoalReceiptSetOperate)
+                .into_owned()
+        } else {
+            app.tr(crate::localization::MessageId::GoalReceiptSet)
+                .replace("{objective}", objective)
+        };
         app.add_message(crate::tui::history::HistoryCell::System { content });
     }
     app.goal.objective = Some(objective.to_string());
@@ -756,7 +763,7 @@ pub(crate) async fn apply_model_picker_choice(
             apply_picker_effort_choice(app, engine_handle, effort, previous_effort).await;
             crate::fleet::members::auto_enroll_fleet_model(
                 &app.workspace,
-                &app.provider_identity_for_persistence(),
+                app.provider_identity_for_persistence(),
                 &app.model,
             );
             if save_as_startup_default {
