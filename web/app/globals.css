@@ -510,16 +510,16 @@ mark.search-highlight {
   min-width: 0;
 }
 
-.paper-wordmark-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 1.25rem;
-  letter-spacing: -0.03em;
+.paper-wordmark-logo {
+  display: block;
+  width: 8.75rem;
+  max-width: 100%;
 }
 
-.paper-wordmark-mark {
-  flex-shrink: 0;
+.paper-wordmark-logo img {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 .paper-wordmark-tag {
