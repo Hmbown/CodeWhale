@@ -600,6 +600,7 @@ fn unavailable_sentinel_routes_stay_distinct_from_unknown_and_unprobed() {
         custom.insert(
             "sentinel-route".to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("https://gateway.example.test/v1".to_string()),
                 model: Some("test-model".to_string()),
@@ -662,6 +663,7 @@ fn unavailable_sentinel_routes_stay_distinct_from_unknown_and_unprobed() {
     custom.insert(
         "empty-route".to_string(),
         crate::config::ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("https://empty.example.test/v1".to_string()),
             model: Some("test-model".to_string()),
@@ -707,6 +709,7 @@ fn sentinel_placeholders_never_become_attemptable_routes_or_metered_evidence() {
                 custom: std::collections::HashMap::from([(
                     "sentinel-route".to_string(),
                     crate::config::ProviderConfig {
+                        model_context_windows: std::collections::BTreeMap::new(),
                         kind: Some("openai-compatible".to_string()),
                         base_url: Some("https://gateway.example.test/v1".to_string()),
                         model: Some("sentinel-model".to_string()),
@@ -747,6 +750,7 @@ fn sentinel_placeholders_never_become_attemptable_routes_or_metered_evidence() {
             provider: Some("xai".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 xai: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some(sentinel.to_string()),
                     ..Default::default()
                 },
@@ -795,6 +799,7 @@ fn sentinel_diagnostic_yields_to_route_bound_env_or_auth_declaration() {
         custom.insert(
             "sentinel-route".to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("https://gateway.example.test/v1".to_string()),
                 model: Some("test-model".to_string()),
@@ -820,6 +825,7 @@ fn sentinel_diagnostic_yields_to_route_bound_env_or_auth_declaration() {
         external.insert(
             "external-sentinel-route".to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("https://external.example.test/v1".to_string()),
                 model: Some("test-model".to_string()),

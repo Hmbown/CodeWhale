@@ -4501,6 +4501,7 @@ esac
                 custom: std::collections::HashMap::from([(
                     "manager-y".to_string(),
                     crate::config::ProviderConfig {
+                        model_context_windows: std::collections::BTreeMap::new(),
                         kind: Some("openai-compatible".to_string()),
                         base_url: Some("https://manager-y.invalid/v1".to_string()),
                         model: Some("manager-model-y".to_string()),
@@ -4584,6 +4585,7 @@ printf '%s\n' '{"type":"done"}'
                     custom: std::collections::HashMap::from([(
                         "manager-y".to_string(),
                         crate::config::ProviderConfig {
+                            model_context_windows: std::collections::BTreeMap::new(),
                             kind: Some("openai-compatible".to_string()),
                             base_url: Some("https://manager-y.invalid/v1".to_string()),
                             model: Some("manager-model-y".to_string()),

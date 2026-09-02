@@ -957,7 +957,12 @@ pub(crate) fn restore_loaded_session_provider(
         app.reasoning_effort =
             requested.normalize_for_route(provider, &config.deepseek_base_url(), &app.model);
     }
-    app.set_active_context_window_override(config.context_window_for_provider_config(provider));
+    let context_override = if app.auto_model {
+        config.context_window_for_provider_config(provider)
+    } else {
+        config.context_window_for_route(provider, Some(&app.model))
+    };
+    app.set_active_context_window_override(context_override);
     app.active_route_limits = app.context_window_override_limits();
     app.active_route_base_url = config.deepseek_base_url();
     app.active_context_window_source = if app.active_context_window_override.is_some() {
@@ -968,7 +973,11 @@ pub(crate) fn restore_loaded_session_provider(
 }
 
 pub(crate) fn resolve_loaded_session_route(app: &mut App, config: &Config) {
-    let context_override = config.context_window_for_provider_config(app.api_provider);
+    let context_override = if app.auto_model {
+        config.context_window_for_provider_config(app.api_provider)
+    } else {
+        config.context_window_for_route(app.api_provider, Some(&app.model))
+    };
     app.set_active_context_window_override(context_override);
     if app.auto_model {
         app.active_route_limits = app.context_window_override_limits();

@@ -1995,5 +1995,13 @@
   "ConfigHintFeatureExecPolicy": "estado de solo lectura del flag de función de las herramientas de política de ejecución",
   "ConfigHintFeatureVisionModel": "flag beta para soporte de imágenes de visión/modelo",
   "ConfigHintGoalCommand": "/goal define objetivos, presupuestos y el estado del contexto de Trabajo",
-  "ConfigHintWorkflow": "/workflow ejecuta operaciones guionadas con tarjetas de ejecución de distribución/consolidación"
+  "ConfigHintWorkflow": "/workflow ejecuta operaciones guionadas con tarjetas de ejecución de distribución/consolidación",
+  "CmdContextWindowDescription": "Configura o borra la ventana de contexto del modelo activo",
+  "ContextWindowCurrent": "{model}: {tokens} tokens de contexto ({source})",
+  "ContextWindowSaved": "Ventana de contexto de {model} guardada: {tokens} ({path})",
+  "ContextWindowCleared": "Se borró la anulación de ventana de contexto de {model}",
+  "ContextWindowInvalid": "Ventana de contexto no válida: {value}",
+  "ContextWindowNeedsConcreteModel": "La anulación requiere un modelo concreto, no auto",
+  "CatalogStale": "catálogo desactualizado",
+  "CatalogRefreshFailed": "falló la actualización · catálogo disponible"
 }

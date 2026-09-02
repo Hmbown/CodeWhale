@@ -373,7 +373,11 @@ impl App {
             push_enabled_provider_model(&mut enabled_provider_models, saved_provider, saved_model);
         }
         push_enabled_provider_model(&mut enabled_provider_models, &provider_identity, &model);
-        let active_context_window_override = config.context_window_for_provider_config(provider);
+        let active_context_window_override = if auto_model {
+            config.context_window_for_provider_config(provider)
+        } else {
+            config.context_window_for_route(provider, Some(&model))
+        };
         let configured_route_base_url = effective_auth_config.deepseek_base_url();
         let (active_route_limits, active_route_base_url, active_context_window_source) =
             if auto_model {

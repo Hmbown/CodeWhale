@@ -434,6 +434,7 @@ fn custom_route_identity_change_rebuilds_client_for_new_named_endpoint() {
         custom.insert(
             name.to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some(base_url.to_string()),
                 model: Some(model.to_string()),
@@ -486,6 +487,7 @@ fn custom_route_config_reload_rebuilds_client_when_identity_is_unchanged() {
     custom.insert(
         "lm-studio".to_string(),
         crate::config::ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:18181/v1".to_string()),
             model: Some("local-model".to_string()),
@@ -539,6 +541,7 @@ fn failed_same_identity_route_preflight_leaves_old_client_untouched() {
     custom.insert(
         "lm-studio".to_string(),
         crate::config::ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:18181/v1".to_string()),
             model: Some("local-model".to_string()),
@@ -603,6 +606,7 @@ async fn exact_turn_snapshot_restores_custom_endpoint_and_turn_receipt_after_bui
     custom.insert(
         "custom-a".to_string(),
         crate::config::ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some(custom_base_url.clone()),
             model: Some("local-model".to_string()),
@@ -614,6 +618,7 @@ async fn exact_turn_snapshot_restores_custom_endpoint_and_turn_receipt_after_bui
         provider: Some("custom-a".to_string()),
         providers: Some(crate::config::ProvidersConfig {
             openai: crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some("http://127.0.0.1:18182/v1".to_string()),
                 model: Some("gpt-5.5".to_string()),
                 api_key: Some("builtin-test-key".to_string()),
@@ -994,6 +999,7 @@ async fn goal_continuation_preserves_goal_and_resolves_updated_authoritative_rou
     custom.insert(
         "custom-a".to_string(),
         crate::config::ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some(first_base_url.clone()),
             model: Some("local-model".to_string()),
@@ -3034,6 +3040,7 @@ fn goal_custom_route_config() -> Config {
     custom.insert(
         "custom-a".to_string(),
         crate::config::ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:18181/v1".to_string()),
             model: Some("local-model".to_string()),
@@ -3725,6 +3732,7 @@ async fn host_managed_engine_does_not_self_dispatch_goal_continuation() {
     custom.insert(
         "custom-a".to_string(),
         crate::config::ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:18181/v1".to_string()),
             model: Some("local-model".to_string()),
@@ -3827,6 +3835,7 @@ async fn host_managed_engine_defers_idle_subagent_completion_to_explicit_turn() 
     custom.insert(
         "custom-a".to_string(),
         crate::config::ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:18181/v1".to_string()),
             model: Some("local-model".to_string()),

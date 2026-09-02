@@ -680,7 +680,7 @@ impl ProviderDashboardRow {
             (provider != ApiProvider::DeepseekCN)
                 .then(|| configured_base_url.clone())
                 .flatten(),
-            config.context_window_for_provider_config(provider),
+            config.context_window_for_route(provider, configured_model.as_deref()),
             None,
         );
         let (
@@ -4814,6 +4814,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 openrouter: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some("https://custom.openrouter.example/v1".to_string()),
                     ..Default::default()
                 },
@@ -4838,6 +4839,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 anthropic: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     http_headers: Some(std::collections::HashMap::new()),
                     ..Default::default()
                 },
@@ -4863,6 +4865,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 anthropic: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     http_headers: Some(std::collections::HashMap::from([(
                         "X-Route".to_string(),
                         "custom".to_string(),
@@ -4893,6 +4896,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 anthropic: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     http_headers: Some(std::collections::HashMap::from([
                         (" ".to_string(), "value".to_string()),
                         ("X-Blank".to_string(), "   ".to_string()),
@@ -5029,6 +5033,7 @@ mod tests {
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                     model: Some(crate::config::KIMI_CODE_K3_MODEL.to_string()),
                     ..Default::default()
@@ -5056,6 +5061,7 @@ mod tests {
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                     model: Some(crate::config::KIMI_CODE_K3_MODEL.to_string()),
                     ..Default::default()
@@ -5087,6 +5093,7 @@ mod tests {
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                     model: Some(crate::config::KIMI_CODE_K3_MODEL.to_string()),
                     ..Default::default()
@@ -5202,6 +5209,7 @@ mod tests {
         custom.insert(
             "my_thing".to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("https://api.example.com/v1".to_string()),
                 model: Some("vendor/custom-model-v1".to_string()),
@@ -5267,6 +5275,7 @@ mod tests {
             provider: Some("ollama".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 ollama: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
                     ..Default::default()
                 },
@@ -5329,6 +5338,7 @@ mod tests {
             provider: Some("deepseek-cn".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 deepseek_cn: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("deepseek-cn-test-key".to_string()),
                     model: Some("deepseek-v4-pro".to_string()),
                     ..Default::default()
@@ -5457,6 +5467,7 @@ mod tests {
             reasoning_effort: Some("max".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 zai: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("zai-key".to_string()),
                     model: Some("GLM-5.2".to_string()),
                     ..Default::default()
@@ -5487,6 +5498,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 modelstudio_token_plan: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("modelstudio-key".to_string()),
                     model: Some("qwen3.8-max".to_string()),
                     ..Default::default()
@@ -5514,6 +5526,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("kimi-code-key".to_string()),
                     base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                     model: Some(crate::config::KIMI_CODE_K3_MODEL.to_string()),
@@ -5595,6 +5608,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 zai: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("zai-key".to_string()),
                     model: Some("GLM-5.2".to_string()),
                     ..Default::default()
@@ -5699,6 +5713,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 deepseek: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("deepseek-key".to_string()),
                     ..Default::default()
                 },
@@ -5745,6 +5760,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 deepseek: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("k".to_string()),
                     model: Some("deepseek-v4-flash".to_string()),
                     ..Default::default()
@@ -5825,6 +5841,7 @@ mod tests {
             provider: Some("vllm".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 vllm: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("api_key".to_string()),
                     ..Default::default()
                 },
@@ -5867,6 +5884,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 openai: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("openai-key".to_string()),
                     base_url: Some("http://localhost:9000/v1".to_string()),
                     model: Some("custom-model".to_string()),
@@ -5902,6 +5920,7 @@ mod tests {
             provider: Some("xai".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 xai: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some("https://gateway.example.test/v1".to_string()),
                     model: Some("private-grok".to_string()),
                     auth_mode: Some("oauth".to_string()),
@@ -5925,6 +5944,7 @@ mod tests {
         let custom = std::collections::HashMap::from([(
             "no-auth-gateway".to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("https://gateway.example.test/v1".to_string()),
                 model: Some("private-model".to_string()),
@@ -5960,6 +5980,7 @@ mod tests {
         let custom = std::collections::HashMap::from([(
             "metadata-only".to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("https://gateway.example.test/v1".to_string()),
                 model: Some("private-model".to_string()),
@@ -6001,6 +6022,7 @@ mod tests {
         custom.insert(
             "my_thing".to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("https://api.example.com/v1".to_string()),
                 model: Some("vendor/custom-model-v1".to_string()),
@@ -6052,6 +6074,7 @@ mod tests {
             (
                 "custom-a".to_string(),
                 crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     kind: Some("openai-compatible".to_string()),
                     base_url: Some("http://127.0.0.1:18181/v1".to_string()),
                     model: Some("model-a".to_string()),
@@ -6062,6 +6085,7 @@ mod tests {
             (
                 "custom-b".to_string(),
                 crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     kind: Some("openai-compatible".to_string()),
                     base_url: Some("http://127.0.0.1:18182/v1".to_string()),
                     model: Some("model-b".to_string()),
@@ -6097,6 +6121,7 @@ mod tests {
         custom.insert(
             "my_thing".to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("https://api.example.com/v1".to_string()),
                 model: Some("custom-model-v1".to_string()),
@@ -6579,6 +6604,7 @@ mod tests {
         custom.insert(
             "local_acme".to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("http://localhost:9000/v1".to_string()),
                 model: Some("acme/code-1".to_string()),
@@ -6615,6 +6641,7 @@ mod tests {
         custom.insert(
             "local_acme".to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("http://localhost:9000/v1".to_string()),
                 model: Some("acme/code-1".to_string()),
@@ -6799,6 +6826,7 @@ mod tests {
             provider: Some("deepseek".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 modelstudio_token_plan: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("api_key".to_string()),
                     ..Default::default()
                 },
@@ -6828,6 +6856,7 @@ mod tests {
             api_key: Some("deepseek-key".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 deepseek: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     model: Some("anthropic/claude-foreign".to_string()),
                     ..Default::default()
                 },
@@ -6856,6 +6885,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 openai: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("openai-key".to_string()),
                     base_url: Some("http://localhost:9000/v1".to_string()),
                     model: Some("custom-model".to_string()),
@@ -7440,6 +7470,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 openai: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("openai-key".to_string()),
                     ..Default::default()
                 },
@@ -7542,6 +7573,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                     model: Some(crate::config::KIMI_CODE_K3_MODEL.to_string()),
                     ..Default::default()
@@ -7622,6 +7654,7 @@ mod tests {
         Config {
             providers: Some(crate::config::ProvidersConfig {
                 stepfun: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: base_url.map(str::to_string),
                     ..Default::default()
                 },
@@ -7888,6 +7921,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 xiaomi_mimo: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("mimo-key".to_string()),
                     ..Default::default()
                 },
@@ -7913,6 +7947,7 @@ mod tests {
                 Config {
                     providers: Some(crate::config::ProvidersConfig {
                         zai: crate::config::ProviderConfig {
+                            model_context_windows: std::collections::BTreeMap::new(),
                             api_key: Some("stored-zai-key".to_string()),
                             ..Default::default()
                         },
@@ -7927,6 +7962,7 @@ mod tests {
                 Config {
                     providers: Some(crate::config::ProvidersConfig {
                         openrouter: crate::config::ProviderConfig {
+                            model_context_windows: std::collections::BTreeMap::new(),
                             api_key: Some("stored-openrouter-key".to_string()),
                             ..Default::default()
                         },
@@ -8191,6 +8227,7 @@ mod tests {
     #[test]
     fn xai_auth_status_distinguishes_oauth_from_api_key_auth() {
         let oauth_config = crate::config::ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             auth_mode: Some("oauth".to_string()),
             ..Default::default()
         };
@@ -8206,6 +8243,7 @@ mod tests {
         assert_eq!(xai_oauth_status(None, false), None);
 
         let fallback_key = crate::config::ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             auth_mode: Some("oauth".to_string()),
             api_key: Some("xai-api-key".to_string()),
             ..Default::default()
@@ -8216,6 +8254,7 @@ mod tests {
         );
         for sentinel in [crate::config::API_KEYRING_SENTINEL, "  __KEYRING__  "] {
             let placeholder = crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 auth_mode: Some("oauth".to_string()),
                 api_key: Some(sentinel.to_string()),
                 ..Default::default()
@@ -8253,6 +8292,7 @@ mod tests {
             provider: Some(ApiProvider::Deepseek.as_str().to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 openai_codex: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     external_credentials: Some(
                         codewhale_config::ExternalCredentialConsentToml::read_only(
@@ -8264,6 +8304,7 @@ mod tests {
                     ..Default::default()
                 },
                 xai: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     external_credentials: Some(
                         codewhale_config::ExternalCredentialConsentToml::read_only(
@@ -8556,6 +8597,7 @@ mod tests {
             provider: Some(ApiProvider::Deepseek.as_str().to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 openai_codex: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     external_credentials: Some(
                         codewhale_config::ExternalCredentialConsentToml::read_only(
@@ -8668,6 +8710,7 @@ mod tests {
         let config = Config {
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("kimi_oauth".to_string()),
                     ..Default::default()
                 },

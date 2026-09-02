@@ -1995,5 +1995,13 @@
   "ConfigHintFeatureExecPolicy": "निष्पादन नीति टूल की केवल पढ़ने योग्य फ़ीचर फ़्लैग स्थिति",
   "ConfigHintFeatureVisionModel": "दृष्टि/मॉडल छवि समर्थन के लिए बीटा फ़ीचर फ़्लैग",
   "ConfigHintGoalCommand": "/goal लक्ष्य, बजट और कार्य-संदर्भ स्थिति सेट करता है",
-  "ConfigHintWorkflow": "/workflow वितरण/समेकन रन कार्ड के साथ स्क्रिप्टेड संचालन चलाता है"
+  "ConfigHintWorkflow": "/workflow वितरण/समेकन रन कार्ड के साथ स्क्रिप्टेड संचालन चलाता है",
+  "CmdContextWindowDescription": "सक्रिय मॉडल की संदर्भ विंडो सेट या साफ़ करें",
+  "ContextWindowCurrent": "{model}: {tokens} संदर्भ टोकन ({source})",
+  "ContextWindowSaved": "{model} की संदर्भ विंडो सहेजी गई: {tokens} ({path})",
+  "ContextWindowCleared": "{model} की संदर्भ विंडो ओवरराइड साफ़ की गई",
+  "ContextWindowInvalid": "अमान्य संदर्भ विंडो: {value}",
+  "ContextWindowNeedsConcreteModel": "ओवरराइड के लिए auto नहीं, ठोस मॉडल चाहिए",
+  "CatalogStale": "कैटलॉग पुराना है",
+  "CatalogRefreshFailed": "रिफ़्रेश विफल · कैटलॉग उपलब्ध है"
 }

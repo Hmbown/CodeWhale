@@ -1995,5 +1995,13 @@
   "ConfigHintFeatureExecPolicy": "estat de només lectura de l'indicador de funció de les eines de política d'execució",
   "ConfigHintFeatureVisionModel": "indicador beta per al suport d'imatges de visió/model",
   "ConfigHintGoalCommand": "/goal defineix objectius, pressupostos i l'estat del context de Treball",
-  "ConfigHintWorkflow": "/workflow executa operacions guionades amb targetes d'execució de distribució/consolidació"
+  "ConfigHintWorkflow": "/workflow executa operacions guionades amb targetes d'execució de distribució/consolidació",
+  "CmdContextWindowDescription": "Estableix o esborra la finestra de context del model actiu",
+  "ContextWindowCurrent": "{model}: {tokens} tokens de context ({source})",
+  "ContextWindowSaved": "Finestra de context de {model} desada: {tokens} ({path})",
+  "ContextWindowCleared": "S'ha esborrat la substitució de finestra de context de {model}",
+  "ContextWindowInvalid": "Finestra de context no vàlida: {value}",
+  "ContextWindowNeedsConcreteModel": "La substitució necessita un model concret, no auto",
+  "CatalogStale": "catàleg caducat",
+  "CatalogRefreshFailed": "ha fallat l'actualització · catàleg disponible"
 }

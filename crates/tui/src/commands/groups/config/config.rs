@@ -227,7 +227,10 @@ fn config_preset_command(app: &mut App, rest: &str) -> CommandResult {
 fn config_context_window_override(app: &App) -> Option<u32> {
     let mut config = Config::load(app.config_path.clone(), app.config_profile.as_deref()).ok()?;
     config.provider = Some(app.provider_identity_for_persistence().to_string());
-    config.context_window_for_provider_config(app.api_provider)
+    config.context_window_for_route(
+        app.api_provider,
+        Some(app.effective_model_for_budget()),
+    )
 }
 
 fn show_single_setting(app: &App, key: &str) -> CommandResult {
@@ -797,6 +800,20 @@ fn config_editability_audit(app: &App) -> CommandResult {
     } else {
         app.model.clone()
     };
+    let model_context_window_is_set = !app.auto_model
+        && config
+            .provider_config_for(app.api_provider)
+            .is_some_and(|entry| {
+                entry
+                    .model_context_windows
+                    .keys()
+                    .any(|id| id.eq_ignore_ascii_case(&model))
+            });
+    let context_window_audit_key = if model_context_window_is_set {
+        format!("providers.<active>.model_context_windows.{model}")
+    } else {
+        "providers.<active>.context_window".to_string()
+    };
     let saved_permission_posture = Settings::load()
         .ok()
         .and_then(|settings| settings.permission_posture)
@@ -921,7 +938,7 @@ fn config_editability_audit(app: &App) -> CommandResult {
             "Writes the active provider table; model clients read it on startup.",
         ),
         (
-            "providers.<active>.context_window",
+            context_window_audit_key.as_str(),
             config_context_window_override(app)
                 .map_or_else(|| "(unset)".to_string(), |tokens| tokens.to_string()),
             "persisted restart",

@@ -1989,6 +1989,9 @@ impl ConfigView {
         };
         let (active_route_provider, _) = app.effective_route_display();
         let (active_provider_identity, active_route_model) = app.effective_route_identity_display();
+        let active_model_context_window = (!app.auto_model).then_some(active_route_model.as_str());
+        let configured_context_window =
+            config.context_window_for_route(active_route_provider, active_model_context_window);
         let routing_model = if app.auto_model {
             app.last_effective_model
                 .as_deref()
@@ -2039,8 +2042,7 @@ impl ConfigView {
             },
             ConfigRow {
                 key: "context_window".to_string(),
-                value: config
-                    .context_window_for_provider_config(active_route_provider)
+                value: configured_context_window
                     .map_or_else(|| "(not set)".to_string(), |tokens| tokens.to_string()),
                 editable: false,
                 scope: ConfigScope::Saved,

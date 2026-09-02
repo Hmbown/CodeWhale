@@ -2187,6 +2187,7 @@ mod tests {
                     custom: std::collections::HashMap::from([(
                         provider_id.to_string(),
                         crate::config::ProviderConfig {
+                            model_context_windows: std::collections::BTreeMap::new(),
                             kind: Some("openai-compatible".to_string()),
                             api_key: Some("fixture-key".to_string()),
                             base_url: Some("https://example.test/v1".to_string()),

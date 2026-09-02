@@ -13232,6 +13232,7 @@ mod doctor_setup_state_tests {
             provider: Some("openai-codex".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 openai_codex: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     external_credentials: Some(consent.clone()),
                     ..Default::default()
@@ -13298,6 +13299,7 @@ mod doctor_setup_state_tests {
             provider: Some("openai-codex".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 openai_codex: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     external_credentials: Some(consent),
                     ..Default::default()
@@ -13943,6 +13945,7 @@ mod doctor_endpoint_tests {
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("kimi-plan-secret".to_string()),
                     base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                     model: Some(crate::config::KIMI_CODE_K3_MODEL.to_string()),
@@ -13970,6 +13973,7 @@ mod doctor_endpoint_tests {
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("kimi-plan-secret".to_string()),
                     base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                     model: Some(crate::config::KIMI_CODE_K3_MODEL.to_string()),
@@ -13997,6 +14001,7 @@ mod doctor_endpoint_tests {
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("kimi-plan-secret".to_string()),
                     base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                     model: Some(crate::config::KIMI_CODE_K3_MODEL.to_string()),
@@ -14026,6 +14031,7 @@ mod doctor_endpoint_tests {
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("moonshot-secret".to_string()),
                     base_url: Some(crate::config::DEFAULT_MOONSHOT_BASE_URL.to_string()),
                     model: Some("kimi-k3".to_string()),
@@ -14271,6 +14277,7 @@ mod terminal_mode_tests {
             custom.insert(
                 name.to_string(),
                 crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     kind: Some("openai-compatible".to_string()),
                     base_url: Some(base_url.to_string()),
                     model: Some(model.to_string()),
@@ -14477,6 +14484,7 @@ mod terminal_mode_tests {
             ),
             providers: Some(crate::config::ProvidersConfig {
                 vllm: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some("http://127.0.0.1:9/v1".to_string()),
                     model: Some("offline-test-model".to_string()),
                     ..Default::default()
@@ -14591,6 +14599,7 @@ mod terminal_mode_tests {
             default_text_model: Some("deepseek/deepseek-v4-pro".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 openrouter: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     model: Some("arcee-ai/trinity-large-thinking".to_string()),
                     ..Default::default()
                 },
@@ -14814,6 +14823,7 @@ reasoning = "high"
             reasoning_effort: Some("low".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 vllm: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some("http://127.0.0.1:18190/v1".to_string()),
                     model: Some("local-auto-model".to_string()),
                     ..Default::default()
@@ -14976,6 +14986,7 @@ reasoning = "high"
         custom.insert(
             "lm-studio".to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("http://127.0.0.1:1234/v1".to_string()),
                 model: Some("qwen-2.5-7b".to_string()),
@@ -15007,6 +15018,7 @@ reasoning = "high"
                 custom: std::collections::HashMap::from([(
                     "CUSTOM".to_string(),
                     crate::config::ProviderConfig {
+                        model_context_windows: std::collections::BTreeMap::new(),
                         kind: Some("openai-compatible".to_string()),
                         base_url: Some("http://127.0.0.1:5678/v1".to_string()),
                         model: Some("case-model".to_string()),
@@ -15416,6 +15428,7 @@ api_key = "test-only-key"
             let providers = config.providers.as_mut().expect("providers");
             for entry in [&mut providers.deepseek, &mut providers.openrouter] {
                 *entry = crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     model: Some("shared-review-model".to_string()),
                     api_key: Some("local-test-key".to_string()),
                     ..Default::default()
@@ -16197,6 +16210,7 @@ api_key = "test-only-key"
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                     model: Some(crate::config::KIMI_CODE_K3_MODEL.to_string()),
                     ..Default::default()
@@ -18600,6 +18614,7 @@ mod doctor_live_probe_tests {
             provider: Some("xai".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 xai: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     ..Default::default()
                 },
@@ -19202,6 +19217,7 @@ mod setup_helper_tests {
         custom.insert(
             "qa-gateway".to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("https://gateway.example.test/v1".to_string()),
                 model: Some("qa-model".to_string()),
@@ -19244,6 +19260,7 @@ mod setup_helper_tests {
         custom.insert(
             "qa-gateway".to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("https://gateway.example.test/v1".to_string()),
                 model: Some("qa-model".to_string()),
@@ -19299,6 +19316,7 @@ mod setup_helper_tests {
             provider: Some("ollama".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 ollama: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(base_url.to_string()),
                     ..Default::default()
                 },

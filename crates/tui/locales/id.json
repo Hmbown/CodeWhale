@@ -1995,5 +1995,13 @@
   "ConfigHintFeatureExecPolicy": "status bendera fitur hanya-baca untuk alat kebijakan eksekusi",
   "ConfigHintFeatureVisionModel": "bendera fitur beta untuk dukungan gambar visi/model",
   "ConfigHintGoalCommand": "/goal mengatur tujuan, anggaran, dan status konteks Kerja",
-  "ConfigHintWorkflow": "/workflow menjalankan operasi terskrip dengan kartu jalan penyebaran/penggabungan"
+  "ConfigHintWorkflow": "/workflow menjalankan operasi terskrip dengan kartu jalan penyebaran/penggabungan",
+  "CmdContextWindowDescription": "Atur atau hapus jendela konteks untuk model aktif",
+  "ContextWindowCurrent": "{model}: {tokens} token konteks ({source})",
+  "ContextWindowSaved": "Jendela konteks {model} disimpan: {tokens} ({path})",
+  "ContextWindowCleared": "Penggantian jendela konteks {model} dihapus",
+  "ContextWindowInvalid": "Jendela konteks tidak valid: {value}",
+  "ContextWindowNeedsConcreteModel": "Penggantian memerlukan model konkret, bukan auto",
+  "CatalogStale": "katalog kedaluwarsa",
+  "CatalogRefreshFailed": "penyegaran gagal · katalog tersedia"
 }

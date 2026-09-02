@@ -942,6 +942,7 @@ mod tests {
             provider: Some("anthropic".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 anthropic: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("test-key".to_string()),
                     base_url: base_url.map(str::to_string),
                     ..Default::default()
@@ -963,6 +964,7 @@ mod tests {
             provider: Some("minimax-anthropic".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 minimax_anthropic: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("test-key".to_string()),
                     base_url: Some(base_url.to_string()),
                     ..Default::default()
@@ -980,6 +982,7 @@ mod tests {
             provider: Some("deepseek-anthropic".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 deepseek_anthropic: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("test-key".to_string()),
                     base_url: Some(base_url.to_string()),
                     ..Default::default()
@@ -1000,10 +1003,12 @@ mod tests {
                 // (modelstudio-token-plan); only the base URL is read from the
                 // anthropic entry.
                 modelstudio_token_plan: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("test-key".to_string()),
                     ..Default::default()
                 },
                 modelstudio_token_plan_anthropic: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(base_url.to_string()),
                     ..Default::default()
                 },
@@ -1377,6 +1382,7 @@ mod tests {
                 provider: Some("deepseek-anthropic".to_string()),
                 providers: Some(crate::config::ProvidersConfig {
                     deepseek_anthropic: crate::config::ProviderConfig {
+                        model_context_windows: std::collections::BTreeMap::new(),
                         api_key: Some("test-key".to_string()),
                         model: Some(alias.to_string()),
                         ..Default::default()

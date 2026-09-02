@@ -577,6 +577,7 @@ mod tests {
             provider: Some("openai-codex".to_string()),
             providers: Some(ProvidersConfig {
                 openai_codex: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     external_credentials: Some(
                         codewhale_config::ExternalCredentialConsentToml::read_only(
@@ -642,6 +643,7 @@ mod tests {
             provider: Some("antigravity".to_string()),
             providers: Some(ProvidersConfig {
                 antigravity: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     external_credentials: Some(
                         codewhale_config::ExternalCredentialConsentToml::read_only(

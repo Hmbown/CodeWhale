@@ -1995,5 +1995,13 @@
   "ConfigHintFeatureExecPolicy": "실행 정책 도구의 읽기 전용 기능 플래그 상태",
   "ConfigHintFeatureVisionModel": "비전/모델 이미지 지원의 베타 기능 플래그",
   "ConfigHintGoalCommand": "/goal은 목표, 예산, 작업 컨텍스트 상태를 설정",
-  "ConfigHintWorkflow": "/workflow는 팬아웃/팬인 실행 카드와 함께 스크립트화된 작업을 실행"
+  "ConfigHintWorkflow": "/workflow는 팬아웃/팬인 실행 카드와 함께 스크립트화된 작업을 실행",
+  "CmdContextWindowDescription": "현재 모델의 컨텍스트 창을 설정하거나 지웁니다",
+  "ContextWindowCurrent": "{model}: 컨텍스트 토큰 {tokens} ({source})",
+  "ContextWindowSaved": "{model} 컨텍스트 창 저장됨: {tokens} ({path})",
+  "ContextWindowCleared": "{model}의 컨텍스트 창 재정의를 지웠습니다",
+  "ContextWindowInvalid": "잘못된 컨텍스트 창: {value}",
+  "ContextWindowNeedsConcreteModel": "컨텍스트 창 재정의에는 auto가 아닌 구체적인 모델이 필요합니다",
+  "CatalogStale": "카탈로그가 오래됨",
+  "CatalogRefreshFailed": "새로 고침 실패 · 카탈로그 사용 가능"
 }

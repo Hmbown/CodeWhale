@@ -13259,18 +13259,21 @@ fn stub_client_for_provider(provider: &str) -> DeepSeekClient {
     match provider {
         "moonshot" => {
             providers.moonshot = crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("test-key".to_string()),
                 ..Default::default()
             };
         }
         "openrouter" => {
             providers.openrouter = crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("test-key".to_string()),
                 ..Default::default()
             };
         }
         "zai" => {
             providers.zai = crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("test-key".to_string()),
                 ..Default::default()
             };
@@ -13279,6 +13282,7 @@ fn stub_client_for_provider(provider: &str) -> DeepSeekClient {
         // rule: GPT-5.5 children stay on GPT-5.5 and resolve Low reasoning.
         "openai-codex" => {
             providers.openai_codex = crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("test-key".to_string()),
                 ..Default::default()
             };
@@ -13287,6 +13291,7 @@ fn stub_client_for_provider(provider: &str) -> DeepSeekClient {
         "ollama" => {}
         "sakana" => {
             providers.sakana = crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("test-key".to_string()),
                 ..Default::default()
             };
@@ -13324,6 +13329,7 @@ fn cross_provider_config() -> crate::config::Config {
     custom.insert(
         "lm-studio".to_string(),
         crate::config::ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             api_key: Some("lm-studio-key".to_string()),
             base_url: Some("http://127.0.0.1:1234/v1".to_string()),
@@ -13341,6 +13347,7 @@ fn cross_provider_config() -> crate::config::Config {
         custom.insert(
             name.to_string(),
             crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 api_key: Some("local-test-key".to_string()),
                 base_url: Some(base_url.to_string()),
@@ -13351,11 +13358,13 @@ fn cross_provider_config() -> crate::config::Config {
     }
     let providers = crate::config::ProvidersConfig {
         deepseek: crate::config::ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             api_key: Some("session-key".to_string()),
             base_url: Some("https://session-provider.example.com/v1".to_string()),
             ..Default::default()
         },
         zai: crate::config::ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             api_key: Some("pinned-key".to_string()),
             base_url: Some("https://pinned-provider.example.com/v1".to_string()),
             ..Default::default()
@@ -13663,12 +13672,14 @@ fn coexisting_ollama_cloud_config(active_provider: &str) -> crate::config::Confi
         provider: Some(active_provider.to_string()),
         providers: Some(crate::config::ProvidersConfig {
             ollama: crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("legacy-cloud-inline-key".to_string()),
                 base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
                 model: Some("legacy-cloud-model".to_string()),
                 ..Default::default()
             },
             ollama_cloud: crate::config::ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("explicit-cloud-inline-key".to_string()),
                 base_url: Some(crate::config::DEFAULT_OLLAMA_CLOUD_BASE_URL.to_string()),
                 model: Some("explicit-cloud-model".to_string()),

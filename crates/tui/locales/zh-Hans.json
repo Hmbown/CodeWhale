@@ -1995,5 +1995,13 @@
   "ConfigHintFeatureExecPolicy": "执行策略工具的只读功能开关状态",
   "ConfigHintFeatureVisionModel": "视觉/模型图像支持的测试版功能开关",
   "ConfigHintGoalCommand": "/goal 设置目标、预算和工作上下文状态",
-  "ConfigHintWorkflow": "/workflow 运行带扇出/扇入运行卡片的脚本化操作"
+  "ConfigHintWorkflow": "/workflow 运行带扇出/扇入运行卡片的脚本化操作",
+  "CmdContextWindowDescription": "设置或清除当前模型的上下文窗口",
+  "ContextWindowCurrent": "{model}：上下文令牌 {tokens}（{source}）",
+  "ContextWindowSaved": "已保存 {model} 的上下文窗口：{tokens}（{path}）",
+  "ContextWindowCleared": "已清除 {model} 的上下文窗口覆盖",
+  "ContextWindowInvalid": "无效的上下文窗口：{value}",
+  "ContextWindowNeedsConcreteModel": "上下文窗口覆盖需要具体模型，不能使用 auto",
+  "CatalogStale": "目录已过期",
+  "CatalogRefreshFailed": "刷新失败 · 目录仍可用"
 }

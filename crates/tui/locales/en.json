@@ -1995,5 +1995,13 @@
   "ConfigHintFeatureExecPolicy": "read-only feature flag state for execution policy tools",
   "ConfigHintFeatureVisionModel": "beta feature flag for vision/model image support",
   "ConfigHintGoalCommand": "/goal sets objectives, budgets, and Work-context status",
-  "ConfigHintWorkflow": "/workflow runs scripted operations with fan-out/fan-in run cards"
+  "ConfigHintWorkflow": "/workflow runs scripted operations with fan-out/fan-in run cards",
+  "CmdContextWindowDescription": "Set or clear the context window for the active model",
+  "ContextWindowCurrent": "{model}: {tokens} context tokens ({source})",
+  "ContextWindowSaved": "Saved {model} context window: {tokens} ({path})",
+  "ContextWindowCleared": "Cleared the context-window override for {model}",
+  "ContextWindowInvalid": "Invalid context window: {value}",
+  "ContextWindowNeedsConcreteModel": "Context-window overrides require a concrete model, not auto",
+  "CatalogStale": "catalog stale",
+  "CatalogRefreshFailed": "refresh failed · catalog available"
 }

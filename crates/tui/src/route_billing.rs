@@ -1057,6 +1057,7 @@ mod tests {
         let config = config_with(
             ApiProvider::Moonshot,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 auth_mode: Some("kimi_oauth".to_string()),
                 ..ProviderConfig::default()
             },
@@ -1105,6 +1106,7 @@ mod tests {
         let mut config = config_with(
             ApiProvider::Deepseek,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("sk-session-deepseek".to_string()),
                 ..ProviderConfig::default()
             },
@@ -1169,6 +1171,7 @@ mod tests {
             let config = config_with(
                 ApiProvider::Moonshot,
                 ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: base_url.map(str::to_string),
                     auth_mode: auth_mode.map(str::to_string),
                     ..ProviderConfig::default()
@@ -1206,6 +1209,7 @@ mod tests {
             let config = config_with(
                 ApiProvider::Moonshot,
                 ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(base_url.to_string()),
                     ..ProviderConfig::default()
                 },
@@ -1235,6 +1239,7 @@ mod tests {
         let config = config_with(
             ApiProvider::Moonshot,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some("https://api.moonshot.ai/v1".to_string()),
                 ..ProviderConfig::default()
             },
@@ -1259,6 +1264,7 @@ mod tests {
         let config = config_with(
             ApiProvider::Moonshot,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some("https://api.kimi.com/coding/v1".to_string()),
                 ..ProviderConfig::default()
             },
@@ -1306,6 +1312,7 @@ mod tests {
             let config = config_with(
                 ApiProvider::Moonshot,
                 ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(base_url.to_string()),
                     ..ProviderConfig::default()
                 },
@@ -1455,6 +1462,7 @@ mod tests {
         let config = config_with(
             ApiProvider::Xai,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 auth_mode: Some("oauth".to_string()),
                 api_key: Some("xai-api-key".to_string()),
                 ..ProviderConfig::default()
@@ -1518,6 +1526,7 @@ mod tests {
         let config = config_with(
             ApiProvider::Zai,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some("https://api.z.ai/api/coding/paas/v4".to_string()),
                 ..ProviderConfig::default()
             },
@@ -1575,6 +1584,7 @@ mod tests {
         let plan_config = config_with(
             ApiProvider::Stepfun,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some("https://api.stepfun.ai/step_plan/v1".to_string()),
                 ..ProviderConfig::default()
             },
@@ -1821,6 +1831,7 @@ mod tests {
             provider: Some("ollama-cloud".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 ollama_cloud: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("cloud-key".to_string()),
                     ..Default::default()
                 },
@@ -1923,6 +1934,7 @@ mod tests {
         let oauth = config_with(
             ApiProvider::Xai,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 auth_mode: Some("grok-oauth".to_string()),
                 ..ProviderConfig::default()
             },
@@ -1930,6 +1942,7 @@ mod tests {
         let api = config_with(
             ApiProvider::Xai,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 auth_mode: Some("api-key".to_string()),
                 ..ProviderConfig::default()
             },
@@ -1943,6 +1956,7 @@ mod tests {
         let oauth = config_with(
             ApiProvider::Anthropic,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 auth_mode: Some("claude-code".to_string()),
                 ..ProviderConfig::default()
             },
@@ -1967,6 +1981,7 @@ mod tests {
         let payg = config_with(
             ApiProvider::XiaomiMimo,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 mode: Some("pay-as-you-go".to_string()),
                 ..ProviderConfig::default()
             },
@@ -1975,6 +1990,7 @@ mod tests {
         let standard_key = config_with(
             ApiProvider::XiaomiMimo,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("sk-standard".to_string()),
                 ..ProviderConfig::default()
             },
@@ -1999,6 +2015,7 @@ mod tests {
             let payg = config_with(
                 provider,
                 ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     mode: Some("pay-as-you-go".to_string()),
                     ..ProviderConfig::default()
                 },
@@ -2016,6 +2033,7 @@ mod tests {
             let plan = config_with(
                 provider,
                 ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     mode: Some("subscription-plan".to_string()),
                     ..ProviderConfig::default()
                 },
@@ -2106,6 +2124,7 @@ mod tests {
             ..Config::default()
         };
         *metered_custom.provider_config_for_mut(ApiProvider::Custom) = ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             auth_mode: Some("api-key".to_string()),
             ..ProviderConfig::default()
         };
@@ -2202,6 +2221,7 @@ mod tests {
         let config = config_with(
             ApiProvider::Minimax,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some("https://api.minimax.io/v1".to_string()),
                 api_key: Some("sk-test-payg-key".to_string()),
                 ..ProviderConfig::default()
@@ -2229,6 +2249,7 @@ mod tests {
         let config = config_with(
             ApiProvider::Minimax,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 mode: Some("token-plan".to_string()),
                 api_key: Some("sk-test-payg-key".to_string()),
                 ..ProviderConfig::default()
@@ -2261,6 +2282,7 @@ mod tests {
         let config = config_with(
             ApiProvider::Minimax,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("sk-cp-test-token-plan-key".to_string()),
                 ..ProviderConfig::default()
             },
@@ -2285,6 +2307,7 @@ mod tests {
         let plan = config_with(
             ApiProvider::MinimaxAnthropic,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("sk-cp-test-token-plan-key".to_string()),
                 ..ProviderConfig::default()
             },
@@ -2299,6 +2322,7 @@ mod tests {
         let explicit_plan = config_with(
             ApiProvider::MinimaxAnthropic,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 mode: Some("token-plan".to_string()),
                 api_key: Some("sk-test-payg-key".to_string()),
                 ..ProviderConfig::default()
@@ -2313,6 +2337,7 @@ mod tests {
         let payg = config_with(
             ApiProvider::MinimaxAnthropic,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("sk-test-payg-key".to_string()),
                 ..ProviderConfig::default()
             },
@@ -2342,6 +2367,7 @@ mod tests {
             let config = config_with(
                 ApiProvider::Minimax,
                 ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     mode: Some(mode.to_string()),
                     api_key: Some("sk-cp-test-token-plan-key".to_string()),
                     ..ProviderConfig::default()
@@ -2387,6 +2413,7 @@ mod tests {
                 let sentinel = config_with(
                     provider,
                     ProviderConfig {
+                        model_context_windows: std::collections::BTreeMap::new(),
                         api_key: Some(sentinel.to_string()),
                         ..ProviderConfig::default()
                     },
@@ -2429,6 +2456,7 @@ mod tests {
                 let config = config_with(
                     provider,
                     ProviderConfig {
+                        model_context_windows: std::collections::BTreeMap::new(),
                         api_key: Some(key.to_string()),
                         ..ProviderConfig::default()
                     },
@@ -2450,6 +2478,7 @@ mod tests {
                 let config = config_with(
                     provider,
                     ProviderConfig {
+                        model_context_windows: std::collections::BTreeMap::new(),
                         api_key_env: Some("CW_TEST_MINIMAX_BOUND_KEY".to_string()),
                         ..ProviderConfig::default()
                     },
@@ -2491,6 +2520,7 @@ mod tests {
         let config = config_with(
             ApiProvider::Minimax,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some("https://gateway.internal.example/v1".to_string()),
                 ..ProviderConfig::default()
             },
@@ -2509,6 +2539,7 @@ mod tests {
         let config = config_with(
             ApiProvider::Minimax,
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 mode: Some("enterprise-committed-spend".to_string()),
                 api_key: Some("sk-cp-plan-key".to_string()),
                 ..ProviderConfig::default()

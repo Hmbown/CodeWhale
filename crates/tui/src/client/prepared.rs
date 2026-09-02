@@ -1301,6 +1301,7 @@ mod dialect_seam_tests {
 
     fn configured(api_key: &str, base_url: Option<&str>, model: &str) -> ProviderConfig {
         ProviderConfig {
+            model_context_windows: std::collections::BTreeMap::new(),
             api_key: Some(api_key.to_string()),
             base_url: base_url.map(str::to_string),
             model: Some(model.to_string()),

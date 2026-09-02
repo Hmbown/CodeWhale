@@ -671,7 +671,7 @@ pub(crate) fn resolve_runtime_route_for_identity(
         model_selector,
         saved_provider_model,
         Some(route_config.deepseek_base_url()),
-        route_config.context_window_for_provider_config(provider),
+        route_config.context_window_for_route(provider, model_selector.or(saved_provider_model)),
         None,
     )?;
     let candidate = resolution.candidate;
@@ -1419,6 +1419,7 @@ mod tests {
             provider: Some("openrouter".to_string()),
             providers: Some(ProvidersConfig {
                 openrouter: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     model: Some("deepseek/deepseek-v4-pro".to_string()),
                     ..Default::default()
                 },
@@ -1456,6 +1457,7 @@ mod tests {
             provider: Some("deepseek".to_string()),
             providers: Some(ProvidersConfig {
                 deepseek: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     model: Some(DEFAULT_TEXT_MODEL.to_string()),
                     ..Default::default()
                 },
@@ -1523,6 +1525,7 @@ mod tests {
         custom.insert(
             "my_thing".to_string(),
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some(base_url.to_string()),
                 model: Some(model.to_string()),
@@ -1573,6 +1576,7 @@ mod tests {
         custom.insert(
             "dashscope".to_string(),
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("https://dashscope.example.com/compatible-mode/v1".to_string()),
                 model: Some("qwen3.7".to_string()),

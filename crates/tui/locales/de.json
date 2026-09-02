@@ -1995,5 +1995,13 @@
   "ConfigHintFeatureExecPolicy": "schreibgeschützter Feature-Flag-Zustand für Ausführungsrichtlinien-Werkzeuge",
   "ConfigHintFeatureVisionModel": "Beta-Feature-Flag für Bildunterstützung von Vision/Modell",
   "ConfigHintGoalCommand": "/goal setzt Ziele, Budgets und den Status des Arbeitskontexts",
-  "ConfigHintWorkflow": "/workflow führt skriptgesteuerte Abläufe mit Verteilungs-/Sammel-Laufkarten aus"
+  "ConfigHintWorkflow": "/workflow führt skriptgesteuerte Abläufe mit Verteilungs-/Sammel-Laufkarten aus",
+  "CmdContextWindowDescription": "Kontextfenster des aktiven Modells festlegen oder löschen",
+  "ContextWindowCurrent": "{model}: {tokens} Kontext-Tokens ({source})",
+  "ContextWindowSaved": "Kontextfenster für {model} gespeichert: {tokens} ({path})",
+  "ContextWindowCleared": "Kontextfenster-Überschreibung für {model} gelöscht",
+  "ContextWindowInvalid": "Ungültiges Kontextfenster: {value}",
+  "ContextWindowNeedsConcreteModel": "Überschreibungen benötigen ein konkretes Modell, nicht auto",
+  "CatalogStale": "Katalog veraltet",
+  "CatalogRefreshFailed": "Aktualisierung fehlgeschlagen · Katalog verfügbar"
 }

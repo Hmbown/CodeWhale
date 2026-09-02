@@ -320,7 +320,7 @@ pub fn build_headless_context_report(config: &Config, workspace: &Path) -> Promp
                 provider,
                 &model,
                 None,
-                config.context_window_for_provider_config(provider),
+                config.context_window_for_route(provider, Some(&model)),
             )
         },
         |route| route.context_window,
@@ -1057,6 +1057,7 @@ mod tests {
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("test-kimi-key".to_string()),
                     base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                     model: Some(crate::config::KIMI_CODE_K3_MODEL.to_string()),
@@ -1084,6 +1085,7 @@ mod tests {
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("test-kimi-key".to_string()),
                     base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                     model: Some(crate::config::KIMI_CODE_K3_MODEL.to_string()),
@@ -1108,6 +1110,7 @@ mod tests {
                 custom: std::collections::HashMap::from([(
                     "custom".to_string(),
                     crate::config::ProviderConfig {
+                        model_context_windows: std::collections::BTreeMap::new(),
                         api_key: Some("test-private-key".to_string()),
                         base_url: Some("https://private.test/v1".to_string()),
                         model: Some("private-1m-deployment-v9".to_string()),

@@ -1995,5 +1995,13 @@
   "ConfigHintFeatureExecPolicy": "état en lecture seule du drapeau de fonctionnalité des outils de politique d'exécution",
   "ConfigHintFeatureVisionModel": "drapeau bêta pour la prise en charge des images vision/modèle",
   "ConfigHintGoalCommand": "/goal définit les objectifs, les budgets et l'état du contexte de Travail",
-  "ConfigHintWorkflow": "/workflow exécute des opérations scriptées avec des cartes d'exécution de distribution/regroupement"
+  "ConfigHintWorkflow": "/workflow exécute des opérations scriptées avec des cartes d'exécution de distribution/regroupement",
+  "CmdContextWindowDescription": "Définir ou effacer la fenêtre de contexte du modèle actif",
+  "ContextWindowCurrent": "{model} : {tokens} jetons de contexte ({source})",
+  "ContextWindowSaved": "Fenêtre de contexte de {model} enregistrée : {tokens} ({path})",
+  "ContextWindowCleared": "Remplacement de fenêtre de contexte de {model} effacé",
+  "ContextWindowInvalid": "Fenêtre de contexte invalide : {value}",
+  "ContextWindowNeedsConcreteModel": "Le remplacement nécessite un modèle concret, pas auto",
+  "CatalogStale": "catalogue obsolète",
+  "CatalogRefreshFailed": "échec de l'actualisation · catalogue disponible"
 }

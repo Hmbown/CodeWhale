@@ -773,7 +773,7 @@ pub(crate) async fn apply_model_picker_choice(
             Some(&model),
             saved_provider_model,
             Some(config.deepseek_base_url()),
-            config.context_window_for_provider_config(app.api_provider),
+            config.context_window_for_route(app.api_provider, Some(&model)),
             None,
         ) {
             Ok(resolution) => {
@@ -781,7 +781,7 @@ pub(crate) async fn apply_model_picker_choice(
                 route_base_url = resolution.candidate.endpoint().base_url.clone();
                 if model_changed {
                     app.set_active_context_window_override(
-                        config.context_window_for_provider_config(app.api_provider),
+                        config.context_window_for_route(app.api_provider, Some(&model)),
                     );
                     app.set_active_route_resolution(
                         route_base_url.clone(),
@@ -1033,7 +1033,10 @@ pub(crate) async fn apply_provider_fallback_switch(
     app.model_ids_passthrough = config.model_ids_pass_through();
     app.set_model_selection(new_model.clone());
     app.apply_provider_switch_reasoning_effort(target, &new_base_url, None);
-    app.set_active_context_window_override(config.context_window_for_provider_config(target));
+    app.set_active_context_window_override(config.context_window_for_route(
+        target,
+        Some(&new_model),
+    ));
     app.set_active_route_resolution(
         new_base_url.clone(),
         resolved_route.candidate.limits(),
@@ -2197,7 +2200,7 @@ pub(crate) async fn apply_command_result(
                             crate::route_billing::for_route(config, app.api_provider);
                         app.set_model_selection(new_model.clone());
                         app.set_active_context_window_override(
-                            config.context_window_for_provider_config(app.api_provider),
+                            config.context_window_for_route(app.api_provider, Some(&new_model)),
                         );
                         app.active_route_limits = route_limits;
                         app.update_model_compaction_budget();

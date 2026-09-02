@@ -1995,5 +1995,13 @@
   "ConfigHintFeatureExecPolicy": "estado somente leitura do flag de recurso das ferramentas de política de execução",
   "ConfigHintFeatureVisionModel": "flag beta para suporte a imagens de visão/modelo",
   "ConfigHintGoalCommand": "/goal define objetivos, orçamentos e o status do contexto de Trabalho",
-  "ConfigHintWorkflow": "/workflow executa operações roteirizadas com cartões de execução de distribuição/consolidação"
+  "ConfigHintWorkflow": "/workflow executa operações roteirizadas com cartões de execução de distribuição/consolidação",
+  "CmdContextWindowDescription": "Define ou limpa a janela de contexto do modelo ativo",
+  "ContextWindowCurrent": "{model}: {tokens} tokens de contexto ({source})",
+  "ContextWindowSaved": "Janela de contexto de {model} salva: {tokens} ({path})",
+  "ContextWindowCleared": "Substituição da janela de contexto de {model} removida",
+  "ContextWindowInvalid": "Janela de contexto inválida: {value}",
+  "ContextWindowNeedsConcreteModel": "Substituições exigem um modelo concreto, não auto",
+  "CatalogStale": "catálogo desatualizado",
+  "CatalogRefreshFailed": "falha ao atualizar · catálogo disponível"
 }

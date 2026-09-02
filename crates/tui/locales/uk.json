@@ -1995,5 +1995,13 @@
   "ConfigHintFeatureExecPolicy": "стан прапорця функції лише для читання для інструментів політики виконання",
   "ConfigHintFeatureVisionModel": "бета-прапорець підтримки зображень для зору/моделі",
   "ConfigHintGoalCommand": "/goal задає цілі, бюджети та стан робочого контексту",
-  "ConfigHintWorkflow": "/workflow виконує сценарні операції з картками запуску розпаралелення/злиття"
+  "ConfigHintWorkflow": "/workflow виконує сценарні операції з картками запуску розпаралелення/злиття",
+  "CmdContextWindowDescription": "Налаштувати або очистити вікно контексту активної моделі",
+  "ContextWindowCurrent": "{model}: {tokens} токенів контексту ({source})",
+  "ContextWindowSaved": "Вікно контексту {model} збережено: {tokens} ({path})",
+  "ContextWindowCleared": "Перевизначення вікна контексту {model} очищено",
+  "ContextWindowInvalid": "Неприпустиме вікно контексту: {value}",
+  "ContextWindowNeedsConcreteModel": "Для перевизначення потрібна конкретна модель, не auto",
+  "CatalogStale": "каталог застарів",
+  "CatalogRefreshFailed": "помилка оновлення · каталог доступний"
 }

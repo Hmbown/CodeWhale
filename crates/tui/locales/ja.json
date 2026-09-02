@@ -1995,5 +1995,13 @@
   "ConfigHintFeatureExecPolicy": "実行ポリシーツールの読み取り専用の機能フラグ状態",
   "ConfigHintFeatureVisionModel": "ビジョン/モデル画像サポートのベータ機能フラグ",
   "ConfigHintGoalCommand": "/goal は目標・予算・作業コンテキストの状態を設定します",
-  "ConfigHintWorkflow": "/workflow はファンアウト/ファンインの実行カード付きでスクリプト化した操作を実行します"
+  "ConfigHintWorkflow": "/workflow はファンアウト/ファンインの実行カード付きでスクリプト化した操作を実行します",
+  "CmdContextWindowDescription": "現在のモデルのコンテキストウィンドウを設定または解除します",
+  "ContextWindowCurrent": "{model}: コンテキストトークン {tokens}（{source}）",
+  "ContextWindowSaved": "{model} のコンテキストウィンドウを保存しました: {tokens}（{path}）",
+  "ContextWindowCleared": "{model} のコンテキストウィンドウ上書きを解除しました",
+  "ContextWindowInvalid": "無効なコンテキストウィンドウ: {value}",
+  "ContextWindowNeedsConcreteModel": "コンテキストウィンドウの上書きには auto ではなく具体的なモデルが必要です",
+  "CatalogStale": "カタログが古くなっています",
+  "CatalogRefreshFailed": "更新に失敗しました · カタログは利用可能です"
 }

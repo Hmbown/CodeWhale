@@ -1995,5 +1995,13 @@
   "ConfigHintFeatureExecPolicy": "trạng thái cờ tính năng chỉ đọc cho công cụ chính sách thực thi",
   "ConfigHintFeatureVisionModel": "cờ tính năng beta cho hỗ trợ hình ảnh thị giác/mô hình",
   "ConfigHintGoalCommand": "/goal đặt mục tiêu, ngân sách và trạng thái ngữ cảnh Công việc",
-  "ConfigHintWorkflow": "/workflow chạy các thao tác theo kịch bản với thẻ chạy phân tán/gộp"
+  "ConfigHintWorkflow": "/workflow chạy các thao tác theo kịch bản với thẻ chạy phân tán/gộp",
+  "CmdContextWindowDescription": "Đặt hoặc xóa cửa sổ ngữ cảnh cho mô hình hiện tại",
+  "ContextWindowCurrent": "{model}: {tokens} token ngữ cảnh ({source})",
+  "ContextWindowSaved": "Đã lưu cửa sổ ngữ cảnh của {model}: {tokens} ({path})",
+  "ContextWindowCleared": "Đã xóa ghi đè cửa sổ ngữ cảnh của {model}",
+  "ContextWindowInvalid": "Cửa sổ ngữ cảnh không hợp lệ: {value}",
+  "ContextWindowNeedsConcreteModel": "Ghi đè cửa sổ ngữ cảnh cần mô hình cụ thể, không phải auto",
+  "CatalogStale": "danh mục đã cũ",
+  "CatalogRefreshFailed": "làm mới thất bại · danh mục vẫn khả dụng"
 }

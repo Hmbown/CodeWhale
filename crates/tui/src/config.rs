@@ -1,6 +1,6 @@
 //! Configuration loading and defaults for codewhale.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -3729,6 +3729,8 @@ pub struct ProviderConfig {
         alias = "contextLength"
     )]
     pub context_window: Option<u32>,
+    #[serde(default, alias = "modelContextWindows")]
+    pub model_context_windows: BTreeMap<String, u32>,
     pub mode: Option<String>,
     /// Dual-wire dialect toggle: `openai` (default) or `anthropic`.
     /// Not a separate catalog provider — config only (DeepSeek / MiniMax /
@@ -5870,6 +5872,43 @@ impl Config {
                 .filter(|window| *window > 0);
         }
         None
+    }
+
+    #[must_use]
+    pub(crate) fn context_window_for_route(
+        &self,
+        provider: ApiProvider,
+        model: Option<&str>,
+    ) -> Option<u32> {
+        let model_override = model
+            .filter(|model| !model.trim().eq_ignore_ascii_case("auto"))
+            .and_then(|model| {
+                self.provider_config_for(provider).and_then(|entry| {
+                    entry
+                        .model_context_windows
+                        .iter()
+                        .find(|(id, window)| id.eq_ignore_ascii_case(model) && **window > 0)
+                        .map(|(_, window)| *window)
+                })
+            });
+        if model_override.is_some() {
+            return model_override;
+        }
+        if provider == ApiProvider::SiliconflowCn {
+            let fallback = self.provider_config_for(ApiProvider::Siliconflow);
+            if let Some(model) = model.filter(|model| !model.trim().eq_ignore_ascii_case("auto"))
+                && let Some(window) = fallback.and_then(|entry| {
+                    entry
+                        .model_context_windows
+                        .iter()
+                        .find(|(id, window)| id.eq_ignore_ascii_case(model) && **window > 0)
+                        .map(|(_, window)| *window)
+                })
+            {
+                return Some(window);
+            }
+        }
+        self.context_window_for_provider_config(provider)
     }
 
     #[must_use]
@@ -10609,11 +10648,14 @@ fn merge_skills_config(
 }
 
 fn merge_provider_config(base: ProviderConfig, override_cfg: ProviderConfig) -> ProviderConfig {
+    let mut model_context_windows = base.model_context_windows;
+    model_context_windows.extend(override_cfg.model_context_windows);
     ProviderConfig {
         api_key: override_cfg.api_key.or(base.api_key),
         base_url: override_cfg.base_url.or(base.base_url),
         model: override_cfg.model.or(base.model),
         context_window: override_cfg.context_window.or(base.context_window),
+        model_context_windows,
         mode: override_cfg.mode.or(base.mode),
         wire: override_cfg.wire.or(base.wire),
         auth_mode: override_cfg.auth_mode.or(base.auth_mode),
@@ -11609,6 +11651,7 @@ fn provider_config_is_explicit(entry: &ProviderConfig) -> bool {
             .as_ref()
             .is_some_and(|auth| auth.validate().is_ok())
         || entry.context_window.is_some()
+        || !entry.model_context_windows.is_empty()
         || non_empty(entry.mode.as_ref())
         || entry.max_concurrency.is_some()
         || entry.http_headers.as_ref().is_some_and(|headers| {
@@ -11894,17 +11937,11 @@ pub(crate) fn save_provider_model_for_identity(
         return Ok(config_path);
     }
 
-    let key_inside = if provider == ApiProvider::Custom {
-        let key = identity.key.trim();
-        anyhow::ensure!(!key.is_empty(), "custom provider id cannot be empty");
-        key
-    } else {
-        provider_config_key(provider).context("provider model table")?
-    };
+    let key_inside = provider_config_key_for_identity(identity).context("provider model table")?;
     crate::config_persistence::mutate_config_document(&config_path, |doc| {
         crate::config_persistence::set_document_value(
             doc,
-            &["providers", key_inside, "model"],
+            &["providers", &key_inside, "model"],
             model,
         )
     })
@@ -11928,17 +11965,12 @@ pub(crate) fn save_provider_base_url_for_identity(
     let config_path = try_default_config_path()
         .context("Failed to resolve config path for provider base URL.")?;
     ensure_parent_dir(&config_path)?;
-    let key_inside = if identity.provider == ApiProvider::Custom {
-        let key = identity.key.trim();
-        anyhow::ensure!(!key.is_empty(), "custom provider id cannot be empty");
-        key
-    } else {
-        provider_config_key(identity.provider).context("provider base URL table")?
-    };
+    let key_inside =
+        provider_config_key_for_identity(identity).context("provider base URL table")?;
     crate::config_persistence::mutate_config_document(&config_path, |doc| {
         crate::config_persistence::set_document_value(
             doc,
-            &["providers", key_inside, "base_url"],
+            &["providers", &key_inside, "base_url"],
             base_url,
         )
     })
@@ -11957,19 +11989,70 @@ pub(crate) fn save_provider_context_window_for_identity(
     let config_path = try_default_config_path()
         .context("Failed to resolve config path for provider context window.")?;
     ensure_parent_dir(&config_path)?;
-    let key_inside = if identity.provider == ApiProvider::Custom {
-        let key = identity.key.trim();
-        anyhow::ensure!(!key.is_empty(), "custom provider id cannot be empty");
-        key
-    } else {
-        provider_config_key(identity.provider).context("provider context window table")?
-    };
+    let key_inside =
+        provider_config_key_for_identity(identity).context("provider context window table")?;
     crate::config_persistence::mutate_config_document(&config_path, |doc| {
         crate::config_persistence::set_document_value(
             doc,
-            &["providers", key_inside, "context_window"],
+            &["providers", &key_inside, "context_window"],
             i64::from(context_window),
         )
+    })
+    .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
+    Ok(config_path)
+}
+
+fn provider_config_key_for_identity(identity: &ProviderIdentity) -> Result<String> {
+    if identity.provider == ApiProvider::Custom {
+        let key = identity.key.trim();
+        anyhow::ensure!(!key.is_empty(), "custom provider id cannot be empty");
+        Ok(key.to_string())
+    } else {
+        Ok(provider_config_key(identity.provider)?.to_string())
+    }
+}
+
+pub(crate) fn save_model_context_window_for_identity(
+    identity: &ProviderIdentity,
+    model: &str,
+    context_window: u32,
+) -> Result<PathBuf> {
+    let model = model.trim();
+    anyhow::ensure!(!model.is_empty(), "model cannot be empty");
+    anyhow::ensure!(context_window > 0, "context window must be greater than 0");
+    let config_path = try_default_config_path()
+        .context("Failed to resolve config path for model context window.")?;
+    ensure_parent_dir(&config_path)?;
+    let key_inside =
+        provider_config_key_for_identity(identity).context("provider model context window table")?;
+    crate::config_persistence::mutate_config_document(&config_path, |doc| {
+        crate::config_persistence::set_document_value(
+            doc,
+            &["providers", &key_inside, "model_context_windows", model],
+            i64::from(context_window),
+        )
+    })
+    .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
+    Ok(config_path)
+}
+
+pub(crate) fn clear_model_context_window_for_identity(
+    identity: &ProviderIdentity,
+    model: &str,
+) -> Result<PathBuf> {
+    let model = model.trim();
+    anyhow::ensure!(!model.is_empty(), "model cannot be empty");
+    let config_path = try_default_config_path()
+        .context("Failed to resolve config path for model context window.")?;
+    ensure_parent_dir(&config_path)?;
+    let key_inside =
+        provider_config_key_for_identity(identity).context("provider model context window table")?;
+    crate::config_persistence::mutate_config_document(&config_path, |doc| {
+        crate::config_persistence::unset_document_value(
+            doc,
+            &["providers", &key_inside, "model_context_windows", model],
+        )
+        .map(|_| ())
     })
     .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
     Ok(config_path)

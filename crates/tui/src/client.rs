@@ -4458,6 +4458,7 @@ mod tests {
             provider: Some("moonshot".to_string()),
             providers: Some(ProvidersConfig {
                 moonshot: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("moonshot-request-boundary-key".to_string()),
                     base_url: Some(route_base_url.to_string()),
                     model: Some(model.to_string()),
@@ -4483,6 +4484,7 @@ mod tests {
             provider: Some("zai".to_string()),
             providers: Some(ProvidersConfig {
                 zai: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("zai-request-boundary-key".to_string()),
                     base_url: Some(route_base_url.to_string()),
                     model: Some(model.to_string()),
@@ -4508,6 +4510,7 @@ mod tests {
             provider: Some("minimax".to_string()),
             providers: Some(ProvidersConfig {
                 minimax: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("minimax-request-boundary-key".to_string()),
                     base_url: Some(route_base_url.to_string()),
                     model: Some(model.to_string()),
@@ -4544,6 +4547,7 @@ mod tests {
             provider: Some("ollama-cloud".to_string()),
             providers: Some(ProvidersConfig {
                 ollama_cloud: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("ollama-cloud-request-boundary-key".to_string()),
                     base_url: Some(crate::config::DEFAULT_OLLAMA_CLOUD_BASE_URL.to_string()),
                     model: Some("gpt-oss:120b".to_string()),
@@ -5371,6 +5375,7 @@ mod tests {
             provider: Some("modelstudio-token-plan".to_string()),
             providers: Some(ProvidersConfig {
                 modelstudio_token_plan: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("modelstudio-request-boundary-key".to_string()),
                     base_url: Some(route_base_url.to_string()),
                     model: Some(model.to_string()),
@@ -6357,6 +6362,7 @@ mod tests {
             provider: Some("concentrate".to_string()),
             providers: Some(ProvidersConfig {
                 concentrate: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("concentrate-test-key".to_string()),
                     base_url: Some(format!("{}/v1", server.uri())),
                     model: Some(model.to_string()),
@@ -6626,6 +6632,7 @@ mod tests {
             provider: Some("opencode-zen".to_string()),
             providers: Some(ProvidersConfig {
                 opencode_zen: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("zen-test-key".to_string()),
                     base_url: Some(server.uri()),
                     model: Some(model.to_string()),
@@ -6842,6 +6849,7 @@ mod tests {
             provider: Some(ApiProvider::OpenaiCodex.as_str().to_string()),
             providers: Some(ProvidersConfig {
                 openai_codex: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     external_credentials: Some(
                         codewhale_config::ExternalCredentialConsentToml::read_only(
@@ -6885,30 +6893,37 @@ mod tests {
             api_key: Some(CONFIG_SECRET_SENTINELS[0].to_string()),
             providers: Some(ProvidersConfig {
                 arcee: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some(CONFIG_SECRET_SENTINELS[1].to_string()),
                     ..ProviderConfig::default()
                 },
                 moonshot: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some(CONFIG_SECRET_SENTINELS[2].to_string()),
                     ..ProviderConfig::default()
                 },
                 openrouter: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some(CONFIG_SECRET_SENTINELS[3].to_string()),
                     ..ProviderConfig::default()
                 },
                 together: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some(CONFIG_SECRET_SENTINELS[4].to_string()),
                     ..ProviderConfig::default()
                 },
                 xiaomi_mimo: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some(CONFIG_SECRET_SENTINELS[5].to_string()),
                     ..ProviderConfig::default()
                 },
                 zai: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some(CONFIG_SECRET_SENTINELS[6].to_string()),
                     ..ProviderConfig::default()
                 },
                 sakana: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some(CONFIG_SECRET_SENTINELS[7].to_string()),
                     ..ProviderConfig::default()
                 },
@@ -7097,12 +7112,14 @@ mod tests {
             provider: Some("zai".to_string()),
             providers: Some(ProvidersConfig {
                 zai: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("active-zai-secret-900".to_string()),
                     ..ProviderConfig::default()
                 },
                 custom: HashMap::from([(
                     "example-custom".to_string(),
                     ProviderConfig {
+                        model_context_windows: std::collections::BTreeMap::new(),
                         kind: Some("openai-compatible".to_string()),
                         api_key_env: Some(CUSTOM_ENV_NAME.to_string()),
                         ..ProviderConfig::default()
@@ -7336,6 +7353,7 @@ mod tests {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let providers = ProvidersConfig {
             deepseek_anthropic: ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("ds-test".to_string()),
                 base_url: Some(server.uri()),
                 ..ProviderConfig::default()
@@ -7354,6 +7372,7 @@ mod tests {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let providers = ProvidersConfig {
             minimax_anthropic: ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("minimax-test".to_string()),
                 base_url: Some(base_url),
                 ..ProviderConfig::default()
@@ -7372,6 +7391,7 @@ mod tests {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let providers = ProvidersConfig {
             zai: ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("zai-test".to_string()),
                 base_url: Some("https://api.z.ai/api/coding/paas/v4".to_string()),
                 ..ProviderConfig::default()
@@ -10166,6 +10186,7 @@ mod tests {
             provider: Some("openrouter".to_string()),
             providers: Some(ProvidersConfig {
                 openrouter: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("test-key".to_string()),
                     base_url: Some(server.uri()),
                     ..ProviderConfig::default()
@@ -10183,6 +10204,7 @@ mod tests {
             provider: Some("opencode-go".to_string()),
             providers: Some(ProvidersConfig {
                 opencode_go: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("test-key".to_string()),
                     base_url: Some(server.uri()),
                     ..ProviderConfig::default()
@@ -10200,6 +10222,7 @@ mod tests {
             provider: Some("telecomjs".to_string()),
             providers: Some(ProvidersConfig {
                 telecomjs: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("test-key".to_string()),
                     base_url: Some(server.uri()),
                     ..ProviderConfig::default()
@@ -10217,6 +10240,7 @@ mod tests {
             provider: Some("edenai".to_string()),
             providers: Some(ProvidersConfig {
                 edenai: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("test-key".to_string()),
                     base_url: Some(format!("{}/v3", server.uri())),
                     ..ProviderConfig::default()
@@ -10283,6 +10307,7 @@ mod tests {
                 provider: Some("opencode-go".to_string()),
                 providers: Some(ProvidersConfig {
                     opencode_go: ProviderConfig {
+                        model_context_windows: std::collections::BTreeMap::new(),
                         api_key: Some("test-key".to_string()),
                         model: Some(model.to_string()),
                         ..ProviderConfig::default()
@@ -10696,6 +10721,7 @@ mod tests {
             provider: Some("minimax".to_string()),
             providers: Some(ProvidersConfig {
                 minimax: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("test-key".to_string()),
                     mode: Some("pay-as-you-go".to_string()),
                     ..ProviderConfig::default()
@@ -11722,6 +11748,7 @@ mod tests {
             provider: Some("openrouter".to_string()),
             providers: Some(ProvidersConfig {
                 openrouter: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("openrouter-route-cap-test".to_string()),
                     base_url: Some("https://openrouter.ai/api/v1".to_string()),
                     model: Some("deepseek/deepseek-v4-pro".to_string()),
@@ -11910,6 +11937,7 @@ mod tests {
         custom.insert(
             "my_thing".to_string(),
             ProviderConfig {
+                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("https://api.example.com/v1".to_string()),
                 model: Some("custom-model-v1".to_string()),

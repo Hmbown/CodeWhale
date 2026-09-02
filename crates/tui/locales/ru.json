@@ -1995,5 +1995,13 @@
   "ConfigHintFeatureExecPolicy": "состояние флага функции только для чтения для инструментов политики выполнения",
   "ConfigHintFeatureVisionModel": "бета-флаг поддержки изображений для зрения/модели",
   "ConfigHintGoalCommand": "/goal задаёт цели, бюджеты и состояние рабочего контекста",
-  "ConfigHintWorkflow": "/workflow выполняет сценарные операции с карточками запуска распараллеливания/слияния"
+  "ConfigHintWorkflow": "/workflow выполняет сценарные операции с карточками запуска распараллеливания/слияния",
+  "CmdContextWindowDescription": "Настроить или очистить окно контекста активной модели",
+  "ContextWindowCurrent": "{model}: {tokens} токенов контекста ({source})",
+  "ContextWindowSaved": "Окно контекста {model} сохранено: {tokens} ({path})",
+  "ContextWindowCleared": "Переопределение окна контекста {model} очищено",
+  "ContextWindowInvalid": "Недопустимое окно контекста: {value}",
+  "ContextWindowNeedsConcreteModel": "Для переопределения нужна конкретная модель, не auto",
+  "CatalogStale": "каталог устарел",
+  "CatalogRefreshFailed": "ошибка обновления · каталог доступен"
 }

@@ -630,6 +630,7 @@ mod tests {
             provider: Some("moonshot".to_string()),
             providers: Some(ProvidersConfig {
                 moonshot: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("moonshot-test-key".to_string()),
                     base_url: Some("https://api.moonshot.ai/v1".to_string()),
                     model: Some("kimi-k3".to_string()),
@@ -671,6 +672,7 @@ mod tests {
             provider: Some("xai".to_string()),
             providers: Some(ProvidersConfig {
                 xai: ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("xai-test-key".to_string()),
                     base_url: Some("https://api.x.ai/v1".to_string()),
                     model: Some("grok-4.5".to_string()),
