@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use codewhale_config::route::CapabilityState;
 use codewhale_execpolicy::{AskForApproval, ExecPolicyContext};
 use codewhale_protocol::runtime::DynamicToolSpec;
 use futures_util::StreamExt;
@@ -7642,7 +7643,7 @@ use context::{
     MAX_CONTEXT_RECOVERY_ATTEMPTS, MIN_RECENT_MESSAGES_TO_KEEP,
     effective_max_output_tokens_for_route, emergency_trim_budget,
     extract_compaction_summary_prompt, is_context_length_error_message,
-    route_context_budget_for_route, summarize_text,
+    is_image_input_rejection_message, route_context_budget_for_route, summarize_text,
 };
 #[cfg(test)]
 use context::{context_input_budget_for_provider, effective_max_output_tokens};

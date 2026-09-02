@@ -276,6 +276,7 @@
   "ScreenModeMouseCaptureOn": "Penangkapan mouse aktif.",
   "ScreenModeMouseCaptureOff": "Penangkapan mouse nonaktif; terminal mengatur seleksi.",
   "ScreenModeUnchanged": "Layar tidak berubah: {reason}.",
+  "ImageInputRejectedResent": "{model} tidak menerima gambar — gambar dikirim ulang sebagai teks; gunakan image_ocr untuk membacanya",
   "ConfigLabelShowThinking": "Penalaran model di chat",
   "ConfigLabelThinkingHighlight": "Sorotan latar penalaran",
   "ConfigLabelShowToolDetails": "Tingkat detail alat",

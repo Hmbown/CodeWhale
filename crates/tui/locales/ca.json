@@ -276,6 +276,7 @@
   "ScreenModeMouseCaptureOn": "Captura del ratolí activada.",
   "ScreenModeMouseCaptureOff": "Captura del ratolí desactivada; el terminal controla la selecció.",
   "ScreenModeUnchanged": "Pantalla sense canvis: {reason}.",
+  "ImageInputRejectedResent": "{model} no accepta imatges — s'han reenviat com a text; usa image_ocr per llegir-les",
   "ConfigLabelShowThinking": "Raonament del model al xat",
   "ConfigLabelThinkingHighlight": "Ressaltat de fons del raonament",
   "ConfigLabelShowToolDetails": "Nivell de detall de les eines",

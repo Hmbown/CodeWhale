@@ -276,6 +276,7 @@
   "ScreenModeMouseCaptureOn": "Captura do mouse ativada.",
   "ScreenModeMouseCaptureOff": "Captura do mouse desativada; o terminal controla a seleção.",
   "ScreenModeUnchanged": "Tela inalterada: {reason}.",
+  "ImageInputRejectedResent": "{model} não aceita imagens — reenviado como texto; use image_ocr para lê-las",
   "ConfigLabelShowThinking": "Raciocínio do modelo no chat",
   "ConfigLabelThinkingHighlight": "Destaque do fundo do raciocínio",
   "ConfigLabelShowToolDetails": "Nível de detalhe das ferramentas",

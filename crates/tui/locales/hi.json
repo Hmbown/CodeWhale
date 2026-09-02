@@ -276,6 +276,7 @@
   "ScreenModeMouseCaptureOn": "माउस कैप्चर चालू।",
   "ScreenModeMouseCaptureOff": "माउस कैप्चर बंद; चयन टर्मिनल के नियंत्रण में है।",
   "ScreenModeUnchanged": "स्क्रीन अपरिवर्तित: {reason}।",
+  "ImageInputRejectedResent": "{model} इमेज स्वीकार नहीं करता — उन्हें टेक्स्ट के रूप में फिर भेजा गया; पढ़ने के लिए image_ocr का उपयोग करें",
   "ConfigLabelShowThinking": "चैट में मॉडल रीज़निंग",
   "ConfigLabelThinkingHighlight": "रीज़निंग पृष्ठभूमि हाइलाइट",
   "ConfigLabelShowToolDetails": "टूल विवरण स्तर",

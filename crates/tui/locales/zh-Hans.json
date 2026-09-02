@@ -276,6 +276,7 @@
   "ScreenModeMouseCaptureOn": "鼠标捕获已开启。",
   "ScreenModeMouseCaptureOff": "鼠标捕获已关闭；选择由终端管理。",
   "ScreenModeUnchanged": "屏幕未改变：{reason}。",
+  "ImageInputRejectedResent": "{model} 不接受图像，已将图像替换为文本重新发送；请使用 image_ocr 读取图像",
   "ConfigLabelShowThinking": "对话中显示模型推理",
   "ConfigLabelThinkingHighlight": "推理背景高亮",
   "ConfigLabelShowToolDetails": "工具详情级别",

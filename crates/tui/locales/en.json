@@ -276,6 +276,7 @@
   "ScreenModeMouseCaptureOn": "Mouse capture on.",
   "ScreenModeMouseCaptureOff": "Mouse capture off; the terminal owns selection.",
   "ScreenModeUnchanged": "Screen unchanged: {reason}.",
+  "ImageInputRejectedResent": "{model} does not accept images — resent as text; use image_ocr to read them",
   "ConfigLabelShowThinking": "Model reasoning in chat",
   "ConfigLabelThinkingHighlight": "Reasoning background highlight",
   "ConfigLabelShowToolDetails": "Tool detail level",

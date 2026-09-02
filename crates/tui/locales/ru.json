@@ -276,6 +276,7 @@
   "ScreenModeMouseCaptureOn": "Захват мыши включён.",
   "ScreenModeMouseCaptureOff": "Захват мыши выключен; выбором управляет терминал.",
   "ScreenModeUnchanged": "Экран без изменений: {reason}.",
+  "ImageInputRejectedResent": "{model} не принимает изображения — они отправлены повторно как текст; используйте image_ocr для чтения",
   "ConfigLabelShowThinking": "Рассуждения модели в чате",
   "ConfigLabelThinkingHighlight": "Подсветка фона рассуждений",
   "ConfigLabelShowToolDetails": "Детализация инструментов",

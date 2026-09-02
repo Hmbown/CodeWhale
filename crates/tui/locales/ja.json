@@ -276,6 +276,7 @@
   "ScreenModeMouseCaptureOn": "マウスキャプチャ：オン。",
   "ScreenModeMouseCaptureOff": "マウスキャプチャ：オフ。選択はターミナルが管理します。",
   "ScreenModeUnchanged": "画面は変更されませんでした：{reason}。",
+  "ImageInputRejectedResent": "{model} は画像を受け付けないため、画像をテキストとして再送しました。画像を読むには image_ocr を使用してください",
   "ConfigLabelShowThinking": "会話にモデル推論を表示",
   "ConfigLabelThinkingHighlight": "推論の背景ハイライト",
   "ConfigLabelShowToolDetails": "ツール詳細レベル",

@@ -555,6 +555,7 @@
   "ScreenModeMouseCaptureOn": "滑鼠擷取已開啟。",
   "ScreenModeMouseCaptureOff": "滑鼠擷取已關閉；選取由終端機管理。",
   "ScreenModeUnchanged": "畫面未變更：{reason}。",
+  "ImageInputRejectedResent": "{model} 不接受圖片，已將圖片替換為文字重新傳送；請使用 image_ocr 讀取圖片",
   "ConfigLabelLocale": "語言",
   "ConfigLabelLowMotion": "減少動態效果",
   "ConfigLabelManagedAllowShell": "Shell 存取（受管理）",
