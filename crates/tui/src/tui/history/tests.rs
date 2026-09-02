@@ -542,6 +542,47 @@ fn reasoning_folds_in_live_and_the_fold_is_reversible() {
     }
 }
 
+/// The fold toggle is relative to the expanded baseline (verbose session or
+/// expanded default): Space inverts the baseline, never the other flag.
+/// In particular verbose plus an expanded default renders expanded — the
+/// old triple-XOR collapsed exactly that cell.
+#[test]
+fn thinking_fold_toggle_is_relative_to_the_expanded_baseline() {
+    let body = (1..=20)
+        .map(|i| format!("step {i:02}: baseline check"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let cell = HistoryCell::Thinking {
+        content: body,
+        streaming: false,
+        duration_secs: Some(1.0),
+    };
+    // (folded, verbose, default_expanded, expect_expanded)
+    for (folded, verbose, default_expanded, expect_expanded) in [
+        (false, false, false, false),
+        (false, false, true, true),
+        (false, true, false, true),
+        (false, true, true, true),
+        (true, false, false, true),
+        (true, false, true, false),
+        (true, true, false, false),
+        (true, true, true, false),
+    ] {
+        let options = TranscriptRenderOptions {
+            verbose,
+            thinking_default_expanded: default_expanded,
+            low_motion: true,
+            ..TranscriptRenderOptions::default()
+        };
+        let text = lines_text(&cell.lines_with_options_folded(80, options, folded).0);
+        let expanded = text.contains("step 20: baseline check");
+        assert_eq!(
+            expanded, expect_expanded,
+            "[folded={folded} verbose={verbose} default_expanded={default_expanded}]"
+        );
+    }
+}
+
 /// A completed reasoning cell short enough to fit needs no expand affordance,
 /// and the live view must still show it — the alternative was a dead card that
 /// said reasoning happened and nothing about what it was.
