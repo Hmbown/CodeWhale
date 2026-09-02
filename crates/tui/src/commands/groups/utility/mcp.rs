@@ -238,8 +238,7 @@ fn mcp_unknown_id(presentation: &mut dyn CommandPresentationContext) -> String {
             &[("recommendations_command", "/mcp recommendations")],
         )
         .unwrap_or_else(|_| {
-            "Unknown recommended MCP ID. Run /mcp recommendations to inspect the curated list."
-                .to_string()
+            "Unknown MCP suggestion. Run /mcp recommendations to see the list.".to_string()
         })
 }
 
@@ -247,7 +246,7 @@ fn recommended_mcp_text(presentation: &mut dyn CommandPresentationContext) -> St
     let heading = presentation
         .translate("mcp_recommendations_heading", &[])
         .unwrap_or_else(|_| {
-            "Suggested Codewhale plugins (MCP components; nothing is installed automatically)"
+            "Suggested codewhale plugins (MCP components; nothing installs automatically)"
                 .to_string()
         });
     let safety = presentation
@@ -255,7 +254,7 @@ fn recommended_mcp_text(presentation: &mut dyn CommandPresentationContext) -> St
             "mcp_recommendations_safety",
             &[("restart_command", "/mcp restart")],
         )
-        .unwrap_or_else(|_| "Viewing this list adds or enables nothing.".to_string());
+        .unwrap_or_else(|_| "Looking adds nothing.".to_string());
     let github = presentation
         .translate(
             "mcp_recommendation_github",
@@ -281,7 +280,7 @@ fn recommended_mcp_text(presentation: &mut dyn CommandPresentationContext) -> St
             ],
         )
         .unwrap_or_else(|_| {
-            format!("• chrome-devtools — official Chrome DevTools MCP via pinned npm package\n  package: {CHROME_DEVTOOLS_MCP_PACKAGE}")
+            format!("• chrome-devtools — official Chrome DevTools MCP (pinned npm package)\n  package: {CHROME_DEVTOOLS_MCP_PACKAGE}")
         });
     let playwright = presentation
         .translate(
@@ -295,7 +294,7 @@ fn recommended_mcp_text(presentation: &mut dyn CommandPresentationContext) -> St
             ],
         )
         .unwrap_or_else(|_| {
-            format!("• playwright — Microsoft's official Playwright MCP via pinned npm package\n  package: {PLAYWRIGHT_MCP_PACKAGE}")
+            format!("• playwright — Microsoft's official Playwright MCP (pinned npm package)\n  package: {PLAYWRIGHT_MCP_PACKAGE}")
         });
     let cua = presentation
         .translate(
@@ -396,7 +395,7 @@ mod tests {
                     "Unknown recommended MCP ID. Run {recommendations_command} to inspect the curated list.".to_string()
                 }
                 "mcp_recommendations_heading" => {
-                    "Suggested Codewhale plugins (MCP components; nothing is installed automatically)"
+                    "Suggested codewhale plugins (MCP components; nothing installs automatically)"
                         .to_string()
                 }
                 "mcp_recommendations_safety" => {
@@ -459,7 +458,7 @@ mod tests {
         let recommended = mcp(&mut FakePresentation, Some("recommendations"))
             .message
             .expect("recommendations text");
-        assert!(recommended.contains("nothing is installed automatically"));
+        assert!(recommended.contains("nothing installs automatically"));
         assert!(recommended.contains("provenance:"));
         assert!(recommended.contains("https://api.githubcopilot.com/mcp/"));
         assert!(recommended.contains("chrome-devtools-mcp@1.7.0"));
@@ -599,8 +598,8 @@ mod tests {
     #[test]
     fn recommendations_state_execution_and_install_boundaries() {
         let text = recommended_mcp_text(&mut FakePresentation);
-        assert!(text.contains("nothing is installed automatically"));
-        assert!(text.contains("Suggested Codewhale plugins"));
+        assert!(text.contains("nothing installs automatically"));
+        assert!(text.contains("Suggested codewhale plugins"));
         assert!(text.contains("never downloads or"));
         assert!(text.contains("installs this binary"));
         assert!(text.contains("experimental"));

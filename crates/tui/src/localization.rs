@@ -5044,7 +5044,7 @@ mod tests {
         let expected = [
             (Locale::Ca, "Treballadors de flota de la sessió actual:"),
             (Locale::De, "Flotten-Worker der aktuellen Sitzung:"),
-            (Locale::En, "Current-session fleet workers:"),
+            (Locale::En, "Fleet workers this session:"),
             (Locale::Es419, "Workers de flota de la sesión actual:"),
             (Locale::Fr, "Workers de la flotte de la session actuelle :"),
             (Locale::Hi, "वर्तमान सत्र के बेड़ा वर्कर:"),

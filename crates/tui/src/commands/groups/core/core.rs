@@ -873,7 +873,7 @@ mod tests {
         let result = help(&mut app, Some("links"));
         let msg = result.message.expect("help topic should return message");
         assert!(msg.contains("links"));
-        assert!(msg.contains("Show Codewhale, community, and provider links"));
+        assert!(msg.contains("Show codewhale, community, and provider links"));
         assert!(msg.contains("Usage: /links"));
         assert!(msg.contains("Aliases: dashboard, api"));
     }
@@ -1597,7 +1597,7 @@ mod tests {
         assert_eq!(app.view_stack.top_kind(), Some(ModalKind::SubAgents));
         assert_eq!(
             app.status_message,
-            Some("Fetching current-session sub-agents...".to_string())
+            Some("Finding this session's sub-agents...".to_string())
         );
     }
 

@@ -44,16 +44,12 @@ impl ElevationOption {
     #[cfg(test)]
     pub fn description(&self) -> &'static str {
         match self {
-            ElevationOption::WithNetwork => {
-                "Retry this tool call with outbound network access for downloads and HTTP requests"
-            }
-            ElevationOption::WithWriteAccess(_) => {
-                "Retry this tool call with additional writable filesystem scope"
-            }
+            ElevationOption::WithNetwork => "Retry with outbound network (downloads and HTTP)",
+            ElevationOption::WithWriteAccess(_) => "Retry with a wider writable scope",
             ElevationOption::FullAccess => {
                 "Retry without sandbox limits; grants unrestricted filesystem and network access"
             }
-            ElevationOption::Abort => "Cancel this tool execution",
+            ElevationOption::Abort => "Cancel this run",
         }
     }
 
