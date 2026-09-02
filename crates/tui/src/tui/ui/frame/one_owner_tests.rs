@@ -222,7 +222,12 @@ fn context_cap_warns_once_in_the_posture_bar() {
         context_tokens: Some(60),
         ..Default::default()
     });
-    let rows = draw(&mut app, 100, 32);
+    // 140 columns: on a backend-less platform (linux CI) the filesystem
+    // scope notice paints `files: workspace (unenforced)` and the shed
+    // ladder drops the hint first; the width keeps the hint inside the
+    // budget with the notice present, so the warning is asserted on every
+    // platform.
+    let rows = draw(&mut app, 140, 32);
     let pct = super::info_context_percent(&app);
     assert!(pct >= 80, "fixture must sit at the cap: {pct}");
     assert_eq!(

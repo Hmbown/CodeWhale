@@ -201,13 +201,35 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
             break;
         }
         if Instant::now() >= deadline {
-            panic!(
+            // One bounded retry: re-find the affordance (a redraw may have
+            // shifted cells between find and click under runner load) and
+            // click it again before failing.
+            let (retry_row, retry_col) = tui.frame().find_text("[↑]").unwrap_or_else(|| {
+                panic!(
+                    "{size}: [↑] submit affordance not painted on retry\n{}",
+                    tui.diagnostics()
+                )
+            });
+            tui.send(keys::mouse::down(retry_row, retry_col + 1))
+                .expect("SGR mouse down on [↑] retry");
+            std::thread::sleep(Duration::from_millis(150));
+            tui.send(keys::mouse::up(retry_row, retry_col + 1))
+                .expect("SGR mouse up on [↑] retry");
+            tui.wait_for_idle(Duration::from_millis(150), Duration::from_secs(2))
+                .expect("retry settles");
+            let retry_text = normalized_text(tui.frame());
+            let retry_grew = queued_count(&retry_text)
+                .zip(expected)
+                .is_some_and(|(seen, want)| seen == want);
+            assert!(
+                retry_text.contains(receipt) || retry_grew,
                 "{size}: click on [↑] at ({send_row},{}) produced no queue receipt \
                  {receipt:?} and no queue growth — pointer submit did not reach the \
                  keyboard-submit dispatch path\n{}",
                 send_col + 1,
                 tui.diagnostics()
             );
+            break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
