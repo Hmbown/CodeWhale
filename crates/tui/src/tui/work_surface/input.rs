@@ -4,8 +4,8 @@ use crate::tui::app::{App, SidebarRowAction};
 
 use super::interaction::{activate_primary, claim_focus, close_opened, release_focus};
 use super::model::{
-    SIDE_WIDTH_MAX, SIDE_WIDTH_MIN, TOP_HEIGHT_MAX, TOP_HEIGHT_MIN, WorkRow, WorkRowId,
-    WorkSurfacePlacement, visible_rows_for_panel,
+    DockTabTarget, RailPanel, SIDE_WIDTH_MAX, SIDE_WIDTH_MIN, TOP_HEIGHT_MAX, TOP_HEIGHT_MIN,
+    WorkRow, WorkRowId, WorkSurfacePlacement, visible_rows_for_panel,
 };
 
 #[derive(Debug, Default)]
@@ -19,11 +19,13 @@ pub struct MouseOutcome {
 /// the rail cannot show agents right now (rail off, or nothing to list); the
 /// caller then opens the `/agents` register instead so the key still lands.
 pub fn enter_agents(app: &mut App) -> bool {
-    app.work_surface.panel = super::model::RailPanel::Agents;
+    let previous_panel = app.work_surface.panel;
+    app.work_surface.panel = RailPanel::Agents;
     if app.work_surface.placement == WorkSurfacePlacement::Off
         || app.work_surface.effective_placement == WorkSurfacePlacement::Off
         || app.work_surface.last_area.is_none()
     {
+        app.work_surface.panel = previous_panel;
         release_focus(app);
         return false;
     }
@@ -41,8 +43,10 @@ pub fn enter_agents(app: &mut App) -> bool {
         })
         .map(|row| row.id.clone());
     let Some(first_agent) = first_agent else {
+        app.work_surface.panel = previous_panel;
         return false;
     };
+    super::interaction::select_dock_panel(app, RailPanel::Agents);
     claim_focus(app);
     let selected_agent_is_visible = app.work_surface.selected.as_ref().is_some_and(|selected| {
         rows.iter()
@@ -75,6 +79,37 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Option<Option<SidebarRowActio
         }
         return None;
     }
+    if app.work_surface.focused {
+        let tabs = app
+            .work_surface
+            .dock_tabs
+            .iter()
+            .filter_map(|hitbox| match hitbox.target {
+                DockTabTarget::Panel(panel) => Some(panel),
+                DockTabTarget::Close => None,
+            })
+            .collect::<Vec<_>>();
+        if !tabs.is_empty() {
+            let current = tabs
+                .iter()
+                .position(|panel| *panel == app.work_surface.panel)
+                .unwrap_or(0);
+            let next = match key.code {
+                KeyCode::Left => Some((current + tabs.len() - 1) % tabs.len()),
+                KeyCode::Right => Some((current + 1) % tabs.len()),
+                KeyCode::Tab if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    Some((current + tabs.len() - 1) % tabs.len())
+                }
+                KeyCode::Tab => Some((current + 1) % tabs.len()),
+                _ => None,
+            };
+            if let Some(next) = next {
+                super::interaction::select_dock_panel(app, tabs[next]);
+                return Some(None);
+            }
+        }
+    }
+
     // Keyboard and mouse share one row source per panel: Enter on the
     // selected row must open the same world a click would.
     let rows = visible_rows_for_panel(app);
@@ -118,7 +153,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Option<Option<SidebarRowActio
             if app.work_surface.opened.is_some() {
                 close_opened(app);
             } else {
-                release_focus(app);
+                super::interaction::dismiss_dock(app);
             }
             return Some(None);
         }
@@ -287,11 +322,91 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> MouseOutcome {
             // only one owner shows selection.
             release_focus(app);
         }
-        if matches!(mouse.kind, MouseEventKind::Moved) && app.work_surface.hovered.take().is_some()
+        if matches!(mouse.kind, MouseEventKind::Moved)
+            && (app.work_surface.hovered.take().is_some()
+                || app.work_surface.hovered_tab.take().is_some())
         {
             app.needs_redraw = true;
         }
         return MouseOutcome::default();
+    }
+
+    if placement.is_strip() {
+        if let Some(target) = dock_tab_at(app, mouse.column, mouse.row) {
+            match mouse.kind {
+                MouseEventKind::Moved => {
+                    let changed = app.work_surface.hovered_tab != Some(target)
+                        || app.work_surface.hovered.take().is_some();
+                    app.work_surface.hovered_tab = Some(target);
+                    if changed {
+                        app.needs_redraw = true;
+                    }
+                    return MouseOutcome {
+                        consumed: true,
+                        action: None,
+                    };
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    app.work_surface.pressed_tab = Some(target);
+                    app.needs_redraw = true;
+                    return MouseOutcome {
+                        consumed: true,
+                        action: None,
+                    };
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    let pressed = app.work_surface.pressed_tab.take();
+                    if pressed.is_some() {
+                        app.needs_redraw = true;
+                    }
+                    if pressed == Some(target) {
+                        match target {
+                            DockTabTarget::Panel(panel) if panel != app.work_surface.panel => {
+                                super::interaction::select_dock_panel(app, panel);
+                            }
+                            DockTabTarget::Panel(_) | DockTabTarget::Close => {
+                                super::interaction::dismiss_dock(app);
+                            }
+                        }
+                    }
+                    return MouseOutcome {
+                        consumed: true,
+                        action: None,
+                    };
+                }
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                    let tabs = dock_panels(app);
+                    if !tabs.is_empty() {
+                        let current = tabs
+                            .iter()
+                            .position(|panel| *panel == app.work_surface.panel)
+                            .unwrap_or(0);
+                        let delta = if matches!(mouse.kind, MouseEventKind::ScrollUp) {
+                            tabs.len() - 1
+                        } else {
+                            1
+                        };
+                        super::interaction::select_dock_panel(
+                            app,
+                            tabs[(current + delta) % tabs.len()],
+                        );
+                    }
+                    return MouseOutcome {
+                        consumed: true,
+                        action: None,
+                    };
+                }
+                _ => {}
+            }
+        } else if matches!(mouse.kind, MouseEventKind::Moved)
+            && app.work_surface.hovered_tab.take().is_some()
+        {
+            app.needs_redraw = true;
+        } else if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
+            if app.work_surface.pressed_tab.take().is_some() {
+                app.needs_redraw = true;
+            }
+        }
     }
 
     match mouse.kind {
@@ -353,6 +468,25 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> MouseOutcome {
             action: None,
         },
     }
+}
+
+fn dock_tab_at(app: &App, column: u16, row: u16) -> Option<DockTabTarget> {
+    app.work_surface
+        .dock_tabs
+        .iter()
+        .find(|hitbox| hitbox.area.contains((column, row).into()))
+        .map(|hitbox| hitbox.target)
+}
+
+fn dock_panels(app: &App) -> Vec<RailPanel> {
+    app.work_surface
+        .dock_tabs
+        .iter()
+        .filter_map(|hitbox| match hitbox.target {
+            DockTabTarget::Panel(panel) => Some(panel),
+            DockTabTarget::Close => None,
+        })
+        .collect()
 }
 
 fn hit_row(app: &App, row_y: u16) -> Option<&WorkRow> {

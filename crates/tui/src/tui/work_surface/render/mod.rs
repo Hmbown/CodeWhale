@@ -22,11 +22,13 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::localization::MessageId;
+use crate::palette::{ChromeInk, chrome_style};
 use crate::tui::app::{App, SidebarHoverRow, SidebarHoverSection};
 use crate::tui::ui_text::truncate_line_to_width;
 
 use super::model::{
-    RailPanel, WorkHitbox, WorkRow, WorkSurfacePlacement, WorkTone, visible_rows_for_panel,
+    DockTabHitbox, DockTabTarget, RailPanel, WorkHitbox, WorkRow, WorkSurfacePlacement, WorkTone,
+    visible_rows_for_panel,
 };
 
 mod layout;
@@ -62,12 +64,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         // Bottom mirrors Top's body/divider split; only the divider edge
         // differs (below-content for Top, above-content for Bottom).
         WorkSurfacePlacement::Top => Rect {
-            height: area.height.saturating_sub(1),
+            y: area.y.saturating_add(1),
+            height: area.height.saturating_sub(2),
             ..area
         },
         WorkSurfacePlacement::Bottom => Rect {
-            y: area.y.saturating_add(1),
-            height: area.height.saturating_sub(1),
+            y: area.y.saturating_add(2),
+            height: area.height.saturating_sub(2),
             ..area
         },
         WorkSurfacePlacement::Left => Rect {
@@ -82,6 +85,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         WorkSurfacePlacement::Off => unreachable!("off placement returned above"),
     };
 
+    if !placement.is_strip() {
+        app.work_surface.dock_tabs.clear();
+        app.work_surface.pressed_tab = None;
+        app.work_surface.hovered_tab = None;
+    }
+
     // Context is the one panel that is not a work-row surface: session facts
     // render as a titled line list with nothing to click. Every other panel
     // (Tasks, Agents, Pinned) routes through the row machinery below, so its
@@ -89,6 +98,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     // door in every panel, not only in Tasks.
     if app.work_surface.panel == RailPanel::Context {
         render_panel(frame, area, body_area, app);
+        render_dock_tabs(frame, area, app);
+        register_dock_targets(app);
         return;
     }
 
@@ -156,6 +167,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     Block::default()
         .style(Style::default().bg(app.ui_theme.surface_bg))
         .render(area, frame.buffer_mut());
+    render_dock_tabs(frame, area, app);
+    register_dock_targets(app);
 
     if let Some((goal_text, goal_style)) = goal_title.filter(|_| goal_height > 0) {
         let full_width = usize::from(content_area.width);
@@ -666,6 +679,202 @@ fn render_divider(frame: &mut Frame, area: Rect, placement: WorkSurfacePlacement
                     .set_bg(app.ui_theme.surface_bg);
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DockTab {
+    target: DockTabTarget,
+    label: &'static str,
+    count: usize,
+}
+
+fn render_dock_tabs(frame: &mut Frame, area: Rect, app: &mut App) {
+    let width = usize::from(area.width);
+    let mut entries = Vec::new();
+    for panel in [
+        RailPanel::Tasks,
+        RailPanel::Agents,
+        RailPanel::Context,
+        RailPanel::Pinned,
+    ] {
+        let useful = super::panels::panel_has_useful_content(app, panel);
+        if useful || panel == app.work_surface.panel {
+            let count = match panel {
+                RailPanel::Tasks | RailPanel::Agents => {
+                    let saved = app.work_surface.panel;
+                    app.work_surface.panel = panel;
+                    let count = visible_rows_for_panel(app)
+                        .iter()
+                        .filter(|row| match panel {
+                            RailPanel::Tasks => row.id.0.starts_with("graph:"),
+                            RailPanel::Agents => row.id.0.starts_with("worker:"),
+                            RailPanel::Context | RailPanel::Pinned => false,
+                        })
+                        .count();
+                    app.work_surface.panel = saved;
+                    count
+                }
+                RailPanel::Context | RailPanel::Pinned => 0,
+            };
+            entries.push(DockTab {
+                target: DockTabTarget::Panel(panel),
+                label: panel.title(),
+                count,
+            });
+        }
+    }
+
+    let close = if crate::tui::color_compat::ascii_safe_enabled() {
+        "x"
+    } else {
+        "×"
+    };
+    let mut show_counts = true;
+    let fits = |tabs: &[DockTab], counts: bool| {
+        tabs.iter()
+            .map(|tab| {
+                UnicodeWidthStr::width(tab.label)
+                    + if counts && tab.count > 0 {
+                        1 + tab.count.to_string().len()
+                    } else {
+                        0
+                    }
+                    + 2
+            })
+            .sum::<usize>()
+            .saturating_add(tabs.len().saturating_sub(1).saturating_mul(2))
+            .saturating_add(1)
+            <= width
+    };
+    if !fits(&entries, true) {
+        show_counts = false;
+    }
+    while !fits(&entries, show_counts) && entries.len() > 1 {
+        let remove = entries
+            .iter()
+            .rposition(|tab| {
+                matches!(
+                    tab.target,
+                    DockTabTarget::Panel(RailPanel::Pinned | RailPanel::Context)
+                ) && tab.target != DockTabTarget::Panel(app.work_surface.panel)
+            })
+            .or_else(|| {
+                entries
+                    .iter()
+                    .rposition(|tab| tab.target != DockTabTarget::Panel(app.work_surface.panel))
+            });
+        let Some(index) = remove else { break };
+        entries.remove(index);
+    }
+
+    let tab_y = if app.work_surface.effective_placement == WorkSurfacePlacement::Bottom {
+        area.y.saturating_add(1)
+    } else {
+        area.y
+    };
+    let tab_area = Rect {
+        x: area.x,
+        y: tab_y,
+        width: area.width,
+        height: 1,
+    };
+    let close_area = Rect {
+        x: tab_area.right().saturating_sub(1),
+        y: tab_y,
+        width: 1,
+        height: 1,
+    };
+    app.work_surface.dock_tabs.clear();
+    for tab in &entries {
+        let label = if show_counts && tab.count > 0 {
+            format!("{} {}", tab.label, tab.count)
+        } else {
+            tab.label.to_string()
+        };
+        let tab_width = u16::try_from(UnicodeWidthStr::width(label.as_str()).saturating_add(2))
+            .unwrap_or(u16::MAX)
+            .min(tab_area.width);
+        let x = tab_area.x.saturating_add(
+            app.work_surface
+                .dock_tabs
+                .last()
+                .map(|hitbox| hitbox.area.right().saturating_sub(tab_area.x) + 2)
+                .unwrap_or(0),
+        );
+        if x.saturating_add(tab_width) > close_area.x {
+            break;
+        }
+        let hitbox = Rect {
+            x,
+            y: tab_y,
+            width: tab_width,
+            height: 1,
+        };
+        let active = tab.target == DockTabTarget::Panel(app.work_surface.panel);
+        let pressed = app.work_surface.pressed_tab == Some(tab.target);
+        let hovered = app.work_surface.hovered_tab == Some(tab.target);
+        let style = if active || pressed {
+            chrome_style(&app.ui_theme, ChromeInk::MetadataValue)
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        } else if hovered {
+            chrome_style(&app.ui_theme, ChromeInk::MetadataValue).add_modifier(Modifier::UNDERLINED)
+        } else {
+            chrome_style(&app.ui_theme, ChromeInk::Metadata)
+        };
+        Paragraph::new(Line::from(Span::styled(format!(" {label} "), style)))
+            .render(hitbox, frame.buffer_mut());
+        app.work_surface.dock_tabs.push(DockTabHitbox {
+            target: tab.target,
+            area: hitbox,
+        });
+    }
+    let close_style = if app.work_surface.hovered_tab == Some(DockTabTarget::Close) {
+        chrome_style(&app.ui_theme, ChromeInk::Attention)
+    } else {
+        chrome_style(&app.ui_theme, ChromeInk::Metadata)
+    };
+    Paragraph::new(Line::from(Span::styled(close, close_style)))
+        .render(close_area, frame.buffer_mut());
+    app.work_surface.dock_tabs.push(DockTabHitbox {
+        target: DockTabTarget::Close,
+        area: close_area,
+    });
+}
+
+fn register_dock_targets(app: &mut App) {
+    let targets = app.work_surface.dock_tabs.clone();
+    for hitbox in targets {
+        let (id, action) = match hitbox.target {
+            DockTabTarget::Panel(panel) => {
+                let id = match panel {
+                    RailPanel::Tasks => crate::tui::tideline::InteractionTargetId::DOCK_TAB_TASKS,
+                    RailPanel::Agents => crate::tui::tideline::InteractionTargetId::DOCK_TAB_AGENTS,
+                    RailPanel::Context => {
+                        crate::tui::tideline::InteractionTargetId::DOCK_TAB_CONTEXT
+                    }
+                    RailPanel::Pinned => crate::tui::tideline::InteractionTargetId::DOCK_TAB_PINNED,
+                };
+                (
+                    id,
+                    crate::tui::tideline::InteractionAction::ShowDockPanel(panel),
+                )
+            }
+            DockTabTarget::Close => (
+                crate::tui::tideline::InteractionTargetId::DOCK_CLOSE,
+                crate::tui::tideline::InteractionAction::DismissDock,
+            ),
+        };
+        app.viewport
+            .interaction_targets
+            .register(crate::tui::tideline::InteractionTarget {
+                id,
+                area: hitbox.area,
+                focus: crate::tui::tideline::InteractionFocus::Direct,
+                keyboard_action: Some(action),
+                mouse_action: Some(action),
+                inspect_detail: crate::tui::tideline::InspectDetail::Route,
+            });
     }
 }
 

@@ -485,7 +485,12 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
             .interaction_targets
             .target_at(mouse.column, mouse.row)
             .and_then(|target| target.mouse_action);
-        if let Some(action) = action {
+        if let Some(action) = action
+            && !matches!(
+                action,
+                InteractionAction::ShowDockPanel(_) | InteractionAction::DismissDock
+            )
+        {
             app.needs_redraw = true;
             return match action {
                 InteractionAction::InspectContext => {
@@ -494,6 +499,9 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
                 }
                 InteractionAction::OpenProviderPicker => {
                     vec![ViewEvent::TopbarRoutePickerRequested]
+                }
+                InteractionAction::ShowDockPanel(_) | InteractionAction::DismissDock => {
+                    unreachable!("dock targets defer to the strip")
                 }
             };
         }
@@ -866,8 +874,7 @@ pub(crate) fn apply_sidebar_row_action(app: &mut App, action: SidebarRowAction) 
                 RailPanel::Agents => RailPanel::Tasks,
                 _ => RailPanel::Agents,
             };
-            app.work_surface.panel = target;
-            app.work_surface.focused = true;
+            crate::tui::work_surface::select_dock_panel(app, target);
             app.status_message = Some(
                 match target {
                     RailPanel::Agents => "Showing subagents",

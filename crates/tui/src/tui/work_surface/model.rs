@@ -63,6 +63,18 @@ pub enum RailPanel {
     Pinned,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DockTabTarget {
+    Panel(RailPanel),
+    Close,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct DockTabHitbox {
+    pub(super) target: DockTabTarget,
+    pub(super) area: Rect,
+}
+
 impl RailPanel {
     #[must_use]
     pub fn parse(value: &str) -> Self {
@@ -256,6 +268,11 @@ pub struct WorkSurfaceState {
     pub last_area: Option<Rect>,
     pub visible_rows: usize,
     pub total_rows: usize,
+    pub(super) dock_tabs: Vec<DockTabHitbox>,
+    pub(super) pressed_tab: Option<DockTabTarget>,
+    pub(super) hovered_tab: Option<DockTabTarget>,
+    pub dismissed: bool,
+    pub dismissed_at_rows: usize,
     pub(super) hovered: Option<WorkRowId>,
     pub(super) hitboxes: Vec<WorkHitbox>,
     pub(super) cached_graph: Option<WorkGraphSnapshot>,
@@ -336,6 +353,11 @@ impl WorkSurfaceState {
             last_area: None,
             visible_rows: 0,
             total_rows: 0,
+            dock_tabs: Vec::new(),
+            pressed_tab: None,
+            hovered_tab: None,
+            dismissed: false,
+            dismissed_at_rows: 0,
             hovered: None,
             hitboxes: Vec::new(),
             cached_graph: None,
