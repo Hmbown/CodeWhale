@@ -394,7 +394,7 @@ pub(crate) async fn execute_read_media(
 
     let delivery_note = build_delivery_note(&processed, crop_region);
 
-    let content_text = format!(
+    let mut content_text = format!(
         "Read media file: {path_str} [{delivered_mime}]\n\
          Original dimensions: {orig_width}x{orig_height} ({mime_type})\n\
          Processed dimensions: {final_width}x{final_height}\n\
@@ -412,6 +412,11 @@ pub(crate) async fn execute_read_media(
         final_width = processed.final_width,
         final_height = processed.final_height,
     );
+    if context.route_capabilities.image_input == CapabilityState::Unknown {
+        content_text.push_str(
+            "\nRoute image support is unverified; if the model cannot see this image, use image_ocr.",
+        );
+    }
 
     let metadata_json = json!({
         "path": path_str,
@@ -1683,7 +1688,10 @@ mod tests {
         let res_unk = tool
             .execute_rich(json!({ "path": "check.png" }), &ctx_unk)
             .await;
-        assert!(res_unk.is_ok());
+        let rich_unk = res_unk.unwrap();
+        assert!(rich_unk.content.contains(
+            "Route image support is unverified; if the model cannot see this image, use image_ocr."
+        ));
     }
 
     #[tokio::test]
