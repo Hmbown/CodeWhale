@@ -15,6 +15,11 @@ improved in public with the people who use it.
 [![npm](https://img.shields.io/npm/v/codewhale?label=npm)](https://www.npmjs.com/package/codewhale)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/37gfS3ksug)
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot.webp">
+  <img src="assets/screenshot.webp" alt="A Codewhale terminal session" width="720">
+</picture>
+
 ## Install
 
 ```bash

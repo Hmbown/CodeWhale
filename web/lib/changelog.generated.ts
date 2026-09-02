@@ -28,8 +28,19 @@ export const CHANGELOG: ChangelogRelease[] = [
     "compareUrl": "https://github.com/Hmbown/CodeWhale/compare/v0.9.11...HEAD",
     "sections": [
       {
+        "heading": "Added",
+        "items": [
+          "Alibaba Model Studio joins the data-driven provider table as an openai-compatible descriptor: international compatible-mode endpoint, DASHSCOPE_API_KEY credential, live /v1/models discovery. Qwen 3.8 Flash and Qwen 3.8 Max arrive through the catalog authority — never a hard-coded id."
+        ],
+        "itemCount": 1
+      },
+      {
         "heading": "Changed",
         "items": [
+          "The launch screen is our own card take: a thin top line ⑂ branch path; a centred bordered card with the whale mark, Codewhale + version, one announcement line only when it is true (the no-model warning, or MCP news), and the menu New worktree / Resume session / Changelog / Quit with their real chords right-aligned. Enter runs the highlighted entry, Up/Down move it, and typing goes straight to the composer. The card dissolves on the first keystroke or command (≤240 ms,…",
+          "After the card dissolves, the working screen shows ⑂ branch path with ⋮ MCP n/m on the right, the transcript starts with the ◆ session_start receipt (naming the configured session-start hooks), and the composer's bottom rule carries model (effort) · permission — the route's one launch reading. The posture bar and metrics line appear only once a session exists.",
+          "Vocabulary: fleet is the public term and Pod is retired from copy — roster, setup, detail, worker-runtime and managed-API messages now say Fleet (/fleet canonical, /pod alias). The workflow wire accepts the canonical role spellings (general/explore/planner/reviewer/implement/ test/advisor) with the pre-rename ones kept as load-time aliases, and serializes canonical names.",
+          "The Operate mode-picker hint is shortened to fit 80 columns.",
           "The footer always shows the permission posture; when only one chip fits, the permission chip outranks the mode word (#5796).",
           "Local Ollama: the header names a model only when the local catalog can serve it, and says unknown until it knows. The startup mark, web and app icon carry the new side-view prompt-eye whale (#5795).",
           "One focus owner: Tab and Shift+Tab work regardless of what is in the composer; Alt shortcuts survive mid-draft; Ctrl+Tab no longer cycles the mode by accident (#5798).",
@@ -37,13 +48,9 @@ export const CHANGELOG: ChangelogRelease[] = [
           "Web: docs hub with task search, shared empty/loading/error states, an offline-to-back-online banner, /changelog in every locale, and real 404s with correct metadata (#5743).",
           "Web: the app's colours come from one file generated from the TUI whale palette; re-typing a colour by hand fails web CI (#5797).",
           "Web: a one-way ceiling on isZh branching outside the i18n spine — the count may only go down (#5805).",
-          "An internal agent handoff doc was removed from the public tree and .playwright-mcp/ is now ignored (#5800).",
-          "First run paints the composer immediately: the Welcome/language/provider/ trust gates no longer precede the first keystroke. Missing-key and workspace-trust recovery stay for returning users; language and provider remain in /setup.",
-          "The canonical whale-tile mark propagates beyond web to the exact-raster surfaces that can carry it (#5738).",
-          "Dead-code sweep: delete proven-unreferenced helpers (unused builders, wrappers, and leftover identifiers) and drop stale #[allow(dead_code)] where the item is production-called or test-exercised. No runtime behavior change (#5791, #5587).",
-          "Remote-control recovery gives every fresh pre-dispatch attempt a new lease generation while preserving that generation across its typed start (#5605)."
+          "An internal agent handoff doc was removed from the public tree and .playwright-mcp/ is now ignored (#5800)."
         ],
-        "itemCount": 19
+        "itemCount": 23
       },
       {
         "heading": "Added",
