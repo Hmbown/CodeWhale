@@ -13,13 +13,13 @@ pub const WHALE_TEXT_BODY_RGB: (u8, u8, u8) = (246, 242, 232); // #F6F2E8 Whale 
 pub const WHALE_TEXT_SOFT_RGB: (u8, u8, u8) = (182, 192, 212); // #B6C0D4
 pub const WHALE_TEXT_MUTED_RGB: (u8, u8, u8) = (147, 160, 184); // #93A0B8
 pub const WHALE_TEXT_HINT_RGB: (u8, u8, u8) = (138, 153, 179); // #8A99B3 — AA hint on the ink field
-#[expect(dead_code)]
-pub const WHALE_TEXT_DIM_RGB: (u8, u8, u8) = (105, 119, 145); // #697791
 /// Blue Stage grammar: the interaction blue is the primary accent and the
 /// Info ink; it has exactly one name. Signal Gold is reserved for the whale
 /// mark and human-attention roles ([`WHALE_HUMAN_RGB`]), never for general
 /// interaction.
 pub const WHALE_ACTION_RGB: (u8, u8, u8) = (106, 166, 220); // #6AA6DC Ombre sky — owns interaction on dark
+// No TUI consumer yet; the web reads these through scripts/export-design-tokens.py
+// (`--whale-cobalt`, `--whale-ice`), so they are not dead.
 #[expect(dead_code)]
 pub const WHALE_COBALT_RGB: (u8, u8, u8) = (21, 53, 178); // #1535B2 Ombre cobalt — light-mode action
 #[expect(dead_code)]
@@ -67,8 +67,6 @@ pub const SOLARIZED_ELEVATED_RGB: (u8, u8, u8) = (0xE4, 0xDF, 0xCF);
 pub const SOLARIZED_SELECT_RGB: (u8, u8, u8) = (0xD6, 0xD2, 0xC9);
 
 pub const WHALE_DIFF_ADDED_RGB: (u8, u8, u8) = (87, 199, 133); // #57C785
-#[expect(dead_code)]
-pub const WHALE_DIFF_DELETED_RGB: (u8, u8, u8) = WHALE_ERROR_RGB;
 pub const WHALE_DIFF_ADDED_BG_RGB: (u8, u8, u8) = (18, 42, 34); // #122A22
 // Raw colors that are remapped by equality must remain distinct across roles.
 // These stay in the same perceptual families as action, danger, and human asks
@@ -441,15 +439,7 @@ pub const LIGHT_USER_BODY: Color = LIGHT_SUCCESS_FG;
 // Compatibility semantic colors for UI theming
 pub const BORDER_COLOR: Color =
     Color::Rgb(BORDER_COLOR_RGB.0, BORDER_COLOR_RGB.1, BORDER_COLOR_RGB.2);
-#[expect(dead_code)]
-pub const ACCENT_SECONDARY: Color = Color::Rgb(
-    WHALE_ACCENT_SECONDARY_RGB.0,
-    WHALE_ACCENT_SECONDARY_RGB.1,
-    WHALE_ACCENT_SECONDARY_RGB.2,
-);
 pub const BACKGROUND_DARK: Color = Color::Rgb(WHALE_BG_RGB.0, WHALE_BG_RGB.1, WHALE_BG_RGB.2);
-#[expect(dead_code)]
-pub const STATUS_NEUTRAL: Color = TEXT_MUTED;
 pub const SURFACE_PANEL: Color =
     Color::Rgb(WHALE_PANEL_RGB.0, WHALE_PANEL_RGB.1, WHALE_PANEL_RGB.2);
 pub const SURFACE_ELEVATED: Color = Color::Rgb(
