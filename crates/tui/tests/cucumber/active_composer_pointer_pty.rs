@@ -197,13 +197,19 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     let deadline = Instant::now() + qa_harness::harness::ci_scaled(SETTLE_WAIT);
     let retry_at = Instant::now() + qa_harness::harness::ci_scaled(SETTLE_WAIT / 2);
     let mut retried = false;
+    println!(
+        "POINTER DEBUG {size}: queued_before={queued_before:?} expected={expected:?} receipt={receipt:?}"
+    );
     loop {
         tui.pump();
         let text = normalized_text(tui.frame());
-        let grew = queued_count(&text)
-            .zip(expected)
-            .is_some_and(|(seen, want)| seen == want);
+        let seen = queued_count(&text);
+        let grew = seen.zip(expected).is_some_and(|(s, want)| s == want);
         if text.contains(receipt) || grew {
+            println!(
+                "POINTER DEBUG {size}: broke with seen={seen:?} expected={expected:?} receipt_seen={}",
+                text.contains(receipt)
+            );
             break;
         }
         // One bounded retry at the half-way point: re-find the affordance
@@ -228,7 +234,7 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
             panic!(
                 "{size}: click on [↑] at ({send_row},{}) produced no queue receipt \
                  {receipt:?} and no queue growth — pointer submit did not reach the \
-                 keyboard-submit dispatch path (last_seen={last_seen:?}, \
+                 keyboard-submit dispatch path (seen={seen:?}, \
                  expected={expected:?})\n{}",
                 send_col + 1,
                 tui.diagnostics()
