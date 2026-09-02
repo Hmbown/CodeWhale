@@ -31,7 +31,7 @@ impl OceanTreatment {
     #[must_use]
     pub fn parse(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
-            "deepsea" | "ombre" | "gradient" | "classic" => Self::Deepsea,
+            "deepsea" | "underwater" | "ombre" | "gradient" | "classic" => Self::Deepsea,
             // Invalid persisted values must never opt the user into a painted
             // surface. The settings editor validates new values before save.
             _ => Self::Flat,

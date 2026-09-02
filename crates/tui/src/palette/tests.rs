@@ -1089,3 +1089,28 @@ fn violation_report_names_pair_and_ratio() {
     assert!(violation.ratio < violation.floor);
     assert_eq!(violation.floor, AA_BODY_CONTRAST);
 }
+
+#[test]
+fn direct_field_paint_follows_the_terminal_owned_shell() {
+    // Widgets that paint `bg(WHALE_BG)` directly follow the theme's shell
+    // instead of laying a navy patch over the terminal's own ground.
+    assert_eq!(
+        adapt_bg_for_theme(WHALE_BG, ThemeId::Whale, &UI_THEME),
+        Color::Reset
+    );
+    assert_eq!(
+        adapt_bg_for_theme(WHALE_BG, ThemeId::WhaleLight, &LIGHT_UI_THEME),
+        Color::Reset
+    );
+    // A user `background_color` override is the field for direct paints too.
+    let custom = UI_THEME.with_background_color(Color::Rgb(1, 2, 3));
+    assert_eq!(
+        adapt_bg_for_theme(WHALE_BG, ThemeId::Whale, &custom),
+        Color::Rgb(1, 2, 3)
+    );
+    // Semantic surfaces keep their paint on the whale pair.
+    assert_eq!(
+        adapt_bg_for_theme(SELECTION_BG, ThemeId::Whale, &UI_THEME),
+        SELECTION_BG
+    );
+}

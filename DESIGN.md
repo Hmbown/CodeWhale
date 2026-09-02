@@ -157,10 +157,12 @@ status colours. `web/app/globals.css` maps them to semantic names: `--paper`
 (bg), `--paper-deep` (panel), `--ink` (text), `--ink-soft`, `--ink-mute`,
 `--indigo` (action), `--hairline` (action at 20 % alpha).
 
-- **Field:** `bg` for the page and the transcript, `chrome` for bars and the
-  dock, `panel` for cards and code, `composer` for the raised input plate,
-  `elevated` only for overlays. Never stack more than two surface steps in
-  one view.
+- **Field:** on the web, `bg` for the page and the transcript and `chrome`
+  for bars and the dock; in the TUI the ground is the terminal's own
+  background (`Color::Reset`), and the navy field is painted only under the
+  opt-in `ocean_treatment = "deepsea"` (alias `underwater`) column. `panel`
+  for cards and code, `composer` for the raised input plate, `elevated` only
+  for overlays. Never stack more than two surface steps in one view.
 - **Type:** `text-body` for copy, `text-soft` for secondary, `text-muted` for
   meta. `text-dim` (#697791) is for borders only — it fails AA on the panels.
 - **Action:** one blue (`action`) for links, buttons, and focus rings; hover

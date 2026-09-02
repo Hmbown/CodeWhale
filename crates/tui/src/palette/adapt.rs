@@ -280,13 +280,20 @@ pub fn adapt_fg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
 /// `ui` note on [`adapt_fg_for_theme`] — same contract here.
 #[must_use]
 pub fn adapt_bg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
+    // The field follows the active shell for every preset, not only the
+    // remapped ones: the Whale pair leaves `surface_bg` at `Color::Reset` so
+    // the terminal owns the ground, and a direct `bg(WHALE_BG)` paint must
+    // not lay a navy patch over it. Deepsea repaints Reset cells through the
+    // ocean column afterwards; a user `background_color` override lands here
+    // too.
+    if color == WHALE_BG || color == BACKGROUND_DARK {
+        return ui.surface_bg;
+    }
     if !theme_remap_active(theme) {
         return color;
     }
 
-    if color == WHALE_BG || color == BACKGROUND_DARK {
-        ui.surface_bg
-    } else if color == WHALE_PANEL
+    if color == WHALE_PANEL
         || color == COMPOSER_BG
         || color == SURFACE_PANEL
         || color == SURFACE_TOOL

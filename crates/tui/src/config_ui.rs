@@ -272,7 +272,7 @@ pub enum UiThemeValue {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum OceanTreatmentValue {
-    #[serde(alias = "ombre")]
+    #[serde(alias = "ombre", alias = "underwater")]
     Deepsea,
     Flat,
 }
