@@ -4265,6 +4265,9 @@ pub(crate) async fn run_event_loop(
                 {
                     return Ok(());
                 }
+                if app.pending_launch_action.is_none() {
+                    restore_launch_card_after_view_close(app);
+                }
                 if let Some(action) = app.pending_launch_action.take() {
                     match action {
                         crate::tui::underwater::LaunchAction::None => {}
@@ -4272,8 +4275,8 @@ pub(crate) async fn run_event_loop(
                             app.launch.status =
                                 Some(app.tr(MessageId::LaunchCreatingWorktree).into_owned());
                             match provision_launch_worktree(app.workspace.clone(), name).await {
-                                Ok(workspace) => {
-                                    let result = begin_launch_session(app, Some(workspace));
+                                Ok(provisioned) => {
+                                    let result = begin_launch_worktree_session(app, provisioned);
                                     if apply_command_result(
                                         terminal,
                                         app,
@@ -4297,12 +4300,14 @@ pub(crate) async fn run_event_loop(
                             }
                         }
                         crate::tui::underwater::LaunchAction::Resume => {
-                            // A launched command dissolves the card.
-                            app.launch.dissolve_card(app.ambient_clock_ms);
                             if app.launch.workspace_session_count == 0 {
+                                // Nothing to open: the card stays and says so.
                                 app.launch.status =
                                     Some(app.tr(MessageId::LaunchNoSavedSessions).into_owned());
                             } else {
+                                // A launched command dissolves the card; Esc
+                                // out of the picker brings it back.
+                                app.launch.dissolve_card(app.ambient_clock_ms);
                                 app.view_stack
                                     .push(SessionPickerView::new(&app.workspace, app.ui_locale));
                             }
@@ -4740,6 +4745,7 @@ pub(crate) async fn run_event_loop(
                     {
                         return Ok(());
                     }
+                    restore_launch_card_after_view_close(app);
                     continue;
                 }
 
@@ -4778,9 +4784,15 @@ pub(crate) async fn run_event_loop(
                         crate::tui::underwater::LaunchComposerKey::MenuNavigate(delta) => {
                             // The card is up: Up/Down move its menu selection.
                             let entries = crate::tui::underwater::LAUNCH_MENU_ENTRIES as i32;
-                            app.launch.menu_selected = (app.launch.menu_selected as i32 + delta)
-                                .rem_euclid(entries)
-                                as usize;
+                            // First arrow lands on the first (Up: last)
+                            // entry; from there it moves.
+                            app.launch.menu_selected = Some(match app.launch.menu_selected {
+                                None if delta < 0 => (entries - 1) as usize,
+                                None => 0,
+                                Some(current) => {
+                                    (current as i32 + delta).rem_euclid(entries) as usize
+                                }
+                            });
                             app.needs_redraw = true;
                             continue;
                         }
@@ -4854,8 +4866,8 @@ pub(crate) async fn run_event_loop(
                             app.launch.status =
                                 Some(app.tr(MessageId::LaunchCreatingWorktree).into_owned());
                             match provision_launch_worktree(app.workspace.clone(), name).await {
-                                Ok(workspace) => {
-                                    let result = begin_launch_session(app, Some(workspace));
+                                Ok(provisioned) => {
+                                    let result = begin_launch_worktree_session(app, provisioned);
                                     if apply_command_result(
                                         terminal,
                                         app,
@@ -4879,12 +4891,14 @@ pub(crate) async fn run_event_loop(
                             }
                         }
                         crate::tui::underwater::LaunchAction::Resume => {
-                            // A launched command dissolves the card.
-                            app.launch.dissolve_card(app.ambient_clock_ms);
                             if app.launch.workspace_session_count == 0 {
+                                // Nothing to open: the card stays and says so.
                                 app.launch.status =
                                     Some(app.tr(MessageId::LaunchNoSavedSessions).into_owned());
                             } else {
+                                // A launched command dissolves the card; Esc
+                                // out of the picker brings it back.
+                                app.launch.dissolve_card(app.ambient_clock_ms);
                                 app.view_stack
                                     .push(SessionPickerView::new(&app.workspace, app.ui_locale));
                             }

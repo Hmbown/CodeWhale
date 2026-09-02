@@ -134,7 +134,10 @@ pub fn run_launch_menu_entry(
     launch: &mut crate::tui::app::LaunchState,
     locale: Locale,
 ) -> LaunchAction {
-    match launch.menu_selected % LAUNCH_MENU_ENTRIES {
+    let Some(selected) = launch.menu_selected else {
+        return LaunchAction::None;
+    };
+    match selected % LAUNCH_MENU_ENTRIES {
         0 => {
             open_launch_worktree_prompt(launch, locale);
             LaunchAction::None
@@ -157,8 +160,10 @@ pub fn run_launch_menu_entry(
 /// empty Enter, the launch chords, and submitting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaunchComposerKey {
-    /// The key is fully consumed and does nothing (Enter on an empty
-    /// composer: there is no row to run and nothing to send).
+    /// The key is fully consumed and does nothing more (Enter on an empty
+    /// composer with no menu entry highlighted: there is no row to run and
+    /// nothing to send; Esc clearing the menu highlight or bringing the
+    /// card back).
     Consumed,
     /// Submit the composed message through the normal dispatch path.
     Submit,
@@ -176,8 +181,8 @@ pub enum LaunchComposerKey {
     ComposerAuthority,
     /// Move the launch card's menu selection (Up/Down while the card is up).
     MenuNavigate(i32),
-    /// Run the card's highlighted menu entry (Enter while the card is up and
-    /// the composer is empty).
+    /// Run the card's highlighted menu entry (Enter while the card is up,
+    /// the composer is empty, and the user has arrowed onto an entry).
     MenuRun,
 }
 
@@ -212,9 +217,9 @@ pub fn handle_launch_composer_key(app: &mut App, key: KeyEvent) -> LaunchCompose
                 app.close_slash_menu();
             }
             if app.input.trim().is_empty() {
-                if card_up {
-                    // The card owns Enter while it is up: run the
-                    // highlighted menu entry.
+                if card_up && app.launch.menu_selected.is_some() {
+                    // The card owns Enter only once the user has arrowed
+                    // onto an entry; an untouched menu runs nothing.
                     return LaunchComposerKey::MenuRun;
                 }
                 LaunchComposerKey::Consumed
@@ -225,6 +230,17 @@ pub fn handle_launch_composer_key(app: &mut App, key: KeyEvent) -> LaunchCompose
         }
         KeyCode::Up if card_up => LaunchComposerKey::MenuNavigate(-1),
         KeyCode::Down if card_up => LaunchComposerKey::MenuNavigate(1),
+        // Esc walks back one step: a highlighted menu entry is unhighlighted;
+        // an empty composer with the card gone brings the card back. A draft
+        // in the composer keeps Esc's composer meaning.
+        KeyCode::Esc if card_up && app.launch.menu_selected.is_some() => {
+            app.launch.menu_selected = None;
+            LaunchComposerKey::Consumed
+        }
+        KeyCode::Esc if !card_up && app.input.is_empty() => {
+            app.launch.restore_card();
+            LaunchComposerKey::Consumed
+        }
         KeyCode::Char('r' | 'n' | 'l' | 'q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             LaunchComposerKey::MenuChord
         }
@@ -1930,7 +1946,7 @@ mod launch_contract_tests {
             composer_focus: true,
             composer_area: None,
             send_area: None,
-            menu_selected: 0,
+            menu_selected: None,
             dissolve_started_ms: None,
             claude_code_detected: false,
         }
@@ -2027,7 +2043,8 @@ mod launch_composer_tests {
     use super::{
         LaunchAction, LaunchComposerKey, apply_launch_hitboxes, handle_launch_composer_key,
         handle_launch_key, launch_composer_rows, render_launch_completion_popup,
-        render_tideline_startup, tideline_startup_from_app, tideline_startup_hitboxes,
+        render_tideline_startup, run_launch_menu_entry, tideline_startup_from_app,
+        tideline_startup_hitboxes,
     };
     use crate::localization::{Locale, MessageId, tr};
     use crate::tui::app::App;
@@ -2389,27 +2406,80 @@ mod launch_composer_tests {
         assert_eq!(app.handle_composer_enter().as_deref(), Some("hello world"));
         assert!(app.input.is_empty());
 
-        // Enter on an empty composer runs the card's highlighted menu
-        // entry while the card is up; the classification alone does not
-        // move focus (the event loop runs the entry).
+        // Enter on an empty composer with an untouched menu runs nothing:
+        // no entry is pre-selected, so a reflexive Enter at launch cannot
+        // create a worktree (founder live-test, 2026-09-02).
         let mut empty = launch_app();
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(empty.launch.menu_selected, None);
+        assert_eq!(
+            handle_launch_composer_key(&mut empty, enter),
+            LaunchComposerKey::Consumed
+        );
+        assert_eq!(
+            run_launch_menu_entry(&mut empty.launch, Locale::En),
+            LaunchAction::None
+        );
+        assert!(empty.launch.worktree_input.is_none());
+        assert!(empty.launch.composer_focus);
+        // Once the user has arrowed onto an entry, Enter runs it.
         assert_eq!(
             handle_launch_composer_key(
                 &mut empty,
-                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)
             ),
+            LaunchComposerKey::MenuNavigate(1)
+        );
+        empty.launch.menu_selected = Some(0);
+        assert_eq!(
+            handle_launch_composer_key(&mut empty, enter),
             LaunchComposerKey::MenuRun
         );
-        assert!(empty.launch.composer_focus);
+        // Esc unhighlights the menu instead of reaching the composer.
+        assert_eq!(
+            handle_launch_composer_key(&mut empty, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            LaunchComposerKey::Consumed
+        );
+        assert_eq!(empty.launch.menu_selected, None);
         // Once the card has dissolved, empty-composer Enter is consumed:
         // there is no row to run and nothing to send.
         empty.launch.dissolve_started_ms = Some(0);
         assert_eq!(
-            handle_launch_composer_key(
-                &mut empty,
-                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
-            ),
+            handle_launch_composer_key(&mut empty, enter),
             LaunchComposerKey::Consumed
+        );
+        // And Esc on the empty composer brings the card back.
+        assert_eq!(
+            handle_launch_composer_key(&mut empty, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            LaunchComposerKey::Consumed
+        );
+        assert_eq!(empty.launch.dissolve_started_ms, None);
+    }
+
+    #[test]
+    fn worktree_prompt_esc_returns_to_the_card() {
+        let mut app = launch_app();
+        app.launch.worktree_available = true;
+        app.launch.menu_selected = Some(0);
+        assert_eq!(
+            run_launch_menu_entry(&mut app.launch, Locale::En),
+            LaunchAction::None
+        );
+        assert!(app.launch.worktree_input.is_some());
+        assert!(!app.launch.composer_focus);
+        assert_eq!(
+            handle_launch_key(
+                &mut app.launch,
+                KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                Locale::En
+            ),
+            LaunchAction::None
+        );
+        assert!(app.launch.worktree_input.is_none());
+        assert!(app.launch.composer_focus);
+        assert!(
+            app.launch.dissolve_started_ms.is_none(),
+            "the card is still up"
         );
     }
 
@@ -2880,8 +2950,8 @@ pub struct TidelineStartup<'a> {
     /// How far the launch card has dissolved, `[0.0 intact ..= 1.0 gone]`.
     /// Injected for the same determinism as `surface_progress`.
     pub card_dissolve: f32,
-    /// The card menu's highlighted entry.
-    pub menu_selected: usize,
+    /// The card menu's highlighted entry, if the user has arrowed onto one.
+    pub menu_selected: Option<usize>,
     /// The one migration notice above the composer, only when true.
     pub notice: Option<String>,
     /// `model (effort) · permission` — the composer bottom rule's trailing
@@ -2910,7 +2980,7 @@ impl<'a> TidelineStartup<'a> {
             mark: MarkTier::Braille,
             surface_progress: 1.0,
             card_dissolve: 0.0,
-            menu_selected: 0,
+            menu_selected: None,
             notice: None,
             composer_rule: None,
             branch: None,
@@ -2934,7 +3004,7 @@ impl<'a> TidelineStartup<'a> {
 
     /// Set the card menu's highlighted entry.
     #[must_use]
-    pub fn menu_selected(mut self, selected: usize) -> Self {
+    pub fn menu_selected(mut self, selected: Option<usize>) -> Self {
         self.menu_selected = selected;
         self
     }
@@ -3391,10 +3461,11 @@ fn render_launch_card(
         row += 1;
     }
 
-    // The menu: Enter runs the highlighted entry; chords right-aligned.
-    let selected = startup.menu_selected % LAUNCH_MENU_ENTRIES;
+    // The menu: ↑/↓ highlight, Enter runs the highlighted entry; chords
+    // right-aligned. Nothing is highlighted until the user arrows.
+    let selected = startup.menu_selected.map(|s| s % LAUNCH_MENU_ENTRIES);
     for (index, (label, chord)) in entries.iter().enumerate().take(menu_rows as usize) {
-        let is_selected = index == selected;
+        let is_selected = selected == Some(index);
         let marker = startup.sym(crate::tui::glyphs::selection_marker(is_selected));
         let marker_style = if is_selected {
             faded(

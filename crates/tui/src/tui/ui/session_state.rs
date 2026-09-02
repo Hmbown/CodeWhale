@@ -609,13 +609,30 @@ pub(crate) fn launch_worktree_spec(
 pub(crate) async fn provision_launch_worktree(
     workspace: PathBuf,
     requested: String,
-) -> Result<PathBuf> {
+) -> Result<codewhale_lane::ProvisionedWorktree> {
     let spec = launch_worktree_spec(&workspace, &requested)?;
-    let provisioned =
-        tokio::task::spawn_blocking(move || codewhale_lane::provision_worktree(&spec))
-            .await
-            .context("new worktree task failed")??;
-    Ok(provisioned.path)
+    tokio::task::spawn_blocking(move || codewhale_lane::provision_worktree(&spec))
+        .await
+        .context("new worktree task failed")?
+}
+
+/// Start the launch session inside a freshly provisioned worktree and leave a
+/// receipt in the transcript saying where it went: the card's New worktree
+/// entry used to succeed silently, which reads as having done nothing.
+pub(crate) fn begin_launch_worktree_session(
+    app: &mut App,
+    provisioned: codewhale_lane::ProvisionedWorktree,
+) -> commands::CommandResult {
+    let receipt = app
+        .tr(MessageId::LaunchWorktreeCreated)
+        .replace("{path}", &provisioned.path.display().to_string())
+        .replace("{branch}", &provisioned.branch);
+    let result = begin_launch_session(app, Some(provisioned.path));
+    app.add_message(HistoryCell::System {
+        content: receipt.clone(),
+    });
+    app.status_message = Some(receipt);
+    result
 }
 
 pub(crate) fn begin_launch_session(
@@ -1192,5 +1209,114 @@ mod stall_outbox_tests {
             !dir.path().join("outbox.jsonl").exists(),
             "no outbox file must be created when the feature is off"
         );
+    }
+}
+
+#[cfg(test)]
+mod launch_worktree_tests {
+    use super::*;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("git runs");
+        assert!(status.success(), "git {args:?} in {}", dir.display());
+    }
+
+    /// The launch card's New worktree entry must produce a real, checked-out
+    /// worktree and hand the new session that path — not just print a status.
+    #[tokio::test]
+    async fn new_worktree_creates_a_checkout_and_the_session_starts_inside_it() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let repo = root.path().join("proj");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "root",
+            ],
+        );
+        std::fs::write(repo.join("README.md"), "hello\n").unwrap();
+        git(&repo, &["add", "README.md"]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "commit",
+                "-q",
+                "-m",
+                "readme",
+            ],
+        );
+
+        let provisioned = provision_launch_worktree(repo.clone(), "Fix Login / v2".to_string())
+            .await
+            .expect("worktree provisioned");
+        let path = provisioned.path.clone();
+        assert_eq!(provisioned.branch, "codex/fix-login-v2");
+        // git reports the canonical toplevel (macOS: /private/var…), so
+        // compare canonical forms.
+        assert_eq!(
+            path.canonicalize().unwrap(),
+            root.path()
+                .join(".codewhale-worktrees")
+                .join("proj-fix-login-v2")
+                .canonicalize()
+                .unwrap()
+        );
+        assert!(path.join(".git").exists(), "worktree is a git checkout");
+        assert_eq!(
+            std::fs::read_to_string(path.join("README.md")).unwrap(),
+            "hello\n",
+            "worktree carries HEAD's files"
+        );
+        let head = std::process::Command::new("git")
+            .current_dir(&path)
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&head.stdout).trim(),
+            "codex/fix-login-v2"
+        );
+
+        // A second request for the same name says so instead of clobbering.
+        let err = provision_launch_worktree(repo.clone(), "fix login v2".to_string())
+            .await
+            .expect_err("duplicate path refused");
+        assert!(err.to_string().contains("already exists"), "{err}");
+
+        // The launch session is pointed at the worktree, not the origin repo.
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            crate::test_support::test_tui_options(dir.path()),
+            &Config::default(),
+        );
+        app.launch.visible = true;
+        let result = begin_launch_worktree_session(&mut app, provisioned);
+        assert_eq!(app.workspace, path);
+        assert!(!app.launch.visible);
+        let receipt = app.status_message.clone().expect("receipt");
+        assert!(receipt.contains("codex/fix-login-v2") && receipt.contains("proj-fix-login-v2"));
+        assert!(matches!(
+            result.action,
+            Some(AppAction::SyncSession { workspace, .. }) if workspace == path
+        ));
     }
 }

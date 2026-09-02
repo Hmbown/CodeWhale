@@ -556,8 +556,11 @@ pub struct LaunchState {
     /// composed message through the normal dispatch path.
     pub send_area: Option<Rect>,
     /// The launch card's highlighted menu entry (index into the four entries
-    /// the card paints, all of whose chords exist).
-    pub menu_selected: usize,
+    /// the card paints, all of whose chords exist). `None` until the user
+    /// arrows onto the menu: nothing is pre-selected, so a reflexive Enter at
+    /// launch does nothing rather than running "New worktree" (founder
+    /// live-test, 2026-09-02). Esc clears it again.
+    pub menu_selected: Option<usize>,
     /// Ambient-clock millisecond reading when the card began dissolving, if
     /// it has. The first keystroke or a launched command dissolves the card
     /// (founder decision, 2026-09-02).
@@ -616,7 +619,7 @@ impl LaunchState {
             composer_focus: true,
             composer_area: None,
             send_area: None,
-            menu_selected: 0,
+            menu_selected: None,
             dissolve_started_ms: None,
             claude_code_detected,
         }
@@ -628,6 +631,16 @@ impl LaunchState {
         if self.dissolve_started_ms.is_none() {
             self.dissolve_started_ms = Some(now_ms);
         }
+    }
+
+    /// Bring the card back after a launch flow (resume picker, changelog,
+    /// worktree prompt) is left with Esc: every launch path has a way back
+    /// to the card, so a dismissed picker never strands the user on an empty
+    /// stage. The menu comes back with nothing highlighted.
+    pub fn restore_card(&mut self) {
+        self.dissolve_started_ms = None;
+        self.menu_selected = None;
+        self.status = None;
     }
 
     /// How far the card has dissolved, `[0.0 intact ..= 1.0 gone]`. Reduced

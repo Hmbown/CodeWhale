@@ -84,6 +84,22 @@ pub(crate) fn toggle_help_view(app: &mut App) {
     app.needs_redraw = true;
 }
 
+/// After a shared view closes over the launch screen, bring the launch card
+/// back: Esc out of the resume picker or the changelog pager returns to the
+/// card rather than stranding the user on an empty stage. A view that began
+/// a session (`launch.visible == false`) or a draft in the composer leaves
+/// the dissolved card alone.
+pub(crate) fn restore_launch_card_after_view_close(app: &mut App) {
+    if app.launch.visible
+        && app.view_stack.is_empty()
+        && app.launch.dissolve_started_ms.is_some()
+        && app.input.is_empty()
+    {
+        app.launch.restore_card();
+        app.needs_redraw = true;
+    }
+}
+
 /// Choose which durable-task summaries should appear in the Work
 /// sidebar's Tasks panel.
 ///
