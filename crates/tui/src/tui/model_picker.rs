@@ -1940,6 +1940,8 @@ fn provider_entries_for_rows(
     active: ApiProvider,
     health: &crate::provider_readiness::ProviderReadinessSnapshot,
 ) -> Vec<ProviderEntry> {
+    let row_refs: Vec<&ModelPickerRow> = rows.iter().collect();
+    let route_labels = route_labels_for_rows(&row_refs);
     let mut entries: Vec<ProviderEntry> = Vec::new();
     for row in rows {
         let Some(provider) = row.provider else {
@@ -1955,10 +1957,16 @@ fn provider_entries_for_rows(
             entry.model_count += 1;
             continue;
         }
-        let label = identity
-            .clone()
-            .filter(|_| provider == ApiProvider::Custom)
-            .unwrap_or_else(|| provider.display_name().to_string());
+        let label = if provider == ApiProvider::Custom {
+            identity
+                .clone()
+                .unwrap_or_else(|| provider.display_name().to_string())
+        } else {
+            route_labels
+                .get(provider.as_str())
+                .cloned()
+                .unwrap_or_else(|| provider.display_name().to_string())
+        };
         entries.push(ProviderEntry {
             provider,
             identity,
