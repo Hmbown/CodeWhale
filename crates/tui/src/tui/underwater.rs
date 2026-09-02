@@ -3015,6 +3015,8 @@ const MARK_SURFACE_MS: u128 = 640;
 /// Rows the hero owes its type block: heading + subtitle. The mark is only
 /// drawn when it fits *above* these, so the words never lose to the picture.
 const HERO_TEXT_ROWS: u16 = 2;
+/// The centered identity wordmark directly below the surfacing mark.
+const HERO_WORDMARK_ROWS: u16 = 1;
 /// One blank row between the mark and the heading. Without it the fluke's
 /// stem and the cap-height of the heading collide into one shape.
 const HERO_MARK_GAP: u16 = 1;
@@ -3318,12 +3320,20 @@ pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &Tideline
     let theme = startup.theme;
     let layout = startup_layout(stage);
 
-    // Hero: fluke over heading + subtitle, as one centered block. The mark is
-    // identity, not scenery, so it does not wait for the opt-in ocean
-    // treatment; it lerps out of the theme's own surface colour instead.
-    let mark_size = MarkSize::for_area(layout.hero, HERO_TEXT_ROWS);
-    let mark_rows = mark_size.map_or(0, |size| size.cells().1 + HERO_MARK_GAP);
-    let block_rows = mark_rows + HERO_TEXT_ROWS;
+    // Hero: mark + wordmark over heading + subtitle, as one centered block.
+    // The mark is identity, not scenery, so it does not wait for the opt-in
+    // ocean treatment; it lerps out of the theme's own surface colour instead.
+    let small_mark = MarkSize::Small;
+    let (mark_width, mark_height) = small_mark.cells();
+    let wordmark_fits = layout.hero.width >= "codewhale".len() as u16
+        && layout.hero.height >= HERO_WORDMARK_ROWS + HERO_TEXT_ROWS;
+    let mark_size = (layout.hero.width >= mark_width
+        && layout.hero.height >= mark_height + HERO_WORDMARK_ROWS + HERO_MARK_GAP + HERO_TEXT_ROWS)
+        .then_some(small_mark);
+    let mark_rows = mark_size.map_or(0, |_| mark_height);
+    let wordmark_rows = u16::from(wordmark_fits);
+    let mark_gap = u16::from(mark_size.is_some()) * HERO_MARK_GAP;
+    let block_rows = mark_rows + wordmark_rows + mark_gap + HERO_TEXT_ROWS;
     let hero_row = layout.hero.height.saturating_sub(block_rows) / 2;
     if let Some(size) = mark_size {
         let mark_area = Rect {
@@ -3341,7 +3351,25 @@ pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &Tideline
             startup.ascii_safe,
         );
     }
-    let hero_row = hero_row + mark_rows;
+    let surface_color = crate::tui::mark::lerp_color(
+        theme.surface_bg,
+        theme.accent_action,
+        startup.surface_progress,
+    );
+    if wordmark_fits {
+        centered(
+            buf,
+            layout.hero,
+            hero_row + mark_rows,
+            &Span::styled(
+                "codewhale",
+                Style::default()
+                    .fg(surface_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        );
+    }
+    let hero_row = hero_row + mark_rows + wordmark_rows + mark_gap;
     let heading = "What are we working on?";
     centered(
         buf,
