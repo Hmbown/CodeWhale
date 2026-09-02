@@ -1372,6 +1372,7 @@
   "PickerActionApply": "применить",
   "PickerActionSetStartupDefault": "установить как значение по умолчанию при запуске",
   "PickerActionPin": "закрепить",
+  "PickerActionFleet": "флот",
   "PickerActionCancel": "отмена",
   "PickerActionClear": "очистить",
   "PickerActionClearSearch": "очистить поиск",

@@ -9,6 +9,7 @@ pub mod host;
 pub mod identity;
 pub mod ledger;
 pub mod manager;
+pub mod members;
 pub mod profile;
 pub mod roster;
 pub mod scheduler;

@@ -105,6 +105,30 @@ exact model id is equally valid. Saved v2 Pods store that optional human name
 as `display_name` (the input alias `name` is also accepted); it must be one
 trimmed printable line of at most 80 characters.
 
+### Your fleet as models
+
+The same Pod file answers a third question: **which models has this person
+put in their fleet?** Every exact `provider` + `model` pin in the selected
+Pod — the operator route and each pinned member — is a fleet model, and the
+member rows that pin it are the roles it fills. There is no second list.
+
+- `/pod models` prints the fleet: `provider/model · roles · price · context ·
+  tools`, facts read from the model catalog. With no selected Pod the line
+  reads "Your fleet is the session model only".
+- `/pod add <provider> <model> [role…]` adds a model (one member row per
+  role; none for a role-less add). The provider must be one you configured
+  and, when the catalog knows the provider, must serve that exact id.
+  With no Pod selected, a user-global Pod named `My fleet` is created and
+  selected first. `/pod remove <provider> <model>` drops every row that pins
+  the route; the operator route is changed with `/pod save`, not removed.
+- In `/model`, `⇧F` on a row adds or removes that exact route the same way;
+  fleet models are listed first, labelled `fleet · <roles>`, ahead of your
+  own `⇧P` pins and the provider lists. `/models` prints the fleet before the
+  provider's list.
+
+The operator model reads this list when it assigns sub-agents (design
+`MODEL-ROUTING-CATALOG-20260901.md` §10, slice F2).
+
 ### Interactive and persistent status
 
 `/pod status` and `codewhale pod status` are the **same** command on two

@@ -30,8 +30,37 @@ pub(super) fn cache_warmup_result(usage: &Usage) -> String {
 
 /// Render the response body for `/models` / `models list` — the current
 /// model is starred and other available models follow underneath.
-pub(super) fn available_models_message(current_model: &str, models: &[String]) -> String {
-    let mut lines = vec![format!("Available models ({})", models.len())];
+pub(super) fn available_models_message(
+    current_provider: &str,
+    current_model: &str,
+    models: &[String],
+    fleet: &[crate::fleet::members::FleetModel],
+) -> String {
+    let mut lines = Vec::new();
+    // The fleet leads (design §10 F1): what the person added, with the roles
+    // each model fills, before the provider's full list.
+    if fleet.is_empty() {
+        lines.push("Your fleet: the session model only (add one with /pod add <provider> <model> or ⇧F in /model)".to_string());
+    } else {
+        lines.push(format!("Your fleet `{}` ({})", fleet[0].fleet, fleet.len()));
+        for member in fleet {
+            // The exact route, not the bare id: two providers may serve the
+            // same model id and only one of them is the current route.
+            let marker = if member.matches(current_provider, current_model) {
+                "*"
+            } else {
+                " "
+            };
+            lines.push(format!(
+                "{marker} {}/{} · {}",
+                member.provider,
+                member.model,
+                member.roles_label()
+            ));
+        }
+        lines.push(String::new());
+    }
+    lines.push(format!("Available models ({})", models.len()));
     for model in models {
         if model == current_model {
             lines.push(format!("* {model} (current)"));
@@ -52,10 +81,41 @@ mod tests {
             "deepseek-v4-pro".to_string(),
             "deepseek-v4-flash".to_string(),
         ];
-        let msg = available_models_message("deepseek-v4-pro", &models);
+        let msg = available_models_message("deepseek", "deepseek-v4-pro", &models, &[]);
         assert!(msg.contains("* deepseek-v4-pro (current)"), "got: {msg}");
         assert!(msg.contains("  deepseek-v4-flash"), "got: {msg}");
-        assert!(msg.starts_with("Available models (2)"), "got: {msg}");
+        assert!(
+            msg.starts_with("Your fleet: the session model only"),
+            "got: {msg}"
+        );
+        assert!(msg.contains("Available models (2)"), "got: {msg}");
+    }
+
+    #[test]
+    fn fleet_current_marker_matches_the_exact_route_not_the_bare_id() {
+        let fleet = vec![
+            crate::fleet::members::FleetModel {
+                provider: "openrouter".to_string(),
+                model: "deepseek/deepseek-v4-flash".to_string(),
+                roles: vec!["scout".to_string()],
+                fleet: "Ops".to_string(),
+            },
+            crate::fleet::members::FleetModel {
+                provider: "novita".to_string(),
+                model: "deepseek/deepseek-v4-flash".to_string(),
+                roles: Vec::new(),
+                fleet: "Ops".to_string(),
+            },
+        ];
+        let msg = available_models_message("novita", "deepseek/deepseek-v4-flash", &[], &fleet);
+        assert!(
+            msg.contains("  openrouter/deepseek/deepseek-v4-flash · scout"),
+            "got: {msg}"
+        );
+        assert!(
+            msg.contains("* novita/deepseek/deepseek-v4-flash · member"),
+            "got: {msg}"
+        );
     }
 
     #[test]

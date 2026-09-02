@@ -1395,6 +1395,7 @@
   "PickerActionApply": "aplicar",
   "PickerActionSetStartupDefault": "definir como padrão de inicialização",
   "PickerActionPin": "fixar",
+  "PickerActionFleet": "frota",
   "PickerActionCancel": "cancelar",
   "PickerActionClear": "limpar",
   "PickerActionClearSearch": "limpar busca",

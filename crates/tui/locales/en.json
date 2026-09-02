@@ -1395,6 +1395,7 @@
   "PickerActionApply": "apply",
   "PickerActionSetStartupDefault": "set startup default",
   "PickerActionPin": "pin",
+  "PickerActionFleet": "fleet",
   "PickerActionCancel": "cancel",
   "PickerActionClear": "clear",
   "PickerActionClearSearch": "clear search",

@@ -777,6 +777,14 @@ pub enum ViewEvent {
         model: String,
         delta: isize,
     },
+    /// `⇧F` in the picker: add the row's exact route to the fleet (the
+    /// selected Pod), or remove it when it is already there (design §10 F1).
+    ModelPickerToggleFleet {
+        provider: crate::config::ApiProvider,
+        /// Exact named route for `Custom`; built-in providers leave this unset.
+        provider_id: Option<String>,
+        model: String,
+    },
     ModelPickerNeedsAuth {
         provider: crate::config::ApiProvider,
         model: String,

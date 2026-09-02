@@ -1395,6 +1395,7 @@
   "PickerActionApply": "적용",
   "PickerActionSetStartupDefault": "시작 기본값으로 설정",
   "PickerActionPin": "고정",
+  "PickerActionFleet": "플릿",
   "PickerActionCancel": "취소",
   "PickerActionClear": "지우기",
   "PickerActionClearSearch": "검색 지우기",

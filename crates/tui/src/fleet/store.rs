@@ -330,7 +330,7 @@ impl FleetFile {
 }
 
 /// Sanitize a display name into a safe file slug.
-fn slugify(name: &str) -> String {
+pub(crate) fn slugify(name: &str) -> String {
     let mut slug = String::with_capacity(name.len());
     for ch in name.trim().chars() {
         if ch.is_ascii_alphanumeric() {
