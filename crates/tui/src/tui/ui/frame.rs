@@ -78,9 +78,7 @@ pub(crate) fn info_segments(app: &App, width: u16) -> Vec<InfoSegment> {
 
     // Branch, when git knows one. Unknown stays absent: the header must not
     // invent a ref to fill the slot (`git_status::chrome_label`'s own rule).
-    if git_matches_workspace
-        && let Some(branch) = git.branch.as_deref()
-    {
+    if git_matches_workspace && let Some(branch) = git.branch.as_deref() {
         segments.push(InfoSegment::new(
             InfoSegmentId::Branch,
             "⑂",
