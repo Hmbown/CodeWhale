@@ -10,6 +10,7 @@ use crate::config::{
     ApiProvider, Config, has_api_key_for, normalize_model_name_for_provider, provider_capability,
 };
 use crate::provider_lake::{all_catalog_models_for_provider, models_for_provider};
+use crate::tui::app::App;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -416,6 +417,18 @@ fn provider_default_model(config: &Config, provider: ApiProvider) -> String {
         .to_string()
 }
 
+pub(crate) fn adopt_live_local_ollama_tag(app: &App) -> Option<String> {
+    if app.api_provider != ApiProvider::Ollama
+        || app.auto_model
+        || !crate::config::is_unresolved_local_ollama_model(&app.model)
+    {
+        return None;
+    }
+    crate::provider_lake::live_per_provider_models(ApiProvider::Ollama)
+        .into_iter()
+        .next()
+}
+
 fn auth_source_for_provider(config: &Config, provider: ApiProvider) -> Option<ModelAuthSource> {
     let credential_state =
         crate::provider_readiness::credential_state_for_provider(config, provider);
@@ -563,6 +576,7 @@ mod tests {
             provider: Some("ollama-cloud".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 ollama_cloud: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("cloud-key".to_string()),
                     ..Default::default()
                 },
@@ -610,6 +624,7 @@ mod tests {
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("kimi_oauth".to_string()),
                     ..Default::default()
                 },
@@ -638,6 +653,7 @@ mod tests {
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("test-kimi-key".to_string()),
                     base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                     model: Some(crate::config::KIMI_CODE_K3_MODEL.to_string()),
@@ -668,6 +684,7 @@ mod tests {
             provider: Some("vllm".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 vllm: crate::config::ProviderConfig {
+                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some("http://localhost:8000/v1".to_string()),
                     model: Some("qwen3-32b-256k".to_string()),
                     ..Default::default()
@@ -704,6 +721,7 @@ mod tests {
                 custom: std::collections::HashMap::from([(
                     "acme".to_string(),
                     crate::config::ProviderConfig {
+                        model_context_windows: std::collections::BTreeMap::new(),
                         kind: Some("openai-compatible".to_string()),
                         base_url: Some("https://api.acme.test/v1".to_string()),
                         model: Some("acme-coder".to_string()),
@@ -1158,6 +1176,35 @@ mod tests {
             provider_default_model(&config, ApiProvider::Ollama),
             "qwen2.5:0.5b"
         );
+        crate::provider_lake::clear_live_snapshot();
+    }
+
+    #[test]
+    fn adopt_live_local_ollama_tag_requires_unresolved_model_and_live_tag() {
+        let options = crate::test_support::test_tui_options(std::path::PathBuf::from("."));
+        let mut app = crate::tui::app::App::new(options, &Config::default());
+        app.api_provider = ApiProvider::Ollama;
+        app.auto_model = false;
+        app.model = crate::config::DEFAULT_OLLAMA_MODEL.to_string();
+        let _live = crate::provider_lake::lock_live_snapshot();
+        crate::provider_lake::clear_live_snapshot();
+        assert_eq!(adopt_live_local_ollama_tag(&app), None);
+
+        crate::provider_lake::merge_live_offerings(vec![
+            codewhale_config::catalog::CatalogOffering {
+                provider: "ollama".to_string(),
+                wire_model_id: "qwen2.5:0.5b".to_string(),
+                endpoint_key: "chat".to_string(),
+                default_for_provider: true,
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(
+            adopt_live_local_ollama_tag(&app).as_deref(),
+            Some("qwen2.5:0.5b")
+        );
+        app.model = "llama3.2".to_string();
+        assert_eq!(adopt_live_local_ollama_tag(&app), None);
         crate::provider_lake::clear_live_snapshot();
     }
 }

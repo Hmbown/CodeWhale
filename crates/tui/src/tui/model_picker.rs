@@ -1718,15 +1718,17 @@ fn push_model_row(
 ///
 /// Fresh/live rows stay unmarked; stale and failed caches get an explicit
 /// suffix so users know the live layer is still visible but not current.
-fn catalog_freshness_title_suffix() -> &'static str {
-    catalog_freshness_title_suffix_for(models_dev_live::status().freshness)
+fn catalog_freshness_title_suffix(locale: Locale) -> String {
+    catalog_freshness_title_suffix_for(locale, models_dev_live::status().freshness)
 }
 
-fn catalog_freshness_title_suffix_for(freshness: ModelsDevFreshness) -> &'static str {
+fn catalog_freshness_title_suffix_for(locale: Locale, freshness: ModelsDevFreshness) -> String {
     match freshness {
-        ModelsDevFreshness::Stale => " · stale",
-        ModelsDevFreshness::Failed => " · refresh failed; catalog available",
-        ModelsDevFreshness::Bundled | ModelsDevFreshness::Live => "",
+        ModelsDevFreshness::Stale => format!(" · {}", tr(locale, MessageId::CatalogStale)),
+        ModelsDevFreshness::Failed => {
+            format!(" · {}", tr(locale, MessageId::CatalogRefreshFailed))
+        }
+        ModelsDevFreshness::Bundled | ModelsDevFreshness::Live => String::new(),
     }
 }
 
@@ -2121,7 +2123,7 @@ fn effective_picker_metadata_with_codex(
         };
     };
 
-    let context_override = config.context_window_for_provider_config(provider);
+    let context_override = config.context_window_for_route(provider, Some(id));
     let overrides = CapabilityOverride {
         context_window: context_override,
         ..CapabilityOverride::default()
@@ -2731,7 +2733,7 @@ impl ModelPickerView {
                     format!(
                         "{}{}",
                         self.view.title_label(),
-                        catalog_freshness_title_suffix()
+                        catalog_freshness_title_suffix(self.locale)
                     ),
                     Style::default().fg(palette::TEXT_MUTED),
                 ),

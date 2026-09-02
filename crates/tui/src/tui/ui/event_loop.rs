@@ -3895,6 +3895,26 @@ pub(crate) async fn run_event_loop(
         if crate::tui::file_mention::poll_background_mention_discovery(app) {
             app.needs_redraw = true;
         }
+        if !app.is_loading
+            && let Some(tag) = crate::model_inventory::adopt_live_local_ollama_tag(app)
+        {
+            let previous_model = app.model.clone();
+            let effort = app.reasoning_effort;
+            apply_model_picker_choice(
+                app,
+                &mut engine_handle,
+                config,
+                tag,
+                None,
+                None,
+                effort,
+                previous_model,
+                effort,
+                false,
+            )
+            .await;
+            app.needs_redraw = true;
+        }
         // Expire the "Press Ctrl+C again to quit" prompt silently after its
         // window. Triggers a redraw if the prompt was visible.
         app.tick_quit_armed();
