@@ -118,6 +118,37 @@ fn fleet_models_text(app: &App) -> String {
     lines.join("\n")
 }
 
+/// Whether `provider_id` names a provider the user has configured — active
+/// route, explicit `[providers.<id>]` table, or usable credentials. Reuses
+/// the same predicate as the `/provider` and `/model` pickers.
+fn provider_id_is_configured(app: &App, provider_id: &str) -> bool {
+    let provider_id = provider_id.trim();
+    if provider_id.is_empty() {
+        return false;
+    }
+    if let Some(provider) = crate::config::ApiProvider::parse(provider_id) {
+        return crate::config::provider_is_configured_for_active(
+            &app.config,
+            provider,
+            app.api_provider,
+        );
+    }
+    // Named custom provider: allow the active custom route, or any explicit
+    // `[providers.<name>]` table.
+    if app.api_provider == crate::config::ApiProvider::Custom
+        && app.provider_identity_for_persistence()
+            .eq_ignore_ascii_case(provider_id)
+    {
+        return true;
+    }
+    app.config.providers.as_ref().is_some_and(|providers| {
+        providers
+            .custom
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(provider_id))
+    })
+}
+
 fn fleet_add(app: &App, target: Option<&str>) -> CommandResult {
     let mut words = target.unwrap_or_default().split_whitespace();
     let (Some(provider), Some(model)) = (words.next(), words.next()) else {
@@ -126,6 +157,11 @@ fn fleet_add(app: &App, target: Option<&str>) -> CommandResult {
         );
     };
     let roles: Vec<String> = words.map(str::to_string).collect();
+    if !provider_id_is_configured(app, provider) {
+        return CommandResult::error(format!(
+            "`{provider}` is not a configured provider. Configure it in ~/.codewhale/config.toml or switch to it with `/provider` before adding it to a Pod."
+        ));
+    }
     if let Some(known) = crate::config::ApiProvider::parse(provider) {
         let served = crate::provider_lake::all_catalog_models_for_provider(known);
         if !served.is_empty() && !served.iter().any(|id| id.eq_ignore_ascii_case(model)) {
@@ -256,6 +292,9 @@ mod tests {
         let workspace = temp.path().join("repo");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let mut app = app_in(workspace.clone());
+        app.config
+            .provider_config_for_mut(crate::config::ApiProvider::Openrouter)
+            .api_key = Some("test-key".to_string());
 
         let empty = FleetCmd::execute(&mut app, Some("models"));
         assert!(
@@ -304,6 +343,12 @@ mod tests {
         let workspace = temp.path().join("repo");
         std::fs::create_dir_all(&workspace).expect("workspace");
         let mut app = app_in(workspace.clone());
+        app.config
+            .provider_config_for_mut(crate::config::ApiProvider::Anthropic)
+            .api_key = Some("test-key".to_string());
+        app.config
+            .provider_config_for_mut(crate::config::ApiProvider::Openrouter)
+            .api_key = Some("test-key".to_string());
         let result = FleetCmd::execute(&mut app, Some("add anthropic not-a-real-model"));
         assert!(result.is_error, "got: {result:?}");
         assert!(
@@ -326,6 +371,28 @@ mod tests {
                     .contains("Usage"),
             "got: {usage:?}"
         );
+    }
+
+    #[test]
+    fn pod_add_rejects_an_unconfigured_provider() {
+        let _lock = crate::test_support::lock_test_env();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.as_os_str());
+        let workspace = temp.path().join("repo");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let mut app = app_in(workspace.clone());
+        let result = FleetCmd::execute(&mut app, Some("add unknown-provider some-model"));
+        assert!(result.is_error, "got: {result:?}");
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("not a configured provider"),
+            "got: {result:?}"
+        );
+        assert!(crate::fleet::members::fleet_models(&workspace).is_empty());
     }
 
     #[test]

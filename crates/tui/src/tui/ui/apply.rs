@@ -1492,6 +1492,7 @@ pub(crate) async fn apply_command_result(
                     Ok(models) => {
                         app.add_message(HistoryCell::System {
                             content: format_helpers::available_models_message(
+                                app.provider_identity_for_persistence(),
                                 &app.model,
                                 &models,
                                 &crate::fleet::members::fleet_models(&app.workspace),

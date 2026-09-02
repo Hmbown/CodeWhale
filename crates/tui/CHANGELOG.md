@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tool cells carry their own state: a running, failed or warned tool
   reads as such in the transcript itself, with per-entry rail dots and
   family-coloured glyphs (#5799).
+- Web: docs hub with task search, shared empty/loading/error states, an
+  offline-to-back-online banner, `/changelog` in every locale, and real
+  404s with correct metadata (#5743).
+- Web: the app's colours come from one file generated from the TUI whale
+  palette; re-typing a colour by hand fails web CI (#5797).
+- Web: a one-way ceiling on `isZh` branching outside the i18n spine —
+  the count may only go down (#5805).
+- An internal agent handoff doc was removed from the public tree and
+  `.playwright-mcp/` is now ignored (#5800).
 - First run paints the composer immediately: the Welcome/language/provider/
   trust gates no longer precede the first keystroke. Missing-key and
   workspace-trust recovery stay for returning users; language and provider

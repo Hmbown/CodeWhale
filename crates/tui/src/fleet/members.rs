@@ -14,7 +14,7 @@ use super::store::{
     save_fleet, set_selected, slugify,
 };
 
-/// Default name for the Pod created by the first `/pod add` or `a` in
+/// Default name for the Pod created by the first `/pod add` or ⇧F on a row in
 /// `/models` when no Pod is selected yet.
 pub const DEFAULT_FLEET_NAME: &str = "My fleet";
 
@@ -61,6 +61,13 @@ pub enum FleetModelChange {
     Removed {
         fleet: String,
         roles: Vec<String>,
+    },
+    /// Nothing was written: the route is the Pod's operator route (your
+    /// current model while this Pod is selected), which `⇧F` and a
+    /// role-less `/pod add` leave alone instead of duplicating.
+    Unchanged {
+        fleet: String,
+        reason: String,
     },
 }
 
@@ -134,6 +141,12 @@ pub fn add_fleet_model(
         ));
     }
     let (mut fleet, scope, created_fleet) = selected_or_new(workspace)?;
+    if roles.iter().all(|r| r.trim().is_empty()) && is_operator_route(&fleet, provider, model) {
+        return Ok(FleetModelChange::Unchanged {
+            fleet: fleet.name,
+            reason: OPERATOR_ROUTE_REASON.to_string(),
+        });
+    }
     let model_slug = slugify(model);
     let roles: Vec<String> = roles
         .iter()
@@ -234,14 +247,30 @@ pub fn toggle_fleet_model(
     provider: &str,
     model: &str,
 ) -> Result<FleetModelChange, FleetStoreError> {
-    let present = fleet_models(workspace)
-        .iter()
-        .any(|m| m.matches(provider, model) && !m.roles.iter().any(|r| r == "operator"));
-    if present {
-        remove_fleet_model(workspace, provider, model)
-    } else {
-        add_fleet_model(workspace, provider, model, &[])
+    let models = fleet_models(workspace);
+    let Some(present) = models.iter().find(|m| m.matches(provider, model)) else {
+        return add_fleet_model(workspace, provider, model, &[]);
+    };
+    // Present by exact route, whatever roles it fills: never write a
+    // duplicate row. The operator route with no member rows of its own is
+    // your current model; it cannot be toggled off, only switched.
+    let only_operator = present.roles.iter().all(|r| r == "operator");
+    if only_operator {
+        return Ok(FleetModelChange::Unchanged {
+            fleet: present.fleet.clone(),
+            reason: OPERATOR_ROUTE_REASON.to_string(),
+        });
     }
+    remove_fleet_model(workspace, provider, model)
+}
+
+const OPERATOR_ROUTE_REASON: &str = "this is your current model (the Pod's operator route); switch models or use /pod save to change it";
+
+fn is_operator_route(fleet: &FleetFile, provider: &str, model: &str) -> bool {
+    fleet.operator.as_ref().is_some_and(|op| {
+        op.provider.eq_ignore_ascii_case(provider.trim())
+            && op.model.eq_ignore_ascii_case(model.trim())
+    })
 }
 
 /// One-line receipt for a membership change, shared by `/pod add|remove`
@@ -273,6 +302,9 @@ pub fn change_receipt(provider: &str, model: &str, change: &FleetModelChange) ->
                 format!(" ({})", roles.join(", "))
             };
             format!("Removed {provider}/{model}{roles} from the fleet `{fleet}`")
+        }
+        FleetModelChange::Unchanged { fleet, reason } => {
+            format!("{provider}/{model} stays in the fleet `{fleet}`: {reason}")
         }
     }
 }
@@ -310,6 +342,7 @@ fn unique_member_id(fleet: &FleetFile, base: &str, model_slug: &str) -> String {
 mod tests {
     use super::*;
     use crate::fleet::store::FleetOperator;
+    use crate::fleet::store::{save_fleet, set_selected};
 
     fn fleet_with(operator: Option<(&str, &str)>, members: &[(&str, &str, &str)]) -> FleetFile {
         let mut fleet = FleetFile::new("Test".to_string(), None).expect("valid");
@@ -421,6 +454,63 @@ mod tests {
 
         let err = remove_fleet_model(&workspace, "openrouter", "nope").expect_err("absent");
         assert!(err.to_string().contains("not in the fleet"), "{err}");
+    }
+
+    #[test]
+    fn toggling_the_operator_route_is_a_no_op_and_never_writes_a_duplicate_row() {
+        let _lock = crate::test_support::lock_test_env();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.as_os_str());
+        let workspace = temp.path().join("repo");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let mut fleet = fleet_with(Some(("openrouter", "z-ai/glm-5.3")), &[]);
+        fleet.name = "Ops".to_string();
+        save_fleet(&fleet, FleetScope::Personal, &workspace).expect("save");
+        set_selected("Ops", FleetScope::Personal, &workspace).expect("select");
+
+        let change = toggle_fleet_model(&workspace, "openrouter", "z-ai/glm-5.3").expect("toggle");
+        assert!(
+            matches!(change, FleetModelChange::Unchanged { ref fleet, ref reason } if fleet == "Ops" && reason.contains("current model")),
+            "{change:?}"
+        );
+        assert!(
+            change_receipt("openrouter", "z-ai/glm-5.3", &change).contains("stays in the fleet"),
+        );
+        // A role-less /pod add of the same route is the same no-op.
+        let change = add_fleet_model(&workspace, "openrouter", "z-ai/glm-5.3", &[]).expect("add");
+        assert!(
+            matches!(change, FleetModelChange::Unchanged { .. }),
+            "{change:?}"
+        );
+        let selected = resolve_selected_fleet(&workspace)
+            .expect("ok")
+            .expect("selected");
+        let (on_disk, _) = load_fleet_at(&selected.path).expect("load");
+        assert!(
+            on_disk.members.is_empty(),
+            "no duplicate member row: {:?}",
+            on_disk.members
+        );
+
+        // With a role, the operator route may also fill that role; toggling
+        // then removes the role rows and keeps the operator.
+        add_fleet_model(
+            &workspace,
+            "openrouter",
+            "z-ai/glm-5.3",
+            &["planner".to_string()],
+        )
+        .expect("add role");
+        let models = fleet_models(&workspace);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].roles, ["operator", "planner"]);
+        let change = toggle_fleet_model(&workspace, "openrouter", "z-ai/glm-5.3").expect("toggle");
+        assert!(
+            matches!(change, FleetModelChange::Removed { ref roles, .. } if roles == &["planner"]),
+            "{change:?}"
+        );
+        assert_eq!(fleet_models(&workspace)[0].roles, ["operator"]);
     }
 
     #[test]

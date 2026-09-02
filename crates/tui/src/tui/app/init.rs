@@ -824,6 +824,7 @@ impl App {
             plugin_registry,
             config_path,
             config_profile,
+            config: config.clone(),
             legacy_plugin_tools_dir: config
                 .tools
                 .as_ref()
