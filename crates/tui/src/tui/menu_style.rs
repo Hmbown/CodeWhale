@@ -46,6 +46,18 @@ pub fn selected_row_bg_style() -> Style {
     Style::default().bg(palette::SELECTION_BG)
 }
 
+pub fn hover_row_style() -> Style {
+    Style::default()
+        .fg(palette::TEXT_PRIMARY)
+        .bg(palette::SURFACE_ELEVATED)
+}
+
+pub fn pressed_row_style() -> Style {
+    Style::default()
+        .fg(palette::SELECTION_TEXT)
+        .bg(palette::WHALE_ACTION)
+}
+
 /// Selected-but-disabled row (e.g. a locked model): the cursor position is
 /// still visible, but muted ink on the elevated surface plus a dim modifier
 /// says the row cannot be chosen.
