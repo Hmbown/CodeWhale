@@ -1807,6 +1807,35 @@ pub(crate) async fn handle_view_events(
                 }
                 app.needs_redraw = true;
             }
+            ViewEvent::ModelPickerToggleFleet {
+                provider,
+                provider_id,
+                model,
+            } => {
+                let provider_key = provider_id.unwrap_or_else(|| provider.as_str().to_string());
+                app.status_message = Some(
+                    match crate::fleet::members::toggle_fleet_model(
+                        &app.workspace,
+                        &provider_key,
+                        &model,
+                    ) {
+                        Ok(change) => {
+                            crate::fleet::members::change_receipt(&provider_key, &model, &change)
+                        }
+                        Err(error) => format!("Could not update the fleet: {error}"),
+                    },
+                );
+                if let Some(mut boxed) = app.view_stack.pop() {
+                    if let Some(picker) = boxed
+                        .as_any_mut()
+                        .downcast_mut::<crate::tui::model_picker::ModelPickerView>(
+                    ) {
+                        picker.re_resolve_from_app(app, config);
+                    }
+                    app.view_stack.push_boxed(boxed);
+                }
+                app.needs_redraw = true;
+            }
             ViewEvent::ModelPickerTogglePin {
                 provider,
                 provider_id,

@@ -1382,6 +1382,7 @@
   "PickerActionApply": "適用",
   "PickerActionSetStartupDefault": "起動時の既定値に設定",
   "PickerActionPin": "ピン留め",
+  "PickerActionFleet": "フリート",
   "PickerActionCancel": "キャンセル",
   "PickerActionClear": "クリア",
   "PickerActionClearSearch": "検索をクリア",

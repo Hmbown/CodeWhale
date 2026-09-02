@@ -1359,6 +1359,7 @@
   "PickerActionApply": "aplica",
   "PickerActionSetStartupDefault": "defineix com a predeterminat d'inici",
   "PickerActionPin": "fixa",
+  "PickerActionFleet": "flota",
   "PickerActionCancel": "cancel·la",
   "PickerActionClear": "esborra",
   "PickerActionClearSearch": "esborra la cerca",

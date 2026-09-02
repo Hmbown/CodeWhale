@@ -1491,7 +1491,11 @@ pub(crate) async fn apply_command_result(
                 match fetch_available_models(config).await {
                     Ok(models) => {
                         app.add_message(HistoryCell::System {
-                            content: format_helpers::available_models_message(&app.model, &models),
+                            content: format_helpers::available_models_message(
+                                &app.model,
+                                &models,
+                                &crate::fleet::members::fleet_models(&app.workspace),
+                            ),
                         });
                         app.status_message = Some(format!("Found {} model(s)", models.len()));
                     }

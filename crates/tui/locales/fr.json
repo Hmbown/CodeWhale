@@ -1359,6 +1359,7 @@
   "PickerActionApply": "appliquer",
   "PickerActionSetStartupDefault": "définir comme valeur par défaut au démarrage",
   "PickerActionPin": "épingler",
+  "PickerActionFleet": "flotte",
   "PickerActionCancel": "annuler",
   "PickerActionClear": "effacer",
   "PickerActionClearSearch": "effacer la recherche",

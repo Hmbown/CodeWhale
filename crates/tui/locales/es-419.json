@@ -1382,6 +1382,7 @@
   "PickerActionApply": "aplicar",
   "PickerActionSetStartupDefault": "establecer como predeterminado de inicio",
   "PickerActionPin": "fijar",
+  "PickerActionFleet": "flota",
   "PickerActionCancel": "cancelar",
   "PickerActionClear": "borrar",
   "PickerActionClearSearch": "borrar búsqueda",

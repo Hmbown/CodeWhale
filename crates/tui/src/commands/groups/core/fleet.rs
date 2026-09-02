@@ -28,7 +28,7 @@ use super::CommandResult;
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "pod",
     aliases: &["fleet", "loadout", "party"],
-    usage: "/pod [members|setup|pods|workers|save|save-as|list|status|runs|interrupt <worker-id>|resume <run-id>]",
+    usage: "/pod [members|models|add <provider> <model> [role…]|remove <provider> <model>|setup|pods|workers|save|save-as|list|status|runs|interrupt <worker-id>|resume <run-id>]",
     description_id: MessageId::CmdFleetDescription,
 };
 
@@ -67,6 +67,92 @@ fn split_verb(arg: Option<&str>) -> Option<(&str, Option<&str>)> {
         Some((verb, tail)) => (verb, Some(tail.trim())),
         None => (rest, None),
     })
+}
+
+fn fleet_models_text(app: &App) -> String {
+    use crate::fleet::members::fleet_models;
+    let models = fleet_models(&app.workspace);
+    if models.is_empty() {
+        return "Your fleet is the session model only. Add one: /pod add <provider> <model> [role…] (or ⇧F on a row in /model).".to_string();
+    }
+    let mut lines = vec![format!(
+        "Your fleet `{}` ({} models)",
+        models[0].fleet,
+        models.len()
+    )];
+    for member in &models {
+        let provider = crate::config::ApiProvider::parse(&member.provider);
+        let facts = provider
+            .and_then(|p| crate::provider_lake::catalog_offering_for_model(p, &member.model))
+            .map(|row| {
+                let mut parts = Vec::new();
+                if let Some(cost) = row.cost.as_ref()
+                    && let (Some(input), Some(output)) = (cost.input, cost.output)
+                {
+                    parts.push(format!("${input:.2}/{output:.2} per M"));
+                }
+                if let Some(limit) = row.limit.as_ref()
+                    && let Some(context) = limit.context
+                {
+                    parts.push(format!("{}k ctx", context / 1000));
+                }
+                if row.tool_call == Some(true) {
+                    parts.push("tools".to_string());
+                }
+                parts.join(" · ")
+            })
+            .filter(|facts| !facts.is_empty())
+            .map(|facts| format!(" · {facts}"))
+            .unwrap_or_default();
+        lines.push(format!(
+            "  {}/{} · {}{facts}",
+            member.provider,
+            member.model,
+            member.roles_label()
+        ));
+    }
+    lines.push(
+        "Add: /pod add <provider> <model> [role…] · Remove: /pod remove <provider> <model>"
+            .to_string(),
+    );
+    lines.join("\n")
+}
+
+fn fleet_add(app: &App, target: Option<&str>) -> CommandResult {
+    let mut words = target.unwrap_or_default().split_whitespace();
+    let (Some(provider), Some(model)) = (words.next(), words.next()) else {
+        return CommandResult::error(
+            "Usage: /pod add <provider> <model> [role…] — e.g. /pod add openrouter z-ai/glm-5.3-flash scout",
+        );
+    };
+    let roles: Vec<String> = words.map(str::to_string).collect();
+    if let Some(known) = crate::config::ApiProvider::parse(provider) {
+        let served = crate::provider_lake::all_catalog_models_for_provider(known);
+        if !served.is_empty() && !served.iter().any(|id| id.eq_ignore_ascii_case(model)) {
+            return CommandResult::error(format!(
+                "{provider} does not serve `{model}` in the current catalog; run /models to see what it serves, or /pod add with the exact id it lists."
+            ));
+        }
+    }
+    match crate::fleet::members::add_fleet_model(&app.workspace, provider, model, &roles) {
+        Ok(change) => CommandResult::message(crate::fleet::members::change_receipt(
+            provider, model, &change,
+        )),
+        Err(error) => CommandResult::error(format!("Could not add to the fleet: {error}")),
+    }
+}
+
+fn fleet_remove(app: &App, target: Option<&str>) -> CommandResult {
+    let mut words = target.unwrap_or_default().split_whitespace();
+    let (Some(provider), Some(model)) = (words.next(), words.next()) else {
+        return CommandResult::error("Usage: /pod remove <provider> <model>");
+    };
+    match crate::fleet::members::remove_fleet_model(&app.workspace, provider, model) {
+        Ok(change) => CommandResult::message(crate::fleet::members::change_receipt(
+            provider, model, &change,
+        )),
+        Err(error) => CommandResult::error(format!("Could not remove from the fleet: {error}")),
+    }
 }
 
 fn run_control(app: &App, operation: ControlOperation, target: Option<&str>) -> CommandResult {
@@ -110,6 +196,11 @@ impl RegisterCommand for FleetCmd {
             _ => {}
         }
         match verb {
+            // The fleet as models (design §10 F1): what the person added,
+            // provider-exact, with the roles each model fills.
+            "models" | "model" => CommandResult::message(fleet_models_text(app)),
+            "add" => fleet_add(app, target),
+            "remove" | "rm" | "drop" => fleet_remove(app, target),
             "members" | "member" | "roster" | "party" | "loadout" | "roles" | "role"
             | "profiles" | "profile" => CommandResult::action(AppAction::OpenFleetRoster),
             "setup" | "edit" | "new" => CommandResult::action(AppAction::OpenFleetSetup),
@@ -154,6 +245,87 @@ mod tests {
         let mut app = App::new(options, &Config::default());
         app.workspace = workspace;
         app
+    }
+
+    #[test]
+    fn pod_models_add_and_remove_round_trip_through_the_selected_pod() {
+        let _lock = crate::test_support::lock_test_env();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.as_os_str());
+        let workspace = temp.path().join("repo");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let mut app = app_in(workspace.clone());
+
+        let empty = FleetCmd::execute(&mut app, Some("models"));
+        assert!(
+            empty
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("session model only"),
+            "got: {empty:?}"
+        );
+
+        let added = FleetCmd::execute(&mut app, Some("add openrouter z-ai/glm-5.3-flash scout"));
+        let text = added.message.clone().unwrap_or_default();
+        assert!(
+            text.contains("Added openrouter/z-ai/glm-5.3-flash as scout"),
+            "got: {text}"
+        );
+        assert!(text.contains("new user-global Pod"), "got: {text}");
+
+        let listed = FleetCmd::execute(&mut app, Some("models"))
+            .message
+            .unwrap_or_default();
+        assert!(
+            listed.contains("openrouter/z-ai/glm-5.3-flash · scout"),
+            "got: {listed}"
+        );
+
+        let removed = FleetCmd::execute(&mut app, Some("remove openrouter z-ai/glm-5.3-flash"));
+        assert!(
+            removed
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Removed openrouter/z-ai/glm-5.3-flash (scout)"),
+            "got: {removed:?}"
+        );
+        assert!(crate::fleet::members::fleet_models(&workspace).is_empty());
+    }
+
+    #[test]
+    fn pod_add_rejects_a_model_the_provider_does_not_serve() {
+        let _lock = crate::test_support::lock_test_env();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.as_os_str());
+        let workspace = temp.path().join("repo");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let mut app = app_in(workspace.clone());
+        let result = FleetCmd::execute(&mut app, Some("add anthropic not-a-real-model"));
+        assert!(result.is_error, "got: {result:?}");
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("does not serve"),
+            "got: {result:?}"
+        );
+        assert!(crate::fleet::members::fleet_models(&workspace).is_empty());
+
+        let usage = FleetCmd::execute(&mut app, Some("add openrouter"));
+        assert!(
+            usage.is_error
+                && usage
+                    .message
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("Usage"),
+            "got: {usage:?}"
+        );
     }
 
     #[test]

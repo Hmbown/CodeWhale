@@ -7624,6 +7624,15 @@ impl Config {
         self.fleet.clone().unwrap_or_default()
     }
 
+    /// The person's fleet as models (design MODEL-ROUTING-CATALOG §10 F1):
+    /// every exact provider + model route in the selected Pod for
+    /// `workspace`, with the roles each fills. Empty = the session model
+    /// only. This is the seam the operator-awareness slice (F2) reads.
+    #[must_use]
+    pub fn fleet_members(&self, workspace: &Path) -> Vec<crate::fleet::members::FleetModel> {
+        crate::fleet::members::fleet_models(workspace)
+    }
+
     /// Parsed `[workflow]` table, or product defaults when the table is absent
     /// (#4128 / Section 2.11). Automatic launch, approval, isolation, and
     /// activity-persistence consumers should read through this accessor so
