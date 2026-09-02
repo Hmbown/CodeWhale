@@ -59,7 +59,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         return;
     }
     let body_area = match placement {
+        // Bottom mirrors Top's body/divider split; only the divider edge
+        // differs (below-content for Top, above-content for Bottom).
         WorkSurfacePlacement::Top => Rect {
+            height: area.height.saturating_sub(1),
+            ..area
+        },
+        WorkSurfacePlacement::Bottom => Rect {
+            y: area.y.saturating_add(1),
             height: area.height.saturating_sub(1),
             ..area
         },
@@ -86,22 +93,21 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 
     let mut rows = visible_rows_for_panel(app);
-    if placement == WorkSurfacePlacement::Top {
+    if placement.is_strip() {
         // Literal work list only: selectable to-dos/agents plus the
         // GrokBuild-style `▾ Subagents N` group header. Generic graph chrome
         // from the side/inspector projection stays out.
         rows.retain(|row| row.selectable || row.id.0.starts_with("section:"));
     }
-    let todo_ordinals = if placement == WorkSurfacePlacement::Top {
+    let todo_ordinals = if placement.is_strip() {
         todo_ordinals(&rows)
     } else {
         HashMap::new()
     };
     let ordinal_width = todo_ordinals.len().max(1).to_string().len();
-    let goal_title = (placement == WorkSurfacePlacement::Top)
-        .then(|| top_goal_title(app))
-        .flatten();
-    let todo_progress = (placement == WorkSurfacePlacement::Top)
+    let goal_title = placement.is_strip().then(|| top_goal_title(app)).flatten();
+    let todo_progress = placement
+        .is_strip()
         .then(|| top_todo_progress(app, &rows))
         .flatten();
     // Pin goal title, then progress receipt, above the scrollable rows.
@@ -221,7 +227,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         let hovered = app.work_surface.hovered.as_ref() == Some(&row.id);
         let opened = app.work_surface.opened.as_ref() == Some(&row.id);
         let style = row_style(app, row, selected, hovered, opened);
-        let compact_owner = if placement == WorkSurfacePlacement::Top {
+        let compact_owner = if placement.is_strip() {
             todo_ordinals
                 .get(&row.id.0)
                 .map(|ordinal| format!("{ordinal:>ordinal_width$} · "))
@@ -454,11 +460,9 @@ fn render_panel(frame: &mut Frame, area: Rect, body_area: Rect, app: &mut App) {
         .render(area, frame.buffer_mut());
 
     // Title row policy:
-    // - Top: only an active goal (`Goal: …`). Never panel chrome ("Pinned").
+    // - Top/Bottom: only an active goal (`Goal: …`). Never panel chrome ("Pinned").
     // - Left/Right: muted panel name — a full-height column needs naming.
-    let goal = (placement == WorkSurfacePlacement::Top)
-        .then(|| top_goal_title(app))
-        .flatten();
+    let goal = placement.is_strip().then(|| top_goal_title(app)).flatten();
     let side_panel_title = matches!(
         placement,
         WorkSurfacePlacement::Left | WorkSurfacePlacement::Right
@@ -633,6 +637,15 @@ fn render_divider(frame: &mut Frame, area: Rect, placement: WorkSurfacePlacement
         WorkSurfacePlacement::Off => {}
         WorkSurfacePlacement::Top => {
             let y = area.bottom().saturating_sub(1);
+            for x in area.left()..area.right() {
+                frame.buffer_mut()[(x, y)]
+                    .set_symbol(if active { "━" } else { "─" })
+                    .set_fg(color)
+                    .set_bg(app.ui_theme.surface_bg);
+            }
+        }
+        WorkSurfacePlacement::Bottom => {
+            let y = area.top();
             for x in area.left()..area.right() {
                 frame.buffer_mut()[(x, y)]
                     .set_symbol(if active { "━" } else { "─" })

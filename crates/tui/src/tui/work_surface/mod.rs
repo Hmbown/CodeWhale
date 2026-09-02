@@ -1883,6 +1883,7 @@ mod tests {
             super::RailPanel::Pinned,
         ] {
             for placement in [
+                super::WorkSurfacePlacement::Bottom,
                 super::WorkSurfacePlacement::Top,
                 super::WorkSurfacePlacement::Left,
                 super::WorkSurfacePlacement::Right,
@@ -1929,6 +1930,12 @@ mod tests {
                     .expect("draw");
                 let text = terminal_text(&terminal);
                 match placement {
+                    super::WorkSurfacePlacement::Bottom => {
+                        assert!(
+                            strip > 0,
+                            "{panel:?} on Bottom should auto-fit a content strip; got height 0"
+                        );
+                    }
                     super::WorkSurfacePlacement::Top => {
                         assert!(
                             strip > 0,

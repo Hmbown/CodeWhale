@@ -1319,6 +1319,10 @@ mod provider_key_validation_tests {
             ..crate::test_support::test_tui_options(PathBuf::from("."))
         };
         let mut app = App::new(options, &Config::default());
+        // These suites assert legacy strip geometry (work surface above the
+        // transcript). The Bottom default (round 3, 2026-09-01) has its own
+        // coverage in work_surface::rail_panels_render_in_all_placements.
+        app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Top;
         app.api_provider = ApiProvider::Deepseek;
         app.model = "deepseek-v4-pro".to_string();
         app.auto_model = false;

@@ -26,11 +26,25 @@ use crate::work_graph::{
 /// outright (rail unification, 0.9.4).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum WorkSurfacePlacement {
+    /// Under the composer — the default (round 3, 2026-09-01: the bar's
+    /// information lives below the composer, so scrolling up reads as
+    /// intentional history).
     #[default]
+    Bottom,
     Top,
     Left,
     Right,
     Off,
+}
+
+impl WorkSurfacePlacement {
+    /// Strip placements render as a horizontal band; side placements as a
+    /// rail. Bottom shares Top's auto-fit height math — only its position
+    /// in the frame differs.
+    #[must_use]
+    pub const fn is_strip(self) -> bool {
+        matches!(self, Self::Top | Self::Bottom)
+    }
 }
 
 /// Which panel the rail shows. Orthogonal to placement: the user picks
@@ -85,16 +99,18 @@ impl WorkSurfacePlacement {
     #[must_use]
     pub fn parse(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
+            "top" => Self::Top,
             "left" => Self::Left,
             "right" => Self::Right,
             "off" => Self::Off,
-            _ => Self::Top,
+            _ => Self::Bottom,
         }
     }
 
     #[must_use]
     pub const fn as_setting(self) -> &'static str {
         match self {
+            Self::Bottom => "bottom",
             Self::Top => "top",
             Self::Left => "left",
             Self::Right => "right",
@@ -278,7 +294,7 @@ pub struct WorkSurfaceState {
 
 impl Default for WorkSurfaceState {
     fn default() -> Self {
-        Self::with_placement(WorkSurfacePlacement::Top)
+        Self::with_placement(WorkSurfacePlacement::Bottom)
     }
 }
 
@@ -569,7 +585,7 @@ pub(super) fn project(app: &mut App) -> Vec<WorkRow> {
 /// visible in the common case.
 pub(super) fn project_visible(app: &mut App) -> Vec<WorkRow> {
     let rows = project(app);
-    if app.work_surface.effective_placement != WorkSurfacePlacement::Top {
+    if !app.work_surface.effective_placement.is_strip() {
         return rows;
     }
 
@@ -734,7 +750,7 @@ pub(super) fn visible_rows_for_panel(app: &mut App) -> Vec<WorkRow> {
             // On Top the goal is already the strip title; a side column
             // repeats it as its first row so the durable goal home survives
             // in every placement.
-            if app.work_surface.effective_placement != WorkSurfacePlacement::Top
+            if !app.work_surface.effective_placement.is_strip()
                 && let Some((objective, paused)) =
                     crate::tui::footer_ui::active_goal_chip_state(app)
             {

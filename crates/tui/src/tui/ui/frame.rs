@@ -1219,23 +1219,51 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     // failure, and cancellation rewrites text inside a fixed row — the
     // composer is never displaced. The freed activity row above the composer
     // was reclaimed by the stage (`Min(1)` chat slot).
+    // Round 3 (2026-09-01): the work surface lives BELOW the composer by
+    // default — scrolling up is intentional history — while `top` placement
+    // keeps the strip above the transcript. The strip slot moves; everything
+    // else keeps its order.
+    let strip_below =
+        app.work_surface.placement == crate::tui::work_surface::WorkSurfacePlacement::Bottom;
+    let (constraints, strip_slot, composer_slot, footer_slot) = if strip_below {
+        (
+            vec![
+                Constraint::Min(1),                        // Chat area
+                Constraint::Length(workflow_panel_height), // Workflow panel (#4121)
+                Constraint::Length(preview_height),        // Pending input preview (0 if empty)
+                Constraint::Length(indicator_height), // Background-work chip (#5286, 0 if idle)
+                Constraint::Length(plugin_cta_height), // Live plugin CTA (0 unless matched)
+                Constraint::Length(composer_height),  // Composer
+                Constraint::Length(top_work_strip_height), // Tasks + To-do below composer
+                Constraint::Length(footer_height),    // Merged Tideline footer (slots 6+8)
+            ],
+            6usize,
+            5usize,
+            7usize,
+        )
+    } else {
+        (
+            vec![
+                Constraint::Length(top_work_strip_height), // Tasks + To-do above transcript
+                Constraint::Min(1),                        // Chat area
+                Constraint::Length(workflow_panel_height), // Workflow panel (#4121)
+                Constraint::Length(preview_height),        // Pending input preview (0 if empty)
+                Constraint::Length(indicator_height), // Background-work chip (#5286, 0 if idle)
+                Constraint::Length(plugin_cta_height), // Live plugin CTA (0 unless matched)
+                Constraint::Length(composer_height),  // Composer
+                Constraint::Length(footer_height),    // Merged Tideline footer (slots 6+8)
+            ],
+            0usize,
+            6usize,
+            7usize,
+        )
+    };
     let body_chunks = Layout::default()
         .direction(Direction::Vertical)
         .flex(ratatui::layout::Flex::Start)
-        .constraints([
-            Constraint::Length(top_work_strip_height), // Tasks + To-do above transcript
-            Constraint::Min(1),                        // Chat area
-            Constraint::Length(workflow_panel_height), // Workflow panel (#4121)
-            Constraint::Length(preview_height),        // Pending input preview (0 if empty)
-            Constraint::Length(indicator_height),      // Background-work chip (#5286, 0 if idle)
-            Constraint::Length(plugin_cta_height),     // Live plugin CTA (0 unless matched)
-            Constraint::Length(composer_height),       // Composer
-            Constraint::Length(footer_height),         // Merged Tideline footer (slots 6+8)
-        ])
+        .constraints(constraints)
         .split(body_area);
-    let plugin_cta_slot = 5;
-    let composer_slot = 6;
-    let footer_slot = 7;
+    let plugin_cta_slot = composer_slot.saturating_sub(1);
 
     let (work_chat_area, side_work_area) = if mini && !mini_cfg.keep_sidebar {
         // Mini mode without the side rail: the transcript takes the whole
@@ -1246,7 +1274,7 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     };
 
     if top_work_strip_height > 0 {
-        crate::tui::work_surface::render(f, body_chunks[0], app);
+        crate::tui::work_surface::render(f, body_chunks[strip_slot], app);
     } else if let Some(work_area) = side_work_area {
         crate::tui::work_surface::render(f, work_area, app);
     }
@@ -1471,7 +1499,11 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         column.paint_matching(size, f.buffer_mut(), app.ui_theme.surface_bg);
         column.paint_matching(header_area, f.buffer_mut(), app.ui_theme.header_bg);
         if top_work_strip_height > 0 {
-            column.paint_matching(body_chunks[0], f.buffer_mut(), app.ui_theme.surface_bg);
+            column.paint_matching(
+                body_chunks[strip_slot],
+                f.buffer_mut(),
+                app.ui_theme.surface_bg,
+            );
         }
         if let Some(side_area) = side_work_area {
             column.paint_matching(side_area, f.buffer_mut(), app.ui_theme.surface_bg);

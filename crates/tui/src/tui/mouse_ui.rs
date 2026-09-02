@@ -1864,7 +1864,10 @@ mod tests {
         let options = TuiOptions {
             ..crate::test_support::test_tui_options(PathBuf::from("."))
         };
-        App::new(options, &Config::default())
+        let mut app = App::new(options, &Config::default());
+        // Legacy strip geometry (see ui.rs); Bottom default has its own tests.
+        app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Top;
+        app
     }
 
     fn hover_row(row_y: u16, action: Option<&str>) -> SidebarHoverRow {
