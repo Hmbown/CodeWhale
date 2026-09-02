@@ -179,9 +179,12 @@ fn live_preview_is_a_real_projection_of_the_real_renderers() {
         "crown fluke deleted by founder decree: {text}"
     );
     assert!(text.contains("[↑]"), "real send hitbox: {text}");
-    // The merged footer's own chip and phase verb: the depth sparkline it
-    // used to prove against is gone (the info line owns the context reading).
-    assert!(text.contains("<·> thinking"), "real footer band: {text}");
+    // The posture bar's own mark and permission chip (the metrics line owns
+    // the context reading; the transcript owns the phase word).
+    assert!(
+        text.contains("▶▶ ask (Shift+Tab)"),
+        "real footer band: {text}"
+    );
 }
 
 #[test]

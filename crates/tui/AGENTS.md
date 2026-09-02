@@ -5,9 +5,12 @@ Read the repository guidance first.
 
 ## UI contracts
 
-- One owner per fact: route and context in the Tideline topbar; work in the top
-  strip; receipts and the active row in the transcript; phase, cost, detail,
-  mode, and permission in the merged footer.
+- One owner per fact: mode, permission and live counts in the posture bar
+  (`phase_strip.rs`, row 1 under the composer); model, context and the
+  session metrics — cost, ttft, tok/s, output tokens — in the metrics line
+  (`infoline.rs`, row 2); the roster and to-do in the work surface; receipts,
+  the active row and the phase in the transcript. Key hints come from the
+  `shell_key_routing` binding table, never from a string literal.
 - Status-bar ink goes through `palette::grammar` (`docs/design/STATUS_BAR_COLOR_GRAMMAR.md`).
   Do not invent an eighth semantic or spend Failure red on non-failure chrome.
 - Derive state from typed enums such as `ShellPhase` and `OceanTreatment`.

@@ -1,22 +1,14 @@
-//! Golden-buffer contract for the shell's info line (spec §5c/§6).
+//! Golden-buffer contract for the metrics line — the row under the posture
+//! bar.
 //!
-//! Each golden is a cell-exact `.txt` dump of the rendered row at one of the
-//! four canonical blocker sizes (`views/status_picker.rs::BLOCKER_SIZES`).
-//! The goldens are the design contract: exact characters, exact columns.
-//!
-//! Re-bless after an intentional design change by DELETING the golden file
-//! and running:
-//!
-//! ```sh
-//! CODEWHALE_BLESS_GOLDENS=1 ./scripts/dev-test.sh tui infoline
-//! ```
+//! Goldens live in `crates/tui/src/tui/goldens/infoline_{screen}_{w}x{h}.txt`
+//! for the two screens (startup, work) at the blocker sizes. Re-bless by
+//! deleting the golden and running with `CODEWHALE_BLESS_GOLDENS=1`.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::Terminal;
-use ratatui::backend::TestBackend;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+use unicode_width::UnicodeWidthStr;
 
-use super::{InfoLine, InfoSegment, InfoSegmentId};
+use super::{InfoLine, InfoSegment, InfoSegmentId, context_meter_hitbox, infoline_hitboxes};
 use crate::palette::{ChromeInk, UI_THEME, UiTheme};
 
 /// The hint the live shell advertises, from the one binding module that owns
@@ -25,126 +17,72 @@ fn help_hint() -> String {
     crate::tui::shell_key_routing::info_help_hint(crate::localization::Locale::En)
 }
 
-fn context_label() -> String {
-    crate::localization::tr(
-        crate::localization::Locale::En,
-        crate::localization::MessageId::FooterHintContext,
-    )
-    .into_owned()
-}
-
 const BLOCKER_SIZES: [(u16, u16); 4] = [(80, 24), (100, 30), (120, 32), (160, 40)];
 
-/// Approved startup screen: no route yet, the workspace names what the
-/// session opened.
+fn context(pct: u8) -> InfoSegment {
+    InfoSegment::new(
+        InfoSegmentId::Context,
+        "ctx",
+        format!("{pct}%"),
+        if pct >= 80 {
+            ChromeInk::Failure
+        } else {
+            ChromeInk::Info
+        },
+    )
+}
+
+/// Approved startup screen: no route yet, no metrics yet.
 fn startup_segments() -> Vec<InfoSegment> {
     vec![
-        InfoSegment::new(
-            InfoSegmentId::Workspace,
-            "",
-            "codewhale",
-            ChromeInk::Metadata,
-        ),
         InfoSegment::new(
             InfoSegmentId::Model,
             "",
             "model not connected",
             ChromeInk::Waiting,
         ),
+        context(0),
     ]
 }
 
-/// Approved work screen: repository, branch, effective model. The repository
-/// segment states the forge slug and keeps the folder basename as its shorter
-/// form.
+/// Approved work screen: model, context, cost, then the session metrics.
 fn work_segments() -> Vec<InfoSegment> {
     vec![
-        InfoSegment::new(
-            InfoSegmentId::Workspace,
-            "",
-            "Hmbown/CodeWhale",
-            ChromeInk::Metadata,
-        )
-        .short("codewhale"),
-        InfoSegment::new(InfoSegmentId::Branch, "⑂", "main", ChromeInk::Metadata),
         InfoSegment::new(InfoSegmentId::Model, "", "deepseek-v4", ChromeInk::Identity),
-    ]
-}
-
-/// Approved settings screen: breadcrumb, repository, effective model.
-fn settings_segments() -> Vec<InfoSegment> {
-    vec![
+        context(61),
+        InfoSegment::new(InfoSegmentId::Cost, "", "$0.42", ChromeInk::MetadataValue),
         InfoSegment::new(
-            InfoSegmentId::SettingsPath,
-            "",
-            "Settings / Appearance",
-            ChromeInk::Identity,
+            InfoSegmentId::Ttft,
+            "ttft",
+            "400ms",
+            ChromeInk::MetadataValue,
         ),
         InfoSegment::new(
-            InfoSegmentId::Workspace,
+            InfoSegmentId::Rate,
             "",
-            "codewhale",
-            ChromeInk::Metadata,
+            "38 tok/s",
+            ChromeInk::MetadataValue,
         ),
         InfoSegment::new(
-            InfoSegmentId::Model,
-            "",
-            "claude-3.5-sonnet",
-            ChromeInk::Identity,
+            InfoSegmentId::OutputTokens,
+            "↓",
+            "1.2K",
+            ChromeInk::MetadataValue,
         ),
     ]
 }
 
-/// The work fixture plus the conditional work facts the live shell adds when
-/// a run, a pod, or scheduled automation is live. Used by the shed test: the
-/// declared order has to hold with the whole ladder present.
-fn crowded_segments() -> Vec<InfoSegment> {
-    let mut segments = work_segments();
-    // A slug whose two forms share no substring, so the shed sweep can tell
-    // "slug" from "basename" from "segment gone".
-    segments[0] = InfoSegment::new(
-        InfoSegmentId::Workspace,
-        "",
-        "acme/mcp-gateway",
-        ChromeInk::Metadata,
-    )
-    .short("mcp-gateway");
-    segments.insert(
-        2,
-        InfoSegment::new(InfoSegmentId::Run, "run", "release 0.9.12", ChromeInk::Info),
-    );
-    segments.insert(
-        3,
-        InfoSegment::new(InfoSegmentId::Pod, "pod", "launch pod", ChromeInk::Active),
-    );
-    segments.insert(
-        4,
-        InfoSegment::new(InfoSegmentId::Whales, "whales", "3/4", ChromeInk::Info),
-    );
-    segments
+fn fixtures() -> Vec<(&'static str, Vec<InfoSegment>)> {
+    vec![("startup", startup_segments()), ("work", work_segments())]
 }
 
-fn fixtures() -> Vec<(&'static str, Vec<InfoSegment>, u8)> {
-    vec![
-        ("startup", startup_segments(), 0),
-        ("work", work_segments(), 61),
-        ("settings", settings_segments(), 61),
-    ]
-}
-
-fn render_buffer(
-    theme: &UiTheme,
-    width: u16,
-    segments: &[InfoSegment],
-    pct: u8,
-) -> ratatui::buffer::Buffer {
+fn render_buffer(theme: &UiTheme, width: u16, segments: &[InfoSegment]) -> ratatui::buffer::Buffer {
     let backend = TestBackend::new(width, 1);
     let mut terminal = Terminal::new(backend).expect("terminal");
     let hint = help_hint();
     terminal
         .draw(|frame| {
-            let context = context_label();
-            let info = InfoLine::new(theme, &hint, &context, pct, segments);
+            let info = InfoLine::new(theme, &hint, segments);
             use ratatui::widgets::Widget;
             Widget::render(info, frame.area(), frame.buffer_mut());
         })
@@ -152,13 +90,13 @@ fn render_buffer(
     terminal.backend().buffer().clone()
 }
 
-fn render_row(theme: &UiTheme, width: u16, segments: &[InfoSegment], pct: u8) -> String {
-    render_cells(theme, width, segments, pct).concat()
+fn render_row(theme: &UiTheme, width: u16, segments: &[InfoSegment]) -> String {
+    render_cells(theme, width, segments).concat()
 }
 
 /// Per-cell symbols of one rendered row (the golden dump, before joining).
-fn render_cells(theme: &UiTheme, width: u16, segments: &[InfoSegment], pct: u8) -> Vec<String> {
-    render_buffer(theme, width, segments, pct)
+fn render_cells(theme: &UiTheme, width: u16, segments: &[InfoSegment]) -> Vec<String> {
+    render_buffer(theme, width, segments)
         .content()
         .iter()
         .map(|cell| cell.symbol().to_string())
@@ -189,10 +127,10 @@ fn golden_text(name: &str) -> Option<String> {
 
 #[test]
 fn infoline_matches_goldens_at_blocker_sizes() {
-    for (screen, segments, pct) in fixtures() {
+    for (screen, segments) in fixtures() {
         for (w, h) in BLOCKER_SIZES {
             let name = format!("infoline_{screen}_{w}x{h}");
-            let rendered = render_row(&UI_THEME, w, &segments, pct);
+            let rendered = render_row(&UI_THEME, w, &segments);
             let rendered = format!("{rendered}\n");
             match golden_text(&name) {
                 Some(expected) => {
@@ -215,400 +153,213 @@ fn infoline_matches_goldens_at_blocker_sizes() {
     }
 }
 
-/// The row states no time of day, and carries no wordmark: the mark belongs
-/// to the launch header and nowhere else in the default look (§2.0).
+/// The row states no time of day, carries no wordmark, and no longer names
+/// the repository or branch: the launch header and the git bottom view own
+/// those (2026-09-02).
 #[test]
-fn infoline_states_no_clock_and_no_wordmark() {
-    for (_, segments, pct) in fixtures() {
+fn infoline_is_model_context_and_metrics_only() {
+    for (_, segments) in fixtures() {
         for (w, _h) in BLOCKER_SIZES {
-            let row = render_row(&UI_THEME, w, &segments, pct);
+            let row = render_row(&UI_THEME, w, &segments);
             assert!(
                 !row.contains(':'),
-                "{w}: the info line carries no clock: {row:?}"
+                "{w}: the metrics line carries no clock: {row:?}"
             );
             assert!(
-                !row.contains("CODEWHALE"),
-                "{w}: no wordmark on this row: {row:?}"
+                !row.contains("CODEWHALE") && !row.contains("codewhale"),
+                "{w}: no wordmark or repository on this row: {row:?}"
             );
+            assert!(!row.contains('⑂'), "{w}: no branch on this row: {row:?}");
         }
     }
-    // The work fixture's own repository is the only `codewhale` on the row,
-    // and only once it has shed the slug.
-    let work = render_row(&UI_THEME, 160, &work_segments(), 61);
-    assert!(!work.contains("codewhale"), "no wordmark: {work:?}");
+    let work = render_row(&UI_THEME, 160, &work_segments());
+    assert!(
+        work.starts_with("deepseek-v4 · ctx 61% · $0.42 · ttft 400ms · 38 tok/s · ↓ 1.2K  "),
+        "{work:?}"
+    );
+    assert!(work.trim_end().ends_with("Ctrl+/ help"), "{work:?}");
 }
 
-/// Declared shed order (spec §5b): the bar glyphs, then the help hint, then
-/// the repository slug down to the folder basename, then folder, then
-/// branch. The route identity and the `context NN%` text are the floor at
-/// every width.
+/// Declared shed order: `tok/s`, `ttft`, `↓ tokens`, the help hint, then
+/// the cost. The model and `ctx NN%` are the floor at every width.
 #[test]
-fn infoline_sheds_bar_then_help_then_slug_then_folder_then_branch() {
-    let segments = crowded_segments();
+fn infoline_sheds_rate_then_ttft_then_tokens_then_help_then_cost() {
+    let segments = work_segments();
     // The narrowest row that still shows a thing. A thing that sheds earlier
     // needs a wider row to survive, so these strictly decrease down the
     // declared order.
     let narrowest_showing = |needle: &str| -> u16 {
         (24..=180u16)
-            .filter(|w| render_row(&UI_THEME, *w, &segments, 61).contains(needle))
+            .filter(|w| render_row(&UI_THEME, *w, &segments).contains(needle))
             .min()
             .unwrap_or_else(|| panic!("{needle} never painted at any width"))
     };
-    let bar = narrowest_showing("▱");
+    let rate = narrowest_showing("tok/s");
+    let ttft = narrowest_showing("ttft");
+    let tokens = narrowest_showing("↓ 1.2K");
     let help = narrowest_showing("help");
-    let slug = narrowest_showing("acme/");
-    let folder = narrowest_showing("mcp-gateway");
-    let branch = narrowest_showing("⑂ main");
+    let cost = narrowest_showing("$0.42");
     assert!(
-        bar > help && help > slug && slug > folder && folder > branch,
-        "shed order drifted: bar {bar}, help {help}, slug {slug}, \
-         folder {folder}, branch {branch}"
+        rate > ttft && ttft > tokens && tokens > help && help > cost,
+        "shed order broke: rate@{rate} ttft@{ttft} tokens@{tokens} help@{help} cost@{cost}"
     );
-    // The slug degrades to the basename rather than costing the row a whole
-    // segment: the repository is still named at every width the folder
-    // survives.
-    for width in folder..=180u16 {
-        let row = render_row(&UI_THEME, width, &segments, 61);
+    for w in 24..=180u16 {
+        let row = render_row(&UI_THEME, w, &segments);
         assert!(
-            row.contains("mcp-gateway"),
-            "{width}: the repository stays named: {row:?}"
-        );
-    }
-    // What 80 columns spend their cells on: the repository under its real
-    // name, the branch, the model, the reading, and the hint. Dropping the
-    // top bar's wordmark and the `model` label bought exactly this.
-    let row80 = render_row(&UI_THEME, 80, &work_segments(), 61);
-    for expected in ["Hmbown/CodeWhale", "⑂ main", "deepseek-v4", "context 61%"] {
-        assert!(
-            row80.contains(expected),
-            "80: {expected} must survive: {row80:?}"
-        );
-    }
-    assert!(
-        row80.contains("help"),
-        "80: the hint survives too: {row80:?}"
-    );
-
-    // Below the floor (route identity + join + reading = 25 cells for this
-    // fixture) the reading pins right, whole, and the route is what yields.
-    let row24 = render_row(&UI_THEME, 24, &segments, 61);
-    assert!(
-        row24.trim_end().ends_with("context 61%"),
-        "24: below the floor the reading pins right: {row24:?}"
-    );
-    assert!(
-        row24.starts_with("deepseek"),
-        "24: the route keeps the left edge: {row24:?}"
-    );
-    for width in 24..=180u16 {
-        let row = render_row(&UI_THEME, width, &segments, 61);
-        assert!(
-            row.contains("context 61%"),
-            "{width}: the context reading is the floor: {row:?}"
-        );
-        if width >= 60 {
-            assert!(
-                row.contains("deepseek-v4"),
-                "{width}: route identity never sheds first: {row:?}"
-            );
-        }
-    }
-}
-
-/// The bar is a solid 10-cell reading: filled cells are the tenths used.
-#[test]
-fn infoline_bar_fills_one_cell_per_tenth() {
-    for (pct, filled) in [(0u8, 0usize), (61, 6), (80, 8), (100, 10)] {
-        let row = render_row(&UI_THEME, 160, &work_segments(), pct);
-        assert!(
-            row.contains(&format!("context {pct}%")),
-            "{pct}: the reading is the number: {row:?}"
-        );
-        assert_eq!(
-            row.matches('▰').count(),
-            filled,
-            "{pct}% must fill {filled} of 10 cells: {row:?}"
-        );
-        assert_eq!(
-            row.matches('▱').count(),
-            10 - filled,
-            "{pct}% must leave {} cells open: {row:?}",
-            10 - filled
+            row.contains("deepseek-v4") && row.contains("ctx 61%"),
+            "{w}: the model and the context reading never shed: {row:?}"
         );
     }
 }
 
-/// At the 80% cap the whole context reading turns to the error token — the
-/// number, the percent sign, and the bar, so it reads as one warning.
+/// At the 80% cap the context reading takes the error token — the caller
+/// picks the ink, and the row paints it on both the label and the value.
 #[test]
 fn infoline_context_takes_the_error_token_at_eighty() {
-    let segments = work_segments();
-    let warn = render_buffer(&UI_THEME, 160, &segments, 83);
-    let calm = render_buffer(&UI_THEME, 160, &segments, 61);
-    let fg_of = |buf: &ratatui::buffer::Buffer, needle: char| {
-        (0..160u16)
-            .find(|x| buf[(*x, 0)].symbol() == needle.to_string())
-            .map(|x| buf[(x, 0)].fg)
-            .expect("row paints the glyph")
-    };
-    assert_eq!(fg_of(&warn, '%'), UI_THEME.error_fg, "83% is the error ink");
-    assert_eq!(fg_of(&warn, '▰'), UI_THEME.error_fg, "the bar warns too");
-    assert_ne!(
-        fg_of(&calm, '%'),
-        UI_THEME.error_fg,
-        "61% is a status, not a failure"
-    );
-    assert_eq!(super::meter_ink_for(83), ChromeInk::Failure);
-    assert_eq!(super::meter_ink_for(79), ChromeInk::Info);
-    assert_eq!(super::context_label_ink_for(83), ChromeInk::Failure);
-    assert_eq!(super::context_label_ink_for(79), ChromeInk::Metadata);
-}
-
-/// The repository segment states `owner/name` while the row can afford it,
-/// and falls back to the folder basename — never to nothing — when it
-/// cannot. A shorter form is taken before any segment goes.
-#[test]
-fn infoline_repository_slug_falls_back_to_the_folder_basename() {
-    let segments = work_segments();
-    let wide = render_row(&UI_THEME, 120, &segments, 61);
-    assert!(
-        wide.contains("Hmbown/CodeWhale"),
-        "the slug is the repository's name when it fits: {wide:?}"
-    );
-    let tight = render_row(&UI_THEME, 52, &segments, 61);
-    assert!(
-        !tight.contains("Hmbown/CodeWhale"),
-        "52 cannot afford the slug: {tight:?}"
-    );
-    assert!(
-        tight.contains("codewhale"),
-        "the basename keeps the slot: {tight:?}"
-    );
-    // A "shorter" form that is not shorter is not adopted.
-    let no_short = InfoSegment::new(InfoSegmentId::Workspace, "", "cw", ChromeInk::Metadata)
-        .short("a-much-longer-name");
-    assert!(no_short.short.is_none());
+    let theme = &UI_THEME;
+    let failure = crate::palette::grammar::chrome_style(theme, ChromeInk::Failure)
+        .fg
+        .expect("failure ink has a colour");
+    for (pct, expect_failure) in [(79u8, false), (80, true), (99, true)] {
+        let segments = vec![
+            InfoSegment::new(InfoSegmentId::Model, "", "deepseek-v4", ChromeInk::Identity),
+            context(pct),
+        ];
+        let buf = render_buffer(theme, 80, &segments);
+        let row = render_row(theme, 80, &segments);
+        let start = row.find("ctx").expect("context reading painted");
+        let value_fg = buf[(u16::try_from(start + 4).unwrap(), 0)].fg;
+        let label_fg = buf[(u16::try_from(start).unwrap(), 0)].fg;
+        assert_eq!(value_fg == failure, expect_failure, "{pct}%: value ink");
+        assert_eq!(label_fg == failure, expect_failure, "{pct}%: label ink");
+    }
 }
 
 /// The hint must name a chord that actually opens help in this shell. `F1`
-/// is advertised nowhere in chrome because terminals eat it, and bare `?` is
-/// composer text; `Ctrl+/` is what `is_help_shortcut` accepts unconditionally.
+/// is eaten by tmux and several emulators, and bare `?` is composer text.
 #[test]
 fn infoline_help_hint_names_a_chord_that_opens_help() {
-    use crate::tui::shell_key_routing::{HELP_CHROME_CHORD, info_help_hint, is_help_shortcut};
-    assert_eq!(HELP_CHROME_CHORD, "Ctrl+/");
-    assert!(
-        is_help_shortcut(&KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL)),
-        "the advertised chord must open help"
-    );
-    // The chords chrome deliberately does not advertise.
-    assert!(
-        !is_help_shortcut(&KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)),
-        "bare ? types text, so it must never be the printed hint"
-    );
-    let hint = info_help_hint(crate::localization::Locale::En);
+    let hint = help_hint();
+    assert!(hint.ends_with(" help"), "{hint}");
     assert!(!hint.contains("F1"), "terminals eat F1: {hint}");
-    let row = render_row(&UI_THEME, 160, &work_segments(), 61);
-    assert!(row.ends_with(&hint), "the hint is pinned right: {row:?}");
+    assert!(!hint.starts_with('?'), "bare ? is composer text: {hint}");
+    let chord = hint.split_whitespace().next().unwrap();
+    let key = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('/'),
+        crossterm::event::KeyModifiers::CONTROL,
+    );
+    assert_eq!(chord, "Ctrl+/");
+    assert!(crate::tui::shell_key_routing::is_help_shortcut(&key));
+    let row = render_row(&UI_THEME, 120, &work_segments());
+    assert!(row.trim_end().ends_with(&hint), "pinned right: {row:?}");
 }
 
+/// Every recorded hitbox covers exactly the cells its segment painted, at
+/// every width — the hitbox pass and the paint pass share one shed pass.
 #[test]
 fn infoline_hitboxes_match_painted_cells() {
-    use super::infoline_hitboxes;
-    let segments = startup_segments();
+    let segments = work_segments();
     let hint = help_hint();
-    let context = context_label();
-    let info = InfoLine::new(&UI_THEME, &hint, &context, 0, &segments);
-    let area = ratatui::layout::Rect::new(0, 0, 160, 1);
-    let hitboxes = infoline_hitboxes(&info, area);
-    assert_eq!(hitboxes.len(), 2, "one hitbox per painted segment");
-    // Every hitbox lies inside the row and is non-degenerate.
-    for hb in &hitboxes {
-        assert_eq!(hb.area.y, 0);
-        assert_eq!(hb.area.height, 1);
-        assert!(hb.area.width > 0);
-        assert!(hb.area.x + hb.area.width <= 160);
-    }
-    // Hitboxes do not overlap.
-    let mut sorted = hitboxes.clone();
-    sorted.sort_by_key(|hb| hb.area.x);
-    for pair in sorted.windows(2) {
-        assert!(
-            pair[0].area.x + pair[0].area.width <= pair[1].area.x,
-            "hitboxes must not overlap"
-        );
-    }
-    // The painted segment text sits inside its recorded hitbox. Slice by
-    // cell, not by byte: the row contains multi-byte glyphs (`·`, meter).
-    let cells = render_cells(&UI_THEME, 160, &segments, 0);
-    for hb in &hitboxes {
-        let text: String = (hb.area.x..hb.area.x + hb.area.width)
-            .filter_map(|x| cells.get(usize::from(x)))
-            .cloned()
-            .collect();
-        assert!(
-            !text.trim().is_empty(),
-            "hitbox {:?} covers empty cells",
-            hb.id
-        );
-    }
-}
-
-#[test]
-fn infoline_hitboxes_follow_the_same_shed_pass_as_paint() {
-    let segments = crowded_segments();
-    let hint = help_hint();
-    for width in [120u16, 80, 60, 44, 30, 20] {
-        let context = context_label();
-        let info = InfoLine::new(&UI_THEME, &hint, &context, 61, &segments);
-        let hitboxes = super::infoline_hitboxes(&info, ratatui::layout::Rect::new(0, 0, width, 1));
-        let cells = render_cells(&UI_THEME, width, &segments, 61);
-        for hitbox in hitboxes {
+    for w in 24..=180u16 {
+        let area = Rect::new(0, 0, w, 1);
+        let info = InfoLine::new(&UI_THEME, &hint, &segments);
+        let hitboxes = infoline_hitboxes(&info, area);
+        let cells = render_cells(&UI_THEME, w, &segments);
+        for hitbox in &hitboxes {
+            let segment = segments.iter().find(|s| s.id == hitbox.id).unwrap();
+            let painted: String = cells
+                [usize::from(hitbox.area.x)..usize::from(hitbox.area.x + hitbox.area.width)]
+                .concat();
+            let expected = if segment.label.is_empty() {
+                segment.value.clone()
+            } else {
+                format!("{} {}", segment.label, segment.value)
+            };
             assert!(
-                hitbox.area.right() <= width,
-                "{width}: hitbox {:?} escapes the row: {:?}",
+                expected.starts_with(painted.trim_end()),
+                "{w}: {:?} hitbox {:?} covers {painted:?}, expected {expected:?}",
                 hitbox.id,
                 hitbox.area
             );
-            let text: String = (hitbox.area.x..hitbox.area.right())
-                .filter_map(|x| cells.get(usize::from(x)))
-                .cloned()
-                .collect();
-            assert!(
-                !text.trim().is_empty(),
-                "{width}: hitbox {:?} covers unpainted cells",
-                hitbox.id
-            );
+        }
+        // No two hitboxes overlap.
+        for (i, a) in hitboxes.iter().enumerate() {
+            for b in &hitboxes[i + 1..] {
+                assert!(
+                    a.area.right() <= b.area.x || b.area.right() <= a.area.x,
+                    "{w}: hitboxes overlap: {a:?} {b:?}"
+                );
+            }
         }
     }
+}
 
-    let context = context_label();
+/// The context reading's hitbox is exactly the painted `ctx NN%` span.
+#[test]
+fn context_meter_hitbox_covers_exactly_the_painted_reading() {
     let segments = work_segments();
-    for width in 20..=24 {
-        let info = InfoLine::new(&UI_THEME, &hint, &context, 61, &segments);
-        let area = ratatui::layout::Rect::new(0, 0, width, 1);
-        let model = super::infoline_hitboxes(&info, area)
-            .into_iter()
-            .find(|hitbox| hitbox.id == InfoSegmentId::Model);
-        let context = super::context_meter_hitbox(&info, area).expect("context hitbox");
+    let hint = help_hint();
+    for w in 24..=180u16 {
+        let area = Rect::new(0, 0, w, 1);
+        let info = InfoLine::new(&UI_THEME, &hint, &segments);
+        let hitbox = context_meter_hitbox(&info, area).expect("the reading never sheds");
+        let cells = render_cells(&UI_THEME, w, &segments);
+        let painted: String =
+            cells[usize::from(hitbox.x)..usize::from(hitbox.x + hitbox.width)].concat();
         assert!(
-            model.is_none_or(|model| {
-                model.area.right() <= context.x || context.right() <= model.area.x
-            }),
-            "{width}: model and context hitboxes overlap"
+            "ctx 61%".starts_with(painted.trim_end()),
+            "{w}: context hitbox {hitbox:?} covers {painted:?}"
         );
     }
 }
 
+/// ASCII-safe mode projects every glyph to a single-width ASCII cell.
 #[test]
 fn infoline_ascii_safe_has_no_wide_or_unsupported_glyphs() {
     let segments = work_segments();
     let hint = help_hint();
-    let row = {
-        let backend = TestBackend::new(160, 1);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| {
-                let context = context_label();
-                let info =
-                    InfoLine::new(&UI_THEME, &hint, &context, 61, &segments).ascii_safe(true);
-                use ratatui::widgets::Widget;
-                Widget::render(info, frame.area(), frame.buffer_mut());
-            })
-            .expect("draw");
-        terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>()
-    };
-    assert!(row.contains('#'), "meter projects to #");
-    assert!(!row.contains('▰'), "no block glyphs survive ascii-safe");
-    assert!(!row.contains('⑂'), "the branch glyph projects too: {row}");
-    for ch in row.chars() {
-        assert_eq!(ch.width(), Some(1), "ascii-safe row must be single-width");
+    for (w, _) in BLOCKER_SIZES {
+        let area = Rect::new(0, 0, w, 1);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let info = InfoLine::new(&UI_THEME, &hint, &segments).ascii_safe(true);
+        ratatui::widgets::Widget::render(info, area, &mut buf);
+        for x in 0..w {
+            let symbol = buf[(x, 0)].symbol();
+            assert!(symbol.is_ascii(), "{w}: cell {x} {symbol:?} is not ASCII");
+            assert_eq!(
+                symbol.width(),
+                1,
+                "{w}: cell {x} {symbol:?} is not one cell"
+            );
+        }
     }
 }
 
+/// Hover and degenerate sizes never panic, and hover only brightens the
+/// model — the one segment with an action.
 #[test]
 fn infoline_hover_and_narrow_do_not_panic() {
     let segments = work_segments();
     let hint = help_hint();
-    // Hover style change must not move cells.
-    let plain = render_row(&UI_THEME, 160, &segments, 61);
-    let hovered = {
-        let backend = TestBackend::new(160, 1);
-        let mut terminal = Terminal::new(backend).expect("terminal");
-        terminal
-            .draw(|frame| {
-                let context = context_label();
-                let info = InfoLine::new(&UI_THEME, &hint, &context, 61, &segments)
-                    .hovered(Some(InfoSegmentId::Model));
-                use ratatui::widgets::Widget;
-                Widget::render(info, frame.area(), frame.buffer_mut());
-            })
-            .expect("draw");
-        terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>()
-    };
-    assert_eq!(plain, hovered, "hover recolors, it does not relayout");
-    // Degenerate sizes must not panic.
-    for w in [1u16, 2, 10, 20, 40] {
-        let _ = render_row(&UI_THEME, w, &segments, 61);
+    for (w, h) in [(0u16, 0u16), (1, 1), (5, 1), (24, 1), (300, 1)] {
+        let area = Rect::new(0, 0, w, h);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let info = InfoLine::new(&UI_THEME, &hint, &segments).hovered(Some(InfoSegmentId::Model));
+        ratatui::widgets::Widget::render(info, area, &mut buf);
+        let info = InfoLine::new(&UI_THEME, &hint, &segments);
+        let _ = infoline_hitboxes(&info, area);
+        let _ = context_meter_hitbox(&info, area);
     }
-    assert!(!plain.is_empty());
-}
-
-#[test]
-fn context_meter_hitbox_covers_exactly_the_painted_meter_span() {
-    // The meter's mouse route must land on the cells the meter painted —
-    // the posture-floor discipline (a hitbox never claims cells another
-    // element paints), proven against the buffer itself at row widths that
-    // are roomy (nothing sheds), tight (help and segments shed), and too
-    // narrow (no hitbox rather than an overlapping one).
-    let segments = crowded_segments();
-    let hint = help_hint();
-    for width in [160u16, 80, 60, 44, 30, 20] {
-        let context = context_label();
-        let info = InfoLine::new(&UI_THEME, &hint, &context, 61, &segments);
-        let row = render_row(&UI_THEME, width, &segments, 61);
-        let area = ratatui::layout::Rect::new(0, 0, width, 1);
-        match super::context_meter_hitbox(&info, area) {
-            Some(hitbox) => {
-                let covered = row
-                    .chars()
-                    .skip(usize::from(hitbox.x))
-                    .take(usize::from(hitbox.width))
-                    .collect::<String>();
-                assert!(
-                    covered.starts_with("context "),
-                    "{width} wide: hitbox must start at the meter's first cell: {covered:?}"
-                );
-                assert!(
-                    covered.contains('%'),
-                    "{width} wide: hitbox must cover the percentage: {covered:?}"
-                );
-                assert!(
-                    !covered.contains("help"),
-                    "{width} wide: hitbox must not reach the help hint: {covered:?}"
-                );
-            }
-            None => {
-                // Refused only when even the floor cannot fit: the route
-                // identity, a join, and the `context NN%` text.
-                let floor = "deepseek-v4".width() + " · ".width() + "context 61%".width();
-                assert!(
-                    usize::from(width) < floor,
-                    "{width} wide: a fittable meter (floor {floor}) must return a hitbox"
-                );
-            }
-        }
-    }
+    let area = Rect::new(0, 0, 120, 1);
+    let mut plain = ratatui::buffer::Buffer::empty(area);
+    ratatui::widgets::Widget::render(InfoLine::new(&UI_THEME, &hint, &segments), area, &mut plain);
+    let mut hovered = ratatui::buffer::Buffer::empty(area);
+    ratatui::widgets::Widget::render(
+        InfoLine::new(&UI_THEME, &hint, &segments).hovered(Some(InfoSegmentId::Model)),
+        area,
+        &mut hovered,
+    );
+    assert_ne!(plain[(0, 0)].modifier, hovered[(0, 0)].modifier);
+    let ctx_x = u16::try_from(render_row(&UI_THEME, 120, &segments).find("ctx").unwrap()).unwrap();
+    assert_eq!(plain[(ctx_x, 0)], hovered[(ctx_x, 0)]);
 }

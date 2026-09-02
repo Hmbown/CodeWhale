@@ -1,1 +1,1 @@
-Hmbown/CodeWhale · ⑂ main · deepseek-v4 · context 61% ▰▰▰▰▰▰▱▱▱▱                         Ctrl+/ help
+deepseek-v4 · ctx 61% · $0.42 · ttft 400ms · 38 tok/s · ↓ 1.2K                           Ctrl+/ help

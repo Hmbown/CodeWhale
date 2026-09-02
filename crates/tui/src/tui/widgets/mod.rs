@@ -7153,15 +7153,8 @@ mod tests {
         {
             let segments = crate::tui::ui::frame::info_segments(&app, info_area.width);
             let help_hint = crate::tui::shell_key_routing::info_help_hint(app.ui_locale);
-            let context_label = app.tr(crate::localization::MessageId::FooterHintContext);
-            let info = crate::tui::infoline::InfoLine::new(
-                &app.ui_theme,
-                &help_hint,
-                context_label.as_ref(),
-                crate::tui::ui::frame::info_context_percent(&app),
-                &segments,
-            )
-            .ascii_safe(true);
+            let info = crate::tui::infoline::InfoLine::new(&app.ui_theme, &help_hint, &segments)
+                .ascii_safe(true);
             use ratatui::widgets::Widget;
             Widget::render(info, info_area, &mut info_buf);
         }
