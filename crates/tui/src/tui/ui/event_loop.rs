@@ -5239,6 +5239,28 @@ pub(crate) async fn run_event_loop(
             // gesture. Handle it before transcript/detail Enter shortcuts so
             // it can never open an unrelated overlay instead (#382).
             let portable_submit_chord = composer_submit_chord(key, app.composer_multiline_mode);
+            // Inside the double-tap window the just-queued message steers —
+            // the same path Ctrl+Enter takes (one steering path). Outside it,
+            // an empty Enter still promotes the oldest queued message.
+            if matches!(portable_submit_chord, Some(ComposerSubmitChord::Enter))
+                && app.input.trim().is_empty()
+                && !slash_menu_open
+                && !mention_menu_open
+                && let Some(queued) = app.take_queued_for_double_tap_steer()
+            {
+                persist_offline_queue_state(app);
+                attempt_steer_with_queue_fallback(
+                    app,
+                    config,
+                    &engine_handle,
+                    queued,
+                    DispatchRecovery::Queued {
+                        restore_index: None,
+                    },
+                )
+                .await;
+                continue;
+            }
             if matches!(portable_submit_chord, Some(ComposerSubmitChord::Enter))
                 && matches!(
                     app.decide_composer_submit(ComposerSubmitChord::Enter),

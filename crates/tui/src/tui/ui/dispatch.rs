@@ -1240,6 +1240,8 @@ pub(crate) async fn dispatch_composer_message(
         }
         SubmitDisposition::Queue => {
             enqueue_offline_message(app, message);
+            // A second, empty Enter inside the window sends this now.
+            app.arm_double_tap_window();
             let toast = queued_follow_up_toast(app);
             app.status_message = Some(toast.clone());
             app.push_status_toast(toast, StatusToastLevel::Info, Some(3_000));
