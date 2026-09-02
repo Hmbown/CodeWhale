@@ -2966,8 +2966,27 @@ pub fn theme(app: &mut App, arg: Option<&str>) -> CommandResult {
             )),
             Err(error) => CommandResult::error(error),
         },
+        // `underwater` (= deepsea) is a compound choice: the Dark palette
+        // plus the painted ocean treatment. It is spelled like a theme
+        // because that is how people ask for it (`/theme underwater`), but
+        // `ocean_treatment` is its owner — the theme picker's Underwater row
+        // and this command write the same pair.
+        Some(name) if is_underwater_theme_alias(name) => {
+            set_theme_selection(app, "dark", "deepsea", true)
+        }
         Some(name) => set_config_value(app, "theme", name, true),
     }
+}
+
+/// The spellings of the underwater treatment accepted where a theme name is
+/// expected. Narrower than [`crate::tui::ocean::OceanTreatment::parse`] on
+/// purpose: `gradient`/`classic` are persisted-setting aliases, not names a
+/// user types after `/theme`.
+fn is_underwater_theme_alias(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "underwater" | "deepsea" | "deep-sea" | "ombre"
+    )
 }
 
 /// Manage workspace-level trust and the per-path allowlist.
@@ -4953,6 +4972,34 @@ context_window = 262144
         assert_eq!(app.theme_id, crate::palette::ThemeId::Grayscale);
         assert_eq!(app.ui_theme.mode, crate::palette::PaletteMode::Grayscale);
         assert!(app.needs_redraw);
+    }
+
+    #[test]
+    fn theme_command_underwater_alias_applies_the_deepsea_pair() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-theme-underwater-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let mut app = create_test_app();
+        for alias in ["underwater", "Deepsea", "ombre"] {
+            let result = theme(&mut app, Some(alias));
+            assert!(!result.is_error, "{alias}: {:?}", result.message);
+            assert_eq!(
+                result.message.as_deref(),
+                Some("theme = dark, ocean_treatment = deepsea (saved)"),
+                "{alias}"
+            );
+            assert_eq!(app.theme_id, crate::palette::ThemeId::Whale);
+            assert!(app.ocean_treatment.is_deepsea(), "{alias}");
+        }
     }
 
     #[test]

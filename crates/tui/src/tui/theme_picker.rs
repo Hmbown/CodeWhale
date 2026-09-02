@@ -127,7 +127,7 @@ fn theme_options(original_name: &str, original_treatment: OceanTreatment) -> Vec
         if id == ThemeId::WhaleLight {
             options.push(
                 SettingOption::builder(DEEPSEA_OPTION_ID, "Deepsea")
-                    .summary("Ocean field + ambient life, opt-in")
+                    .summary("Ocean field + ambient life, opt-in (/theme underwater)")
                     .detail("Paint the authored deep-blue water column behind the Dark palette")
                     .help("Explicitly opt into the Deepsea surface")
                     .values(SettingValues::new(
