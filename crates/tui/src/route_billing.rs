@@ -792,28 +792,6 @@ pub fn format_usage_chip(chip: &UsageChip) -> Option<String> {
     }
 }
 
-/// Sidebar / detail line. Always returns a string so the panel has an owner.
-#[must_use]
-pub fn format_usage_line(chip: &UsageChip) -> String {
-    match chip {
-        UsageChip::Money(amount) => format!("cost: {amount}"),
-        UsageChip::PricedSubtotal { amount, legacy } => {
-            if *legacy {
-                format!("cost: saved subtotal {amount} + unknown")
-            } else {
-                format!("cost: subtotal {amount} + unknown")
-            }
-        }
-        UsageChip::Allowance { label, used_pct } => match used_pct {
-            Some(pct) => format!("usage: {label} · {pct:.0}% used"),
-            None => format!("usage: {label}"),
-        },
-        UsageChip::Local => "cost: local".to_string(),
-        UsageChip::Unknown => "cost: unknown".to_string(),
-        UsageChip::Hidden => "cost: —".to_string(),
-    }
-}
-
 fn custom_billing_unknown(config: &ProviderConfig) -> bool {
     // A custom OpenAI-compatible endpoint with no explicit pay mode and no
     // priced catalog is treated as unknown rather than inventing metered
@@ -1088,9 +1066,17 @@ mod tests {
         );
         // The label names the membership product, never the credential import
         // mechanism, and never a dollar figure.
-        assert!(!format_usage_line(&chip).contains("OAuth"));
-        assert!(!format_usage_line(&chip).contains("imported token"));
-        assert!(!format_usage_line(&chip).contains('$'));
+        assert!(
+            !format_usage_chip(&chip)
+                .unwrap_or_default()
+                .contains("OAuth")
+        );
+        assert!(
+            !format_usage_chip(&chip)
+                .unwrap_or_default()
+                .contains("imported token")
+        );
+        assert!(!format_usage_chip(&chip).unwrap_or_default().contains('$'));
     }
 
     #[test]
@@ -1226,7 +1212,7 @@ mod tests {
                 None,
             );
             assert!(!matches!(chip, UsageChip::Money(_)));
-            assert!(!format_usage_line(&chip).contains('$'));
+            assert!(!format_usage_chip(&chip).unwrap_or_default().contains('$'));
         }
     }
 
@@ -1251,7 +1237,7 @@ mod tests {
             None,
         );
         assert!(matches!(chip, UsageChip::Money(_)));
-        assert!(format_usage_line(&chip).contains('$'));
+        assert!(format_usage_chip(&chip).unwrap_or_default().contains('$'));
     }
 
     #[test]
@@ -1287,7 +1273,7 @@ mod tests {
                 used_pct: None,
             }
         );
-        assert!(!format_usage_line(&chip).contains('$'));
+        assert!(!format_usage_chip(&chip).unwrap_or_default().contains('$'));
     }
 
     #[test]
@@ -1440,7 +1426,7 @@ mod tests {
             format_usage_chip(&chip).as_deref(),
             Some("usage: Codex OAuth quota")
         );
-        assert!(!format_usage_line(&chip).contains('$'));
+        assert!(!format_usage_chip(&chip).unwrap_or_default().contains('$'));
     }
 
     #[test]
@@ -1490,7 +1476,7 @@ mod tests {
             CostCurrency::Usd,
             None,
         );
-        assert!(!format_usage_line(&chip).contains('$'));
+        assert!(!format_usage_chip(&chip).unwrap_or_default().contains('$'));
         assert_eq!(
             for_child_route(
                 ApiProvider::Deepseek,
@@ -1535,7 +1521,7 @@ mod tests {
             CostCurrency::Usd,
             None,
         );
-        assert!(!format_usage_line(&chip).contains('$'));
+        assert!(!format_usage_chip(&chip).unwrap_or_default().contains('$'));
     }
 
     #[test]
@@ -1592,7 +1578,11 @@ mod tests {
             CostCurrency::Usd,
             None,
         );
-        assert!(!format_usage_line(&plan_chip).contains('$'));
+        assert!(
+            !format_usage_chip(&plan_chip)
+                .unwrap_or_default()
+                .contains('$')
+        );
 
         assert_eq!(
             for_child_route(
@@ -1794,7 +1784,7 @@ mod tests {
         );
         assert_eq!(zero, UsageChip::Hidden);
         assert!(format_usage_chip(&zero).is_none());
-        assert!(!format_usage_line(&zero).contains('$'));
+        assert!(!format_usage_chip(&zero).unwrap_or_default().contains('$'));
     }
 
     #[test]
@@ -1812,7 +1802,7 @@ mod tests {
             None,
         );
         assert_eq!(format_usage_chip(&chip).as_deref(), Some("cost: local"));
-        assert!(!format_usage_line(&chip).contains('$'));
+        assert!(!format_usage_chip(&chip).unwrap_or_default().contains('$'));
     }
 
     #[test]
@@ -1863,7 +1853,7 @@ mod tests {
         );
         assert_eq!(chip, UsageChip::Unknown);
         assert_eq!(format_usage_chip(&chip).as_deref(), Some("cost: unknown"));
-        assert!(!format_usage_line(&chip).contains('$'));
+        assert!(!format_usage_chip(&chip).unwrap_or_default().contains('$'));
 
         let unknown_billing = usage_chip(
             BillingPresentation::Unknown,
@@ -1874,7 +1864,11 @@ mod tests {
             None,
         );
         assert_eq!(unknown_billing, UsageChip::Unknown);
-        assert!(!format_usage_line(&unknown_billing).contains('$'));
+        assert!(
+            !format_usage_chip(&unknown_billing)
+                .unwrap_or_default()
+                .contains('$')
+        );
     }
 
     #[test]
@@ -2219,7 +2213,7 @@ mod tests {
             None,
         );
         assert!(matches!(chip, UsageChip::Money(_)));
-        assert!(format_usage_line(&chip).contains('$'));
+        assert!(format_usage_chip(&chip).unwrap_or_default().contains('$'));
     }
 
     #[test]
@@ -2251,7 +2245,7 @@ mod tests {
             None,
         );
         assert!(!matches!(chip, UsageChip::Money(_)));
-        assert!(!format_usage_line(&chip).contains('$'));
+        assert!(!format_usage_chip(&chip).unwrap_or_default().contains('$'));
     }
 
     #[test]
@@ -2406,7 +2400,7 @@ mod tests {
                 None,
             );
             assert_eq!(chip, UsageChip::Unknown);
-            assert!(!format_usage_line(&chip).contains('$'));
+            assert!(!format_usage_chip(&chip).unwrap_or_default().contains('$'));
         }
     }
 

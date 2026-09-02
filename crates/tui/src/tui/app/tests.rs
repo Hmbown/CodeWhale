@@ -3356,20 +3356,6 @@ fn failed_workspace_owner_reconcile_leaves_previous_work_state_intact() {
 }
 
 #[test]
-fn clear_todos_is_atomic_and_invalidates_cached_work_summary() {
-    let mut app = App::new(test_options(false), &Config::default());
-    {
-        let mut todos = app.todos.try_lock().expect("todos lock");
-        todos.add("clear me".to_string(), TodoStatus::Pending);
-    }
-    app.cached_work_summary = Some(SidebarWorkSummary::default());
-
-    assert!(app.clear_todos());
-    assert!(app.cached_work_summary.is_none());
-    assert_eq!(app.work_state_snapshot().expect("snapshot"), None);
-}
-
-#[test]
 fn entering_operate_preserves_user_rail_panel() {
     let mut app = App::new(test_options(false), &Config::default());
     app.work_surface.panel = crate::tui::work_surface::RailPanel::Agents;

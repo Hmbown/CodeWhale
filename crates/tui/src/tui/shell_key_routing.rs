@@ -86,6 +86,10 @@ pub enum ShellBindingId {
     ModeCycle,
     /// Shift+Tab: cycle the permission posture.
     PermissionCycle,
+    /// Ctrl+Tab / Ctrl+]: the next bottom-dock view.
+    ViewCycle,
+    /// Ctrl+Shift+Tab: the previous bottom-dock view.
+    ViewCycleBack,
 }
 
 /// One advertised binding with the portable catalog chord and focus rules.
@@ -114,6 +118,8 @@ impl ShellBinding {
             ShellBindingId::Settings => is_settings_shortcut(key),
             ShellBindingId::ModeCycle => is_mode_cycle_shortcut(key),
             ShellBindingId::PermissionCycle => is_permission_cycle_shortcut(key),
+            ShellBindingId::ViewCycle => is_view_cycle_shortcut(key),
+            ShellBindingId::ViewCycleBack => is_view_cycle_back_shortcut(key),
         }
     }
 }
@@ -191,6 +197,22 @@ pub const SHELL_BINDINGS: &[ShellBinding] = &[
         // including the launch screen, where it used to be dead — plus the
         // Config modal that displays the posture it changes.
         focus: FocusScope::AnyShellOrConfig,
+    },
+    ShellBinding {
+        id: ShellBindingId::ViewCycle,
+        // Ctrl+Tab only arrives under the kitty keyboard protocol (the loop
+        // pushes DISAMBIGUATE_ESCAPE_CODES); Ctrl+] is the chord every
+        // terminal delivers — unbound here, not eaten by VS Code/Cursor
+        // (Ctrl+F is), tmux, iTerm2, Terminal.app, or Windows Terminal.
+        catalog_chord: "Ctrl+Tab / Ctrl+]",
+        footer_chord: "Ctrl+]",
+        focus: FocusScope::SessionShell,
+    },
+    ShellBinding {
+        id: ShellBindingId::ViewCycleBack,
+        catalog_chord: "Ctrl+Shift+Tab",
+        footer_chord: "Ctrl+Shift+Tab",
+        focus: FocusScope::SessionShell,
     },
 ];
 
@@ -389,9 +411,92 @@ pub fn is_permission_cycle_shortcut(key: &KeyEvent) -> bool {
         || (matches!(key.code, KeyCode::Tab) && key.modifiers.contains(KeyModifiers::SHIFT))
 }
 
+/// Ctrl+Tab (kitty protocol: `Tab` + CONTROL) or Ctrl+] cycles the bottom
+/// dock view forward. AltGr chords stay text (#4723).
+#[must_use]
+pub fn is_view_cycle_shortcut(key: &KeyEvent) -> bool {
+    if crate::tui::widgets::key_hint::is_altgr(key.modifiers) {
+        return false;
+    }
+    let ctrl_only = key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::ALT | KeyModifiers::SUPER | KeyModifiers::SHIFT);
+    ctrl_only && matches!(key.code, KeyCode::Tab | KeyCode::Char(']'))
+}
+
+/// Ctrl+Shift+Tab (kitty protocol: `BackTab` or `Tab` with CONTROL|SHIFT)
+/// cycles the bottom dock view backward.
+#[must_use]
+pub fn is_view_cycle_back_shortcut(key: &KeyEvent) -> bool {
+    if key
+        .modifiers
+        .intersects(KeyModifiers::ALT | KeyModifiers::SUPER)
+        || !key.modifiers.contains(KeyModifiers::CONTROL)
+    {
+        return false;
+    }
+    matches!(key.code, KeyCode::BackTab)
+        || (matches!(key.code, KeyCode::Tab) && key.modifiers.contains(KeyModifiers::SHIFT))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn view_cycle_chords_are_ctrl_tab_and_ctrl_bracket() {
+        let ctrl_tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::CONTROL);
+        let ctrl_bracket = KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL);
+        let ctrl_shift_tab = KeyEvent::new(
+            KeyCode::BackTab,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(
+            route(Focus::Composer, &ctrl_tab),
+            Some(ShellBindingId::ViewCycle)
+        );
+        assert_eq!(
+            route(Focus::Panel, &ctrl_bracket),
+            Some(ShellBindingId::ViewCycle)
+        );
+        assert_eq!(
+            route(Focus::Composer, &ctrl_shift_tab),
+            Some(ShellBindingId::ViewCycleBack)
+        );
+        // Plain Tab / Shift+Tab stay the mode and permission cycles.
+        assert_eq!(
+            route(
+                Focus::Composer,
+                &KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)
+            ),
+            Some(ShellBindingId::ModeCycle)
+        );
+        assert_eq!(
+            route(
+                Focus::Composer,
+                &KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)
+            ),
+            Some(ShellBindingId::PermissionCycle)
+        );
+        // Ctrl+T is reasoning effort, not ours; a bare `]` is composer text.
+        assert_eq!(
+            route(
+                Focus::Composer,
+                &KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL)
+            ),
+            None
+        );
+        assert_eq!(
+            route(
+                Focus::Composer,
+                &KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE)
+            ),
+            None
+        );
+        // Modals keep every key.
+        assert_eq!(route(Focus::Modal(ModalKind::Pager), &ctrl_bracket), None);
+    }
 
     #[test]
     fn bare_v_is_never_a_shortcut_in_any_state() {

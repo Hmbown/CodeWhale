@@ -670,8 +670,13 @@ fn normalize_work_surface_placement(value: &str) -> &'static str {
 fn normalize_rail_panel(value: &str) -> &'static str {
     match value.trim().to_ascii_lowercase().as_str() {
         "agents" => "agents",
+        "background" => "background",
+        "files" => "files",
+        "notepad" => "notepad",
         "context" => "context",
-        "pinned" => "pinned",
+        "git" => "git",
+        "price" => "price",
+        // `pinned` folded into the tasks view (2026-09-02 dock views).
         _ => "tasks",
     }
 }
@@ -3245,7 +3250,8 @@ mod tests {
 
         assert_eq!(loaded.work_surface_top_height, WORK_SURFACE_TOP_HEIGHT_MIN);
         assert_eq!(loaded.work_surface_placement, "top");
-        assert_eq!(loaded.rail_panel, "pinned");
+        // `pinned` folded into the tasks view (2026-09-02 dock views).
+        assert_eq!(loaded.rail_panel, "tasks");
         assert_eq!(
             std::fs::read_to_string(settings_path).expect("read unchanged settings"),
             legacy,

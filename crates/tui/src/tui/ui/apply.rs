@@ -115,7 +115,7 @@ pub(crate) fn apply_coordination_detail_projection(
 }
 
 pub(crate) fn apply_alt_4_shortcut(app: &mut App, _modifiers: KeyModifiers) {
-    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Pinned);
+    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Files);
 }
 
 pub(crate) fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {

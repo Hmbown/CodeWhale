@@ -14,6 +14,19 @@ pub struct MouseOutcome {
     pub action: Option<SidebarRowAction>,
 }
 
+/// Cycle the bottom view: `Ctrl+Tab` / `Ctrl+]` forward, `Ctrl+Shift+Tab`
+/// back. Every view is reachable this way, content or not — an empty view
+/// paints its one "nothing here" row rather than skipping, so the order the
+/// user learns is the order they get. The choice is explicit until Esc.
+pub fn cycle_view(app: &mut App, forward: bool) {
+    let next = if forward {
+        app.work_surface.panel.next()
+    } else {
+        app.work_surface.panel.prev()
+    };
+    super::interaction::select_dock_panel(app, next);
+}
+
 /// `← for agents`: switch the rail to the Agents panel and give it keyboard
 /// ownership so ↑/↓ + Enter select and focus a worker. Returns `false` when
 /// the rail cannot show agents right now (rail off, or nothing to list); the
@@ -107,9 +120,11 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Option<Option<SidebarRowActio
     }
 
     // Keyboard and mouse share one row source per panel: Enter on the
-    // selected row must open the same world a click would.
+    // selected row must open the same world a click would. An explicitly
+    // opened empty view still owns Esc (close) so cycling into "no files
+    // touched" is never a trap.
     let rows = visible_rows_for_panel(app);
-    if rows.is_empty() {
+    if rows.is_empty() && !(app.work_surface.focused && app.work_surface.explicit_view) {
         return None;
     }
     if !app.work_surface.focused {

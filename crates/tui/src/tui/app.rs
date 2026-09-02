@@ -46,7 +46,6 @@ use crate::tui::paste_burst::{FlushResult, PasteBurst};
 use crate::tui::scrolling::{MouseScrollState, TranscriptLineMeta, TranscriptScroll};
 use crate::tui::selection::{SelectionAutoscroll, TranscriptSelection};
 use crate::tui::shell_key_routing::Focus;
-use crate::tui::sidebar::SidebarWorkSummary;
 use crate::tui::streaming::StreamingState;
 use crate::tui::transcript::TranscriptViewCache;
 use crate::tui::views::ViewStack;
@@ -945,9 +944,6 @@ pub enum SidebarRowAction {
     /// The user confirms with Enter or cancels by editing/clearing the draft.
     #[allow(dead_code)] // destructive confirm path; mouse_ui already matches it (TUI-DOG-008)
     PrefillCommand(String),
-    ToggleAgentDetails {
-        agent_id: String,
-    },
     /// Select the persistent Agents panel. This is deliberately a navigation
     /// action rather than a modal: the Subagents summary is a group door, so
     /// it should reveal the standing register instead of fabricating a detail
@@ -981,7 +977,6 @@ impl SidebarRowAction {
         match self {
             Self::Command(command) => Some(command.as_str()),
             Self::PrefillCommand(_)
-            | Self::ToggleAgentDetails { .. }
             | Self::ShowSubagentsPanel
             | Self::OpenAgentDetail { .. }
             | Self::OpenAgentTranscript { .. }
@@ -1642,8 +1637,6 @@ pub struct App {
     /// Current hover tooltip text, if any.
     pub sidebar_hover_tooltip: Option<String>,
     /// Last successfully rendered Work panel summary. Transient mutex misses
-    /// should not wipe settled To-do state from the sidebar.
-    pub(crate) cached_work_summary: Option<SidebarWorkSummary>,
     /// Browsing context from the last dismissed `/model` picker, so reopening
     /// restores the view mode and highlighted row instead of resetting to the
     /// top (#4109 picker memory). Session-scoped, never persisted.
@@ -1685,8 +1678,6 @@ pub struct App {
     pub subagent_terminal_seen_at: HashMap<String, Instant>,
     /// Last known per-agent progress text for running sub-agents.
     pub agent_progress: HashMap<String, String>,
-    /// Agent rows expanded by direct sidebar interaction.
-    pub expanded_sidebar_agents: HashSet<String>,
     /// Parent/depth metadata for live progress-only sub-agent rows.
     pub agent_progress_meta: HashMap<String, AgentProgressMeta>,
     /// In-transcript sub-agent card index by `agent_id` (issue #128).
@@ -3880,6 +3871,29 @@ impl App {
         crate::pricing::format_cost_amount(amount, self.cost_display_currency(self.cost_currency))
     }
 
+    /// A [`CostEstimate`] in the session's display currency — the same rule
+    /// `format_cost_amount` applies, so a turn receipt and the session total
+    /// never disagree on `$` versus `¥`.
+    pub fn format_cost_estimate(&self, estimate: CostEstimate) -> String {
+        crate::pricing::format_cost_estimate(
+            estimate,
+            self.cost_display_currency(self.cost_currency),
+        )
+    }
+
+    /// Price is one number, everywhere (design §2.11 item 5): the session
+    /// cost as the footer chip, the price view, and the roster print it.
+    /// Money routes print the amount; subscription, local, and unknown
+    /// routes print the same words the chip uses; a metered route that has
+    /// not spent yet prints `$0.00` rather than vanishing between turns.
+    #[must_use]
+    pub fn session_cost_label(&self) -> String {
+        let chip = self.cumulative_usage_chip();
+        crate::route_billing::format_usage_chip(&chip).unwrap_or_else(|| {
+            self.format_cost_amount(self.displayed_session_cost_for_currency(self.cost_currency))
+        })
+    }
+
     pub fn format_cost_amount_precise(&self, amount: f64) -> String {
         crate::pricing::format_cost_amount_precise(
             amount,
@@ -5444,7 +5458,6 @@ impl App {
                     .as_ref()
                     .and_then(|state| state.graph.as_ref()),
             );
-            self.cached_work_summary = None;
             self.last_known_work_state = Some(normalized_state);
             return Ok(());
         }
@@ -5470,7 +5483,6 @@ impl App {
         drop(plan);
         drop(todos);
         self.work_surface.record_restored_session(session_id, None);
-        self.cached_work_summary = None;
         self.last_known_work_state =
             Some((!normalized_state.is_empty()).then_some(normalized_state));
         Ok(())
@@ -5481,7 +5493,6 @@ impl App {
             if !work.clear(self.current_session_id.as_deref()) {
                 return false;
             }
-            self.cached_work_summary = None;
             self.last_known_work_state = Some(None);
             return true;
         }
@@ -5497,7 +5508,6 @@ impl App {
         *plan = PlanState::default();
         drop(plan);
         drop(todos);
-        self.cached_work_summary = None;
         self.last_known_work_state = Some(None);
         true
     }
@@ -5510,9 +5520,7 @@ impl App {
             .work
             .as_ref()
             .map_or(Ok(false), |work| work.publish_pending_sync())?;
-        if published {
-            self.cached_work_summary = None;
-        }
+        if published {}
         Ok(published)
     }
 

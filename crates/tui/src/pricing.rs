@@ -2103,6 +2103,31 @@ pub fn calculate_cache_savings(model: &str, cache_hit_tokens: u32) -> Option<Cos
     })
 }
 
+/// The route's list price per million tokens, `in $X · out $Y`, when this
+/// provider/model pair has authoritative pricing without endpoint
+/// provenance. `None` otherwise — the price view omits the row rather than
+/// quoting a rate the session is not actually billed at.
+#[must_use]
+pub(crate) fn model_rate_label(
+    provider: ApiProvider,
+    model: &str,
+    currency: CostCurrency,
+) -> Option<String> {
+    if !has_pricing_for_provider(provider, model) {
+        return None;
+    }
+    let pricing = pricing_for_model(model)?;
+    let rates = match currency {
+        CostCurrency::Usd => pricing.usd,
+        CostCurrency::Cny => pricing.cny?,
+    };
+    Some(format!(
+        "in {} · out {}",
+        format_cost_amount(rates.input_cache_miss_per_million, currency),
+        format_cost_amount(rates.output_per_million, currency),
+    ))
+}
+
 /// Format a cost amount for compact display in the chosen currency.
 #[must_use]
 pub fn format_cost_amount(cost: f64, currency: CostCurrency) -> String {
