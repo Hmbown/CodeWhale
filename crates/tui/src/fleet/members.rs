@@ -158,7 +158,7 @@ pub fn add_fleet_model(
         if already {
             continue;
         }
-        let base = role.map_or_else(|| model_slug.clone(), |role| slugify(role));
+        let base = role.map_or_else(|| model_slug.clone(), slugify);
         let id = unique_member_id(&fleet, &base, &model_slug);
         fleet.members.push(FleetMember {
             id,
