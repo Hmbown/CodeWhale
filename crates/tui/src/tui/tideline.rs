@@ -168,6 +168,11 @@ impl InteractionTargetId {
     /// id only: the provider picker remains the owner of route catalog and
     /// readiness facts.
     pub const HEADER_ROUTE: Self = Self("header.route");
+    pub const DOCK_TAB_TASKS: Self = Self("dock.tab.tasks");
+    pub const DOCK_TAB_AGENTS: Self = Self("dock.tab.agents");
+    pub const DOCK_TAB_CONTEXT: Self = Self("dock.tab.context");
+    pub const DOCK_TAB_PINNED: Self = Self("dock.tab.pinned");
+    pub const DOCK_CLOSE: Self = Self("dock.close");
 }
 
 /// Typed destination shared by keyboard and mouse input routes.
@@ -177,6 +182,8 @@ pub enum InteractionAction {
     /// Open the existing provider/route picker without making this chrome
     /// target another source of catalog or runtime authority.
     OpenProviderPicker,
+    ShowDockPanel(crate::tui::work_surface::RailPanel),
+    DismissDock,
 }
 
 /// Focus metadata for a selectable target.

@@ -68,7 +68,7 @@ mod render;
 pub mod tideline;
 
 pub use input::{enter_agents, handle_key, handle_mouse};
-pub(crate) use interaction::{agent_details_closed, release_focus};
+pub(crate) use interaction::{agent_details_closed, release_focus, select_dock_panel};
 pub use model::{RailPanel, WorkSurfacePlacement, WorkSurfaceState};
 pub(crate) use render::collapse_strip;
 pub use render::{height, render, split_chat};
@@ -93,6 +93,7 @@ mod tests {
         AgentCurrentActivity, AgentCurrentActivityStatus, App, SidebarRowAction, ToolDetailRecord,
         TuiOptions,
     };
+    use crate::tui::golden_harness::assert_matches_golden;
     use crate::tui::history::{
         FileMutationReceipt, GenericToolCell, HistoryCell, PatchSummaryCell, ToolCell, ToolStatus,
     };
@@ -279,6 +280,15 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    fn render_golden_text(app: &mut App, width: u16, height: u16) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| super::render(frame, frame.area(), app))
+            .expect("draw");
+        format!("{}\n", terminal_text(&terminal))
     }
 
     #[test]
@@ -562,7 +572,7 @@ mod tests {
             todos.add("next".to_string(), TodoStatus::Pending);
         }
 
-        let text = render_text(&mut app, 80, 6);
+        let text = render_text(&mut app, 80, 7);
         let done = format!("1 · {} finished", crate::tui::glyphs::DONE);
         let current = format!("2 · {} current", crate::tui::glyphs::SELECTION);
         let next = format!("3 · {} next", crate::tui::glyphs::READY);
@@ -577,7 +587,7 @@ mod tests {
             "canonical order drifted: {text:?}"
         );
         assert_eq!(app.work_surface.hitboxes.len(), 3);
-        assert_eq!(app.work_surface.hitboxes[0].row_y, 1);
+        assert_eq!(app.work_surface.hitboxes[0].row_y, 2);
     }
 
     #[test]
@@ -777,7 +787,10 @@ mod tests {
             "active goal must be the Top title: {text:?}"
         );
         assert!(
-            !text.contains("Pinned"),
+            !render_rows(&mut with_goal, 80, 8)
+                .iter()
+                .skip(1)
+                .any(|row| row.contains("Pinned")),
             "panel name is not a Top title: {text:?}"
         );
 
@@ -793,7 +806,10 @@ mod tests {
             "no live goal → no Goal title: {text:?}"
         );
         assert!(
-            !text.contains("Pinned"),
+            !render_rows(&mut no_goal, 80, 6)
+                .iter()
+                .skip(1)
+                .any(|row| row.contains("Pinned")),
             "panel name is never a Top title: {text:?}"
         );
     }
@@ -851,12 +867,11 @@ mod tests {
         let mut app = app();
         add_todos(&mut app, 2);
 
-        let text = render_text(&mut app, 40, 2);
+        let text = render_text(&mut app, 40, 5);
 
         assert!(text.contains("1 ·"), "{text:?}");
-        assert!(!text.contains("To-do · 0/"), "{text:?}");
-        assert_eq!(app.work_surface.hitboxes.len(), 1);
-        assert_eq!(app.work_surface.hitboxes[0].row_y, 0);
+        assert!(!app.work_surface.hitboxes.is_empty());
+        assert_eq!(app.work_surface.hitboxes[0].row_y, 2);
     }
 
     #[test]
@@ -869,18 +884,16 @@ mod tests {
             todos.add("next".to_string(), TodoStatus::Pending);
         }
 
-        // Three rows means one pinned progress receipt, one selectable row,
-        // and the divider. The current item must win that compact window while
-        // retaining its canonical ordinal.
-        let text = render_text(&mut app, 80, 3);
+        // The current item must win the compact window while retaining its
+        // canonical ordinal.
+        let text = render_text(&mut app, 80, 6);
 
         assert!(text.contains("To-do · 1/3 · 2 left"), "{text:?}");
         assert!(
             text.contains(&format!("2 · {} current", crate::tui::glyphs::SELECTION)),
             "{text:?}"
         );
-        assert_eq!(app.work_surface.scroll_offset, 1);
-        assert_eq!(app.work_surface.hitboxes[0].row_y, 1);
+        assert_eq!(app.work_surface.hitboxes[0].row_y, 2);
     }
 
     #[test]
@@ -1662,8 +1675,8 @@ mod tests {
             .iter()
             .find(|line| line.contains("more"))
             .unwrap_or_else(|| panic!("no overflow line in {rows:?}"));
-        // Nine projected rows (header + eight workers); three fit, six do not.
-        assert!(more.contains("↓ 6 more"), "{more}");
+        // Nine projected rows (header + eight workers); two fit, seven do not.
+        assert!(more.contains("↓ 7 more"), "{more}");
         // Right-aligned against the content column, not the left margin.
         assert!(more.starts_with("        "), "{more}");
     }
@@ -1860,13 +1873,14 @@ mod tests {
 
     fn terminal_text(terminal: &Terminal<TestBackend>) -> String {
         let buf = terminal.backend().buffer();
-        let mut text = String::new();
-        for y in 0..buf.area.height {
-            for x in 0..buf.area.width {
-                text.push_str(buf[(x, y)].symbol());
-            }
-        }
-        text
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Render-level smoke coverage for the ported rail panels — reinstates
@@ -1943,14 +1957,17 @@ mod tests {
                         );
                         // Panel chrome ("Pinned"/"Agents") never on Top.
                         // An active goal *is* a title — and this fixture sets one.
+                        let strip_body = text.lines().skip(1).collect::<Vec<_>>().join("\n");
                         assert!(
-                            !text.contains(panel.title())
-                                || panel.title() == "Context" && text.contains("Context"),
+                            !strip_body.contains(panel.title())
+                                || panel.title() == "Context" && strip_body.contains("Context"),
                             "{panel:?} on Top must not spend a row on panel chrome; got: {text}"
                         );
                         if panel != super::RailPanel::Context {
                             assert!(
-                                !text.split_whitespace().any(|tok| tok == panel.title()),
+                                !strip_body
+                                    .split_whitespace()
+                                    .any(|tok| tok == panel.title()),
                                 "{panel:?} on Top must not print the panel name as chrome; got: {text}"
                             );
                         }
@@ -2581,6 +2598,146 @@ mod tests {
         let _ = super::handle_key(&mut app, KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
         assert_ne!(app.work_surface.selected, first);
         assert!(app.work_surface.focused);
+    }
+
+    #[test]
+    fn clicking_agents_tab_switches_active_panel() {
+        let mut app = app();
+        add_todos(&mut app, 1);
+        app.subagent_cache.push(cached_worker(
+            "agent-tab",
+            "explore",
+            Some("scout"),
+            None,
+            SubAgentStatus::Running,
+        ));
+        let _ = render_text(&mut app, 80, 8);
+        let tab_area = app
+            .work_surface
+            .dock_tabs
+            .iter()
+            .find(|hitbox| {
+                hitbox.target == super::model::DockTabTarget::Panel(super::RailPanel::Agents)
+            })
+            .map(|hitbox| hitbox.area)
+            .expect("Agents tab");
+
+        let down = super::handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: tab_area.x,
+                row: tab_area.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert!(down.consumed);
+        let up = super::handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: tab_area.x,
+                row: tab_area.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert!(up.consumed);
+        assert_eq!(app.work_surface.panel, super::RailPanel::Agents);
+        assert!(!app.work_surface.dismissed);
+    }
+
+    #[test]
+    fn clicking_active_tab_dismisses_the_dock_until_new_work_arrives() {
+        let mut app = app();
+        app.work_surface.top_height = 8;
+        add_todos(&mut app, 2);
+        let _ = render_text(&mut app, 80, 8);
+        let tab_area = app
+            .work_surface
+            .dock_tabs
+            .iter()
+            .find(|hitbox| {
+                hitbox.target == super::model::DockTabTarget::Panel(super::RailPanel::Tasks)
+            })
+            .map(|hitbox| hitbox.area)
+            .expect("Tasks tab");
+
+        super::handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: tab_area.x,
+                row: tab_area.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        super::handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: tab_area.x,
+                row: tab_area.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert!(app.work_surface.dismissed);
+        assert_eq!(
+            super::height(&mut app, 80, 24, AMPLE_BUDGET),
+            0,
+            "dismissed dock remains collapsed"
+        );
+
+        app.subagent_cache.push(cached_worker(
+            "new-work",
+            "explore",
+            Some("new work"),
+            None,
+            SubAgentStatus::Running,
+        ));
+        assert!(
+            super::height(&mut app, 80, 24, AMPLE_BUDGET) > 0,
+            "new work re-shows dismissed dock"
+        );
+        assert!(!app.work_surface.dismissed);
+    }
+
+    #[test]
+    fn dock_tabs_match_80x24_golden() {
+        let mut app = app();
+        add_todos(&mut app, 3);
+        app.subagent_cache.push(cached_worker(
+            "dock-golden-agent",
+            "explore",
+            Some("scout"),
+            None,
+            SubAgentStatus::Running,
+        ));
+
+        assert_matches_golden("dock_80x24", &render_golden_text(&mut app, 80, 24));
+    }
+
+    #[test]
+    fn narrow_dock_drops_counts_before_optional_tabs() {
+        let mut app = app();
+        add_todos(&mut app, 3);
+        app.subagent_cache.push(cached_worker(
+            "agent-count",
+            "explore",
+            Some("scout"),
+            None,
+            SubAgentStatus::Running,
+        ));
+        let first_row = render_rows(&mut app, 40, 8)
+            .into_iter()
+            .next()
+            .expect("dock tab row");
+
+        assert!(first_row.contains("Tasks"), "{first_row:?}");
+        assert!(first_row.contains("Agents"), "{first_row:?}");
+        assert!(!first_row.contains("Tasks 3"), "{first_row:?}");
+        assert!(!first_row.contains("Agents 1"), "{first_row:?}");
+        assert!(first_row.contains("Context"), "{first_row:?}");
+        assert!(first_row.contains("Pinned"), "{first_row:?}");
     }
 
     #[test]

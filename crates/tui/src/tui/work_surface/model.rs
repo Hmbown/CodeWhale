@@ -63,6 +63,18 @@ pub enum RailPanel {
     Pinned,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DockTabTarget {
+    Panel(RailPanel),
+    Close,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct DockTabHitbox {
+    pub(super) target: DockTabTarget,
+    pub(super) area: Rect,
+}
+
 impl RailPanel {
     #[must_use]
     pub fn parse(value: &str) -> Self {
@@ -256,6 +268,11 @@ pub struct WorkSurfaceState {
     pub last_area: Option<Rect>,
     pub visible_rows: usize,
     pub total_rows: usize,
+    pub(super) dock_tabs: Vec<DockTabHitbox>,
+    pub(super) pressed_tab: Option<DockTabTarget>,
+    pub(super) hovered_tab: Option<DockTabTarget>,
+    pub dismissed: bool,
+    pub dismissed_at_rows: usize,
     pub(super) hovered: Option<WorkRowId>,
     pub(super) hitboxes: Vec<WorkHitbox>,
     pub(super) cached_graph: Option<WorkGraphSnapshot>,
@@ -336,6 +353,11 @@ impl WorkSurfaceState {
             last_area: None,
             visible_rows: 0,
             total_rows: 0,
+            dock_tabs: Vec::new(),
+            pressed_tab: None,
+            hovered_tab: None,
+            dismissed: false,
+            dismissed_at_rows: 0,
             hovered: None,
             hitboxes: Vec::new(),
             cached_graph: None,
@@ -698,7 +720,12 @@ fn plan_step_row_ids(app: &App) -> HashSet<String> {
 /// same sense the panel's name means (they survive completion — see the row
 /// lifetime rule in the module docs), so they belong here on their own terms.
 pub(super) fn visible_rows_for_panel(app: &mut App) -> Vec<WorkRow> {
-    match app.work_surface.panel {
+    let panel = app.work_surface.panel;
+    visible_rows_for(app, panel)
+}
+
+pub(super) fn visible_rows_for(app: &mut App, panel: RailPanel) -> Vec<WorkRow> {
+    match panel {
         RailPanel::Tasks => project_visible(app),
         RailPanel::Agents => {
             let rows = project(app);

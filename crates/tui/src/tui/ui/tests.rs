@@ -24036,8 +24036,9 @@ mod work_surface {
                  anything"
             );
             let rendered = render_underwater_test_app(&mut app, 100, 34);
+            let strip_body = rendered.lines().skip(1).collect::<Vec<_>>().join("\n");
             assert!(
-                !rendered.contains(panel.title()),
+                !strip_body.contains(panel.title()),
                 "a {strip}-row {panel:?} strip painted its panel name \
                  ({:?}) as chrome. Top titles are goals only — and a title \
                  probe is what let the rail regression through last time\n{rendered}",

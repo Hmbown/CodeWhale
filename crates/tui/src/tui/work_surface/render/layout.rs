@@ -51,6 +51,15 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
         collapse_strip(app);
         return 0;
     }
+    if app.work_surface.dismissed {
+        let current_rows = visible_rows_for_panel(app).len();
+        if current_rows > app.work_surface.dismissed_at_rows {
+            app.work_surface.dismissed = false;
+        } else {
+            collapse_strip(app);
+            return 0;
+        }
+    }
     // The Context fact list on Top auto-fits like the row surface. Empty
     // projections collapse to zero — an empty panel is not a panel. (Auto-fit
     // governs HEIGHT only; membership is the model's business, and a settled
@@ -86,7 +95,7 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
         let desired = u16::try_from(content_rows)
             .unwrap_or(u16::MAX)
             .saturating_add(goal_rows)
-            .saturating_add(1); // divider
+            .saturating_add(2); // tab row + divider
         return desired.clamp(model::TOP_HEIGHT_MIN, cap);
     }
 
@@ -111,7 +120,7 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
             collapse_strip(app);
             return 0;
         }
-        return (goal_rows.saturating_add(1)).clamp(model::TOP_HEIGHT_MIN, cap);
+        return (goal_rows.saturating_add(2)).clamp(model::TOP_HEIGHT_MIN, cap);
     }
     if !app.work_surface.effective_placement.is_strip() {
         return 0;
@@ -137,7 +146,7 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
         .unwrap_or(u16::MAX)
         .saturating_add(progress)
         .saturating_add(goal_rows)
-        .saturating_add(1);
+        .saturating_add(2);
     desired.clamp(model::TOP_HEIGHT_MIN, cap)
 }
 
@@ -183,6 +192,9 @@ pub(crate) fn collapse_strip(app: &mut App) {
     app.work_surface.hovered = None;
     app.work_surface.resizing = false;
     app.work_surface.divider_hovered = false;
+    app.work_surface.dock_tabs.clear();
+    app.work_surface.pressed_tab = None;
+    app.work_surface.hovered_tab = None;
 }
 
 /// Split the transcript slot for a side rail. Top placement consumes its own
@@ -260,6 +272,9 @@ pub fn split_chat(app: &mut App, area: Rect, min_chat_width: u16) -> (Rect, Opti
 
 /// Whether a Left/Right rail should reserve columns this frame.
 fn side_rail_has_content(app: &mut App) -> bool {
+    if app.work_surface.dismissed {
+        return false;
+    }
     match app.work_surface.panel {
         RailPanel::Context => panels::panel_has_useful_content(app, RailPanel::Context),
         _ => !visible_rows_for_panel(app).is_empty(),

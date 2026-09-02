@@ -6,7 +6,24 @@
 use crate::tui::app::{App, SidebarRowAction};
 use crate::tui::views::ModalKind;
 
-use super::model::WorkRowId;
+use super::model::{RailPanel, WorkRowId};
+
+pub(crate) fn select_dock_panel(app: &mut App, panel: RailPanel) {
+    app.work_surface.panel = panel;
+    app.work_surface.dismissed = false;
+    app.work_surface.focused = true;
+    app.work_surface.scroll_offset = 0;
+    app.work_surface.selected = None;
+    app.needs_redraw = true;
+}
+
+pub(crate) fn dismiss_dock(app: &mut App) {
+    app.work_surface.dismissed = true;
+    app.work_surface.dismissed_at_rows = app.work_surface.total_rows;
+    app.work_surface.focused = false;
+    app.work_surface.selected = None;
+    app.needs_redraw = true;
+}
 
 /// Claim work-surface focus and clear competing selection owners.
 pub fn claim_focus(app: &mut App) {

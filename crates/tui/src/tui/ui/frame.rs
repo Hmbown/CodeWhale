@@ -307,6 +307,13 @@ fn register_info_interaction_targets(app: &mut App, hitboxes: InfoLineInteractio
                     crate::localization::MessageId::CmdProviderDescription,
                 ),
             ),
+            Some(crate::tui::tideline::InteractionAction::ShowDockPanel(panel)) => {
+                panel.title().to_string()
+            }
+            Some(crate::tui::tideline::InteractionAction::DismissDock) => {
+                crate::localization::tr(app.ui_locale, crate::localization::MessageId::KbCloseMenu)
+                    .into_owned()
+            }
             None => continue,
         };
         crate::tui::hover_layer::register_rect(
