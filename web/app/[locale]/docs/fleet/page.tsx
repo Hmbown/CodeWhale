@@ -38,7 +38,7 @@ export default async function FleetPage({ params }: { params: Promise<{ locale: 
         <div className="hairline-t mt-6">
           {vocabulary.map((row) => (
             <section key={row.term} className="py-4 hairline-b">
-              <h3 className="font-display text-xl">{row.term}</h3>
+          <h2 className="font-display text-xl">{row.term}</h2>
               <p className={`${t.bodyClassName} mt-1 text-sm`}>{row.definition}</p>
             </section>
           ))}
