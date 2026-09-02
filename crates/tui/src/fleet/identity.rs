@@ -43,7 +43,7 @@ pub fn load_effective_roster(
         Ok(selected) => selected,
         Err(_) => {
             return FleetRoster::failed(
-                "Selected Pod is missing or unreadable; inspect /pod and repair or clear the selection.",
+                "Selected Fleet is missing or unreadable; inspect /pod and repair or clear the selection.",
             );
         }
     };
@@ -58,7 +58,7 @@ pub fn load_effective_roster(
         Err(_) => {
             let name = bounded_fleet_label(&selected.name);
             return FleetRoster::failed(format!(
-                "Selected {} Pod `{name}` is invalid or unreadable; inspect /pod and repair or clear the selection.",
+                "Selected {} Fleet `{name}` is invalid or unreadable; inspect /pod and repair or clear the selection.",
                 selected.scope.label()
             ));
         }
@@ -288,10 +288,10 @@ pub fn friendly_model_name(member: &AgentProfile) -> Option<String> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum FleetSelectorError {
-    #[error("Pod member selector cannot be blank")]
+    #[error("Fleet member selector cannot be blank")]
     Blank,
     #[error(
-        "Pod member selector `{selector}` is ambiguous; choose one member explicitly: {candidates}"
+        "Fleet member selector `{selector}` is ambiguous; choose one member explicitly: {candidates}"
     )]
     Ambiguous {
         selector: String,
@@ -752,8 +752,8 @@ mod tests {
 
         let roster = load_effective_roster(&FleetConfigToml::default(), workspace.path(), None);
         assert!(roster.members().is_empty());
-        let error = roster.load_error().expect("visible selected-Pod error");
-        assert!(error.contains("Selected folder Pod `Broken`"), "{error}");
+        let error = roster.load_error().expect("visible selected-Fleet error");
+        assert!(error.contains("Selected folder Fleet `Broken`"), "{error}");
         assert!(!error.contains(&workspace.path().display().to_string()));
         assert!(!error.contains("must pin both provider and model"));
         assert!(!error.contains("provider ="));

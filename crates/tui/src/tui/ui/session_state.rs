@@ -10,7 +10,6 @@ pub(crate) async fn publish_pending_work_projection(app: &mut App) -> Result<boo
         return Ok(false);
     };
     let published = work.publish_pending().await?;
-    if published {}
     Ok(published)
 }
 

@@ -989,7 +989,7 @@
   "AppModeAutoHint": "Shell activé avec revue automatique des risques",
   "AppModePlanHint": "Recherche en lecture seule d'abord — présentez un plan avant d'agir",
   "AppModeYoloHint": "Compatibilité uniquement — Act + Full Access, pas un mode visible",
-  "AppModeOperateHint": "Operate transforme votre demande en objectif et y travaille en parallèle : workers en arrière-plan pour les flux séparables, vérifiés avant de s'arrêter.",
+  "AppModeOperateHint": "Transforme le prompt en objectif : workers parallèles, vérifié",
   "VimModeNormal": "-- NORMAL --",
   "VimModeInsert": "-- INSERTION --",
   "VimModeVisual": "-- VISUEL --",

@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Alibaba Model Studio joins the data-driven provider table as an
+  `openai-compatible` descriptor: international compatible-mode endpoint,
+  `DASHSCOPE_API_KEY` credential, live `/v1/models` discovery. Qwen 3.8
+  Flash and Qwen 3.8 Max arrive through the catalog authority — never a
+  hard-coded id.
+
 ### Changed
+
+- The launch screen is our own card take: a thin top line
+  `⑂ branch  path`; a centred bordered card with the whale mark,
+  `Codewhale` + version, one announcement line only when it is true (the
+  no-model warning, or MCP news), and the menu New worktree / Resume
+  session / Changelog / Quit with their real chords right-aligned. Enter
+  runs the highlighted entry, Up/Down move it, and typing goes straight to
+  the composer. The card dissolves on the first keystroke or command
+  (≤240 ms, instant under reduced motion).
+- After the card dissolves, the working screen shows `⑂ branch  path` with
+  `⋮ MCP n/m` on the right, the transcript starts with the
+  `◆ session_start` receipt (naming the configured session-start hooks),
+  and the composer's bottom rule carries `model (effort) · permission` —
+  the route's one launch reading. The posture bar and metrics line appear
+  only once a session exists.
+- Vocabulary: `fleet` is the public term and `Pod` is retired from copy —
+  roster, setup, detail, worker-runtime and managed-API messages now say
+  Fleet (`/fleet` canonical, `/pod` alias). The workflow wire accepts the
+  canonical role spellings (general/explore/planner/reviewer/implement/
+  test/advisor) with the pre-rename ones kept as load-time aliases, and
+  serializes canonical names.
+- The Operate mode-picker hint is shortened to fit 80 columns.
 
 - The footer always shows the permission posture; when only one chip
   fits, the permission chip outranks the mode word (#5796).

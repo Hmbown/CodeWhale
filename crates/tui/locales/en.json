@@ -1012,7 +1012,7 @@
   "AppModeAutoHint": "Shell enabled with automatic risk review",
   "AppModePlanHint": "Read-only research first — present a plan before acting",
   "AppModeYoloHint": "Compatibility only — Act + Full Access, not a visible mode",
-  "AppModeOperateHint": "Operate turns your prompt into a goal and works it in parallel: background workers for separable streams, verified before it stops.",
+  "AppModeOperateHint": "Turns your prompt into a goal: parallel workers, verified work",
   "VimModeNormal": "-- NORMAL --",
   "VimModeInsert": "-- INSERT --",
   "VimModeVisual": "-- VISUAL --",

@@ -989,7 +989,7 @@
   "AppModeAutoHint": "Shell увімкнено з автоматичною перевіркою ризиків",
   "AppModePlanHint": "Спочатку дослідження лише для читання — подайте план перед діями",
   "AppModeYoloHint": "Лише для сумісності — Act + Full Access, не видимий режим",
-  "AppModeOperateHint": "Operate перетворює запит на ціль і веде її паралельно: фонові виконавці для розділюваних потоків, перевірка перед зупинкою.",
+  "AppModeOperateHint": "Перетворює запит на ціль: паралельні агенти, перевірка",
   "VimModeNormal": "-- NORMAL --",
   "VimModeInsert": "-- INSERT --",
   "VimModeVisual": "-- VISUAL --",

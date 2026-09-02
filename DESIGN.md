@@ -195,23 +195,31 @@ skipped levels; use CSS, not a lower heading tag, to make something smaller.
 ## Shell (TUI) direction
 
 The redesigned 0.9.12 shell is the reference the website mirrors. Top to
-bottom:
+bottom (founder decisions, 2026-09-01/02 — see
+`codewhale-ops/design/SHELL-DESIGN-20260901.md` for the dated record):
 
 1. **Transcript first.** The conversation owns the screen: no permanent side
-   chrome, no top bar. Turns are plain text on `bg`; tool output is `text-soft`
-   on `panel`; reasoning is the reasoning tint, collapsed by default.
-2. **Composer.** The raised `composer` plate directly under the transcript,
-   cyan prompt glyph, one hairline above. Mode (Plan / Work / Operate) and
-   permission (Ask / Auto-Review / Full Access) cycle with Tab from here.
-3. **Info line.** One row of mono meta under the composer: model, mode,
-   permission, context budget, git state. `text-muted`, no icons, no chips.
-4. **Bottom dock.** A `chrome` band with clickable tabs **Tasks · Agents ·
-   Context · Pinned** and a `×` to close; the active tab's panel opens above the
-   dock and pushes the transcript up rather than overlaying it. The dock is the
-   only panel surface — there is no rail, no sidebar, no modal stack for these.
-
-Launch hero: wordmark plus the small surfacing mark on the flat field, nothing
-animated beyond the Tideline atmosphere already in `tideline.rs`.
+   chrome, no top bar. Turns are plain text on the terminal's own ground;
+   tool output is `text-soft` on `panel`; reasoning is the reasoning tint,
+   collapsed by default.
+2. **Launch is a card, not a hero.** A thin top line (`⑂ branch  path`);
+   a centred bordered card: the whale mark at left, `Codewhale` + version,
+   one announcement line only when it is true, then the menu **New
+   worktree · Resume session · Changelog · Quit** with real chords
+   right-aligned. Enter runs the highlighted entry; typing goes straight to
+   the composer; the card dissolves on the first keystroke or command.
+3. **Composer.** The raised `composer` plate directly under the transcript,
+   cyan `❯` prompt glyph. While the card is up its bottom rule carries
+   `model (effort) · permission` — the route's one launch reading.
+4. **Posture bar + metrics line** under the composer, once a session
+   exists: `▶▶ ask (Shift+Tab) · work (Tab) · 2 agents · Esc to interrupt …`
+   and `model · ctx NN% · $cost · ttft · tok/s · ↓ tokens … Ctrl+/ help`.
+   Context % lives in the metrics line only.
+5. **Bottom views, not a dock.** One region under the composer cycles
+   through agents → tasks → background → files → notepad → context → git →
+   price (Ctrl+Tab forward, Ctrl+Shift+Tab back where the terminal
+   delivers it). Zero rows when idle with nothing to show. There is no
+   rail, no sidebar, no tab band.
 
 ## Layout (web)
 

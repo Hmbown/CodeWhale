@@ -1232,7 +1232,7 @@
   "HomeOperateModeTip": "Operate — Pod を並列で動かす",
   "HomeOperateModeFleetTip": "  組み込みロールはこのセッションのモデルを使用。/fleet setup でカスタマイズ",
   "AppModeOperate": "Operate",
-  "AppModeOperateHint": "Operate はプロンプトを目標にして並列で進めます。分離できる流れはバックグラウンドワーカーに任せ、停止前に検証します。",
+  "AppModeOperateHint": "プロンプトをゴールに変え、並列ワーカーで検証しながら進めます",
   "HelpSubtitle": "概念・コマンド・キーバインド",
   "CommandPaletteTitle": "コマンド",
   "CommandPaletteSubtitle": "操作を見つけて実行",

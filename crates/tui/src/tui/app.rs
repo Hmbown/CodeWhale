@@ -600,7 +600,12 @@ impl LaunchState {
         // stat at construction, never on the render path.
         let claude_code_detected = std::env::var_os("HOME")
             .as_ref()
-            .map(|home| std::path::Path::new(home).join(".claude").join("projects").is_dir())
+            .map(|home| {
+                std::path::Path::new(home)
+                    .join(".claude")
+                    .join("projects")
+                    .is_dir()
+            })
             .unwrap_or(false);
         Self {
             visible,
@@ -5608,7 +5613,6 @@ impl App {
             .work
             .as_ref()
             .map_or(Ok(false), |work| work.publish_pending_sync())?;
-        if published {}
         Ok(published)
     }
 

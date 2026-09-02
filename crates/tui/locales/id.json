@@ -989,7 +989,7 @@
   "AppModeAutoHint": "Shell aktif dengan tinjauan risiko otomatis",
   "AppModePlanHint": "Riset baca-saja dulu — ajukan rencana sebelum bertindak",
   "AppModeYoloHint": "Hanya kompatibilitas — Act + akses penuh, bukan mode yang terlihat",
-  "AppModeOperateHint": "Operate mengubah prompt Anda menjadi tujuan dan mengerjakannya secara paralel: worker latar belakang untuk alur yang bisa dipisah, diverifikasi sebelum berhenti.",
+  "AppModeOperateHint": "Mengubah prompt menjadi goal: worker paralel, terverifikasi",
   "VimModeNormal": "-- NORMAL --",
   "VimModeInsert": "-- SISIP --",
   "VimModeVisual": "-- VISUAL --",

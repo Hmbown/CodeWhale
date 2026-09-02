@@ -1232,7 +1232,7 @@
   "HomeOperateModeTip": "Operate — pon tu Pod a trabajar en paralelo",
   "HomeOperateModeFleetTip": "  Los roles integrados usan el modelo de esta sesión; /fleet setup los personaliza",
   "AppModeOperate": "Operate",
-  "AppModeOperateHint": "Operate convierte tu pedido en una meta y la trabaja en paralelo: workers en segundo plano para flujos separables, verificados antes de detenerse.",
+  "AppModeOperateHint": "Convierte tu prompt en meta: workers paralelos y verificación",
   "HelpSubtitle": "Conceptos, comandos y atajos",
   "CommandPaletteTitle": "Comando",
   "CommandPaletteSubtitle": "Encuentra y ejecuta una acción",

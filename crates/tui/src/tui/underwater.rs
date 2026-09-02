@@ -118,10 +118,7 @@ pub fn handle_launch_key(
 
 /// Open the worktree-name prompt, or say why there cannot be one. Shared by
 /// the Ctrl+N chord and the card's New worktree entry.
-fn open_launch_worktree_prompt(
-    launch: &mut crate::tui::app::LaunchState,
-    locale: Locale,
-) {
+fn open_launch_worktree_prompt(launch: &mut crate::tui::app::LaunchState, locale: Locale) {
     if launch.worktree_available {
         launch.worktree_input = Some(String::new());
         launch.status = Some(tr(locale, MessageId::LaunchWorktreePrompt).into_owned());
@@ -2250,10 +2247,7 @@ mod launch_composer_tests {
             let app = launch_app();
             let (buf, area) = render(&app, width, height);
             let (input_y, _) = launch_composer_rows(area).unwrap();
-            assert!(
-                input_y >= 2,
-                "{width}x{height}: dock below the top line"
-            );
+            assert!(input_y >= 2, "{width}x{height}: dock below the top line");
             assert!(
                 !row_text(&buf, area, 0).trim().is_empty(),
                 "{width}x{height}: the top line paints the branch/path: {:?}",
@@ -3162,8 +3156,10 @@ fn render_launch_top_line(
     let right_w = card_gone
         .then(|| startup.mcp.filter(|mcp| mcp.enabled > 0))
         .flatten()
-        .map_or(0, |_| format!("⋮ MCP 99/99").width() + 2);
-    let budget = usize::from(area.width).saturating_sub(right_w).saturating_sub(prefix_w);
+        .map_or(0, |_| "⋮ MCP 99/99".width() + 2);
+    let budget = usize::from(area.width)
+        .saturating_sub(right_w)
+        .saturating_sub(prefix_w);
     let workspace = [2usize, 1]
         .into_iter()
         .map(|keep| shorten_workspace(&startup.workspace, keep))
@@ -3174,7 +3170,7 @@ fn render_launch_top_line(
                 chosen
             }
         });
-    let mut left = String::from(startup.sym("⑂"));
+    let mut left = startup.sym("⑂");
     match startup.branch.as_deref().filter(|b| !b.is_empty()) {
         Some(branch) => {
             left.push(' ');
@@ -3189,12 +3185,7 @@ fn render_launch_top_line(
         .flatten()
         .map(|mcp| {
             (
-                format!(
-                    "{} MCP {}/{}",
-                    startup.sym("⋮"),
-                    mcp.connected,
-                    mcp.enabled
-                ),
+                format!("{} MCP {}/{}", startup.sym("⋮"), mcp.connected, mcp.enabled),
                 chrome(theme, ChromeInk::Metadata),
             )
         });
@@ -3276,7 +3267,12 @@ fn render_launch_card(
     set_span(buf, card.x, card.y, &Span::styled(top, border));
     let bar = startup.sym("│");
     for row in 1..card.height.saturating_sub(1) {
-        set_span(buf, card.x, card.y + row, &Span::styled(bar.clone(), border));
+        set_span(
+            buf,
+            card.x,
+            card.y + row,
+            &Span::styled(bar.clone(), border),
+        );
         set_span(
             buf,
             card.right().saturating_sub(1),
@@ -3305,7 +3301,10 @@ fn render_launch_card(
         MarkSize::Small
     };
     let (mark_cols, mark_rows) = match startup.mark {
-        MarkTier::Image => (crate::tui::mark::KITTY_MARK_COLS, crate::tui::mark::KITTY_MARK_ROWS),
+        MarkTier::Image => (
+            crate::tui::mark::KITTY_MARK_COLS,
+            crate::tui::mark::KITTY_MARK_ROWS,
+        ),
         MarkTier::Braille => braille_rung.cells(),
         MarkTier::None => (0, 0),
     };
@@ -3319,14 +3318,22 @@ fn render_launch_card(
         };
         match startup.mark {
             MarkTier::Image => {
-                crate::tui::mark::render_kitty_placeholders(mark_area, buf, startup.surface_progress);
+                crate::tui::mark::render_kitty_placeholders(
+                    mark_area,
+                    buf,
+                    startup.surface_progress,
+                );
             }
             MarkTier::Braille => {
                 crate::tui::mark::render_mark(
                     mark_area,
                     buf,
                     braille_rung,
-                    crate::tui::mark::lerp_color(theme.surface_bg, theme.accent_action, startup.surface_progress),
+                    crate::tui::mark::lerp_color(
+                        theme.surface_bg,
+                        theme.accent_action,
+                        startup.surface_progress,
+                    ),
                     theme.surface_bg,
                     startup.surface_progress,
                 );
@@ -3350,7 +3357,9 @@ fn render_launch_card(
         &Span::styled(
             fit("Codewhale"),
             faded(
-                Style::default().fg(theme.accent_action).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.accent_action)
+                    .add_modifier(Modifier::BOLD),
                 theme,
                 fade,
             ),
@@ -3363,7 +3372,10 @@ fn render_launch_card(
             buf,
             version_x,
             row,
-            &Span::styled(version, faded(chrome(theme, ChromeInk::MetadataHint), theme, fade)),
+            &Span::styled(
+                version,
+                faded(chrome(theme, ChromeInk::MetadataHint), theme, fade),
+            ),
         );
     }
     row += 1;
@@ -3404,10 +3416,12 @@ fn render_launch_card(
             text_x + marker.width() as u16 + 1,
             row,
             &Span::styled(
-                fit(&label),
+                fit(label),
                 if is_selected {
                     faded(
-                        Style::default().fg(crate::palette::SELECTION_TEXT).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(crate::palette::SELECTION_TEXT)
+                            .add_modifier(Modifier::BOLD),
                         theme,
                         fade,
                     )
@@ -3422,12 +3436,7 @@ fn render_launch_card(
             .saturating_sub(2)
             .saturating_sub(chord_text.width() as u16);
         if chord_x > text_x + marker.width() as u16 + label.width() as u16 + 1 {
-            set_span(
-                buf,
-                chord_x,
-                row,
-                &Span::styled(chord_text, marker_style),
-            );
+            set_span(buf, chord_x, row, &Span::styled(chord_text, marker_style));
         }
         row += 1;
     }
@@ -3516,7 +3525,9 @@ pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &Tideline
             enclosed.then_some(layout.dock),
             startup.status_line.as_deref(),
             startup.ascii_safe,
-            (!card_gone).then_some(startup.composer_rule.as_deref()).flatten(),
+            (!card_gone)
+                .then_some(startup.composer_rule.as_deref())
+                .flatten(),
         );
         if !enclosed && let Some(line) = startup.status_line.as_deref() {
             let y = if layout.dock.height == 1 {
@@ -3684,13 +3695,18 @@ pub fn tideline_startup_from_app(app: &App) -> TidelineStartup<'_> {
         .composer(LaunchComposerDisplay::from_app(app))
         .status_line(launch_status_line(app, ascii_safe))
         .menu_selected(app.launch.menu_selected)
-        .notice(app.launch.claude_code_detected.then(|| {
-            tr(app.ui_locale, MessageId::LaunchNoticeClaude).into_owned()
-        }))
+        .notice(
+            app.launch
+                .claude_code_detected
+                .then(|| tr(app.ui_locale, MessageId::LaunchNoticeClaude).into_owned()),
+        )
         .composer_rule(composer_rule)
         .branch(branch)
         .session_hooks(session_hooks)
-        .card_dissolve(app.launch.card_dissolve_progress(app.ambient_clock_ms, dissolve_motion))
+        .card_dissolve(
+            app.launch
+                .card_dissolve_progress(app.ambient_clock_ms, dissolve_motion),
+        )
         // The app opens on this screen, so the ambient clock is already
         // launch-relative. Reduced motion asks for the settled mark, which is
         // the same drawing at its endpoint.

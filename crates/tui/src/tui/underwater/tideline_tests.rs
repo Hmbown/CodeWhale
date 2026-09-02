@@ -91,7 +91,10 @@ fn startup_first_run_matches_its_golden() {
     // fixes it.
     let text = draw(80, 24, &first_run(&UI_THEME));
     assert_matches_golden("startup_first_run_80x24", &text);
-    assert!(text.contains('⑂'), "the top line paints the branch glyph: {text}");
+    assert!(
+        text.contains('⑂'),
+        "the top line paints the branch glyph: {text}"
+    );
     assert!(
         text.contains("⚠ no model connected · run /provider"),
         "{text}"
@@ -151,7 +154,10 @@ fn the_card_states_the_workspace_menu_and_mcp_news() {
     }
     // Row 0 is the thin top line; the wordmark lives in the card.
     let first = text.lines().next().unwrap_or_default();
-    assert!(first.contains('⑂'), "top line opens with the branch glyph: {first:?}");
+    assert!(
+        first.contains('⑂'),
+        "top line opens with the branch glyph: {first:?}"
+    );
     assert!(
         !first.contains("Codewhale"),
         "the wordmark left row 0: {first:?}"
@@ -195,7 +201,10 @@ fn startup_ascii_safe_drops_the_mark_and_every_wide_glyph() {
         first.trim_start().starts_with('y'),
         "the branch glyph falls back to ASCII on row 0: {first:?}"
     );
-    assert!(text.contains("Codewhale"), "the card keeps the wordmark: {text}");
+    assert!(
+        text.contains("Codewhale"),
+        "the card keeps the wordmark: {text}"
+    );
     assert!(
         text.lines().any(|line| {
             let trimmed = line.trim_end();
@@ -231,7 +240,10 @@ fn startup_image_tier_places_the_kitty_mark_through_placeholder_cells() {
         .iter()
         .filter(|cell| cell.symbol().starts_with('\u{10EEEE}'))
         .count();
-    assert!(placeholders >= 6, "kitty placeholders painted: {placeholders}");
+    assert!(
+        placeholders >= 6,
+        "kitty placeholders painted: {placeholders}"
+    );
     let origin = buf
         .content()
         .iter()

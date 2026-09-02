@@ -801,13 +801,16 @@ fn wait_for_composer_ready(tui: &mut Harness) {
 /// live conversation; a focused pre-session composer is not itself a session.
 #[cfg(all(unix, feature = "long-running-tests"))]
 fn begin_new_session_from_startup(tui: &mut Harness) {
-    expect_visible(tui, "Codewhale v", "show the launch card");
+    expect_visible(tui, "Codewhale", "show the launch card");
     // Typing goes straight to the composer; Enter sends the first message
     // and the session begins (the card dissolved on the first keystroke).
-    tui.send("start the session").expect("type the first prompt");
+    tui.send("start the session")
+        .expect("type the first prompt");
+    tui.send(keys::key::enter())
+        .expect("send the first prompt");
     if tui
         .wait_for(
-            |frame| frame.text().contains("Esc to interrupt"),
+            |frame| !frame.text().contains('\u{2442}'),
             BINARY_ACCEPTANCE_TIMEOUT,
         )
         .is_err()

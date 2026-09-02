@@ -4631,16 +4631,24 @@ impl Engine {
                             && let Some(tool_state) = tool_uses.get_mut(tool_idx)
                         {
                             tool_state.input_buffer.push_str(&partial_json);
-                            crate::logging::info(format!(
-                                "Tool '{}' input delta: {} (buffer now: {})",
-                                tool_state.name, partial_json, tool_state.input_buffer
-                            ));
+                            // Verbose-only: the eager format! here copied the
+                            // whole accumulated buffer on every JSON delta
+                            // (O(n²) per tool call) for a log that is
+                            // usually disabled.
+                            if crate::logging::is_verbose() {
+                                crate::logging::info(format!(
+                                    "Tool '{}' input delta: {} (buffer now: {})",
+                                    tool_state.name, partial_json, tool_state.input_buffer
+                                ));
+                            }
                             if let Some(value) = parse_tool_input(&tool_state.input_buffer) {
                                 tool_state.input = value.clone();
-                                crate::logging::info(format!(
-                                    "Tool '{}' input parsed: {:?}",
-                                    tool_state.name, value
-                                ));
+                                if crate::logging::is_verbose() {
+                                    crate::logging::info(format!(
+                                        "Tool '{}' input parsed: {:?}",
+                                        tool_state.name, value
+                                    ));
+                                }
                             }
                         }
                     }

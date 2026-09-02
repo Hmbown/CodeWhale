@@ -989,7 +989,7 @@
   "AppModeAutoHint": "Shell aktiv mit automatischer Risikoprüfung",
   "AppModePlanHint": "Read-only-Recherche zuerst — Plan vorlegen, bevor gehandelt wird",
   "AppModeYoloHint": "Nur Kompatibilität — Act + Full Access, kein sichtbarer Modus",
-  "AppModeOperateHint": "Operate macht aus Ihrer Eingabe ein Ziel und arbeitet es parallel ab: Hintergrund-Worker für trennbare Stränge, verifiziert bevor es stoppt.",
+  "AppModeOperateHint": "Macht dein Prompt zum Ziel: parallele Worker, verifiziert",
   "VimModeNormal": "-- NORMAL --",
   "VimModeInsert": "-- INSERT --",
   "VimModeVisual": "-- VISUAL --",

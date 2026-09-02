@@ -1232,7 +1232,7 @@
   "HomeOperateModeTip": "Operate — 让 Pod 并行开展工作",
   "HomeOperateModeFleetTip": "  内置角色使用本会话的模型；/fleet setup 可自定义",
   "AppModeOperate": "Operate",
-  "AppModeOperateHint": "Operate 把你的提示变成目标并行推进：可拆分的流交给后台工作者，停止前先验证。",
+  "AppModeOperateHint": "把提示词变成目标：并行工作器，完成前先验证",
   "HelpSubtitle": "概念、命令与快捷键",
   "CommandPaletteTitle": "命令",
   "CommandPaletteSubtitle": "查找并执行一个操作",

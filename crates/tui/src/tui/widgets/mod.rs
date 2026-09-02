@@ -347,7 +347,12 @@ impl ChatWidget {
                 }
             }
             // Build identity mapping: filtered index == original index.
-            app.collapsed_cell_map = (0..app.history.len() + active_entries.len()).collect();
+            // Reused across frames; identity maps are rebuilt only when the
+            // row count changes.
+            let row_count = app.history.len() + active_entries.len();
+            if app.collapsed_cell_map.len() != row_count {
+                app.collapsed_cell_map = (0..row_count).collect();
+            }
 
             let shards: [&[HistoryCell]; 2] = [&app.history, active_entries];
             app.viewport.transcript_cache.ensure_split(

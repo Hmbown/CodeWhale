@@ -989,7 +989,7 @@
   "AppModeAutoHint": "Shell activat amb revisió automàtica de risc",
   "AppModePlanHint": "Recerca de només lectura primer — presenta un pla abans d'actuar",
   "AppModeYoloHint": "Només compatibilitat — Act + Full Access, no és un mode visible",
-  "AppModeOperateHint": "Operate converteix la teva petició en un objectiu i hi treballa en paral·lel: workers en segon pla per als fluxos separables, verificats abans d'aturar-se.",
+  "AppModeOperateHint": "Converteix el prompt en objectiu: workers paral·lels",
   "VimModeNormal": "-- NORMAL --",
   "VimModeInsert": "-- INSERIR --",
   "VimModeVisual": "-- VISUAL --",

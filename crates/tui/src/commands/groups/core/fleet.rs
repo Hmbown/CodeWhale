@@ -1,9 +1,9 @@
 //! `/pod` command (`/fleet` remains a compatibility alias).
 //!
-//! Pod = who. Bare `/pod` (and `/pod roster`) opens the familiar roster
-//! surface for the selected Pod; `/pod setup` opens the authoring wizard.
+//! Fleet = who. Bare `/pod` (and `/pod roster`) opens the familiar roster
+//! surface for the selected Fleet; `/pod setup` opens the authoring wizard.
 //! `/pod pods` (compatibility alias: `fleets`; other aliases: `saved`, `manage`)
-//! opens the named-Pod picker
+//! opens the named-Fleet picker
 //! for switching between saved configurations — never the primary face.
 //! `/pod list|status|interrupt|resume` are control-plane verbs that run
 //! against the **durable** workspace ledger through the shared contract in
@@ -11,7 +11,7 @@
 //!
 //! `/pod status` used to show the current TUI session's sub-agents. That was
 //! a different thing wearing the same name: session sub-agents are not the
-//! durable Pod ledger, and a run started by `codewhale pod run` never
+//! durable Fleet ledger, and a run started by `codewhale pod run` never
 //! appeared. The session view is still reachable as `/pod workers` (and
 //! `/subagents`), now labelled as what it is.
 

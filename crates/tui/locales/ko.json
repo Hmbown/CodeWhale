@@ -1012,7 +1012,7 @@
   "AppModeAutoHint": "셸 사용 가능, 자동 위험도 검토 적용",
   "AppModePlanHint": "먼저 읽기 전용으로 조사 — 실행 전에 계획을 제시합니다",
   "AppModeYoloHint": "호환성 유지용 — 실행 + 전체 권한이며 실제로 표시되는 모드는 아닙니다",
-  "AppModeOperateHint": "Operate는 프롬프트를 목표로 바꿔 병렬로 진행합니다. 분리 가능한 흐름은 백그라운드 작업자에게 맡기고, 멈추기 전에 검증합니다.",
+  "AppModeOperateHint": "프롬프트를 목표로 바꿔 병렬 워커로 검증하며 진행합니다",
   "VimModeNormal": "-- 일반 --",
   "VimModeInsert": "-- 입력 --",
   "VimModeVisual": "-- 비주얼 --",

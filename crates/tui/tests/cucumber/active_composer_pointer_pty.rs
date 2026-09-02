@@ -100,7 +100,7 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     tui.send(keys::key::enter()).expect("leave onboarding");
     wait_or_panic(
         &mut tui,
-        "Codewhale v",
+        "Codewhale",
         STARTUP_WAIT,
         &format!("{size}: show the launch card"),
     );
@@ -108,10 +108,13 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     assert_startup_contract(tui.frame(), rows, cols, &size);
     // Typing goes straight to the composer; Enter sends the first message
     // and the session begins (the card dissolved on the first keystroke).
-    tui.send("start the session").expect("type the first prompt");
+    tui.send("start the session")
+        .expect("type the first prompt");
+    tui.send(keys::key::enter())
+        .expect("send the first prompt");
     if tui
         .wait_for(
-            |frame| frame.text().contains("Esc to interrupt"),
+            |frame| !frame.text().contains('\u{2442}'),
             STARTUP_WAIT,
         )
         .is_err()
@@ -249,19 +252,20 @@ fn assert_startup_contract(frame: &Frame, rows: u16, cols: u16, size: &str) {
     // real chords, and the focused composer. The posture bar and metrics
     // line appear only once a session exists, so `context` is NOT asserted
     // here any more (SHELL-DESIGN-20260901 Round 5).
-    for needle in ["Codewhale v", "❯"] {
+    for needle in ["Codewhale", "❯"] {
         assert!(
             text.contains(needle),
             "{size}: startup misses {needle:?}\n{}",
             frame.debug_dump()
         );
     }
-    for needle in if cols < 56 {
-        // The card sheds menu rows on narrow stages; the title holds last.
-        ["worktree"]
+    // The card sheds menu rows on narrow stages; the title holds last.
+    let needles: &[&str] = if cols < 56 {
+        &["New worktree"]
     } else {
-        ["New worktree", "Resume session", "Changelog", "Quit"]
-    } {
+        &["New worktree", "Resume session", "Changelog", "Quit"]
+    };
+    for needle in needles {
         assert!(
             text.contains(needle),
             "{size}: startup misses {needle:?}\n{}",
@@ -287,7 +291,7 @@ fn assert_startup_contract(frame: &Frame, rows: u16, cols: u16, size: &str) {
 fn assert_live_shell_contract(frame: &Frame, cols: u16, size: &str) {
     let text = frame.text();
     assert!(
-        text.contains("context "),
+        text.contains("ctx "),
         "{size}: live shell misses the info line\n{}",
         frame.debug_dump()
     );

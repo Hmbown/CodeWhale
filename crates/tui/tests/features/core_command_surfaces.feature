@@ -39,5 +39,5 @@ Feature: Core command visible surfaces
     When the user runs the core command "/rlm 1 inspect command extraction"
     Then the message window should include "Loading that into a persistent working context"
   When the user runs the core command "/pod help"
-  Then the message window should include "/pod workers (and /subagents) shows sub-agents in the current TUI session only"
-    And the message window should include "CLI: codewhale pod status"
+  Then the message window should include "/fleet workers (and /subagents) shows sub-agents in the current TUI session only"
+    And the message window should include "/pod and `codewhale pod` remain accepted as compatibility aliases"

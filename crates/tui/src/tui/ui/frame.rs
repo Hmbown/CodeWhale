@@ -1016,7 +1016,9 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         // exists: while the launch card is up the stage owns every row.
         let card_up = {
             let motion = app.motion_policy().allows_decorative() && !app.low_motion;
-            app.launch.card_dissolve_progress(app.ambient_clock_ms, motion) < 1.0
+            app.launch
+                .card_dissolve_progress(app.ambient_clock_ms, motion)
+                < 1.0
         };
         let areas = if card_up {
             Layout::default()

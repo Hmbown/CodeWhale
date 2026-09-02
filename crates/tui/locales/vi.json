@@ -1232,7 +1232,7 @@
   "HomeOperateModeTip": "Operate — cho Pod của bạn làm việc song song",
   "HomeOperateModeFleetTip": "  Vai trò tích hợp dùng mô hình của phiên này; /fleet setup để tùy chỉnh",
   "AppModeOperate": "Operate",
-  "AppModeOperateHint": "Operate biến yêu cầu của bạn thành mục tiêu và làm song song: worker nền cho các luồng tách được, được xác minh trước khi dừng.",
+  "AppModeOperateHint": "Biến prompt thành mục tiêu: worker song song, có xác minh",
   "HelpSubtitle": "Khái niệm, lệnh và phím tắt",
   "CommandPaletteTitle": "Lệnh",
   "CommandPaletteSubtitle": "Tìm và chạy một thao tác",

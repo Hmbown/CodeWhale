@@ -90,7 +90,7 @@
   "AppModeAuto": "自動",
   "AppModeAutoHint": "啟用 shell，並自動進行風險審查",
   "AppModeOperate": "Operate",
-  "AppModeOperateHint": "Operate 把你的提示變成目標並行推進：可拆分的流交給背景工作者，停止前先驗證。",
+  "AppModeOperateHint": "把提示詞變成目標：並行工作器，完成前先驗證",
   "AppModePlan": "Plan",
   "AppModePlanHint": "先唯讀調研，行動前提出計畫",
   "AppModeYolo": "完全存取（已棄用標籤）",
