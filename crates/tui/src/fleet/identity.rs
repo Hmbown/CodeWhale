@@ -328,18 +328,30 @@ pub fn resolve_member_in_profiles<'a>(
         return Ok(Some(member));
     }
 
+    if kind
+        .as_deref()
+        .is_none_or(|kind| kind == "member" || kind == "id")
+        && let Some(member) = profiles.iter().find(|member| {
+            public_role_label(&member.id).eq_ignore_ascii_case(&public_role_label(value))
+        })
+    {
+        return Ok(Some(member));
+    }
+
     let mut candidates = Vec::new();
     for member in profiles {
         let matches = match kind.as_deref() {
             Some("member" | "id") => false,
             Some("name") => matches_display_name(member, value),
-            Some("role") => member_role(member).eq_ignore_ascii_case(value),
+            Some("role") => public_role_label(member_role(member))
+                .eq_ignore_ascii_case(&public_role_label(value)),
             Some("model") => matches_model(member, value),
             Some("route") => matches_route(member, value),
             Some(_) => false,
             None => {
                 matches_display_name(member, value)
-                    || member_role(member).eq_ignore_ascii_case(value)
+                    || public_role_label(member_role(member))
+                        .eq_ignore_ascii_case(&public_role_label(value))
                     || matches_model(member, value)
                     || matches_route(member, value)
                     || friendly_model_name(member)
@@ -624,6 +636,24 @@ mod tests {
                 "selector {selector}"
             );
         }
+    }
+
+    #[test]
+    fn canonical_role_selectors_resolve_legacy_builtin_member_ids() {
+        let roster = FleetRoster::built_ins_only();
+
+        assert_eq!(
+            resolve_member(&roster, "explore")
+                .expect("canonical role selector")
+                .map(|member| member.id.as_str()),
+            Some("scout")
+        );
+        assert_eq!(
+            resolve_member(&roster, "advisor")
+                .expect("canonical role selector")
+                .map(|member| member.id.as_str()),
+            Some("consultant")
+        );
     }
 
     #[test]
