@@ -1,6 +1,6 @@
 ---
 name: Codewhale
-description: Quiet, dense, navy-and-blue documentation-grade site for a terminal coding agent.
+description: Quiet, dense, navy-and-blue design system for Codewhale — the terminal shell, the website, and the docs.
 colors:
   # brand constants (brand/*.svg, shared with the TUI palette)
   brand-black: "#000000"
@@ -9,25 +9,27 @@ colors:
   brand-stage: "#142352"
   brand-ivory: "#ffffff"
   brand-ice: "#ddeef9"
-  brand-cobalt: "#0b48bb"
-  brand-blue: "#1e8fd8"
+  brand-cobalt: "#1535b2"
+  brand-blue: "#6aa6dc"
   brand-cyan: "#78bce8"
   ombre-start: "#1535B2"
   ombre-end: "#6AA6DC"
-  # web surface tokens (app/tokens.css, generated — never edit by hand)
-  bg: "#03070d"
-  chrome: "#08111c"
-  panel: "#0e1729"
-  composer: "#162238"
-  elevated: "#182742"
-  border: "#263e5c"
+  # surface tokens — crates/tui/src/palette/tokens.rs, exported to web/app/tokens.css (generated, never hand-edit)
+  bg: "#070c1d"          # ink
+  chrome: "#0c1531"      # navy
+  panel: "#101c40"
+  composer: "#142352"    # stage — the raised input plate
+  elevated: "#1a2c63"
+  selection: "#1e3c8f"
+  border: "#2a3f72"
   text-body: "#f6f2e8"
   text-soft: "#b6c0d4"
   text-muted: "#93a0b8"
-  action: "#6aaef2"
+  action: "#6aa6dc"      # sky — the ombre's light end
   action-hover: "#8fc4f8"
-  ice: "#d1ebf4"
-  cyan: "#48d7ff"
+  cobalt: "#1535b2"      # the ombre's dark end
+  ice: "#ddeef9"
+  cyan: "#78bce8"
   success: "#9bd66f"
   warning: "#ff7a59"
   error: "#ff86b2"
@@ -105,26 +107,60 @@ components:
 
 ## Overview
 
-Codewhale is a coding agent that lives in a terminal, and the site is built to
-feel like the tool: a dark navy field, one blue action colour, white type, thin
-hairlines, and nothing decorative. The direction in one line: **it doesn't need
-to look special — it needs to look like Codewhale.** Density over drama, facts
-over claims, documentation-grade restraint on every page including the landing.
+Codewhale is an open-source Rust coding agent and TUI. Everything it shows —
+the shell, the website, the docs — is built to feel like one tool: a flat navy
+field, one blue action colour, white type, thin hairlines, and nothing
+decorative. The direction in one line: **it doesn't need to look special — it
+needs to look like Codewhale.** Density over drama, facts over claims,
+documentation-grade restraint on every surface including the landing page and
+the launch hero.
 
-Anti-references: purple/violet gradients, glassmorphism, glowing cards, fake
-terminal transcripts, fake reasoning traces, stock "AI" imagery, emoji, and
-status-chip soup. None of it belongs here.
+This file is shared design context for every 0.9.12 lane (web, docs, TUI). The
+web-specific product truth is in `PRODUCT.md` next to it.
+
+## Anti-slop rules
+
+These are hard rules, not taste notes. A surface that breaks one is wrong even
+if it looks fine in a screenshot.
+
+1. **No gradients for decoration.** The ombre `#1535B2 → #6AA6DC` lives in the
+   mark and the wordmark only. No gradient backgrounds, gradient text,
+   gradient rules, radial "spotlight" glows, or gradient borders anywhere else.
+2. **No glassmorphism.** No `backdrop-filter`, no translucent frosted panels,
+   no blur. Surfaces are opaque tokens from the palette.
+3. **No generic SaaS hero.** No three-column feature grid with icons, no logo
+   wall, no testimonials, no floating product mock at an angle, no "trusted by",
+   no neon eyebrow line. The landing page states what the tool is, shows one
+   real screenshot, and gives the install command.
+4. **No fabricated evidence.** No invented terminal transcripts, reasoning
+   traces, benchmarks, or screenshots of a UI that has not shipped. Pending
+   media is labelled pending.
+5. **No shadow theatre.** No drop shadows on cards, buttons, or figures; depth is
+   one surface step and one hairline.
+6. **No second accent.** One action blue. Cyan is bounded to the composer
+   prompt glyph; state colours carry state only; violet is 1px rules, never
+   text.
+7. **No status-chip soup, no emoji, no all-caps headings.** Labels are
+   letterspaced mono at ≥ 0.7rem and there are few of them.
+8. **No text below the floors** (12px functional, 11.2px labels) and no
+   text/background pair under 4.5:1.
 
 ## Colors
 
-The web colours are the TUI palette exported to `app/tokens.css` (generated
-from `crates/tui/src/palette/tokens.rs`; regenerate, never edit). `globals.css`
-maps them to semantic names: `--paper` (bg), `--paper-deep` (panel), `--ink`
-(text), `--ink-soft`, `--ink-mute`, `--indigo` (action), `--hairline` (action at
-20 % alpha).
+One palette, owned by `crates/tui/src/palette/tokens.rs`, exported to
+`web/app/tokens.css` by `scripts/export-design-tokens.py` (regenerate, never
+edit). The brand-name aliases used in conversation map onto it: black `#000`,
+ink `#070c1d` = `bg`, navy `#0c1531` = `chrome`, stage `#142352` = `composer`,
+ivory `#fff`, ice `#ddeef9`, cobalt `#1535b2`, blue/sky `#6aa6dc` = `action`,
+cyan `#78bce8`. The TUI uses the same tokens through `palette::grammar` for
+status colours. `web/app/globals.css` maps them to semantic names: `--paper`
+(bg), `--paper-deep` (panel), `--ink` (text), `--ink-soft`, `--ink-mute`,
+`--indigo` (action), `--hairline` (action at 20 % alpha).
 
-- **Field:** `bg` for the page, `panel` for cards and code, `elevated` only for
-  raised inputs. Never stack more than two surface steps.
+- **Field:** `bg` for the page and the transcript, `chrome` for bars and the
+  dock, `panel` for cards and code, `composer` for the raised input plate,
+  `elevated` only for overlays. Never stack more than two surface steps in
+  one view.
 - **Type:** `text-body` for copy, `text-soft` for secondary, `text-muted` for
   meta. `text-dim` (#697791) is for borders only — it fails AA on the panels.
 - **Action:** one blue (`action`) for links, buttons, and focus rings; hover
@@ -136,7 +172,7 @@ maps them to semantic names: `--paper` (bg), `--paper-deep` (panel), `--ink`
   not use them decoratively, and never convey state by colour alone.
 
 Contrast: every text/background pair in use is ≥ 4.5:1 (`text-muted` on
-`panel` is 6.8:1, on `bg` 7.7:1).
+`panel` 6.3:1, on `composer` 5.7:1, on `bg` 7.4:1; `action` on `bg` 7.5:1).
 
 ## Typography
 
@@ -154,7 +190,28 @@ Floors: functional text (links, nav, labels, meta, footer) never below
 legal smallprint never below 10px. Heading outline is strict: h1 → h2 → h3, no
 skipped levels; use CSS, not a lower heading tag, to make something smaller.
 
-## Layout
+## Shell (TUI) direction
+
+The redesigned 0.9.12 shell is the reference the website mirrors. Top to
+bottom:
+
+1. **Transcript first.** The conversation owns the screen: no permanent side
+   chrome, no top bar. Turns are plain text on `bg`; tool output is `text-soft`
+   on `panel`; reasoning is the reasoning tint, collapsed by default.
+2. **Composer.** The raised `composer` plate directly under the transcript,
+   cyan prompt glyph, one hairline above. Mode (Plan / Work / Operate) and
+   permission (Ask / Auto-Review / Full Access) cycle with Tab from here.
+3. **Info line.** One row of mono meta under the composer: model, mode,
+   permission, context budget, git state. `text-muted`, no icons, no chips.
+4. **Bottom dock.** A `chrome` band with clickable tabs **Tasks · Agents ·
+   Context · Pinned** and a `×` to close; the active tab's panel opens above the
+   dock and pushes the transcript up rather than overlaying it. The dock is the
+   only panel surface — there is no rail, no sidebar, no modal stack for these.
+
+Launch hero: wordmark plus the small surfacing mark on the flat field, nothing
+animated beyond the Tideline atmosphere already in `tideline.rs`.
+
+## Layout (web)
 
 - Single content column, `.product-container` max 72rem, 1rem side padding at
   390px. The landing has no permanent side chrome; docs have a left contents
@@ -179,7 +236,7 @@ Small radii: 4px on controls, 6px on cards and code panels, 999px only on the
 GitHub-stars pill. No rounded-2xl, no circles as decoration. Whale mark is the
 only curved form.
 
-## Components
+## Components (web)
 
 - **Nav:** 62px bar, `bg`, hairline below. Left: whale mark (22px) + wordmark
   (20px) as one link labelled "Codewhale home". Centre: text links in body
