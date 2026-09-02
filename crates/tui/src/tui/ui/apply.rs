@@ -1033,10 +1033,9 @@ pub(crate) async fn apply_provider_fallback_switch(
     app.model_ids_passthrough = config.model_ids_pass_through();
     app.set_model_selection(new_model.clone());
     app.apply_provider_switch_reasoning_effort(target, &new_base_url, None);
-    app.set_active_context_window_override(config.context_window_for_route(
-        target,
-        Some(&new_model),
-    ));
+    app.set_active_context_window_override(
+        config.context_window_for_route(target, Some(&new_model)),
+    );
     app.set_active_route_resolution(
         new_base_url.clone(),
         resolved_route.candidate.limits(),

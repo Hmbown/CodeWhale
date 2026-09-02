@@ -17,35 +17,26 @@ pub const CONTEXT_WINDOW_INFO: CommandInfo = CommandInfo {
 };
 
 pub fn context_window(app: &mut App, args: Option<&str>) -> CommandResult {
-    let model = app.effective_model_for_budget();
+    let model = app.effective_model_for_budget().to_string();
     let argument = args.unwrap_or("").trim();
     if argument.is_empty() {
-        let mut source = app.active_context_window_source.display_label().to_string();
-        if let Some(config) =
-            Config::load(app.config_path.clone(), app.config_profile.as_deref()).ok()
-        {
-            let provider_window = config.context_window_for_provider_config(app.api_provider);
-            if app
-                .active_context_window_override
-                .is_some_and(|window| provider_window != Some(window))
-            {
-                source.push_str(" (per-model override)");
-            }
-        }
         return CommandResult::message(
             tr(app.ui_locale, MessageId::ContextWindowCurrent)
                 .replace("{model}", &model)
                 .replace(
                     "{tokens}",
-                    &crate::tui::model_picker::format_picker_context_window(
+                    &crate::tui::model_picker::format_picker_context_window(u64::from(
                         crate::route_budget::route_context_window_tokens(
                             app.api_provider,
                             &model,
                             app.active_route_limits,
                         ),
-                    ),
+                    )),
                 )
-                .replace("{source}", &source),
+                .replace(
+                    "{source}",
+                    &app.active_context_window_source.display_label(),
+                ),
         );
     }
 
@@ -107,7 +98,7 @@ fn parse_context_window(value: &str) -> Option<u32> {
 
 fn persistence_identity(app: &App) -> Result<ProviderIdentity, String> {
     let config = Config::load(app.config_path.clone(), app.config_profile.as_deref())
-        .map_err(|error| format!("Failed to load config: {error}"))?;
+        .map_err(|error| error.to_string())?;
     Ok(config
         .resolve_persisted_provider_identity(
             Some(app.api_provider.as_str()),

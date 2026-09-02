@@ -9,13 +9,11 @@ fn personal_consultant_runtime(
 ) -> SubAgentRuntime {
     let providers = crate::config::ProvidersConfig {
         deepseek: crate::config::ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             api_key: Some("deepseek-test-key".to_string()),
             base_url: Some("http://127.0.0.1:9/v1".to_string()),
             ..Default::default()
         },
         openai_codex: crate::config::ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             api_key: Some("codex-test-key".to_string()),
             ..Default::default()
         },

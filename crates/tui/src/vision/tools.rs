@@ -446,7 +446,6 @@ mod tests {
             provider: Some("vllm".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 vllm: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(base_url.clone()),
                     model: Some(model.clone()),
                     context_window: Some(327_680),

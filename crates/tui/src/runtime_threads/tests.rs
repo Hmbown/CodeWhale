@@ -669,7 +669,6 @@ async fn named_custom_thread_identity_round_trips_and_fails_closed_when_removed(
     custom.insert(
         "lm-studio".to_string(),
         crate::config::ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:1234/v1".to_string()),
             model: Some("local-default".to_string()),
@@ -791,7 +790,6 @@ fn legacy_literal_custom_thread_resume_requires_and_keeps_root_route() -> Result
         custom.insert(
             "lm-studio".to_string(),
             crate::config::ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("http://127.0.0.1:18181/v1".to_string()),
                 model: Some("named-model".to_string()),
@@ -1195,7 +1193,6 @@ async fn real_turn_client_preflight_failure_writes_no_in_progress_record() -> Re
     custom.insert(
         "preflight-failure".to_string(),
         crate::config::ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("https://preflight.invalid/v1".to_string()),
             model: Some("preflight-model".to_string()),
@@ -2007,7 +2004,6 @@ fn legacy_custom_thread_stays_on_root_when_literal_table_coexists() -> Result<()
     custom.insert(
         "custom".to_string(),
         crate::config::ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:18182/v1".to_string()),
             model: Some("table-model".to_string()),
@@ -2070,7 +2066,6 @@ async fn empty_imported_custom_id_fails_closed_when_root_and_table_coexist() -> 
     custom.insert(
         "custom".to_string(),
         crate::config::ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:18182/v1".to_string()),
             model: Some("table-model".to_string()),
@@ -2126,7 +2121,6 @@ async fn thread_records_and_create_requests_preserve_provider_kind_id_pairing() 
     custom.insert(
         "openai".to_string(),
         crate::config::ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:18183/v1".to_string()),
             model: Some("custom-openai-model".to_string()),
@@ -2234,7 +2228,6 @@ async fn config_reload_updates_next_turn_route_without_mutating_engine_route() -
     custom.insert(
         "lm-studio".to_string(),
         crate::config::ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:18181/v1".to_string()),
             model: Some("local-model".to_string()),
@@ -2334,7 +2327,6 @@ async fn config_reload_updates_next_turn_route_without_mutating_engine_route() -
 #[tokio::test]
 async fn queued_reload_is_a_hard_boundary_for_a_concurrent_turn_start() -> Result<()> {
     let provider = |base_url: &str, key: &str| crate::config::ProviderConfig {
-        model_context_windows: std::collections::BTreeMap::new(),
         kind: Some("openai-compatible".to_string()),
         base_url: Some(base_url.to_string()),
         model: Some("local-model".to_string()),
@@ -2432,7 +2424,6 @@ async fn queued_reload_is_a_hard_boundary_for_a_concurrent_turn_start() -> Resul
 #[tokio::test]
 async fn queued_reload_is_a_hard_boundary_for_concurrent_compaction() -> Result<()> {
     let provider = |base_url: &str, key: &str| crate::config::ProviderConfig {
-        model_context_windows: std::collections::BTreeMap::new(),
         kind: Some("openai-compatible".to_string()),
         base_url: Some(base_url.to_string()),
         model: Some("local-model".to_string()),
@@ -2528,7 +2519,6 @@ async fn config_sync_reports_removed_named_custom_route_and_keeps_mailbox_clean(
     custom.insert(
         "lm-studio".to_string(),
         crate::config::ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:18181/v1".to_string()),
             model: Some("local-model".to_string()),
@@ -2580,7 +2570,6 @@ async fn create_thread_uses_requested_named_custom_provider_default_model() -> R
         custom.insert(
             name.to_string(),
             crate::config::ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some(base_url.to_string()),
                 model: Some(model.to_string()),
@@ -2656,7 +2645,6 @@ async fn simultaneous_named_custom_auto_threads_keep_exact_routes() -> Result<()
         custom.insert(
             name.to_string(),
             crate::config::ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some(base_url.to_string()),
                 model: Some(model.to_string()),
@@ -6280,7 +6268,6 @@ async fn compact_thread_receipt_keeps_exact_named_custom_identity() -> Result<()
     custom.insert(
         "lm-studio".to_string(),
         crate::config::ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:1234/v1".to_string()),
             model: Some("local-code-model".to_string()),

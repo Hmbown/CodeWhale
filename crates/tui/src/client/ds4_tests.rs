@@ -11,7 +11,6 @@ fn ds4_client() -> DeepSeekClient {
     providers.custom.insert(
         "ds4".to_string(),
         ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:8000/v1".to_string()),
             model: Some("deepseek-v4-flash".to_string()),

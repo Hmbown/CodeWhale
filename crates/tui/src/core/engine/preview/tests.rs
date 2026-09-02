@@ -706,7 +706,6 @@ async fn auto_route_without_a_prompt_omits_every_final_fact() {
 fn deepseek_config() -> crate::config::Config {
     let providers = crate::config::ProvidersConfig {
         deepseek: crate::config::ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             api_key: Some("sk-test-deepseek".to_string()),
             model: Some("deepseek-chat".to_string()),
             ..crate::config::ProviderConfig::default()
@@ -1272,7 +1271,6 @@ async fn anthropic_preview_matches_the_first_native_messages_wire_body() {
         provider: Some("anthropic".to_string()),
         providers: Some(crate::config::ProvidersConfig {
             anthropic: crate::config::ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("test-anthropic-key".to_string()),
                 base_url: Some(server.uri()),
                 model: Some(model.to_string()),
@@ -1446,7 +1444,6 @@ fn matrix_routes() -> Vec<MatrixRoute> {
 
 fn matrix_config(route: &MatrixRoute) -> crate::config::Config {
     let entry = crate::config::ProviderConfig {
-        model_context_windows: std::collections::BTreeMap::new(),
         api_key: Some(format!("sk-test-{}-matrix-key", route.provider_key)),
         base_url: Some(route.base_url.to_string()),
         model: Some(route.model.to_string()),

@@ -3668,7 +3668,6 @@ fn provider_api_key_config_failure_restores_secret_and_keeps_external_route() ->
             provider: Some(ApiProvider::Xai.as_str().to_string()),
             providers: Some(ProvidersConfig {
                 xai: ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     oauth_credential_generation: Some(generation.to_string()),
                     external_credentials: Some(
@@ -4679,7 +4678,6 @@ fn named_custom_provider_never_reuses_generic_custom_secret() -> Result<()> {
     providers.custom.insert(
         "endpoint-b".to_string(),
         ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("https://endpoint-b.example.test/v1".to_string()),
             model: Some("endpoint-b-model".to_string()),
@@ -5248,7 +5246,6 @@ fn named_custom_api_key_env_satisfies_runtime_and_onboarding_readiness() -> Resu
     providers.custom.insert(
         "acme".to_string(),
         ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("https://acme.example.test/v1".to_string()),
             model: Some("acme-model".to_string()),
@@ -6203,7 +6200,6 @@ fn retired_deepseek_aliases_keep_mode_intent_unless_effort_is_explicit() {
         provider: Some("deepseek-anthropic".to_string()),
         providers: Some(ProvidersConfig {
             deepseek_anthropic: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 model: Some("deepseek-reasoner".to_string()),
                 ..Default::default()
             },
@@ -6292,7 +6288,6 @@ fn deepseek_default_model_canonicalizes_provider_prefixed_ids() {
         provider: Some("deepseek".to_string()),
         providers: Some(ProvidersConfig {
             deepseek: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 model: Some(DEFAULT_OPENROUTER_MODEL.to_string()),
                 ..Default::default()
             },
@@ -8585,7 +8580,6 @@ fn ollama_cloud_resolves_env_key_and_is_not_keyless() -> Result<()> {
         provider: Some("ollama".to_string()),
         providers: Some(ProvidersConfig {
             ollama: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some("https://ollama.com/v1/".to_string()),
                 ..ProviderConfig::default()
             },
@@ -8619,7 +8613,6 @@ fn ollama_cloud_resolves_saved_provider_key() -> Result<()> {
         provider: Some("ollama".to_string()),
         providers: Some(ProvidersConfig {
             ollama: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
                 ..ProviderConfig::default()
             },
@@ -8650,7 +8643,6 @@ fn explicit_ollama_cloud_uses_new_secret_slot_without_local_fallback() -> Result
         provider: Some("ollama-cloud".to_string()),
         providers: Some(ProvidersConfig {
             ollama: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
                 ..ProviderConfig::default()
             },
@@ -8711,7 +8703,6 @@ fn migrated_ollama_cloud_scope_preserves_legacy_table_and_slot_read_only() -> Re
         provider: Some("deepseek".to_string()),
         providers: Some(ProvidersConfig {
             ollama: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
                 model: Some("legacy-cloud-model".to_string()),
                 ..ProviderConfig::default()
@@ -8773,7 +8764,6 @@ fn ollama_cloud_without_key_fails_with_cloud_guidance() -> Result<()> {
         provider: Some("ollama".to_string()),
         providers: Some(ProvidersConfig {
             ollama: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some("https://ollama.com/v1".to_string()),
                 ..ProviderConfig::default()
             },
@@ -8817,7 +8807,6 @@ fn ollama_custom_remote_does_not_inherit_cloud_env_key() -> Result<()> {
         provider: Some("ollama".to_string()),
         providers: Some(ProvidersConfig {
             ollama: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some("https://ollama-gateway.example/v1".to_string()),
                 ..ProviderConfig::default()
             },
@@ -9715,7 +9704,6 @@ fn codex_external_credentials_are_disabled_by_default_and_managed_fails_before_i
         provider: Some(ApiProvider::OpenaiCodex.as_str().to_string()),
         providers: Some(ProvidersConfig {
             openai_codex: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 auth_mode: Some("oauth".to_string()),
                 external_credentials: Some(managed_consent),
                 ..Default::default()
@@ -9769,7 +9757,6 @@ fn codex_read_only_consent_reads_exact_file_without_mutation() -> Result<()> {
         provider: Some(ApiProvider::OpenaiCodex.as_str().to_string()),
         providers: Some(ProvidersConfig {
             openai_codex: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 auth_mode: Some("oauth".to_string()),
                 external_credentials: Some(
                     codewhale_config::ExternalCredentialConsentToml::read_only(
@@ -9883,7 +9870,6 @@ fn moonshot_kimi_code_missing_key_reports_membership_plan_console() -> Result<()
         provider: Some(ApiProvider::Moonshot.as_str().to_string()),
         providers: Some(ProvidersConfig {
             moonshot: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some(DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                 model: Some(KIMI_CODE_K3_MODEL.to_string()),
                 ..Default::default()
@@ -10848,7 +10834,6 @@ fn provider_capability_openai_codex_uses_responses_payload() {
 #[test]
 fn invalid_provider_auth_source_is_not_explicit_configuration() {
     let entry = ProviderConfig {
-        model_context_windows: std::collections::BTreeMap::new(),
         auth: Some(codewhale_config::ProviderAuthSourceToml {
             source: codewhale_config::AuthSourceKind::Command,
             command: Vec::new(),
@@ -11755,7 +11740,6 @@ fn api_provider_returns_custom_for_custom_name_and_deepseek_for_junk() {
     custom.insert(
         "my_thing".to_string(),
         ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("https://api.example.com/v1".to_string()),
             ..Default::default()
@@ -11790,7 +11774,6 @@ fn api_provider_returns_custom_for_custom_name_and_deepseek_for_junk() {
 #[test]
 fn custom_provider_kind_only_accepts_openai_compatible() {
     let ok = ProviderConfig {
-        model_context_windows: std::collections::BTreeMap::new(),
         kind: Some("openai-compatible".to_string()),
         ..Default::default()
     };
@@ -11798,7 +11781,6 @@ fn custom_provider_kind_only_accepts_openai_compatible() {
 
     // Underscore spelling and case are tolerated.
     let underscore = ProviderConfig {
-        model_context_windows: std::collections::BTreeMap::new(),
         kind: Some("OpenAI_Compatible".to_string()),
         ..Default::default()
     };
@@ -11806,7 +11788,6 @@ fn custom_provider_kind_only_accepts_openai_compatible() {
 
     // Any other declared wire format is rejected (callers error on these).
     let other = ProviderConfig {
-        model_context_windows: std::collections::BTreeMap::new(),
         kind: Some("anthropic-messages".to_string()),
         ..Default::default()
     };
@@ -11822,7 +11803,6 @@ fn custom_provider_base_url_and_model_resolve_from_named_table() {
     custom.insert(
         "my_thing".to_string(),
         ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("https://api.example.com/v1".to_string()),
             model: Some("custom-model-v1".to_string()),
@@ -11849,7 +11829,6 @@ fn session_custom_provider_config(name: &str, kind: &str, base_url: &str) -> Con
     custom.insert(
         name.to_string(),
         ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some(kind.to_string()),
             base_url: Some(base_url.to_string()),
             model: Some("local-model".to_string()),
@@ -11920,7 +11899,6 @@ fn persisted_legacy_ollama_cloud_receipts_upgrade_only_on_exact_live_route() {
         provider: Some("ollama".to_string()),
         providers: Some(ProvidersConfig {
             ollama: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
                 ..ProviderConfig::default()
             },
@@ -11942,7 +11920,6 @@ fn persisted_legacy_ollama_cloud_receipts_upgrade_only_on_exact_live_route() {
         provider: Some("ollama".to_string()),
         providers: Some(ProvidersConfig {
             ollama: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some("https://ollama.com/v1/preview".to_string()),
                 ..ProviderConfig::default()
             },
@@ -11972,12 +11949,10 @@ fn persisted_legacy_ollama_cloud_receipts_upgrade_only_on_exact_live_route() {
         provider: Some("ollama".to_string()),
         providers: Some(ProvidersConfig {
             ollama: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
                 ..ProviderConfig::default()
             },
             ollama_cloud: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
                 ..ProviderConfig::default()
             },
@@ -12228,7 +12203,6 @@ fn legacy_literal_custom_identity_requires_one_valid_root_route() {
         .insert(
             "vllm-local".to_string(),
             ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("http://127.0.0.1:8000/v1".to_string()),
                 model: Some("other-local-model".to_string()),
@@ -12271,7 +12245,6 @@ fn legacy_literal_custom_identity_requires_one_valid_root_route() {
         custom: HashMap::from([(
             "CUSTOM".to_string(),
             ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some("http://127.0.0.1:5678/v1".to_string()),
                 model: Some("table-model".to_string()),
@@ -12915,7 +12888,6 @@ fn config_selects_bare_k3_on_the_kimi_code_route() {
         provider: Some("moonshot".to_string()),
         providers: Some(ProvidersConfig {
             moonshot: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("k".to_string()),
                 base_url: Some(DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                 model: Some(KIMI_CODE_K3_MODEL.to_string()),
@@ -13113,7 +13085,6 @@ fn configured_inactive_provider_reads_its_secret_store_key() -> Result<()> {
     // the active provider away (#5033).
     let providers = ProvidersConfig {
         moonshot: ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             auth_mode: Some("api_key".to_string()),
             ..Default::default()
         },

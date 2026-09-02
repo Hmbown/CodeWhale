@@ -85,7 +85,6 @@ fn test_codex_config(server: &MockServer) -> Config {
         }),
         providers: Some(ProvidersConfig {
             openai_codex: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some(server.uri()),
                 ..ProviderConfig::default()
             },

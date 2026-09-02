@@ -2651,7 +2651,6 @@ mod tests {
         custom_providers.custom.insert(
             "acme".to_string(),
             crate::config::ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some("http://127.0.0.1:1/v1".to_string()),
                 model: Some("acme-coder".to_string()),
                 kind: Some("openai-compatible".to_string()),

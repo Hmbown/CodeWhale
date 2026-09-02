@@ -3891,7 +3891,6 @@ mod tests {
     fn fleet_includes_saved_model_outside_bundled_catalog() {
         let providers = crate::config::ProvidersConfig {
             openrouter: crate::config::ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("openrouter-test-key".to_string()),
                 model: Some("acme/private-preview".to_string()),
                 ..Default::default()
@@ -3935,7 +3934,6 @@ mod tests {
             custom.insert(
                 name.to_string(),
                 crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     kind: Some("openai-compatible".to_string()),
                     base_url: Some(base_url.to_string()),
                     model: Some(model.to_string()),
@@ -4407,7 +4405,6 @@ mod tests {
         let mut config = crate::config::Config::default();
         config.providers = Some(crate::config::ProvidersConfig {
             openai_codex: crate::config::ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 auth_mode: Some("oauth".to_string()),
                 external_credentials: Some(
                     codewhale_config::ExternalCredentialConsentToml::read_only(
@@ -4449,7 +4446,6 @@ mod tests {
         let mut config = crate::config::Config::default();
         config.providers = Some(crate::config::ProvidersConfig {
             xai: crate::config::ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 auth_mode: Some("oauth".to_string()),
                 external_credentials: Some(
                     codewhale_config::ExternalCredentialConsentToml::read_only(

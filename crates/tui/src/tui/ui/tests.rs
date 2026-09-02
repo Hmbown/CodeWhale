@@ -4100,7 +4100,6 @@ fn cache_warmup_resolves_the_last_concrete_auto_route() {
         provider: Some("deepseek".to_string()),
         providers: Some(ProvidersConfig {
             vllm: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some("http://127.0.0.1:18191/v1".to_string()),
                 model: Some("auto-cache-model".to_string()),
                 ..Default::default()
@@ -4141,7 +4140,6 @@ fn cache_warmup_rejects_an_auto_route_whose_endpoint_changed() {
         provider: Some("deepseek".to_string()),
         providers: Some(ProvidersConfig {
             vllm: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 base_url: Some("http://127.0.0.1:18192/v1".to_string()),
                 model: Some("auto-cache-model".to_string()),
                 ..Default::default()
@@ -6594,7 +6592,6 @@ fn named_custom_session_config(name: &str, base_url: &str, model: &str) -> Confi
     custom.insert(
         name.to_string(),
         ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some(base_url.to_string()),
             model: Some(model.to_string()),
@@ -8005,7 +8002,6 @@ async fn provider_switch_to_deepseek_drops_stale_xiaomi_root_base_url() {
         default_text_model: Some("mimo-v2.5-pro".to_string()),
         providers: Some(ProvidersConfig {
             xiaomi_mimo: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("mimo-key".to_string()),
                 model: Some("mimo-v2.5-pro".to_string()),
                 ..Default::default()
@@ -8047,7 +8043,6 @@ async fn provider_switch_from_mimo_to_openrouter_without_key_fails_before_dispat
         default_text_model: Some("mimo-v2.5-pro".to_string()),
         providers: Some(ProvidersConfig {
             xiaomi_mimo: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("mimo-key".to_string()),
                 model: Some("mimo-v2.5-pro".to_string()),
                 ..Default::default()
@@ -8580,7 +8575,6 @@ async fn provider_switch_model_override_updates_target_provider_model_slot() {
         default_text_model: Some("mimo-v2.5-pro".to_string()),
         providers: Some(ProvidersConfig {
             xiaomi_mimo: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("mimo-key".to_string()),
                 model: Some("mimo-v2.5-pro".to_string()),
                 ..Default::default()
@@ -8650,7 +8644,6 @@ async fn provider_switch_succeeds_without_writing_when_config_is_unwritable() {
         default_text_model: Some("mimo-v2.5-pro".to_string()),
         providers: Some(ProvidersConfig {
             xiaomi_mimo: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("mimo-key".to_string()),
                 model: Some("mimo-v2.5-pro".to_string()),
                 ..Default::default()
@@ -8710,13 +8703,11 @@ async fn provider_switch_without_model_uses_target_default_not_previous_provider
         api_key: Some("deepseek-key".to_string()),
         providers: Some(ProvidersConfig {
             openrouter: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("openrouter-key".to_string()),
                 model: Some("deepseek/deepseek-v4-pro".to_string()),
                 ..Default::default()
             },
             zai: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("zai-key".to_string()),
                 ..Default::default()
             },
@@ -8765,13 +8756,11 @@ async fn provider_switch_foreign_direct_model_rejected_before_mutation() {
         api_key: Some("deepseek-key".to_string()),
         providers: Some(ProvidersConfig {
             deepseek: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("deepseek-key".to_string()),
                 model: Some(DEFAULT_TEXT_MODEL.to_string()),
                 ..Default::default()
             },
             zai: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("zai-key".to_string()),
                 ..Default::default()
             },
@@ -8823,7 +8812,6 @@ async fn provider_switch_to_openai_codex_normalizes_deepseek_off_effort() {
         default_text_model: Some(DEFAULT_TEXT_MODEL.to_string()),
         providers: Some(ProvidersConfig {
             openai_codex: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 model: Some(crate::config::DEFAULT_OPENAI_CODEX_MODEL.to_string()),
                 ..Default::default()
             },
@@ -8860,7 +8848,6 @@ async fn provider_switch_to_openrouter_canonicalizes_deepseek_default_model() {
         default_text_model: Some(DEFAULT_TEXT_MODEL.to_string()),
         providers: Some(ProvidersConfig {
             openrouter: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("test-key".to_string()),
                 ..Default::default()
             },
@@ -9325,7 +9312,6 @@ async fn dispatch_uses_app_owned_exact_custom_identity_when_config_selector_drif
         custom.insert(
             name.to_string(),
             ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some(base_url.to_string()),
                 model: Some(model.to_string()),
@@ -9385,7 +9371,6 @@ async fn dispatch_idless_custom_identity_keeps_legacy_root_over_literal_table() 
             custom: HashMap::from([(
                 "custom".to_string(),
                 ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     kind: Some("openai-compatible".to_string()),
                     api_key: Some("literal-table-test-key".to_string()),
                     base_url: Some("http://127.0.0.1:18181/v1".to_string()),
@@ -9493,7 +9478,6 @@ fn logout_memory_clear_respects_named_and_legacy_custom_scopes() {
             custom: HashMap::from([(
                 "lm-studio".to_string(),
                 ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     kind: Some("openai-compatible".to_string()),
                     api_key: Some("named-key".to_string()),
                     base_url: Some("http://127.0.0.1:18181/v1".to_string()),
@@ -9550,7 +9534,6 @@ fn auto_routed_turn_compaction_uses_selected_route_not_stale_app_route() {
         provider: Some("openrouter".to_string()),
         providers: Some(ProvidersConfig {
             openrouter: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("test-openrouter-key".to_string()),
                 model: Some("vendor/model-b".to_string()),
                 context_window: Some(196_000),
@@ -9841,7 +9824,6 @@ fn context_override_drives_compaction_meter_and_preflight_budget() {
         provider: Some("moonshot".to_string()),
         providers: Some(ProvidersConfig {
             moonshot: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 model: Some("kimi-k3".to_string()),
                 context_window: Some(262_144),
                 ..Default::default()
@@ -10441,7 +10423,6 @@ async fn dispatch_route_failure_leaves_loading_and_transcript_unchanged() {
     custom.insert(
         "lm-studio".to_string(),
         ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("ftp://invalid.example/v1".to_string()),
             model: Some("local-model".to_string()),
@@ -17733,7 +17714,6 @@ fn same_workspace_named_custom_switch_requires_engine_respawn() {
     config.providers.as_mut().expect("providers").custom.insert(
         "custom-b".to_string(),
         crate::config::ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:18182/v1".to_string()),
             model: Some("model-b".to_string()),
@@ -18467,13 +18447,11 @@ async fn model_picker_startup_default_overrides_configured_xai_route_after_resta
         provider: Some("xai".to_string()),
         providers: Some(ProvidersConfig {
             xai: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("xai-test-key".to_string()),
                 model: Some("grok-4.5".to_string()),
                 ..ProviderConfig::default()
             },
             deepseek: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("deepseek-test-key".to_string()),
                 model: Some("deepseek-v4-flash".to_string()),
                 ..ProviderConfig::default()
@@ -18770,7 +18748,6 @@ async fn model_picker_switches_between_exact_named_custom_routes() {
         custom.insert(
             name.to_string(),
             ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some(base_url.to_string()),
                 model: Some(model.to_string()),
@@ -18829,7 +18806,6 @@ async fn model_picker_auto_switches_exact_named_custom_route_transactionally() {
         custom.insert(
             name.to_string(),
             ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 kind: Some("openai-compatible".to_string()),
                 base_url: Some(base_url.to_string()),
                 model: Some(model.to_string()),
@@ -18889,7 +18865,6 @@ fn dismissing_named_custom_model_picker_restores_app_owned_config_route() {
     config.providers.as_mut().expect("providers").custom.insert(
         "custom-b".to_string(),
         ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             kind: Some("openai-compatible".to_string()),
             base_url: Some("http://127.0.0.1:18182/v1".to_string()),
             model: Some("model-b".to_string()),
@@ -21000,7 +20975,6 @@ async fn failed_fallback_restores_exact_literal_custom_identity_without_root_cro
             custom: HashMap::from([(
                 "custom".to_string(),
                 ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     kind: Some("openai-compatible".to_string()),
                     api_key: Some("literal-table-key".to_string()),
                     base_url: Some("http://127.0.0.1:18181/v1".to_string()),
@@ -21080,13 +21054,11 @@ async fn provider_switch_auth_error_restores_previous_provider_and_model() {
         default_text_model: Some("deepseek-v4-pro".to_string()),
         providers: Some(ProvidersConfig {
             deepseek: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("deepseek-key".to_string()),
                 context_window: Some(1_000_000),
                 ..Default::default()
             },
             moonshot: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("kimi-key".to_string()),
                 context_window: Some(262_144),
                 ..Default::default()
@@ -21189,12 +21161,10 @@ async fn provider_switch_rollback_corrects_setup_receipt_when_persistence_fails(
         default_text_model: Some("deepseek-v4-pro".to_string()),
         providers: Some(ProvidersConfig {
             deepseek: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("deepseek-key".to_string()),
                 ..Default::default()
             },
             moonshot: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("kimi-key".to_string()),
                 ..Default::default()
             },
@@ -24109,7 +24079,6 @@ async fn refused_route_change_does_not_pin_a_startup_default_and_says_so() {
         provider: Some("xai".to_string()),
         providers: Some(ProvidersConfig {
             xai: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("xai-test-key".to_string()),
                 model: Some("grok-4.5".to_string()),
                 ..ProviderConfig::default()

@@ -1482,7 +1482,6 @@ mod tests {
             provider: Some(ApiProvider::Xai.as_str().to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 xai: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     external_credentials: Some(
                         codewhale_config::ExternalCredentialConsentToml::read_only(
@@ -1531,7 +1530,6 @@ mod tests {
             provider: Some(ApiProvider::Xai.as_str().to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 xai: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     ..Default::default()
                 },
@@ -1583,7 +1581,6 @@ mod tests {
             provider: Some(ApiProvider::Xai.as_str().to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 xai: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     external_credentials: Some(
                         codewhale_config::ExternalCredentialConsentToml::read_only(
@@ -1665,7 +1662,6 @@ mod tests {
             provider: Some(ApiProvider::Xai.as_str().to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 xai: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     external_credentials: Some(
                         codewhale_config::ExternalCredentialConsentToml::read_only(
@@ -2110,7 +2106,6 @@ consent_version = 1
         let mut live = Config {
             providers: Some(crate::config::ProvidersConfig {
                 xai: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     model: Some("grok-code-fast-1".to_string()),
                     external_credentials: Some(consent),
                     ..Default::default()
@@ -2324,7 +2319,6 @@ consent_version = 1
             provider: Some(ApiProvider::Xai.as_str().to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 xai: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     oauth_credential_generation: Some(stale.to_string()),
                     ..Default::default()
@@ -2344,7 +2338,6 @@ consent_version = 1
             provider: Some(ApiProvider::Xai.as_str().to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 xai: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     ..Default::default()
                 },
@@ -2424,7 +2417,6 @@ consent_version = 1
         let mut live = Config {
             providers: Some(crate::config::ProvidersConfig {
                 xai: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("api_key".to_string()),
                     api_key: Some("still-selected".to_string()),
                     ..Default::default()

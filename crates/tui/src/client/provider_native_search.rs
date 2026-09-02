@@ -662,7 +662,6 @@ mod tests {
             provider: Some("xai".to_string()),
             providers: Some(ProvidersConfig {
                 xai: ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("xai-test-key".to_string()),
                     base_url: Some(format!("{}/v1", server.uri())),
                     model: Some("grok-4.5".to_string()),
@@ -935,7 +934,6 @@ mod tests {
             provider: Some("xai".to_string()),
             providers: Some(ProvidersConfig {
                 xai: ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("xai-test-key".to_string()),
                     base_url: Some(format!("{}/v1", server.uri())),
                     model: Some("grok-4.5".to_string()),
@@ -988,7 +986,6 @@ mod tests {
             provider: Some("modelstudio-token-plan".to_string()),
             providers: Some(ProvidersConfig {
                 modelstudio_token_plan: ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("modelstudio-test-key".to_string()),
                     base_url: Some(format!("{}/v1", server.uri())),
                     model: Some("qwen3.8-max".to_string()),
@@ -1043,7 +1040,6 @@ mod tests {
             provider: Some("deepseek".to_string()),
             providers: Some(ProvidersConfig {
                 deepseek: ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("deepseek-test-key".to_string()),
                     base_url: Some(format!("{}/v1", server.uri())),
                     model: Some("deepseek-v4-flash".to_string()),

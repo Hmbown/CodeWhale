@@ -3089,7 +3089,6 @@ mod tests {
                 custom: std::collections::HashMap::from([(
                     "lm-studio".to_string(),
                     crate::config::ProviderConfig {
-                        model_context_windows: std::collections::BTreeMap::new(),
                         kind: Some("openai-compatible".to_string()),
                         base_url: Some("http://127.0.0.1:1234/v1".to_string()),
                         model: Some("qwen-2.5-7b".to_string()),
@@ -3176,7 +3175,6 @@ mod tests {
                 custom: std::collections::HashMap::from([(
                     "CUSTOM".to_string(),
                     crate::config::ProviderConfig {
-                        model_context_windows: std::collections::BTreeMap::new(),
                         kind: Some("openai-compatible".to_string()),
                         base_url: Some("http://127.0.0.1:5678/v1".to_string()),
                         model: Some("case-model".to_string()),

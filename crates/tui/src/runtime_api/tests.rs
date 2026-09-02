@@ -97,7 +97,6 @@ fn provider_default_model_cases() -> Vec<(&'static str, Config, &'static str)> {
     custom_providers.custom.insert(
         "acme".to_string(),
         crate::config::ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             api_key: Some("acme-test-key".to_string()),
             base_url: Some("http://127.0.0.1:1/v1".to_string()),
             model: Some("acme-coder".to_string()),
@@ -634,7 +633,6 @@ fn legacy_exact_thread_export_normalizes_provider_kind_and_id() {
             custom: std::collections::HashMap::from([(
                 "lm-studio".to_string(),
                 crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     kind: Some("openai-compatible".to_string()),
                     base_url: Some("http://127.0.0.1:1234/v1".to_string()),
                     model: Some("local-model".to_string()),

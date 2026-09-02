@@ -1382,7 +1382,6 @@ fn xai_grok_46_startup_config() -> Config {
         provider: Some("xai".to_string()),
         providers: Some(ProvidersConfig {
             xai: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("xai-startup-test-key".to_string()),
                 base_url: Some(crate::config::DEFAULT_XAI_BASE_URL.to_string()),
                 model: Some(crate::config::XAI_GROK_4_6_MODEL.to_string()),
@@ -1566,7 +1565,6 @@ fn app_new_normalizes_saved_codex_reasoning_effort() {
         provider: Some("openai-codex".to_string()),
         providers: Some(ProvidersConfig {
             openai_codex: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 model: Some(crate::config::DEFAULT_OPENAI_CODEX_MODEL.to_string()),
                 ..ProviderConfig::default()
             },
@@ -1614,7 +1612,6 @@ fn app_new_exposes_direct_moonshot_k3_off_as_effective_low() {
         provider: Some("moonshot".to_string()),
         providers: Some(ProvidersConfig {
             moonshot: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("moonshot-startup-test-key".to_string()),
                 base_url: Some(crate::config::DEFAULT_MOONSHOT_BASE_URL.to_string()),
                 model: Some(crate::config::MOONSHOT_KIMI_K3_MODEL.to_string()),
@@ -1667,7 +1664,6 @@ fn codex_startup_threads_fresh_roster_context_into_active_route_limits() {
         provider: Some("openai-codex".to_string()),
         providers: Some(ProvidersConfig {
             openai_codex: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 model: Some(crate::config::DEFAULT_OPENAI_CODEX_MODEL.to_string()),
                 ..ProviderConfig::default()
             },
@@ -1713,7 +1709,6 @@ fn settings_default_provider_auth_check_uses_provider_scoped_key() {
     let config = Config {
         providers: Some(ProvidersConfig {
             openai: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("openai-config-key".to_string()),
                 ..ProviderConfig::default()
             },
@@ -1748,13 +1743,11 @@ fn saved_startup_provider_overrides_config_file_provider() {
         provider: Some("xiaomi-mimo".to_string()),
         providers: Some(ProvidersConfig {
             deepseek: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("deepseek-config-key".to_string()),
                 model: Some("deepseek-v4-pro".to_string()),
                 ..ProviderConfig::default()
             },
             xiaomi_mimo: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("mimo-config-key".to_string()),
                 model: Some("mimo-v2.5-pro".to_string()),
                 ..ProviderConfig::default()
@@ -1801,13 +1794,11 @@ openrouter = "openai/gpt-5"
         fleet_operator_reasoning_applied: true,
         providers: Some(ProvidersConfig {
             deepseek: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("deepseek-config-key".to_string()),
                 model: Some("deepseek-v4-flash-vision-exp".to_string()),
                 ..ProviderConfig::default()
             },
             openrouter: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("openrouter-config-key".to_string()),
                 model: Some("openai/gpt-5".to_string()),
                 ..ProviderConfig::default()
@@ -1844,13 +1835,11 @@ fn explicit_launch_provider_overrides_saved_startup_provider() {
         provider: Some("xiaomi-mimo".to_string()),
         providers: Some(ProvidersConfig {
             deepseek: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("deepseek-config-key".to_string()),
                 model: Some("deepseek-v4-pro".to_string()),
                 ..ProviderConfig::default()
             },
             xiaomi_mimo: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 api_key: Some("mimo-config-key".to_string()),
                 model: Some("mimo-v2.5-pro".to_string()),
                 ..ProviderConfig::default()
@@ -5878,7 +5867,6 @@ fn app_with_fallback_chain(
     let mut providers = ProvidersConfig::default();
     for provider in keyed {
         let entry = ProviderConfig {
-            model_context_windows: std::collections::BTreeMap::new(),
             api_key: Some(format!("test-key-{}", provider.as_str())),
             ..Default::default()
         };
@@ -6030,7 +6018,6 @@ fn startup_and_fallback_skip_inactive_external_only_routes_without_io() {
         ],
         providers: Some(ProvidersConfig {
             openai_codex: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 auth_mode: Some("oauth".to_string()),
                 external_credentials: Some(
                     codewhale_config::ExternalCredentialConsentToml::read_only(
@@ -6042,7 +6029,6 @@ fn startup_and_fallback_skip_inactive_external_only_routes_without_io() {
                 ..Default::default()
             },
             xai: ProviderConfig {
-                model_context_windows: std::collections::BTreeMap::new(),
                 auth_mode: Some("oauth".to_string()),
                 external_credentials: Some(
                     codewhale_config::ExternalCredentialConsentToml::read_only(

@@ -493,7 +493,6 @@ mod tests {
             provider: Some("moonshot".to_string()),
             providers: Some(ProvidersConfig {
                 moonshot: ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("moonshot-test-key".to_string()),
                     base_url: Some(format!("{}/v1", server.uri())),
                     model: Some("kimi-k3".to_string()),

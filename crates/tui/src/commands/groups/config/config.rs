@@ -227,10 +227,7 @@ fn config_preset_command(app: &mut App, rest: &str) -> CommandResult {
 fn config_context_window_override(app: &App) -> Option<u32> {
     let mut config = Config::load(app.config_path.clone(), app.config_profile.as_deref()).ok()?;
     config.provider = Some(app.provider_identity_for_persistence().to_string());
-    config.context_window_for_route(
-        app.api_provider,
-        Some(app.effective_model_for_budget()),
-    )
+    config.context_window_for_route(app.api_provider, Some(app.effective_model_for_budget()))
 }
 
 fn show_single_setting(app: &App, key: &str) -> CommandResult {

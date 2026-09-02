@@ -5880,16 +5880,18 @@ impl Config {
         provider: ApiProvider,
         model: Option<&str>,
     ) -> Option<u32> {
+        let lookup_model_override = |entry: &ProviderConfig, model: &str| {
+            entry
+                .model_context_windows
+                .iter()
+                .find(|(id, window)| id.eq_ignore_ascii_case(model) && **window > 0)
+                .map(|(_, window)| *window)
+        };
         let model_override = model
             .filter(|model| !model.trim().eq_ignore_ascii_case("auto"))
             .and_then(|model| {
-                self.provider_config_for(provider).and_then(|entry| {
-                    entry
-                        .model_context_windows
-                        .iter()
-                        .find(|(id, window)| id.eq_ignore_ascii_case(model) && **window > 0)
-                        .map(|(_, window)| *window)
-                })
+                self.provider_config_for(provider)
+                    .and_then(|entry| lookup_model_override(entry, model))
             });
         if model_override.is_some() {
             return model_override;
@@ -5897,13 +5899,7 @@ impl Config {
         if provider == ApiProvider::SiliconflowCn {
             let fallback = self.provider_config_for(ApiProvider::Siliconflow);
             if let Some(model) = model.filter(|model| !model.trim().eq_ignore_ascii_case("auto"))
-                && let Some(window) = fallback.and_then(|entry| {
-                    entry
-                        .model_context_windows
-                        .iter()
-                        .find(|(id, window)| id.eq_ignore_ascii_case(model) && **window > 0)
-                        .map(|(_, window)| *window)
-                })
+                && let Some(window) = fallback.and_then(|entry| lookup_model_override(entry, model))
             {
                 return Some(window);
             }
@@ -12023,8 +12019,8 @@ pub(crate) fn save_model_context_window_for_identity(
     let config_path = try_default_config_path()
         .context("Failed to resolve config path for model context window.")?;
     ensure_parent_dir(&config_path)?;
-    let key_inside =
-        provider_config_key_for_identity(identity).context("provider model context window table")?;
+    let key_inside = provider_config_key_for_identity(identity)
+        .context("provider model context window table")?;
     crate::config_persistence::mutate_config_document(&config_path, |doc| {
         crate::config_persistence::set_document_value(
             doc,
@@ -12045,8 +12041,8 @@ pub(crate) fn clear_model_context_window_for_identity(
     let config_path = try_default_config_path()
         .context("Failed to resolve config path for model context window.")?;
     ensure_parent_dir(&config_path)?;
-    let key_inside =
-        provider_config_key_for_identity(identity).context("provider model context window table")?;
+    let key_inside = provider_config_key_for_identity(identity)
+        .context("provider model context window table")?;
     crate::config_persistence::mutate_config_document(&config_path, |doc| {
         crate::config_persistence::unset_document_value(
             doc,

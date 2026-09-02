@@ -1338,7 +1338,6 @@ mod provider_key_validation_tests {
         let mut config = Config {
             providers: Some(ProvidersConfig {
                 xai: ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("oauth".to_string()),
                     external_credentials: Some(
                         codewhale_config::ExternalCredentialConsentToml::read_only(
@@ -1406,7 +1405,6 @@ mod provider_key_validation_tests {
         Config {
             providers: Some(ProvidersConfig {
                 openrouter: ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(base_url.to_string()),
                     ..ProviderConfig::default()
                 },
@@ -1424,7 +1422,6 @@ mod provider_key_validation_tests {
                     (
                         "custom-a".to_string(),
                         ProviderConfig {
-                            model_context_windows: std::collections::BTreeMap::new(),
                             kind: Some("openai-compatible".to_string()),
                             base_url: Some("http://127.0.0.1:18181/v1".to_string()),
                             model: Some("model-a".to_string()),
@@ -1435,7 +1432,6 @@ mod provider_key_validation_tests {
                     (
                         "custom-b".to_string(),
                         ProviderConfig {
-                            model_context_windows: std::collections::BTreeMap::new(),
                             kind: Some("openai-compatible".to_string()),
                             base_url: Some("http://127.0.0.1:18182/v1".to_string()),
                             model: Some("model-b".to_string()),
@@ -1858,7 +1854,6 @@ auth_mode = "kimi_oauth"
         let mut config = Config {
             providers: Some(ProvidersConfig {
                 moonshot: ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("kimi_oauth".to_string()),
                     ..ProviderConfig::default()
                 },

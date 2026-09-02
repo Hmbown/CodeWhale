@@ -1397,7 +1397,6 @@ mod tests {
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                     model: Some("k3".to_string()),
                     ..Default::default()

@@ -547,10 +547,9 @@ pub(crate) async fn switch_provider(
     app.model_ids_passthrough = config.model_ids_pass_through();
     app.set_model_selection(new_model.clone());
     app.apply_provider_switch_reasoning_effort(target, &new_base_url, model_override.as_deref());
-    app.set_active_context_window_override(config.context_window_for_route(
-        target,
-        (!app.auto_model).then_some(new_model.as_str()),
-    ));
+    app.set_active_context_window_override(
+        config.context_window_for_route(target, (!app.auto_model).then_some(new_model.as_str())),
+    );
     app.set_active_route_resolution(new_base_url.clone(), route_limits, context_window_source);
     if model_override.is_some() {
         app.provider_models

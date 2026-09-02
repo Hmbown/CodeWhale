@@ -2966,7 +2966,6 @@ permissions = "read_only"
             provider: Some("deepseek".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 ollama: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
                     ..Default::default()
                 },
@@ -2992,7 +2991,6 @@ permissions = "read_only"
             provider: Some("ollama".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 ollama: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some("https://ollama-gateway.example.test/v1".to_string()),
                     ..Default::default()
                 },
@@ -3031,7 +3029,6 @@ permissions = "read_only"
             provider: Some("deepseek".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 ollama: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some(codewhale_config::provider::OLLAMA_CLOUD_BASE_URL.to_string()),
                     model: Some(crate::config::DEFAULT_OLLAMA_CLOUD_MODEL.to_string()),
                     ..Default::default()

@@ -576,7 +576,6 @@ mod tests {
             provider: Some("ollama-cloud".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 ollama_cloud: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("cloud-key".to_string()),
                     ..Default::default()
                 },
@@ -624,7 +623,6 @@ mod tests {
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     auth_mode: Some("kimi_oauth".to_string()),
                     ..Default::default()
                 },
@@ -653,7 +651,6 @@ mod tests {
             provider: Some("moonshot".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 moonshot: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     api_key: Some("test-kimi-key".to_string()),
                     base_url: Some(crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string()),
                     model: Some(crate::config::KIMI_CODE_K3_MODEL.to_string()),
@@ -684,7 +681,6 @@ mod tests {
             provider: Some("vllm".to_string()),
             providers: Some(crate::config::ProvidersConfig {
                 vllm: crate::config::ProviderConfig {
-                    model_context_windows: std::collections::BTreeMap::new(),
                     base_url: Some("http://localhost:8000/v1".to_string()),
                     model: Some("qwen3-32b-256k".to_string()),
                     ..Default::default()
@@ -721,7 +717,6 @@ mod tests {
                 custom: std::collections::HashMap::from([(
                     "acme".to_string(),
                     crate::config::ProviderConfig {
-                        model_context_windows: std::collections::BTreeMap::new(),
                         kind: Some("openai-compatible".to_string()),
                         base_url: Some("https://api.acme.test/v1".to_string()),
                         model: Some("acme-coder".to_string()),
