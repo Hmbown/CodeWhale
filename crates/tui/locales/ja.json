@@ -2018,5 +2018,10 @@
   "ConfigHintFeatureExecPolicy": "実行ポリシーツールの読み取り専用の機能フラグ状態",
   "ConfigHintFeatureVisionModel": "ビジョン/モデル画像サポートのベータ機能フラグ",
   "ConfigHintGoalCommand": "/goal は目標・予算・作業コンテキストの状態を設定します",
-  "ConfigHintWorkflow": "/workflow はファンアウト/ファンインの実行カード付きでスクリプト化した操作を実行します"
+  "ConfigHintWorkflow": "/workflow はファンアウト/ファンインの実行カード付きでスクリプト化した操作を実行します",
+  "LaunchMenuNewWorktree": "新しいワークツリー",
+  "LaunchMenuResume": "セッションを再開",
+  "LaunchMenuQuit": "終了",
+  "LaunchNoticeClaude": "Claude Code からのお乗り換えですか？ctrl+r でセッションを再開できます",
+  "ReceiptSessionHooks": "フック {count}"
 }

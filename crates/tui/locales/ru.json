@@ -2018,5 +2018,10 @@
   "ConfigHintFeatureExecPolicy": "состояние флага функции только для чтения для инструментов политики выполнения",
   "ConfigHintFeatureVisionModel": "бета-флаг поддержки изображений для зрения/модели",
   "ConfigHintGoalCommand": "/goal задаёт цели, бюджеты и состояние рабочего контекста",
-  "ConfigHintWorkflow": "/workflow выполняет сценарные операции с карточками запуска распараллеливания/слияния"
+  "ConfigHintWorkflow": "/workflow выполняет сценарные операции с карточками запуска распараллеливания/слияния",
+  "LaunchMenuNewWorktree": "Новый worktree",
+  "LaunchMenuResume": "Продолжить сессию",
+  "LaunchMenuQuit": "Выход",
+  "LaunchNoticeClaude": "Пришли из Claude Code? Возобновите сессию через ctrl+r",
+  "ReceiptSessionHooks": "хуков: {count}"
 }

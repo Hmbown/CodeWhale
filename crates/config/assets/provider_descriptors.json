@@ -47,6 +47,19 @@
       "credential_url": "https://cloud.cerebras.ai"
     },
     {
+      "id": "dashscope",
+      "label": "Alibaba Model Studio (DashScope)",
+      "wire": "openai-compatible",
+      "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "api_key_env": "DASHSCOPE_API_KEY",
+      "default_model": "qwen3.8-flash",
+      "discovery": "models_endpoint",
+      "docs_url": "https://www.alibabacloud.com/help/en/model-studio/getting-started/models",
+      "credential_url": "https://bailian.console.alibabacloud.com/",
+      "guidance": "International Model Studio compatible-mode endpoint (OpenAI Chat Completions + GET /v1/models). Live /v1/models is the model authority: Qwen 3.8 Flash and the dated 0901 release arrive through the catalog, never a hard-coded id. Store DASHSCOPE_API_KEY, not a raw key.",
+      "aliases": ["dashscope-intl", "alibaba-model-studio", "model-studio", "qwen"]
+    },
+    {
       "id": "command-code",
       "label": "Command Code",
       "wire": "openai-compatible",

@@ -1012,15 +1012,32 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         let launch_slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
         let launch_mention_menu_entries =
             crate::tui::file_mention::visible_mention_menu_entries(app, app.mention_menu_limit);
-        let [stage_area, footer_area, info_area] = Layout::default()
-            .direction(Direction::Vertical)
-            .flex(ratatui::layout::Flex::Start)
-            .constraints([
-                Constraint::Min(1),    // stage: Tideline startup
-                Constraint::Length(1), // posture row (merged footer, slots 6+8)
-                Constraint::Length(1), // info line
-            ])
-            .areas(size);
+        // The posture bar and the metrics line appear only once a session
+        // exists: while the launch card is up the stage owns every row.
+        let card_up = {
+            let motion = app.motion_policy().allows_decorative() && !app.low_motion;
+            app.launch.card_dissolve_progress(app.ambient_clock_ms, motion) < 1.0
+        };
+        let areas = if card_up {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .flex(ratatui::layout::Flex::Start)
+                .constraints([Constraint::Min(1)])
+                .split(size)
+        } else {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .flex(ratatui::layout::Flex::Start)
+                .constraints([
+                    Constraint::Min(1),    // stage: Tideline startup
+                    Constraint::Length(1), // posture row (merged footer, slots 6+8)
+                    Constraint::Length(1), // info line
+                ])
+                .split(size)
+        };
+        let stage_area = areas[0];
+        let footer_area = areas.get(1).copied().unwrap_or_default();
+        let info_area = areas.get(2).copied().unwrap_or_default();
         let startup = crate::tui::underwater::tideline_startup_from_app(app);
         let hitboxes = if startup.composer.enclosed {
             crate::tui::underwater::tideline_startup_hitboxes(stage_area)

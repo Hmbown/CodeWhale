@@ -555,7 +555,21 @@ pub struct LaunchState {
     /// Send-glyph hitbox inside the composer row. A click here submits the
     /// composed message through the normal dispatch path.
     pub send_area: Option<Rect>,
+    /// The launch card's highlighted menu entry (index into the four entries
+    /// the card paints, all of whose chords exist).
+    pub menu_selected: usize,
+    /// Ambient-clock millisecond reading when the card began dissolving, if
+    /// it has. The first keystroke or a launched command dissolves the card
+    /// (founder decision, 2026-09-02).
+    pub dissolve_started_ms: Option<u128>,
+    /// Claude Code config was detected on this host (probed once at
+    /// construction); drives the launch card's migration notice line.
+    pub claude_code_detected: bool,
 }
+
+/// The launch card's dissolve motion budget. One bounded motion; reduced
+/// motion dissolves instantly (same drawing at its endpoint).
+pub(crate) const LAUNCH_CARD_DISSOLVE_MS: u128 = 240;
 
 impl LaunchState {
     #[must_use]
@@ -581,6 +595,13 @@ impl LaunchState {
             .stderr(std::process::Stdio::null())
             .status()
             .is_ok_and(|status| status.success());
+        // The launch card's migration notice is only painted when it is true:
+        // Claude Code leaves its sessions under `~/.claude/projects`. One
+        // stat at construction, never on the render path.
+        let claude_code_detected = std::env::var_os("HOME")
+            .as_ref()
+            .map(|home| std::path::Path::new(home).join(".claude").join("projects").is_dir())
+            .unwrap_or(false);
         Self {
             visible,
             worktree_input: None,
@@ -590,6 +611,31 @@ impl LaunchState {
             composer_focus: true,
             composer_area: None,
             send_area: None,
+            menu_selected: 0,
+            dissolve_started_ms: None,
+            claude_code_detected,
+        }
+    }
+
+    /// Begin the card dissolve once (idempotent). The first keystroke or a
+    /// launched command dissolves the launch card.
+    pub fn dissolve_card(&mut self, now_ms: u128) {
+        if self.dissolve_started_ms.is_none() {
+            self.dissolve_started_ms = Some(now_ms);
+        }
+    }
+
+    /// How far the card has dissolved, `[0.0 intact ..= 1.0 gone]`. Reduced
+    /// motion dissolves instantly: the same drawing at its endpoint.
+    #[must_use]
+    pub fn card_dissolve_progress(&self, now_ms: u128, motion_allowed: bool) -> f32 {
+        match self.dissolve_started_ms {
+            None => 0.0,
+            Some(_) if !motion_allowed => 1.0,
+            Some(started) => {
+                let elapsed = now_ms.saturating_sub(started);
+                (elapsed as f32 / LAUNCH_CARD_DISSOLVE_MS as f32).clamp(0.0, 1.0)
+            }
         }
     }
 }

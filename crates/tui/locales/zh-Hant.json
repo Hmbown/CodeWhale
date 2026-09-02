@@ -2018,5 +2018,10 @@
   "ConfigHintFeatureExecPolicy": "執行政策工具的唯讀功能開關狀態",
   "ConfigHintFeatureVisionModel": "視覺/模型影像支援的測試版功能開關",
   "ConfigHintGoalCommand": "/goal 設定目標、預算和工作情境狀態",
-  "ConfigHintWorkflow": "/workflow 執行帶扇出/扇入執行卡片的腳本化操作"
+  "ConfigHintWorkflow": "/workflow 執行帶扇出/扇入執行卡片的腳本化操作",
+  "LaunchMenuNewWorktree": "新增工作樹",
+  "LaunchMenuResume": "恢復會話",
+  "LaunchMenuQuit": "結束",
+  "LaunchNoticeClaude": "從 Claude Code 過來？按 ctrl+r 恢復會話",
+  "ReceiptSessionHooks": "掛鉤 {count}"
 }

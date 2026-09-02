@@ -2018,5 +2018,10 @@
   "ConfigHintFeatureExecPolicy": "schreibgeschützter Feature-Flag-Zustand für Ausführungsrichtlinien-Werkzeuge",
   "ConfigHintFeatureVisionModel": "Beta-Feature-Flag für Bildunterstützung von Vision/Modell",
   "ConfigHintGoalCommand": "/goal setzt Ziele, Budgets und den Status des Arbeitskontexts",
-  "ConfigHintWorkflow": "/workflow führt skriptgesteuerte Abläufe mit Verteilungs-/Sammel-Laufkarten aus"
+  "ConfigHintWorkflow": "/workflow führt skriptgesteuerte Abläufe mit Verteilungs-/Sammel-Laufkarten aus",
+  "LaunchMenuNewWorktree": "Neuer Worktree",
+  "LaunchMenuResume": "Sitzung fortsetzen",
+  "LaunchMenuQuit": "Beenden",
+  "LaunchNoticeClaude": "Von Claude Code gekommen? Sitzung mit ctrl+r fortsetzen",
+  "ReceiptSessionHooks": "Hooks {count}"
 }

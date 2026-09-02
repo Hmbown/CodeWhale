@@ -2018,5 +2018,10 @@
   "ConfigHintFeatureExecPolicy": "estado de solo lectura del flag de función de las herramientas de política de ejecución",
   "ConfigHintFeatureVisionModel": "flag beta para soporte de imágenes de visión/modelo",
   "ConfigHintGoalCommand": "/goal define objetivos, presupuestos y el estado del contexto de Trabajo",
-  "ConfigHintWorkflow": "/workflow ejecuta operaciones guionadas con tarjetas de ejecución de distribución/consolidación"
+  "ConfigHintWorkflow": "/workflow ejecuta operaciones guionadas con tarjetas de ejecución de distribución/consolidación",
+  "LaunchMenuNewWorktree": "Nuevo worktree",
+  "LaunchMenuResume": "Reanudar sesión",
+  "LaunchMenuQuit": "Salir",
+  "LaunchNoticeClaude": "¿Vienes de Claude Code? Reanuda tu sesión con ctrl+r",
+  "ReceiptSessionHooks": "hooks {count}"
 }

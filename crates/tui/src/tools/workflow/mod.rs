@@ -6268,15 +6268,15 @@ permissions = "read_only"
         );
         let state = WorkflowWorkspaceState::open(tmp.path());
         let run_id = "workflow_exact_gate".to_string();
-        // The gate blocks the semantic role `builder`, whose member id is the
-        // *different* string `implementer`.
+        // The gate blocks the semantic role `implement`, whose member id is
+        // the *different* string `implementer`.
         let gates = vec![GateSpec {
-            id: "scout-findings".to_string(),
-            role: "scout".to_string(),
+            id: "explore-findings".to_string(),
+            role: "explore".to_string(),
             on: GateOn::RoleComplete,
             gate: GateKind::Approve,
             on_fail: codewhale_workflow::GateOnFail::Block,
-            blocks_role: Some("builder".to_string()),
+            blocks_role: Some("implement".to_string()),
             max_retries: 0,
             artifact_kind: Some("findings".to_string()),
             require_explicit_verdict: false,
@@ -6303,11 +6303,12 @@ permissions = "read_only"
             tmp.path().to_path_buf(),
         );
 
-        // The upstream scout fails, which puts the gate into a blocking state.
+        // The upstream explore agent fails, which puts the gate into a
+        // blocking state.
         driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
-            agent_id: "scout-agent".to_string(),
-            label: Some("scout".to_string()),
-            role: Some("scout".to_string()),
+            agent_id: "explore-agent".to_string(),
+            label: Some("explore".to_string()),
+            role: Some("explore".to_string()),
             status: IrWorkflowRunStatus::Failed,
             output: None,
             schema_error: None,
@@ -6327,8 +6328,8 @@ permissions = "read_only"
 
         let err = driver
             .prepare_request_for_gates(&mut request)
-            .expect_err("a blocking gate on `builder` must still see `builder`");
-        assert!(err.to_string().contains("builder"), "{err}");
+            .expect_err("a blocking gate on `implement` must still see `implement`");
+        assert!(err.to_string().contains("implement"), "{err}");
 
         // The same gate does *not* block a task carrying the member id, which
         // is exactly why stamping the id into `role` silently disabled it.
@@ -8724,12 +8725,12 @@ reviewer = "reviewer"
         let state = WorkflowWorkspaceState::open(tmp.path());
         let run_id = "workflow_gate".to_string();
         let gates = vec![GateSpec {
-            id: "scout-findings".to_string(),
-            role: "scout".to_string(),
+            id: "explore-findings".to_string(),
+            role: "explore".to_string(),
             on: GateOn::RoleComplete,
             gate: GateKind::Approve,
             on_fail: codewhale_workflow::GateOnFail::Block,
-            blocks_role: Some("implementer".to_string()),
+            blocks_role: Some("implement".to_string()),
             max_retries: 0,
             artifact_kind: Some("findings".to_string()),
             require_explicit_verdict: false,
@@ -8768,9 +8769,9 @@ reviewer = "reviewer"
         );
 
         driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
-            agent_id: "scout-agent".to_string(),
-            label: Some("scout".to_string()),
-            role: Some("scout".to_string()),
+            agent_id: "explore-agent".to_string(),
+            label: Some("explore".to_string()),
+            role: Some("explore".to_string()),
             status: IrWorkflowRunStatus::Succeeded,
             output: Some("findings: inspect tui exit path".to_string()),
             schema_error: None,
@@ -8779,8 +8780,8 @@ reviewer = "reviewer"
 
         let mut implementer = TaskRequest {
             description: "Use the findings.".to_string(),
-            subagent_type: Some("implementer".to_string()),
-            role: Some("implementer".to_string()),
+            subagent_type: Some("implement".to_string()),
+            role: Some("implement".to_string()),
             profile: None,
             model: None,
             model_strength: None,
@@ -8810,7 +8811,7 @@ reviewer = "reviewer"
         assert_eq!(handoffs.len(), 1, "{handoffs:?}");
         assert_eq!(handoffs[0].kind, "findings");
         assert_eq!(handoffs[0].from_role, "explore");
-        assert_eq!(handoffs[0].to_role, "implementer");
+        assert_eq!(handoffs[0].to_role, "implement");
         assert!(
             implementer
                 .description
@@ -8825,23 +8826,23 @@ reviewer = "reviewer"
         );
 
         driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
-            agent_id: "scout-agent-2".to_string(),
-            label: Some("scout".to_string()),
-            role: Some("scout".to_string()),
+            agent_id: "explore-agent-2".to_string(),
+            label: Some("explore".to_string()),
+            role: Some("explore".to_string()),
             status: IrWorkflowRunStatus::Failed,
-            output: Some("scout incomplete".to_string()),
+            output: Some("explore incomplete".to_string()),
             schema_error: None,
             usage: None,
         });
         let mut blocked = TaskRequest {
             description: "Try after block.".to_string(),
-            role: Some("implementer".to_string()),
+            role: Some("implement".to_string()),
             ..implementer.clone()
         };
         let err = driver
             .prepare_request_for_gates(&mut blocked)
             .expect_err("blocked gate should reject downstream role");
-        assert!(err.to_string().contains("scout incomplete"), "{err}");
+        assert!(err.to_string().contains("explore incomplete"), "{err}");
 
         let run = state
             .runs
@@ -8853,9 +8854,9 @@ reviewer = "reviewer"
         assert!(
             run.gate_status
                 .iter()
-                .any(|line| line.gate_id == "scout-findings"
+                .any(|line| line.gate_id == "explore-findings"
                     && line.state == "blocked"
-                    && line.blocked_reason.as_deref() == Some("scout incomplete")),
+                    && line.blocked_reason.as_deref() == Some("explore incomplete")),
             "{:?}",
             run.gate_status
         );
@@ -10220,10 +10221,10 @@ FINAL RECEIPT
             .filter(|event| event["type"] == "task_started")
             .collect::<Vec<_>>();
         let expected_roles = [
-            ("scout", "scout"),
-            ("implementer", "builder"),
+            ("explore", "scout"),
+            ("implement", "builder"),
             ("reviewer", "reviewer"),
-            ("verifier", "verifier"),
+            ("test", "verifier"),
             ("release_lead", "manager"),
         ];
         assert_eq!(started.len(), expected_roles.len(), "{started:#?}");
@@ -10241,7 +10242,7 @@ FINAL RECEIPT
         assert_eq!(gates.len(), 5, "{gates:#?}");
         assert!(gates.iter().all(|event| event["state"] == "passed"));
         assert_eq!(gates[0]["role"], "explore");
-        assert_eq!(gates[0]["blocked_role"], "implementer");
+        assert_eq!(gates[0]["blocked_role"], "implement");
         assert_eq!(gates[3]["role"], "test");
         assert_eq!(gates[3]["blocked_role"], "release_lead");
         assert_eq!(gates[4]["role"], "release_lead");
@@ -10256,10 +10257,10 @@ FINAL RECEIPT
             .filter(|event| event["type"] == "handoff_consumed")
             .collect::<Vec<_>>();
         let expected_handoffs = [
-            ("scout", "implementer", "source_evidence"),
-            ("implementer", "reviewer", "verification_plan"),
-            ("reviewer", "verifier", "review_report"),
-            ("verifier", "release_lead", "verification_report"),
+            ("explore", "implement", "source_evidence"),
+            ("implement", "reviewer", "verification_plan"),
+            ("reviewer", "test", "review_report"),
+            ("test", "release_lead", "verification_report"),
         ];
         assert_eq!(promoted.len(), expected_handoffs.len(), "{promoted:#?}");
         assert_eq!(consumed.len(), expected_handoffs.len(), "{consumed:#?}");

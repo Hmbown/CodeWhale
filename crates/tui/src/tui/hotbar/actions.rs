@@ -1784,7 +1784,16 @@ mod tests {
 
     #[test]
     fn slash_source_matches_command_palette_command_entries() {
+        // Hermetic: the palette builder also reads `~/.claude/skills`, so a
+        // host with imported Claude skills would leak entries into one side
+        // and fail the comparison. Isolate HOME the way the other
+        // environment-reading tests in this file do.
+        let _lock = crate::test_support::lock_test_env();
         let tmp = tempfile::TempDir::new().expect("tempdir");
+        let _home = crate::test_support::EnvVarGuard::set("HOME", tmp.path());
+        let _user_profile = crate::test_support::EnvVarGuard::set("USERPROFILE", tmp.path());
+        let _codewhale_home =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", tmp.path().join(".codewhale"));
         let palette_slash_ids = build_command_palette_entries(
             Locale::En,
             tmp.path(),

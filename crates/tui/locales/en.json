@@ -1012,7 +1012,6 @@
   "AppModeAutoHint": "Shell enabled with automatic risk review",
   "AppModePlanHint": "Read-only research first — present a plan before acting",
   "AppModeYoloHint": "Compatibility only — Act + Full Access, not a visible mode",
-  "AppModeOperateHint": "Put your fleet to work in parallel",
   "AppModeOperateHint": "Operate turns your prompt into a goal and works it in parallel: background workers for separable streams, verified before it stops.",
   "VimModeNormal": "-- NORMAL --",
   "VimModeInsert": "-- INSERT --",
@@ -2019,5 +2018,10 @@
   "ConfigHintFeatureExecPolicy": "read-only feature flag state for execution policy tools",
   "ConfigHintFeatureVisionModel": "beta feature flag for vision/model image support",
   "ConfigHintGoalCommand": "/goal sets objectives, budgets, and Work-context status",
-  "ConfigHintWorkflow": "/workflow runs scripted operations with fan-out/fan-in run cards"
+  "ConfigHintWorkflow": "/workflow runs scripted operations with fan-out/fan-in run cards",
+  "LaunchMenuNewWorktree": "New worktree",
+  "LaunchMenuResume": "Resume session",
+  "LaunchMenuQuit": "Quit",
+  "LaunchNoticeClaude": "Coming from Claude Code? Resume your session with ctrl+r",
+  "ReceiptSessionHooks": "hooks {count}"
 }

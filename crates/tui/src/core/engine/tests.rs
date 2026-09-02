@@ -11270,10 +11270,25 @@ async fn operate_model_shell_uses_normal_approval_and_workspace_sandbox() {
         "\"finish_reason\":\"stop\"}]}\n\n",
         "data: [DONE]\n\n",
     );
+    // Operate turns the work prompt into a goal, so after the approved shell
+    // runs, the model must seal the goal through the same `update_goal` tool
+    // a live Operate turn uses; only then does the final "done" arrive.
+    let goal_seal_marker = "goal-seal-receipt-0902";
+    let goal_sse = concat!(
+        "data: {\"id\":\"chatcmpl-operate-goal\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[",
+        "{\"index\":0,\"id\":\"call_operate_goal\",\"type\":\"function\",\"function\":{\"name\":\"update_goal\",",
+        "\"arguments\":\"{\\\"status\\\":\\\"complete\\\",\\\"evidence\\\":\\\"goal-seal-receipt-0902: operate-mode-approved.txt written\\\",",
+        "\\\"verification\\\":{\\\"status\\\":\\\"passed\\\",\\\"check\\\":\\\"cat operate-mode-approved.txt\\\",\\\"summary\\\":\\\"fixture contains operate-approved\\\"}}\"}}",
+        "]},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"chatcmpl-operate-goal\",\"choices\":[{\"index\":0,\"delta\":{},",
+        "\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
 
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
-        .and(body_string_contains("operate-mode-approved.txt"))
+        .and(body_string_contains(goal_seal_marker))
+        .and(body_string_contains("tokens_used"))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
@@ -11281,6 +11296,32 @@ async fn operate_model_shell_uses_normal_approval_and_workspace_sandbox() {
         )
         .expect(1)
         .with_priority(1)
+        .mount(&server)
+        .await;
+    // The first `update_goal` call only loads the deferred tool; the retry —
+    // the request carrying the deferral receipt — is the one that executes.
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(body_string_contains("was deferred and has now been loaded"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(goal_sse),
+        )
+        .expect(1)
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(body_string_contains("operate-mode-approved.txt"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(goal_sse),
+        )
+        .expect(1)
+        .with_priority(3)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -11291,7 +11332,7 @@ async fn operate_model_shell_uses_normal_approval_and_workspace_sandbox() {
                 .set_body_string(tool_call_sse),
         )
         .expect(1)
-        .with_priority(2)
+        .with_priority(3)
         .mount(&server)
         .await;
 
@@ -11353,9 +11394,10 @@ async fn operate_model_shell_uses_normal_approval_and_workspace_sandbox() {
                 saw_approval = true;
                 assert_eq!(tool_name, "Bash");
                 // Operate turned this work prompt into the goal; pause it
-                // before the turn ends so no continuation turn queues a
-                // second approval nobody answers. Queued now, the pause is
-                // processed before any engine-owned continuation op.
+                // before the turn ends so the goal-continuation loop cannot
+                // queue passes nobody answers in this mock. The goal-complete
+                // `update_goal` response below stays: it is the receipt a
+                // real Operate turn seals with.
                 handle_for_approval
                     .send(Op::SetGoalStatus {
                         status: crate::tools::goal::GoalStatus::Paused,

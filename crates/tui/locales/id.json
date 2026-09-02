@@ -2018,5 +2018,10 @@
   "ConfigHintFeatureExecPolicy": "status bendera fitur hanya-baca untuk alat kebijakan eksekusi",
   "ConfigHintFeatureVisionModel": "bendera fitur beta untuk dukungan gambar visi/model",
   "ConfigHintGoalCommand": "/goal mengatur tujuan, anggaran, dan status konteks Kerja",
-  "ConfigHintWorkflow": "/workflow menjalankan operasi terskrip dengan kartu jalan penyebaran/penggabungan"
+  "ConfigHintWorkflow": "/workflow menjalankan operasi terskrip dengan kartu jalan penyebaran/penggabungan",
+  "LaunchMenuNewWorktree": "Worktree baru",
+  "LaunchMenuResume": "Lanjutkan sesi",
+  "LaunchMenuQuit": "Keluar",
+  "LaunchNoticeClaude": "Datang dari Claude Code? Lanjutkan sesi dengan ctrl+r",
+  "ReceiptSessionHooks": "hook {count}"
 }

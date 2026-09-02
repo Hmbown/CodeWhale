@@ -2018,5 +2018,10 @@
   "ConfigHintFeatureExecPolicy": "trạng thái cờ tính năng chỉ đọc cho công cụ chính sách thực thi",
   "ConfigHintFeatureVisionModel": "cờ tính năng beta cho hỗ trợ hình ảnh thị giác/mô hình",
   "ConfigHintGoalCommand": "/goal đặt mục tiêu, ngân sách và trạng thái ngữ cảnh Công việc",
-  "ConfigHintWorkflow": "/workflow chạy các thao tác theo kịch bản với thẻ chạy phân tán/gộp"
+  "ConfigHintWorkflow": "/workflow chạy các thao tác theo kịch bản với thẻ chạy phân tán/gộp",
+  "LaunchMenuNewWorktree": "Worktree mới",
+  "LaunchMenuResume": "Tiếp tục phiên",
+  "LaunchMenuQuit": "Thoát",
+  "LaunchNoticeClaude": "Đến từ Claude Code? Tiếp tục phiên với ctrl+r",
+  "ReceiptSessionHooks": "hook {count}"
 }

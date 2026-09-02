@@ -2018,5 +2018,10 @@
   "ConfigHintFeatureExecPolicy": "стан прапорця функції лише для читання для інструментів політики виконання",
   "ConfigHintFeatureVisionModel": "бета-прапорець підтримки зображень для зору/моделі",
   "ConfigHintGoalCommand": "/goal задає цілі, бюджети та стан робочого контексту",
-  "ConfigHintWorkflow": "/workflow виконує сценарні операції з картками запуску розпаралелення/злиття"
+  "ConfigHintWorkflow": "/workflow виконує сценарні операції з картками запуску розпаралелення/злиття",
+  "LaunchMenuNewWorktree": "Новий worktree",
+  "LaunchMenuResume": "Відновити сесію",
+  "LaunchMenuQuit": "Вихід",
+  "LaunchNoticeClaude": "Прийшли з Claude Code? Відновіть сесію через ctrl+r",
+  "ReceiptSessionHooks": "гачків: {count}"
 }

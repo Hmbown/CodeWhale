@@ -2018,5 +2018,10 @@
   "ConfigHintFeatureExecPolicy": "état en lecture seule du drapeau de fonctionnalité des outils de politique d'exécution",
   "ConfigHintFeatureVisionModel": "drapeau bêta pour la prise en charge des images vision/modèle",
   "ConfigHintGoalCommand": "/goal définit les objectifs, les budgets et l'état du contexte de Travail",
-  "ConfigHintWorkflow": "/workflow exécute des opérations scriptées avec des cartes d'exécution de distribution/regroupement"
+  "ConfigHintWorkflow": "/workflow exécute des opérations scriptées avec des cartes d'exécution de distribution/regroupement",
+  "LaunchMenuNewWorktree": "Nouveau worktree",
+  "LaunchMenuResume": "Reprendre la session",
+  "LaunchMenuQuit": "Quitter",
+  "LaunchNoticeClaude": "Vous venez de Claude Code ? Reprenez votre session avec ctrl+r",
+  "ReceiptSessionHooks": "hooks {count}"
 }

@@ -106,19 +106,45 @@ pub fn handle_launch_key(
     match key.code {
         KeyCode::Char('r') if ctrl => LaunchAction::Resume,
         KeyCode::Char('n') if ctrl => {
-            if launch.worktree_available {
-                launch.worktree_input = Some(String::new());
-                launch.status = Some(tr(locale, MessageId::LaunchWorktreePrompt).into_owned());
-                launch.composer_focus = false;
-            } else {
-                launch.status = Some(tr(locale, MessageId::LaunchWorktreeNeedsGit).into_owned());
-            }
+            open_launch_worktree_prompt(launch, locale);
             LaunchAction::None
         }
         KeyCode::Char('l' | 'L') if ctrl => LaunchAction::Changelog,
         KeyCode::Char('q' | 'Q') if ctrl => LaunchAction::Quit,
         KeyCode::F(1) => LaunchAction::Help,
         _ => LaunchAction::None,
+    }
+}
+
+/// Open the worktree-name prompt, or say why there cannot be one. Shared by
+/// the Ctrl+N chord and the card's New worktree entry.
+fn open_launch_worktree_prompt(
+    launch: &mut crate::tui::app::LaunchState,
+    locale: Locale,
+) {
+    if launch.worktree_available {
+        launch.worktree_input = Some(String::new());
+        launch.status = Some(tr(locale, MessageId::LaunchWorktreePrompt).into_owned());
+        launch.composer_focus = false;
+    } else {
+        launch.status = Some(tr(locale, MessageId::LaunchWorktreeNeedsGit).into_owned());
+    }
+}
+
+/// Run the card's highlighted menu entry. Enter on the card is the menu's
+/// runner; the chords painted beside each entry run the same actions.
+pub fn run_launch_menu_entry(
+    launch: &mut crate::tui::app::LaunchState,
+    locale: Locale,
+) -> LaunchAction {
+    match launch.menu_selected % LAUNCH_MENU_ENTRIES {
+        0 => {
+            open_launch_worktree_prompt(launch, locale);
+            LaunchAction::None
+        }
+        1 => LaunchAction::Resume,
+        2 => LaunchAction::Changelog,
+        _ => LaunchAction::Quit,
     }
 }
 
@@ -151,6 +177,11 @@ pub enum LaunchComposerKey {
     /// Not launch-specific: the conversation composer match below owns the
     /// key. The event loop must not run [`handle_launch_key`] for it.
     ComposerAuthority,
+    /// Move the launch card's menu selection (Up/Down while the card is up).
+    MenuNavigate(i32),
+    /// Run the card's highlighted menu entry (Enter while the card is up and
+    /// the composer is empty).
+    MenuRun,
 }
 
 /// Admit one key for the pre-session composer.
@@ -161,6 +192,7 @@ pub enum LaunchComposerKey {
 /// [`LaunchComposerKey::MenuChord`].
 pub fn handle_launch_composer_key(app: &mut App, key: KeyEvent) -> LaunchComposerKey {
     let multiline = app.composer_multiline_mode;
+    let card_up = app.launch.dissolve_started_ms.is_none();
     match key.code {
         KeyCode::Enter
             if crate::tui::composer_ui::composer_submit_chord(key, multiline).is_some() =>
@@ -183,11 +215,19 @@ pub fn handle_launch_composer_key(app: &mut App, key: KeyEvent) -> LaunchCompose
                 app.close_slash_menu();
             }
             if app.input.trim().is_empty() {
+                if card_up {
+                    // The card owns Enter while it is up: run the
+                    // highlighted menu entry.
+                    return LaunchComposerKey::MenuRun;
+                }
                 LaunchComposerKey::Consumed
             } else {
+                app.launch.dissolve_card(app.ambient_clock_ms);
                 LaunchComposerKey::Submit
             }
         }
+        KeyCode::Up if card_up => LaunchComposerKey::MenuNavigate(-1),
+        KeyCode::Down if card_up => LaunchComposerKey::MenuNavigate(1),
         KeyCode::Char('r' | 'n' | 'l' | 'q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             LaunchComposerKey::MenuChord
         }
@@ -195,7 +235,19 @@ pub fn handle_launch_composer_key(app: &mut App, key: KeyEvent) -> LaunchCompose
         // Every other key — text, caret motion, word motion, selection,
         // newline chords, Home/End, kill/chord editing, vim motions, Esc,
         // Tab, history — is answered by the conversation composer authority.
-        _ => LaunchComposerKey::ComposerAuthority,
+        _ => {
+            // Typing goes straight to the composer, and the first keystroke
+            // dissolves the card (founder decision, 2026-09-02).
+            if card_up
+                && matches!(key.code, KeyCode::Char(_))
+                && !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
+            {
+                app.launch.dissolve_card(app.ambient_clock_ms);
+            }
+            LaunchComposerKey::ComposerAuthority
+        }
     }
 }
 
@@ -1098,12 +1150,32 @@ fn render_launch_composer(
     panel_area: Option<Rect>,
     status_line: Option<&str>,
     ascii_safe: bool,
+    bottom_rule: Option<&str>,
 ) {
     let focused = display.focused;
     if let Some(panel_area) = panel_area {
         crate::tui::composer_chrome::render_tideline_composer_shell(
             panel_area, buf, theme, focused, ascii_safe,
         );
+        // The launch rule: `model (effort) · permission` trailing right on
+        // the bottom border — the route's one reading while the card is up.
+        if let Some(rule) = bottom_rule
+            && panel_area.height >= 4
+        {
+            let rule = truncate_to_width(rule, usize::from(panel_area.width.saturating_sub(4)));
+            let rule_w = rule.width() as u16;
+            let rule_x = panel_area
+                .right()
+                .saturating_sub(1)
+                .saturating_sub(rule_w)
+                .max(panel_area.x + 1);
+            set_span(
+                buf,
+                rule_x,
+                panel_area.y + panel_area.height - 1,
+                &Span::styled(rule, chrome(theme, ChromeInk::Metadata)),
+            );
+        }
         let geometry = crate::tui::composer_chrome::tideline_composer_geometry(panel_area);
         let content_width = usize::from(geometry.content.width);
         if content_width == 0 {
@@ -1861,6 +1933,9 @@ mod launch_contract_tests {
             composer_focus: true,
             composer_area: None,
             send_area: None,
+            menu_selected: 0,
+            dissolve_started_ms: None,
+            claude_code_detected: false,
         }
     }
 
@@ -2167,21 +2242,21 @@ mod launch_composer_tests {
     }
 
     #[test]
-    fn the_header_never_collides_with_the_composer_dock() {
-        // The header block and the state line sit at the top; the dock owns
-        // the bottom rows. At the 40x12 floor the stage is ten rows: header
-        // (3) + blank + state line (row 4) leave the dock its four.
+    fn the_top_line_never_collides_with_the_composer_dock() {
+        // The top line (`⑂ branch  path`) owns row 0; the dock owns the
+        // bottom rows. At the 40x12 floor the stage is ten rows: the top
+        // line, the centred card, and the dock's four.
         for (width, height) in LAUNCH_SIZES {
             let app = launch_app();
             let (buf, area) = render(&app, width, height);
             let (input_y, _) = launch_composer_rows(area).unwrap();
             assert!(
-                input_y > super::STATE_ROW,
-                "{width}x{height}: dock below the header"
+                input_y >= 2,
+                "{width}x{height}: dock below the top line"
             );
             assert!(
-                row_text(&buf, area, 0).contains("Codewhale"),
-                "{width}x{height}: wordmark on the first row: {:?}",
+                !row_text(&buf, area, 0).trim().is_empty(),
+                "{width}x{height}: the top line paints the branch/path: {:?}",
                 row_text(&buf, area, 0)
             );
         }
@@ -2320,9 +2395,21 @@ mod launch_composer_tests {
         assert_eq!(app.handle_composer_enter().as_deref(), Some("hello world"));
         assert!(app.input.is_empty());
 
-        // Enter on an empty composer is consumed and does nothing: there is
-        // no row to run and nothing to send.
+        // Enter on an empty composer runs the card's highlighted menu
+        // entry while the card is up; the classification alone does not
+        // move focus (the event loop runs the entry).
         let mut empty = launch_app();
+        assert_eq!(
+            handle_launch_composer_key(
+                &mut empty,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+            ),
+            LaunchComposerKey::MenuRun
+        );
+        assert!(empty.launch.composer_focus);
+        // Once the card has dissolved, empty-composer Enter is consumed:
+        // there is no row to run and nothing to send.
+        empty.launch.dissolve_started_ms = Some(0);
         assert_eq!(
             handle_launch_composer_key(
                 &mut empty,
@@ -2330,7 +2417,6 @@ mod launch_composer_tests {
             ),
             LaunchComposerKey::Consumed
         );
-        assert!(empty.launch.composer_focus);
     }
 
     #[test]
@@ -2716,8 +2802,6 @@ const HEADER_MARGIN: u16 = 1;
 const HEADER_GUTTER: u16 = 1;
 /// The header block: wordmark + version, route, workspace.
 const HEADER_ROWS: u16 = 3;
-/// The state line sits one blank row under the header.
-const STATE_ROW: u16 = HEADER_ROWS + 1;
 /// Stages narrower than this paint the tiny mark so the header keeps columns.
 const TINY_MARK_BELOW_WIDTH: u16 = 40;
 /// Route facts are shed by `route_identity_fields` against this budget and
@@ -2736,12 +2820,14 @@ pub enum MarkTier {
     None,
 }
 
-/// MCP facts for the connected-state line: only painted when there is
-/// something true to say.
+/// MCP facts: the working screen's `⋮ MCP n/m` chip and the card's
+/// sign-in news. Only painted when there is something true to say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct McpFacts {
     pub connected: usize,
     pub needs_sign_in: usize,
+    /// Enabled servers total — the `m` in `n/m`.
+    pub enabled: usize,
 }
 
 impl McpFacts {
@@ -2750,15 +2836,17 @@ impl McpFacts {
     #[must_use]
     pub fn from_snapshot(snapshot: &crate::mcp::McpManagerSnapshot) -> Self {
         let enabled = snapshot.servers.iter().filter(|server| server.enabled);
-        let (connected, needs_sign_in) = enabled.fold((0, 0), |(connected, sign_in), server| {
+        let (connected, needs_sign_in, total) = enabled.fold((0, 0, 0), |acc, server| {
             (
-                connected + usize::from(server.connected),
-                sign_in + usize::from(server.auth_required && !server.connected),
+                acc.0 + usize::from(server.connected),
+                acc.1 + usize::from(server.auth_required && !server.connected),
+                acc.2 + 1,
             )
         });
         Self {
             connected,
             needs_sign_in,
+            enabled: total,
         }
     }
 
@@ -2795,6 +2883,21 @@ pub struct TidelineStartup<'a> {
     /// reduced-motion path is the *same* drawing at its endpoint. Callers
     /// pass `1.0` for a settled mark.
     pub surface_progress: f32,
+    /// How far the launch card has dissolved, `[0.0 intact ..= 1.0 gone]`.
+    /// Injected for the same determinism as `surface_progress`.
+    pub card_dissolve: f32,
+    /// The card menu's highlighted entry.
+    pub menu_selected: usize,
+    /// The one migration notice above the composer, only when true.
+    pub notice: Option<String>,
+    /// `model (effort) · permission` — the composer bottom rule's trailing
+    /// text while the card is up. The route's one launch reading.
+    pub composer_rule: Option<String>,
+    /// The branch for the top line, when the shell observes one.
+    pub branch: Option<String>,
+    /// Session-start hooks configured, for the working screen's receipt
+    /// row. Zero paints the receipt without a hooks count.
+    pub session_hooks: usize,
 }
 
 impl<'a> TidelineStartup<'a> {
@@ -2812,7 +2915,55 @@ impl<'a> TidelineStartup<'a> {
             ascii_safe: false,
             mark: MarkTier::Braille,
             surface_progress: 1.0,
+            card_dissolve: 0.0,
+            menu_selected: 0,
+            notice: None,
+            composer_rule: None,
+            branch: None,
+            session_hooks: 0,
         }
+    }
+
+    /// Set the configured session-start hook count for the receipt row.
+    #[must_use]
+    pub fn session_hooks(mut self, hooks: usize) -> Self {
+        self.session_hooks = hooks;
+        self
+    }
+
+    /// Set the card's dissolve progress (`0.0` intact → `1.0` gone).
+    #[must_use]
+    pub fn card_dissolve(mut self, progress: f32) -> Self {
+        self.card_dissolve = progress.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Set the card menu's highlighted entry.
+    #[must_use]
+    pub fn menu_selected(mut self, selected: usize) -> Self {
+        self.menu_selected = selected;
+        self
+    }
+
+    /// Set the migration notice line above the composer.
+    #[must_use]
+    pub fn notice(mut self, notice: Option<String>) -> Self {
+        self.notice = notice;
+        self
+    }
+
+    /// Set the composer bottom rule's trailing text.
+    #[must_use]
+    pub fn composer_rule(mut self, rule: Option<String>) -> Self {
+        self.composer_rule = rule;
+        self
+    }
+
+    /// Set the observed git branch for the top line.
+    #[must_use]
+    pub fn branch(mut self, branch: Option<String>) -> Self {
+        self.branch = branch;
+        self
     }
 
     /// Set the mark's surface progress (`0.0` submerged → `1.0` settled).
@@ -2878,29 +3029,7 @@ impl<'a> TidelineStartup<'a> {
             .collect()
     }
 
-    /// The mark's cell footprint on `stage`, or none when it does not fit.
-    fn mark_cells(&self, stage: Rect) -> Option<(u16, u16)> {
-        let (cols, rows) = match self.mark {
-            MarkTier::None => return None,
-            MarkTier::Image => (
-                crate::tui::mark::KITTY_MARK_COLS,
-                crate::tui::mark::KITTY_MARK_ROWS,
-            ),
-            MarkTier::Braille => self.braille_rung(stage).cells(),
-        };
-        (stage.width >= HEADER_MARGIN + cols + HEADER_GUTTER + 9 && stage.height >= rows)
-            .then_some((cols, rows))
-    }
-
-    fn braille_rung(&self, stage: Rect) -> MarkSize {
-        if stage.width < TINY_MARK_BELOW_WIDTH {
-            MarkSize::Tiny
-        } else {
-            MarkSize::Small
-        }
-    }
-
-    /// The state line under the header, if there is anything true to say:
+    /// The card's announcement line, if there is anything true to say:
     /// the missing-model warning, else MCP news.
     fn state_line(&self) -> Option<(String, ChromeInk)> {
         if self.route.is_none() {
@@ -2981,8 +3110,332 @@ fn startup_layout(stage: Rect) -> StartupLayout {
     StartupLayout { header, dock }
 }
 
-/// Paint the startup stage: mark + header block, the state line, then the
-/// docked composer. Deterministic; every fact is injected.
+/// The card menu's entries: label and the chord that runs it. Every chord
+/// exists in [`handle_launch_key`], so a hint can never advertise a dead key.
+fn launch_menu_entries(locale: Locale) -> [(Cow<'static, str>, &'static str); 4] {
+    [
+        (tr(locale, MessageId::LaunchMenuNewWorktree), "ctrl+n"),
+        (tr(locale, MessageId::LaunchMenuResume), "ctrl+r"),
+        (tr(locale, MessageId::LaunchMenuChangelog), "ctrl+l"),
+        (tr(locale, MessageId::LaunchMenuQuit), "ctrl+q"),
+    ]
+}
+
+/// Number of entries the launch card paints.
+pub(crate) const LAUNCH_MENU_ENTRIES: usize = 4;
+
+/// Mix a style's ink toward the surface colour by `fade` — the card
+/// dissolve's whole motion, one bounded lerp.
+fn faded(style: Style, theme: &UiTheme, fade: f32) -> Style {
+    if fade <= 0.0 {
+        return style;
+    }
+    match style.fg {
+        Some(fg) => {
+            let mixed = crate::tui::mark::lerp_color(fg, theme.surface_bg, fade);
+            Style {
+                fg: Some(mixed),
+                ..style
+            }
+        }
+        None => style,
+    }
+}
+
+/// Paint the stage's top line: `⑂ branch  path` left, dim; when the working
+/// screen is up, `⋮ MCP n/m` right (MCP status has no other owner).
+fn render_launch_top_line(
+    area: Rect,
+    buf: &mut Buffer,
+    startup: &TidelineStartup<'_>,
+    card_gone: bool,
+) {
+    if area.height == 0 {
+        return;
+    }
+    let theme = startup.theme;
+    let branch_w = startup
+        .branch
+        .as_deref()
+        .map_or(0, |b| b.width() + usize::from(!b.is_empty()) * 2);
+    let prefix_w = startup.sym("⑂").width() + usize::from(!startup.sym("⑂").is_empty()) + branch_w;
+    let right_w = card_gone
+        .then(|| startup.mcp.filter(|mcp| mcp.enabled > 0))
+        .flatten()
+        .map_or(0, |_| format!("⋮ MCP 99/99").width() + 2);
+    let budget = usize::from(area.width).saturating_sub(right_w).saturating_sub(prefix_w);
+    let workspace = [2usize, 1]
+        .into_iter()
+        .map(|keep| shorten_workspace(&startup.workspace, keep))
+        .fold(startup.workspace.clone(), |chosen, shorter| {
+            if chosen.width() > budget {
+                shorter
+            } else {
+                chosen
+            }
+        });
+    let mut left = String::from(startup.sym("⑂"));
+    match startup.branch.as_deref().filter(|b| !b.is_empty()) {
+        Some(branch) => {
+            left.push(' ');
+            left.push_str(branch);
+            left.push_str("  ");
+        }
+        None => left.push(' '),
+    }
+    left.push_str(&workspace);
+    let right = card_gone
+        .then(|| startup.mcp.filter(|mcp| mcp.enabled > 0))
+        .flatten()
+        .map(|mcp| {
+            (
+                format!(
+                    "{} MCP {}/{}",
+                    startup.sym("⋮"),
+                    mcp.connected,
+                    mcp.enabled
+                ),
+                chrome(theme, ChromeInk::Metadata),
+            )
+        });
+    let left_budget = usize::from(area.width).saturating_sub(right_w);
+    set_span(
+        buf,
+        area.x,
+        area.y,
+        &Span::styled(
+            truncate_to_width(&left, left_budget),
+            chrome(theme, ChromeInk::MetadataDim),
+        ),
+    );
+    if let Some((text, style)) = right {
+        let x = area.right().saturating_sub(text.width() as u16).max(area.x);
+        set_span(buf, x, area.y, &Span::styled(text, style));
+    }
+}
+
+/// Paint the centred launch card: the mark at left, `Codewhale` + version,
+/// one announcement line only when true, then the menu with its chords
+/// right-aligned. The dissolve fades every ink toward the surface colour;
+/// at progress 1.0 the caller stops painting the card entirely.
+fn render_launch_card(
+    stage: Rect,
+    buf: &mut Buffer,
+    startup: &TidelineStartup<'_>,
+    layout: &StartupLayout,
+) {
+    let theme = startup.theme;
+    let fade = startup.card_dissolve;
+    let entries = launch_menu_entries(startup.locale);
+    let announcement = startup.state_line();
+    let notice_rows = u16::from(startup.notice.is_some());
+    let margin = (stage.width / 10).clamp(2, 12);
+    let card_w = stage.width.saturating_sub(margin.saturating_mul(2));
+    // Vertically centred between the top line (and the notice row it keeps
+    // clear) and the composer dock.
+    let available = layout
+        .dock
+        .y
+        .saturating_sub(stage.y)
+        .saturating_sub(1 + notice_rows);
+    if card_w < 20 {
+        return;
+    }
+    // The card sheds rather than clips: menu entries from the bottom, then
+    // the announcement; the title holds last. A stage too small even for
+    // the title keeps only the composer.
+    let mut show_announcement = announcement.is_some();
+    let mut menu_rows = entries.len() as u16;
+    let mut content_rows = 1 + u16::from(show_announcement) + menu_rows;
+    while available < content_rows + 2 {
+        if menu_rows > 0 {
+            menu_rows -= 1;
+            content_rows -= 1;
+        } else if show_announcement {
+            show_announcement = false;
+            content_rows -= 1;
+        } else {
+            return;
+        }
+    }
+    let card_h = content_rows + 2;
+    let card = Rect {
+        x: stage.x + margin,
+        y: stage.y + 1 + notice_rows + (available - card_h) / 2,
+        width: card_w,
+        height: card_h,
+    };
+
+    let border = faded(chrome(theme, ChromeInk::MetadataDim), theme, fade);
+    let top = startup.sym(&{
+        let mut text = String::from("╭");
+        text.push_str(&"─".repeat(usize::from(card_w.saturating_sub(2))));
+        text.push('╮');
+        text
+    });
+    set_span(buf, card.x, card.y, &Span::styled(top, border));
+    let bar = startup.sym("│");
+    for row in 1..card.height.saturating_sub(1) {
+        set_span(buf, card.x, card.y + row, &Span::styled(bar.clone(), border));
+        set_span(
+            buf,
+            card.right().saturating_sub(1),
+            card.y + row,
+            &Span::styled(bar.clone(), border),
+        );
+    }
+    let bottom = startup.sym(&{
+        let mut text = String::from("╰");
+        text.push_str(&"─".repeat(usize::from(card_w.saturating_sub(2))));
+        text.push('╯');
+        text
+    });
+    set_span(
+        buf,
+        card.x,
+        card.y + card.height.saturating_sub(1),
+        &Span::styled(bottom, border),
+    );
+
+    // The mark: the card's left column, vertically centred in the interior.
+    let interior_h = card.height.saturating_sub(2);
+    let braille_rung = if card_w < TINY_MARK_BELOW_WIDTH {
+        MarkSize::Tiny
+    } else {
+        MarkSize::Small
+    };
+    let (mark_cols, mark_rows) = match startup.mark {
+        MarkTier::Image => (crate::tui::mark::KITTY_MARK_COLS, crate::tui::mark::KITTY_MARK_ROWS),
+        MarkTier::Braille => braille_rung.cells(),
+        MarkTier::None => (0, 0),
+    };
+    let mark_fits = card_w >= 30 && interior_h >= mark_rows;
+    let text_x = if mark_fits {
+        let mark_area = Rect {
+            x: card.x + 2,
+            y: card.y + 1 + (interior_h - mark_rows) / 2,
+            width: mark_cols,
+            height: mark_rows,
+        };
+        match startup.mark {
+            MarkTier::Image => {
+                crate::tui::mark::render_kitty_placeholders(mark_area, buf, startup.surface_progress);
+            }
+            MarkTier::Braille => {
+                crate::tui::mark::render_mark(
+                    mark_area,
+                    buf,
+                    braille_rung,
+                    crate::tui::mark::lerp_color(theme.surface_bg, theme.accent_action, startup.surface_progress),
+                    theme.surface_bg,
+                    startup.surface_progress,
+                );
+            }
+            MarkTier::None => {}
+        }
+        mark_area.x + mark_cols + HEADER_GUTTER
+    } else {
+        card.x + 2
+    };
+
+    let interior_w = usize::from(card.right().saturating_sub(1).saturating_sub(text_x));
+    let fit = |text: &str| truncate_to_width(text, interior_w);
+    let mut row = card.y + 1;
+
+    // Title: the wordmark bold, the version dim.
+    set_span(
+        buf,
+        text_x,
+        row,
+        &Span::styled(
+            fit("Codewhale"),
+            faded(
+                Style::default().fg(theme.accent_action).add_modifier(Modifier::BOLD),
+                theme,
+                fade,
+            ),
+        ),
+    );
+    let version = format!("v{}", startup.version);
+    let version_x = text_x + "Codewhale".width() as u16 + 1;
+    if usize::from(version_x) + version.width() <= interior_w {
+        set_span(
+            buf,
+            version_x,
+            row,
+            &Span::styled(version, faded(chrome(theme, ChromeInk::MetadataHint), theme, fade)),
+        );
+    }
+    row += 1;
+
+    // The announcement: the one blocking fact or piece of news, only true.
+    if let Some((line, ink)) = announcement {
+        set_span(
+            buf,
+            text_x,
+            row,
+            &Span::styled(fit(&line), faded(chrome(theme, ink), theme, fade)),
+        );
+        row += 1;
+    }
+
+    // The menu: Enter runs the highlighted entry; chords right-aligned.
+    let selected = startup.menu_selected % LAUNCH_MENU_ENTRIES;
+    for (index, (label, chord)) in entries.iter().enumerate().take(menu_rows as usize) {
+        let is_selected = index == selected;
+        let marker = startup.sym(crate::tui::glyphs::selection_marker(is_selected));
+        let marker_style = if is_selected {
+            faded(
+                Style::default().fg(crate::palette::SELECTION_TEXT),
+                theme,
+                fade,
+            )
+        } else {
+            faded(chrome(theme, ChromeInk::MetadataDim), theme, fade)
+        };
+        set_span(
+            buf,
+            text_x,
+            row,
+            &Span::styled(marker.clone(), marker_style),
+        );
+        set_span(
+            buf,
+            text_x + marker.width() as u16 + 1,
+            row,
+            &Span::styled(
+                fit(&label),
+                if is_selected {
+                    faded(
+                        Style::default().fg(crate::palette::SELECTION_TEXT).add_modifier(Modifier::BOLD),
+                        theme,
+                        fade,
+                    )
+                } else {
+                    faded(chrome(theme, ChromeInk::Metadata), theme, fade)
+                },
+            ),
+        );
+        let chord_text = chord.to_string();
+        let chord_x = card
+            .right()
+            .saturating_sub(2)
+            .saturating_sub(chord_text.width() as u16);
+        if chord_x > text_x + marker.width() as u16 + label.width() as u16 + 1 {
+            set_span(
+                buf,
+                chord_x,
+                row,
+                &Span::styled(chord_text, marker_style),
+            );
+        }
+        row += 1;
+    }
+}
+
+/// Paint the startup stage: top line, the launch card (or the working
+/// screen once dissolved), then the docked composer. Deterministic; every
+/// fact is injected.
 pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &TidelineStartup<'_>) {
     if stage.width < 8 || stage.height < 5 {
         return;
@@ -2990,123 +3443,33 @@ pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &Tideline
     let theme = startup.theme;
     let layout = startup_layout(stage);
 
-    // The mark: identity, not scenery, so it does not wait for the opt-in
-    // ocean treatment; it surfaces out of the theme's own surface colour.
-    let mark_cells = startup.mark_cells(layout.header);
-    if let Some((cols, rows)) = mark_cells {
-        let mark_area = Rect {
-            x: layout.header.x + HEADER_MARGIN,
-            width: cols,
-            height: rows,
-            ..layout.header
-        };
-        match startup.mark {
-            MarkTier::Image => {
-                crate::tui::mark::render_kitty_placeholders(
-                    mark_area,
-                    buf,
-                    startup.surface_progress,
-                );
-            }
-            MarkTier::Braille => {
-                crate::tui::mark::render_mark(
-                    mark_area,
-                    buf,
-                    startup.braille_rung(layout.header),
-                    theme.accent_action,
-                    theme.surface_bg,
-                    startup.surface_progress,
-                );
-            }
-            MarkTier::None => {}
-        }
-    }
-    let text_x =
-        layout.header.x + HEADER_MARGIN + mark_cells.map_or(0, |(cols, _)| cols + HEADER_GUTTER);
-    let text_w = usize::from(layout.header.right().saturating_sub(text_x));
-    let fit = |text: &str| truncate_to_width(text, text_w);
+    // The top line: ⑂ branch  path, one dim row the terminal owns above the
+    // stage. The working screen (card gone) gains the `⋮ MCP n/m` chip right.
+    let card_gone = startup.card_dissolve >= 1.0;
+    render_launch_top_line(layout.header, buf, startup, card_gone);
 
-    // Line 1: the wordmark, fading in with the mark, then the version dim.
-    let wordmark = "Codewhale";
-    let surface_color = crate::tui::mark::lerp_color(
-        theme.surface_bg,
-        theme.accent_action,
-        startup.surface_progress,
-    );
-    set_span(
-        buf,
-        text_x,
-        layout.header.y,
-        &Span::styled(
-            fit(wordmark),
-            Style::default()
-                .fg(surface_color)
-                .add_modifier(Modifier::BOLD),
-        ),
-    );
-    let version = format!("v{}", startup.version);
-    let version_x = text_x + wordmark.width() as u16 + 1;
-    if usize::from(version_x) + version.width() <= usize::from(layout.header.right()) {
-        set_span(
-            buf,
-            version_x,
-            layout.header.y,
-            &Span::styled(version, chrome(theme, ChromeInk::MetadataHint)),
-        );
-    }
-
-    // Line 2: the route, or the one fact that blocks the first turn.
-    if layout.header.height > 1 {
-        let (route, ink) = match &startup.route {
-            Some(route) => (fit(route), ChromeInk::MetadataValue),
-            None => (
-                fit(&tr(startup.locale, MessageId::InfoLineNotConnected)),
-                ChromeInk::Attention,
-            ),
+    if card_gone {
+        // The working screen's first transcript receipt, only when the
+        // session fact is true.
+        let receipt = if startup.session_hooks > 0 {
+            format!(
+                "{} session_start {} {}",
+                startup.sym("◆"),
+                startup.sym("·"),
+                tr(startup.locale, MessageId::ReceiptSessionHooks)
+                    .replace("{count}", &startup.session_hooks.to_string()),
+            )
+        } else {
+            format!("{} session_start", startup.sym("◆"))
         };
         set_span(
             buf,
-            text_x,
-            layout.header.y + 1,
-            &Span::styled(route, chrome(theme, ink)),
-        );
-    }
-
-    // Line 3: the workspace, whole when it fits, else elided from the left
-    // so the folder you are standing in is the part that survives.
-    if layout.header.height > 2 {
-        let workspace = [2usize, 1]
-            .into_iter()
-            .map(|keep| shorten_workspace(&startup.workspace, keep))
-            .fold(startup.workspace.clone(), |chosen, shorter| {
-                if chosen.width() > text_w {
-                    shorter
-                } else {
-                    chosen
-                }
-            });
-        set_span(
-            buf,
-            text_x,
+            layout.header.x + HEADER_MARGIN,
             layout.header.y + 2,
-            &Span::styled(fit(&workspace), chrome(theme, ChromeInk::Metadata)),
+            &Span::styled(receipt, chrome(theme, ChromeInk::Metadata)),
         );
-    }
-
-    // The state line: one blank row under the header, only when true.
-    if layout.header.height > STATE_ROW
-        && let Some((line, ink)) = startup.state_line()
-    {
-        let x = layout.header.x + HEADER_MARGIN;
-        set_span(
-            buf,
-            x,
-            layout.header.y + STATE_ROW,
-            &Span::styled(
-                truncate_to_width(&line, usize::from(layout.header.right().saturating_sub(x))),
-                chrome(theme, ink),
-            ),
-        );
+    } else {
+        render_launch_card(stage, buf, startup, &layout);
     }
 
     // The docked pre-session composer is the same rounded Tideline shell
@@ -3123,6 +3486,25 @@ pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &Tideline
     } else {
         launch_compact_composer_rows(stage)
     };
+    // The one migration notice above the composer, only when true.
+    if !card_gone
+        && let Some(notice) = startup.notice.as_deref()
+        && layout.dock.y > stage.y
+    {
+        let x = stage.x + HEADER_MARGIN + 1;
+        set_span(
+            buf,
+            x,
+            layout.dock.y.saturating_sub(1),
+            &Span::styled(
+                truncate_to_width(
+                    notice,
+                    usize::from(stage.width.saturating_sub(HEADER_MARGIN * 2 + 2)),
+                ),
+                chrome(theme, ChromeInk::MetadataDim),
+            ),
+        );
+    }
     if let Some((input_row, hint_row)) = composer_rows {
         render_launch_composer(
             stage,
@@ -3134,6 +3516,7 @@ pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &Tideline
             enclosed.then_some(layout.dock),
             startup.status_line.as_deref(),
             startup.ascii_safe,
+            (!card_gone).then_some(startup.composer_rule.as_deref()).flatten(),
         );
         if !enclosed && let Some(line) = startup.status_line.as_deref() {
             let y = if layout.dock.height == 1 {
@@ -3260,6 +3643,39 @@ pub fn tideline_startup_from_app(app: &App) -> TidelineStartup<'_> {
     } else {
         MarkTier::Braille
     };
+    // The composer's launch rule: `model (effort) · permission` — the one
+    // place the route and the posture show while the card is up.
+    let (_, model) = app.effective_route_identity_display();
+    let permission = permission_label(app);
+    let composer_rule = Some(if model.is_empty() {
+        format!(
+            "{} · {}",
+            tr(app.ui_locale, MessageId::InfoLineNotConnected),
+            permission
+        )
+    } else {
+        let effort = app.reasoning_effort_display_label();
+        if effort.is_empty() {
+            format!("{model} · {permission}")
+        } else {
+            format!("{model} ({effort}) · {permission}")
+        }
+    });
+    let branch = git_matches_workspace
+        .then(|| git.branch.clone())
+        .flatten()
+        .filter(|branch| !branch.is_empty());
+    let session_hooks = if app.hooks.config().enabled {
+        app.hooks
+            .config()
+            .hooks
+            .iter()
+            .filter(|hook| hook.event == crate::hooks::HookEvent::SessionStart)
+            .count()
+    } else {
+        0
+    };
+    let dissolve_motion = app.motion_policy().allows_decorative() && !app.low_motion;
     TidelineStartup::new(&app.ui_theme, route, workspace)
         .locale(app.ui_locale)
         .mcp(app.mcp_snapshot.as_ref().map(McpFacts::from_snapshot))
@@ -3267,6 +3683,14 @@ pub fn tideline_startup_from_app(app: &App) -> TidelineStartup<'_> {
         .mark(mark)
         .composer(LaunchComposerDisplay::from_app(app))
         .status_line(launch_status_line(app, ascii_safe))
+        .menu_selected(app.launch.menu_selected)
+        .notice(app.launch.claude_code_detected.then(|| {
+            tr(app.ui_locale, MessageId::LaunchNoticeClaude).into_owned()
+        }))
+        .composer_rule(composer_rule)
+        .branch(branch)
+        .session_hooks(session_hooks)
+        .card_dissolve(app.launch.card_dissolve_progress(app.ambient_clock_ms, dissolve_motion))
         // The app opens on this screen, so the ambient clock is already
         // launch-relative. Reduced motion asks for the settled mark, which is
         // the same drawing at its endpoint.

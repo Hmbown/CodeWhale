@@ -4297,6 +4297,8 @@ pub(crate) async fn run_event_loop(
                             }
                         }
                         crate::tui::underwater::LaunchAction::Resume => {
+                            // A launched command dissolves the card.
+                            app.launch.dissolve_card(app.ambient_clock_ms);
                             if app.launch.workspace_session_count == 0 {
                                 app.launch.status =
                                     Some(app.tr(MessageId::LaunchNoSavedSessions).into_owned());
@@ -4309,6 +4311,8 @@ pub(crate) async fn run_event_loop(
                             toggle_help_view(app);
                         }
                         crate::tui::underwater::LaunchAction::Changelog => {
+                            // A launched command dissolves the card.
+                            app.launch.dissolve_card(app.ambient_clock_ms);
                             let title = app.tr(MessageId::LaunchMenuChangelog).into_owned();
                             open_text_pager(
                                 app,
@@ -4748,6 +4752,9 @@ pub(crate) async fn run_event_loop(
                 // word motion, selection, completion menus, attachments,
                 // history, and vim behavior cannot drift from the shell.
                 let mut composer_authority = false;
+                // A menu-run Enter defers its action to the chord match
+                // below, which owns every launch action's execution.
+                let mut menu_run_action: Option<crate::tui::underwater::LaunchAction> = None;
                 if app.launch.composer_focus {
                     match crate::tui::underwater::handle_launch_composer_key(app, key) {
                         crate::tui::underwater::LaunchComposerKey::Consumed => {
@@ -4767,6 +4774,24 @@ pub(crate) async fn run_event_loop(
                             // consumed without submitting.
                             app.needs_redraw = true;
                             continue;
+                        }
+                        crate::tui::underwater::LaunchComposerKey::MenuNavigate(delta) => {
+                            // The card is up: Up/Down move its menu selection.
+                            let entries = crate::tui::underwater::LAUNCH_MENU_ENTRIES as i32;
+                            app.launch.menu_selected = (app.launch.menu_selected as i32 + delta)
+                                .rem_euclid(entries)
+                                as usize;
+                            app.needs_redraw = true;
+                            continue;
+                        }
+                        crate::tui::underwater::LaunchComposerKey::MenuRun => {
+                            // Enter with an empty composer while the card is
+                            // up runs the highlighted entry below, through the
+                            // same arms the painted chords use.
+                            menu_run_action = Some(crate::tui::underwater::run_launch_menu_entry(
+                                &mut app.launch,
+                                launch_locale,
+                            ));
                         }
                         crate::tui::underwater::LaunchComposerKey::Submit => {
                             let chord = composer_submit_chord(key, app.composer_multiline_mode)
@@ -4816,11 +4841,13 @@ pub(crate) async fn run_event_loop(
                         app.needs_redraw = true;
                         continue;
                     }
-                    let action = crate::tui::underwater::handle_launch_key(
-                        &mut app.launch,
-                        key,
-                        launch_locale,
-                    );
+                    let action = menu_run_action.take().unwrap_or_else(|| {
+                        crate::tui::underwater::handle_launch_key(
+                            &mut app.launch,
+                            key,
+                            launch_locale,
+                        )
+                    });
                     match action {
                         crate::tui::underwater::LaunchAction::None => {}
                         crate::tui::underwater::LaunchAction::CreateWorktree(name) => {
@@ -4852,6 +4879,8 @@ pub(crate) async fn run_event_loop(
                             }
                         }
                         crate::tui::underwater::LaunchAction::Resume => {
+                            // A launched command dissolves the card.
+                            app.launch.dissolve_card(app.ambient_clock_ms);
                             if app.launch.workspace_session_count == 0 {
                                 app.launch.status =
                                     Some(app.tr(MessageId::LaunchNoSavedSessions).into_owned());
@@ -4864,6 +4893,8 @@ pub(crate) async fn run_event_loop(
                             toggle_help_view(app);
                         }
                         crate::tui::underwater::LaunchAction::Changelog => {
+                            // A launched command dissolves the card.
+                            app.launch.dissolve_card(app.ambient_clock_ms);
                             let title = app.tr(MessageId::LaunchMenuChangelog).into_owned();
                             open_text_pager(
                                 app,

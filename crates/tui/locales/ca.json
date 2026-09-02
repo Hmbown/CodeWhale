@@ -2018,5 +2018,10 @@
   "ConfigHintFeatureExecPolicy": "estat de només lectura de l'indicador de funció de les eines de política d'execució",
   "ConfigHintFeatureVisionModel": "indicador beta per al suport d'imatges de visió/model",
   "ConfigHintGoalCommand": "/goal defineix objectius, pressupostos i l'estat del context de Treball",
-  "ConfigHintWorkflow": "/workflow executa operacions guionades amb targetes d'execució de distribució/consolidació"
+  "ConfigHintWorkflow": "/workflow executa operacions guionades amb targetes d'execució de distribució/consolidació",
+  "LaunchMenuNewWorktree": "Nou worktree",
+  "LaunchMenuResume": "Reprendre la sessió",
+  "LaunchMenuQuit": "Surt",
+  "LaunchNoticeClaude": "Ve de Claude Code? Repreni la sessió amb ctrl+r",
+  "ReceiptSessionHooks": "hooks {count}"
 }

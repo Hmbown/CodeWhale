@@ -141,23 +141,19 @@ fn enter_live_shell(tui: &mut Harness) {
         .expect("choose Explore Offline");
     wait_or_panic(tui, "You're ready.", SETTLE_WAIT, "offline explore ready");
     tui.send(keys::key::enter()).expect("leave onboarding");
-    wait_or_panic(
-        tui,
-        "What are we working on?",
-        STARTUP_WAIT,
-        "Tideline Startup",
-    );
-    tui.send(keys::key::ch('w'))
-        .expect("choose Startup New session");
+    wait_or_panic(tui, "Codewhale v", STARTUP_WAIT, "launch card");
+    // Typing goes straight to the composer; Enter sends the first message
+    // and the session begins (the card dissolved on the first keystroke).
+    tui.send("start the session").expect("type the first prompt");
     if tui
         .wait_for(
-            |frame| !frame.text().contains("What are we working on?"),
+            |frame| frame.text().contains("Esc to interrupt"),
             STARTUP_WAIT,
         )
         .is_err()
     {
         panic!(
-            "Startup New session did not enter the live shell\n{}",
+            "the first prompt did not enter the live shell\n{}",
             tui.diagnostics()
         );
     }

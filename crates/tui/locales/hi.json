@@ -2018,5 +2018,10 @@
   "ConfigHintFeatureExecPolicy": "निष्पादन नीति टूल की केवल पढ़ने योग्य फ़ीचर फ़्लैग स्थिति",
   "ConfigHintFeatureVisionModel": "दृष्टि/मॉडल छवि समर्थन के लिए बीटा फ़ीचर फ़्लैग",
   "ConfigHintGoalCommand": "/goal लक्ष्य, बजट और कार्य-संदर्भ स्थिति सेट करता है",
-  "ConfigHintWorkflow": "/workflow वितरण/समेकन रन कार्ड के साथ स्क्रिप्टेड संचालन चलाता है"
+  "ConfigHintWorkflow": "/workflow वितरण/समेकन रन कार्ड के साथ स्क्रिप्टेड संचालन चलाता है",
+  "LaunchMenuNewWorktree": "नया वर्कट्री",
+  "LaunchMenuResume": "सेशन फिर से शुरू करें",
+  "LaunchMenuQuit": "बंद करें",
+  "LaunchNoticeClaude": "Claude Code से आए हैं? ctrl+r से सेशन फिर से शुरू करें",
+  "ReceiptSessionHooks": "हुक {count}"
 }

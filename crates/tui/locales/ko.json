@@ -2018,5 +2018,10 @@
   "ConfigHintFeatureExecPolicy": "실행 정책 도구의 읽기 전용 기능 플래그 상태",
   "ConfigHintFeatureVisionModel": "비전/모델 이미지 지원의 베타 기능 플래그",
   "ConfigHintGoalCommand": "/goal은 목표, 예산, 작업 컨텍스트 상태를 설정",
-  "ConfigHintWorkflow": "/workflow는 팬아웃/팬인 실행 카드와 함께 스크립트화된 작업을 실행"
+  "ConfigHintWorkflow": "/workflow는 팬아웃/팬인 실행 카드와 함께 스크립트화된 작업을 실행",
+  "LaunchMenuNewWorktree": "새 워크트리",
+  "LaunchMenuResume": "세션 재개",
+  "LaunchMenuQuit": "종료",
+  "LaunchNoticeClaude": "Claude Code에서 오셨나요? ctrl+r로 세션을 다시 시작하세요",
+  "ReceiptSessionHooks": "훅 {count}"
 }

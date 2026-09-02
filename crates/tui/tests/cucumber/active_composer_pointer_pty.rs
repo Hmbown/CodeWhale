@@ -100,17 +100,18 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     tui.send(keys::key::enter()).expect("leave onboarding");
     wait_or_panic(
         &mut tui,
-        "What are we working on?",
+        "Codewhale v",
         STARTUP_WAIT,
-        &format!("{size}: show Tideline Startup"),
+        &format!("{size}: show the launch card"),
     );
     tui.pump();
     assert_startup_contract(tui.frame(), rows, cols, &size);
-    tui.send(keys::key::ch('w'))
-        .expect("choose Startup New session");
+    // Typing goes straight to the composer; Enter sends the first message
+    // and the session begins (the card dissolved on the first keystroke).
+    tui.send("start the session").expect("type the first prompt");
     if tui
         .wait_for(
-            |frame| !frame.text().contains("What are we working on?"),
+            |frame| frame.text().contains("Esc to interrupt"),
             STARTUP_WAIT,
         )
         .is_err()
@@ -244,11 +245,11 @@ fn normalized_text(frame: &Frame) -> String {
 
 fn assert_startup_contract(frame: &Frame, rows: u16, cols: u16, size: &str) {
     let text = frame.text();
-    // `context` is the info line's floor (it never sheds), so it proves the
-    // shell chrome painted at every size. The wordmark used to serve here;
-    // it left the row by design (SHELL-DESIGN-20260901 §2.0: the mark
-    // appears at launch and nowhere else).
-    for needle in ["context", "What are we working on?", "Theme", "Help"] {
+    // The launch card's own truth: the wordmark + version, the menu with
+    // real chords, and the focused composer. The posture bar and metrics
+    // line appear only once a session exists, so `context` is NOT asserted
+    // here any more (SHELL-DESIGN-20260901 Round 5).
+    for needle in ["Codewhale v", "❯"] {
         assert!(
             text.contains(needle),
             "{size}: startup misses {needle:?}\n{}",
@@ -256,9 +257,10 @@ fn assert_startup_contract(frame: &Frame, rows: u16, cols: u16, size: &str) {
         );
     }
     for needle in if cols < 56 {
-        ["worktree", "chat"]
+        // The card sheds menu rows on narrow stages; the title holds last.
+        ["worktree"]
     } else {
-        ["New worktree", "Chat only"]
+        ["New worktree", "Resume session", "Changelog", "Quit"]
     } {
         assert!(
             text.contains(needle),

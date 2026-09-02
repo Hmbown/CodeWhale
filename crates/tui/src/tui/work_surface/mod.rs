@@ -983,7 +983,7 @@ mod tests {
             agent_type: FleetRole::Builder,
             assignment: SubAgentAssignment {
                 objective: "Wire settled file activity".to_string(),
-                role: Some("worker".to_string()),
+                role: Some("general".to_string()),
             },
             model: "test-model".to_string(),
             nickname: Some("Blue Whale".to_string()),

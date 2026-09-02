@@ -1,17 +1,17 @@
-         Codewhale v0.9.12                                                      
- ⣤⣄⣠⣤⣤⠤⡄ OpenRouter · deepseek-v4                                               
- ⠙⠿⣯⣿⡡⠞  Hmbown/CodeWhale · main                                                
-                                                                                
- ● 2 MCP servers connected · 1 needs sign-in · run /mcp                         
+⑂ Hmbown/CodeWhale · main                                                       
                                                                                 
                                                                                 
                                                                                 
                                                                                 
                                                                                 
-                                                                                
-                                                                                
-                                                                                
-                                                                                
+        ╭──────────────────────────────────────────────────────────────╮        
+        │         Codewhale v0.9.12                                    │        
+        │         ● 2 MCP servers connected · 1 needs sign-in · run /m…│        
+        │ ⣤⣄⣠⣤⣤⠤⡄ ▸ New worktree                                ctrl+n │        
+        │ ⠙⠿⣯⣿⡡⠞    Resume session                              ctrl+r │        
+        │           Changelog                                   ctrl+l │        
+        │           Quit                                        ctrl+q │        
+        ╰──────────────────────────────────────────────────────────────╯        
                                                                                 
                                                                                 
                                                                                 

@@ -58,6 +58,7 @@ fn connected(theme: &crate::palette::UiTheme) -> TidelineStartup<'_> {
     .mcp(Some(McpFacts {
         connected: 2,
         needs_sign_in: 1,
+        enabled: 3,
     }))
     .composer(docked_composer());
     startup.version = "0.9.12";
@@ -67,7 +68,8 @@ fn connected(theme: &crate::palette::UiTheme) -> TidelineStartup<'_> {
 /// First run: no model, no forge remote — the workspace path stands in.
 fn first_run(theme: &crate::palette::UiTheme) -> TidelineStartup<'_> {
     let mut startup = TidelineStartup::new(theme, None, "/Users/hunter/src/codewhale".to_string())
-        .composer(docked_composer());
+        .composer(docked_composer())
+        .composer_rule(Some("no model connected · ask".to_string()));
     startup.version = "0.9.12";
     startup
 }
@@ -84,11 +86,12 @@ fn startup_matches_goldens_at_blocker_sizes() {
 
 #[test]
 fn startup_first_run_matches_its_golden() {
-    // The founder's own first paint: no model connected, so line 2 says so
-    // in the gate colour and the state line names the command that fixes it.
+    // The founder's own first paint: no model connected, so the card's
+    // announcement says so in the gate colour and names the command that
+    // fixes it.
     let text = draw(80, 24, &first_run(&UI_THEME));
     assert_matches_golden("startup_first_run_80x24", &text);
-    assert!(text.contains("not connected"), "{text}");
+    assert!(text.contains('⑂'), "the top line paints the branch glyph: {text}");
     assert!(
         text.contains("⚠ no model connected · run /provider"),
         "{text}"
@@ -104,7 +107,7 @@ fn startup_matches_golden_at_the_40x12_terminal_floor() {
     let text = draw(40, 10, &connected(&UI_THEME));
     assert_matches_golden("startup_40x10", &text);
     assert!(text.contains("Codewhale"), "{text}");
-    assert!(text.contains("deepseek-v4"), "{text}");
+    assert!(text.contains("New worktree"), "{text}");
     assert!(text.contains("❯"), "the floor keeps the composer: {text}");
 }
 
@@ -126,22 +129,32 @@ fn startup_surfacing_midpoint_matches_its_golden() {
 }
 
 #[test]
-fn startup_header_states_the_route_workspace_and_mcp_news() {
+fn the_card_states_the_workspace_menu_and_mcp_news() {
     let text = draw(100, 30, &connected(&UI_THEME));
     for fact in [
         "Codewhale v0.9.12",
-        "OpenRouter · deepseek-v4",
+        // The top line owns the workspace truth now.
         "Hmbown/CodeWhale · main",
+        // The card's announcement: only when true.
         "● 2 MCP servers connected · 1 needs sign-in · run /mcp",
+        // The menu with its real chords.
+        "New worktree",
+        "ctrl+n",
+        "Resume session",
+        "ctrl+r",
+        "Changelog",
+        "ctrl+l",
+        "Quit",
+        "ctrl+q",
     ] {
         assert!(text.contains(fact), "missing {fact:?} in:\n{text}");
     }
-    // The header is left-anchored after the mark, Claude Code's structure.
+    // Row 0 is the thin top line; the wordmark lives in the card.
     let first = text.lines().next().unwrap_or_default();
-    let wordmark_col = first.find("Codewhale").expect("wordmark on row 0");
+    assert!(first.contains('⑂'), "top line opens with the branch glyph: {first:?}");
     assert!(
-        (2..12).contains(&first[..wordmark_col].chars().count()),
-        "the wordmark sits just right of the mark: {first:?}"
+        !first.contains("Codewhale"),
+        "the wordmark left row 0: {first:?}"
     );
     // Nothing from the old stage survives.
     for gone in [
@@ -165,6 +178,7 @@ fn startup_state_line_is_silent_when_there_is_nothing_true_to_say() {
     let one = connected(&UI_THEME).mcp(Some(McpFacts {
         connected: 1,
         needs_sign_in: 0,
+        enabled: 1,
     }));
     let text = draw(100, 30, &one);
     assert!(text.contains("● 1 MCP server connected"), "{text}");
@@ -178,8 +192,16 @@ fn startup_ascii_safe_drops_the_mark_and_every_wide_glyph() {
     let text = draw(100, 30, &startup);
     let first = text.lines().next().unwrap_or_default();
     assert!(
-        first.trim_start().starts_with("Codewhale"),
-        "the wordmark line stands alone: {first:?}"
+        first.trim_start().starts_with('y'),
+        "the branch glyph falls back to ASCII on row 0: {first:?}"
+    );
+    assert!(text.contains("Codewhale"), "the card keeps the wordmark: {text}");
+    assert!(
+        text.lines().any(|line| {
+            let trimmed = line.trim_end();
+            trimmed.starts_with('+') && trimmed.ends_with('+') && trimmed.contains('-')
+        }),
+        "the card border draws in ASCII: {text}"
     );
     for ch in text.chars() {
         if ch != '\n' {
@@ -202,19 +224,23 @@ fn startup_image_tier_places_the_kitty_mark_through_placeholder_cells() {
     let area = Rect::new(0, 0, 80, 22);
     let mut buf = Buffer::empty(area);
     render_tideline_startup(area, &mut buf, &startup);
-    let cell = &buf[(1u16, 0u16)];
-    assert!(
-        cell.symbol().starts_with('\u{10EEEE}'),
-        "placeholder at the mark's origin: {:?}",
-        cell.symbol()
-    );
+    // The mark lives in the card's left column now, not on row 0: find the
+    // placeholder block wherever the card centred it.
+    let placeholders = buf
+        .content()
+        .iter()
+        .filter(|cell| cell.symbol().starts_with('\u{10EEEE}'))
+        .count();
+    assert!(placeholders >= 6, "kitty placeholders painted: {placeholders}");
+    let origin = buf
+        .content()
+        .iter()
+        .find(|cell| cell.symbol().starts_with('\u{10EEEE}'))
+        .expect("a placeholder cell");
     assert_eq!(
-        cell.fg,
+        origin.fg,
         ratatui::style::Color::Indexed(crate::tui::mark::KITTY_MARK_IMAGE_ID)
     );
-    // The header starts one gutter after the six-column block.
-    assert_eq!(buf[(1 + 6, 0u16)].symbol(), " ");
-    assert_eq!(buf[(1 + 6 + 1, 0u16)].symbol(), "C");
 }
 
 #[test]
