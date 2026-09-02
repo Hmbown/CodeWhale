@@ -368,13 +368,8 @@ pub(crate) fn sha256_label(bytes: &[u8]) -> String {
 }
 
 /// Required roles for the stopship dogfood fleet (#4178).
-pub const STOPSHIP_REQUIRED_ROLES: &[&str] = &[
-    "explore",
-    "implement",
-    "reviewer",
-    "test",
-    "release_lead",
-];
+pub const STOPSHIP_REQUIRED_ROLES: &[&str] =
+    &["explore", "implement", "reviewer", "test", "release_lead"];
 
 /// Parse a fleet TOML document.
 pub fn parse_named_fleet(toml_text: &str) -> Result<NamedFleet, NamedFleetError> {

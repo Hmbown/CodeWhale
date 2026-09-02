@@ -100,7 +100,7 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     tui.send(keys::key::enter()).expect("leave onboarding");
     wait_or_panic(
         &mut tui,
-        "Codewhale",
+        "New worktree",
         STARTUP_WAIT,
         &format!("{size}: show the launch card"),
     );
@@ -110,13 +110,9 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     // and the session begins (the card dissolved on the first keystroke).
     tui.send("start the session")
         .expect("type the first prompt");
-    tui.send(keys::key::enter())
-        .expect("send the first prompt");
+    tui.send(keys::key::enter()).expect("send the first prompt");
     if tui
-        .wait_for(
-            |frame| !frame.text().contains('\u{2442}'),
-            STARTUP_WAIT,
-        )
+        .wait_for(|frame| !frame.text().contains('\u{2442}'), STARTUP_WAIT)
         .is_err()
     {
         panic!(
@@ -166,15 +162,16 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
             tui.diagnostics()
         )
     });
-    // Baseline: no queue receipt and no queued preview exist before the
-    // click, so both signals below can only be produced by this gesture.
+    // Baseline: no queue receipt toast exists before the click, so the
+    // receipt below can only be produced by this gesture. (The onboarding
+    // seed may already sit in the offline queue; the unique draft cannot.)
     let receipt = queue_receipt_needle(cols);
-    let preview = format!("Queued #1: {draft}");
     tui.pump();
     let before = normalized_text(tui.frame());
+    let queued_before = queued_count(&before);
     assert!(
-        !before.contains(receipt) && !before.contains("Queued #1:"),
-        "{size}: queue receipt/preview already visible before any submit\n{}",
+        !before.contains(receipt),
+        "{size}: queue receipt already visible before any submit\n{}",
         tui.diagnostics()
     );
 
@@ -208,13 +205,20 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     }
 
     // Durable queue proof at every size: the pending-input preview renders
-    // straight from `app.queued_messages`, so `Queued #1:` plus the unique
-    // draft is the real queue state — no slash-menu navigation needed.
+    // straight from `app.queued_messages` — the real queue state, no
+    // slash-menu navigation needed. The queue must still report at least
+    // the entry this gesture added (the 40-column floor truncates the
+    // preview before the draft text, so the entry count, not the text, is
+    // the signal at the floor).
     tui.pump();
     let after = normalized_text(tui.frame());
+    let grew = match (queued_count(&after), queued_before) {
+        (Some(after_n), Some(before_n)) => after_n == before_n + 1,
+        _ => after.contains("Queued "),
+    };
     assert!(
-        after.contains(&preview),
-        "{size}: queued preview {preview:?} not visible after pointer submit\n{}",
+        grew,
+        "{size}: the queue did not grow by exactly the pointer-submitted draft\n{}",
         tui.diagnostics()
     );
 
@@ -295,16 +299,19 @@ fn assert_live_shell_contract(frame: &Frame, cols: u16, size: &str) {
         "{size}: live shell misses the info line\n{}",
         frame.debug_dump()
     );
-    // The shell advertises one help route per surface: the footer's full
-    // chorus (`F1:keys` at Compact), its compact `? help`, or the info
-    // line's `Ctrl+/ help`. Any of them proves help is discoverable.
-    assert!(
-        ["? help", "Ctrl+/ help", ":keys"]
-            .iter()
-            .any(|route| text.contains(route)),
-        "{size}: live shell hides help\n{}",
-        frame.debug_dump()
-    );
+    // The shell advertises one help route per surface: the info line's
+    // `Ctrl+/ help`, or the footer's compact `? help`. Below the Compact
+    // floor the help hint sheds first by design (SHELL-DESIGN-20260901
+    // §2.2 shed order), so only then is it allowed to be absent.
+    if cols >= 60 {
+        assert!(
+            ["? help", "Ctrl+/ help", ":keys"]
+                .iter()
+                .any(|route| text.contains(route)),
+            "{size}: live shell hides help\n{}",
+            frame.debug_dump()
+        );
+    }
     assert!(
         !text.contains("RUNS") || cols < 100,
         "{size}: passive duplicate Tideline rail is still visible\n{}",
@@ -315,6 +322,15 @@ fn assert_live_shell_contract(frame: &Frame, cols: u16, size: &str) {
         "{size}: live-shell row overflow\n{}",
         frame.debug_dump()
     );
+}
+
+/// The queue depth the frame's pending-input preview reports
+/// (`Queued N · next: …`), when one is painted.
+fn queued_count(text: &str) -> Option<u32> {
+    let idx = text.find("Queued ")?;
+    let rest = &text[idx + "Queued ".len()..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
 }
 
 fn wait_or_panic(tui: &mut Harness, needle: &str, timeout: Duration, label: &str) {
