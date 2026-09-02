@@ -4,9 +4,7 @@
 //! discovery + side effects (`CommandSkillGroupContext::run_review`); the
 //! portable handler composes the exact error text and the `SendMessage` action.
 
-use codewhale_command_contract::facets::{
-    CommandSkillGroupContext, CommandSkillsContext, ReviewOutcome,
-};
+use codewhale_command_contract::facets::{CommandSkillGroupContext, ReviewOutcome};
 use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
 use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
@@ -41,30 +39,24 @@ impl RegisterCommand<CommandResult> for ReviewCmd {
     }
 }
 
-/// Contextual `/review` dispatch (FEAT-022 D4): exactly the skill-group facet
-/// plus the shared SKILLS facet (D2 read/refresh surface).
+/// Contextual `/review` dispatch: exactly the skill-group facet. The baseline
+/// command never refreshed the shared skill cache, so `/review` must not
+/// request the unrelated SKILLS facet.
 fn review_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
     let mut parts = contexts.into_parts();
     let Some(skill_group) = parts.skill_group.as_deref_mut() else {
         return CommandResult::error("Command capability unavailable: skill_group");
     };
-    let Some(skills) = parts.skills.as_deref_mut() else {
-        return CommandResult::error("Command capability unavailable: skills");
-    };
-    review(skill_group, skills, arg)
+    review(skill_group, arg)
 }
 
 /// Portable `/review` dispatch — byte-identical to the baseline handler.
 ///
 /// The host performs discovery, warning merge, session-message insertion, and
 /// active-skill mutation (`run_review`); the handler validates the target,
-/// renders the not-found error, refreshes the shared skill cache, and emits
-/// the `SendMessage` action. The baseline success path renders no message.
-fn review(
-    group: &mut dyn CommandSkillGroupContext,
-    skills: &mut dyn CommandSkillsContext,
-    arg: Option<&str>,
-) -> CommandResult {
+/// renders the not-found error, and emits the `SendMessage` action. The
+/// baseline success path renders no message and does not refresh the cache.
+fn review(group: &mut dyn CommandSkillGroupContext, arg: Option<&str>) -> CommandResult {
     let target = arg.unwrap_or("").trim();
     if target.is_empty() {
         return CommandResult::error("Usage: /review <target>");
@@ -72,10 +64,6 @@ fn review(
 
     match group.run_review() {
         Ok(ReviewOutcome::Ready) => {
-            // D4 declares the shared SKILLS facet for review; the cache
-            // refresh exercises that surface and is idempotent (the registry
-            // projection is re-discovered on demand anyway).
-            skills.refresh_skill_cache();
             CommandResult::action(AppAction::SendMessage(target.to_string()))
         }
         Ok(ReviewOutcome::NotFound {
@@ -100,21 +88,6 @@ mod tests {
         CommandApprovalState, RemoteRegistryOutcome, SkillActivationError, SkillMutationReceipt,
         SkillRecommendation, SkillSyncOutcome, SkillTargetScope, SnapshotEntry,
     };
-
-    struct FakeSkills {
-        refreshed: bool,
-    }
-    impl CommandSkillsContext for FakeSkills {
-        fn active_skill(&self) -> Option<String> {
-            None
-        }
-        fn active_skill_provenance(&self) -> Option<String> {
-            None
-        }
-        fn refresh_skill_cache(&mut self) {
-            self.refreshed = true;
-        }
-    }
 
     struct FakeSkillGroup {
         review: Result<ReviewOutcome, String>,
@@ -198,23 +171,21 @@ mod tests {
     #[test]
     fn review_without_target_prints_usage() {
         let mut group = FakeSkillGroup::ready();
-        let mut skills = FakeSkills { refreshed: false };
-        let result = review(&mut group, &mut skills, None);
+        let result = review(&mut group, None);
         assert!(result.is_error);
         assert!(result.message.unwrap().contains("Usage: /review"));
     }
 
     #[test]
-    fn review_ready_sends_target_and_refreshes_cache() {
+    fn review_ready_sends_target_without_skills_context() {
         let mut group = FakeSkillGroup::ready();
-        let mut skills = FakeSkills { refreshed: false };
-        let result = review(&mut group, &mut skills, Some("file.rs"));
+        let contexts = CommandContexts::empty().with_skill_group(&mut group);
+        let result = review_contextual(contexts, Some("file.rs"));
         assert!(result.message.is_none());
         assert!(matches!(
             result.action,
             Some(AppAction::SendMessage(ref t)) if t == "file.rs"
         ));
-        assert!(skills.refreshed);
     }
 
     #[test]
@@ -225,8 +196,7 @@ mod tests {
             global_dir: "/home/u/.codewhale/skills".to_string(),
             warnings: vec!["one warning".to_string()],
         });
-        let mut skills = FakeSkills { refreshed: false };
-        let result = review(&mut group, &mut skills, Some("file.rs"));
+        let result = review(&mut group, Some("file.rs"));
         assert!(result.is_error);
         let msg = result.message.unwrap();
         assert!(

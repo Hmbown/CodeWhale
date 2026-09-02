@@ -421,9 +421,9 @@ pub struct CommandApprovalState {
 /// async runtime bridge. The shared FEAT-015 `CommandSkillsContext` is never
 /// widened; active-skill reads use that facet, mutations flow through the
 /// delegates here (D2). All results are contract-owned portable values;
-/// implementation errors cross as safe text. `/skill` and `/review` declare
-/// exactly this facet plus `CommandSkillsContext`; `/skills` and `/restore`
-/// declare exactly this facet (D4).
+/// implementation errors cross as safe text. `/skill` declares this facet
+/// plus `CommandSkillsContext` for the baseline cache-refresh policy;
+/// `/skills`, `/review`, and `/restore` declare exactly this facet.
 pub trait CommandSkillGroupContext {
     /// `/skills` discovery projection (workspace, skills dir, scan mode,
     /// searched directories, plugin-provided skills, warnings).

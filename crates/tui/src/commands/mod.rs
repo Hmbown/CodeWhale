@@ -2303,8 +2303,8 @@ mod tests {
     #[test]
     fn feat022_context_exposure_is_exact_per_d4() {
         // The envelope exposes every adapter (main's model); the handlers
-        // consume exactly their declared facets. skills/restore consume only
-        // skill_group; skill/review consume skill_group + skills.
+        // consume exactly their required facets. skills/review/restore consume
+        // only skill_group; skill also consumes skills for cache refreshes.
         let tmp = tempfile::TempDir::new().unwrap();
         let _home = feat022_scoped_home(&tmp);
         let mut app = feat022_test_app(&tmp);

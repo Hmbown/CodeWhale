@@ -906,7 +906,7 @@ fn skill_group_facet_transports_through_envelope_when_declared() {
     assert!(parts.session.is_none());
     assert!(parts.project.is_none());
 
-    // skill_group combined with the shared SKILLS facet (D4: /skill, /review).
+    // /skill combines skill_group with SKILLS for baseline cache refreshes.
     let mut skills = Skills;
     let parts = CommandContexts::empty()
         .with_skill_group(&mut group)

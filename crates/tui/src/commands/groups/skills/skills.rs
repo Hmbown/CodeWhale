@@ -852,6 +852,23 @@ mod tests {
         }
     }
 
+    /// Counting fake for preserving the baseline's exact cache-refresh policy.
+    #[derive(Default)]
+    struct CountingSkills {
+        refresh_count: usize,
+    }
+    impl CommandSkillsContext for CountingSkills {
+        fn active_skill(&self) -> Option<String> {
+            None
+        }
+        fn active_skill_provenance(&self) -> Option<String> {
+            None
+        }
+        fn refresh_skill_cache(&mut self) {
+            self.refresh_count += 1;
+        }
+    }
+
     /// Deterministic fake skill-group facet over portable values only.
     struct FakeSkillGroup {
         projection: SkillRegistryProjection,
@@ -1310,9 +1327,9 @@ mod tests {
     }
 
     #[test]
-    fn skill_install_receipt_renders_and_refreshes_cache() {
+    fn skill_install_receipt_refreshes_cache_exactly_once() {
         let mut group = FakeSkillGroup::new(vec![demo_entry()]);
-        let mut skills = FakeSkills { refreshed: false };
+        let mut skills = CountingSkills::default();
         let result = run_skill(&mut group, &mut skills, Some("install github:acme/demo"));
         assert!(!result.is_error);
         assert!(
@@ -1321,34 +1338,34 @@ mod tests {
                 .unwrap()
                 .starts_with("Installed skill 'demo'.\nLocation: /ws/.codewhale/skills/demo"),
         );
-        assert!(
-            skills.refreshed,
-            "Installed receipt must refresh the skill cache (D2)"
+        assert_eq!(
+            skills.refresh_count, 1,
+            "Installed receipt must refresh the skill cache exactly once"
         );
     }
 
     #[test]
-    fn skill_update_and_uninstall_refresh_cache() {
+    fn skill_update_and_uninstall_refresh_cache_exactly_once_each() {
         let mut group = FakeSkillGroup::new(vec![demo_entry()]);
-        let mut skills = FakeSkills { refreshed: false };
+        let mut skills = CountingSkills::default();
         let result = run_skill(&mut group, &mut skills, Some("update demo"));
         assert!(!result.is_error);
-        assert!(skills.refreshed);
+        assert_eq!(skills.refresh_count, 1, "update refresh count");
 
-        skills.refreshed = false;
+        skills.refresh_count = 0;
         let result = run_skill(&mut group, &mut skills, Some("uninstall --global demo"));
         assert!(!result.is_error);
-        assert!(skills.refreshed);
+        assert_eq!(skills.refresh_count, 1, "uninstall refresh count");
         assert!(result.message.unwrap().contains("Removed skill 'demo'."));
     }
 
     #[test]
     fn skill_trust_does_not_refresh_cache() {
         let mut group = FakeSkillGroup::new(vec![demo_entry()]);
-        let mut skills = FakeSkills { refreshed: false };
+        let mut skills = CountingSkills::default();
         let result = run_skill(&mut group, &mut skills, Some("trust demo"));
         assert!(!result.is_error);
-        assert!(!skills.refreshed);
+        assert_eq!(skills.refresh_count, 0, "trust must not refresh the cache");
         assert!(
             result
                 .message
