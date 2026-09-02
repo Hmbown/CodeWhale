@@ -1420,13 +1420,12 @@ impl Engine {
                             "model {} rejected image content; resending with images replaced by text",
                             self.session.model
                         ));
-                        let _ = self
-                            .tx_event
-                            .send(Event::status(format!(
-                                "{} does not accept images — resent as text; use image_ocr to read them",
-                                self.session.model
-                            )))
-                            .await;
+                        let status = crate::localization::tr(
+                            crate::localization::resolve_locale(&self.config.locale_tag),
+                            crate::localization::MessageId::ImageInputRejectedResent,
+                        )
+                        .replace("{model}", &self.session.model);
+                        let _ = self.tx_event.send(Event::status(status)).await;
                         continue;
                     }
                     turn_error = Some(message.clone());

@@ -591,7 +591,9 @@ pub(super) fn is_image_input_rejection_message(message: &str) -> bool {
         || lower.contains("does not support image")
         || lower.contains("image input")
         || lower.contains("unsupported modality")
-        || lower.contains("vision");
+        || lower
+            .split(|character: char| !character.is_alphanumeric())
+            .any(|term| term == "vision");
     let rejection_signal = lower.contains("400")
         || lower.contains("invalid")
         || lower.contains("unsupported")
@@ -622,6 +624,7 @@ mod tests {
             "Invalid content type. image_url is only supported by certain models."
         ));
         assert!(!is_image_input_rejection_message("Model not exist."));
+        assert!(!is_image_input_rejection_message("invalid revision id"));
         assert!(!is_image_input_rejection_message(
             "This model's maximum context length is 131072 tokens."
         ));

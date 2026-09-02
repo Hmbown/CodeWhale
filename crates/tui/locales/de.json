@@ -276,6 +276,7 @@
   "ScreenModeMouseCaptureOn": "Mausaufnahme aktiviert.",
   "ScreenModeMouseCaptureOff": "Mausaufnahme deaktiviert; das Terminal steuert die Auswahl.",
   "ScreenModeUnchanged": "Bildschirm unverändert: {reason}.",
+  "ImageInputRejectedResent": "{model} akzeptiert keine Bilder — sie wurden als Text erneut gesendet; nutze image_ocr zum Lesen",
   "ConfigLabelShowThinking": "Modell-Reasoning im Chat",
   "ConfigLabelThinkingHighlight": "Reasoning-Hintergrund hervorheben",
   "ConfigLabelShowToolDetails": "Tool-Detailgrad",
