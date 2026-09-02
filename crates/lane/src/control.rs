@@ -131,7 +131,7 @@ impl ControlExecution {
 pub enum ControlDomain {
     /// One running Workflow, recorded in `$CODEWHALE_HOME/lanes/`.
     Lane,
-    /// Pod workers and runs, recorded in `<workspace>/.codewhale/fleet.jsonl`.
+    /// fleet workers and runs, recorded in `<workspace>/.codewhale/fleet.jsonl`.
     Fleet,
 }
 
@@ -149,7 +149,7 @@ impl ControlDomain {
     pub const fn public_name(self) -> &'static str {
         match self {
             Self::Lane => "lane",
-            Self::Fleet => "pod",
+            Self::Fleet => "fleet",
         }
     }
 }
@@ -708,9 +708,9 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         backend: BackendCapability::Implemented,
         reconciles: false,
         hotbar_bare_dispatch: false,
-        slash_command: "pod",
-        cli_invocation: "codewhale pod list",
-        summary: "List durable Pod runs from the workspace ledger.",
+        slash_command: "fleet",
+        cli_invocation: "codewhale fleet list",
+        summary: "List durable fleet runs from the workspace ledger.",
     },
     OperationDescriptor {
         operation: ControlOperation::FleetStatus,
@@ -725,8 +725,8 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         backend: BackendCapability::Implemented,
         reconciles: false,
         hotbar_bare_dispatch: false,
-        slash_command: "pod",
-        cli_invocation: "codewhale pod status",
+        slash_command: "fleet",
+        cli_invocation: "codewhale fleet status",
         summary: "Show durable Pod run/worker counts from the workspace ledger.",
     },
     OperationDescriptor {
@@ -742,9 +742,9 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         backend: BackendCapability::Implemented,
         reconciles: false,
         hotbar_bare_dispatch: false,
-        slash_command: "pod",
-        cli_invocation: "codewhale pod interrupt <worker-id>",
-        summary: "Cancel a Pod worker's active task in the durable ledger.",
+        slash_command: "fleet",
+        cli_invocation: "codewhale fleet interrupt <worker-id>",
+        summary: "Cancel a fleet worker's active task in the durable ledger.",
     },
     OperationDescriptor {
         operation: ControlOperation::FleetRestart,
@@ -762,9 +762,9 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         },
         reconciles: false,
         hotbar_bare_dispatch: false,
-        slash_command: "pod",
-        cli_invocation: "codewhale pod restart <worker-id>",
-        summary: "Re-lease a Pod worker's task and drive the manager loop.",
+        slash_command: "fleet",
+        cli_invocation: "codewhale fleet restart <worker-id>",
+        summary: "Re-lease a fleet worker's task and drive the manager loop.",
     },
     OperationDescriptor {
         operation: ControlOperation::FleetResume,
@@ -779,8 +779,8 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         backend: BackendCapability::Implemented,
         reconciles: false,
         hotbar_bare_dispatch: false,
-        slash_command: "pod",
-        cli_invocation: "codewhale pod resume <run-id>",
+        slash_command: "fleet",
+        cli_invocation: "codewhale fleet resume <run-id>",
         summary: "Reconcile a durable Pod run's orphaned leases after a manager restart.",
     },
 ];
@@ -2396,7 +2396,7 @@ mod tests {
             // The CLI and slash surfaces must name the same canonical noun.
             // `domain.as_str()` is the serialization key ("fleet"), which the
             // ledger, receipts, and config tables still use; the customer-
-            // facing spelling is the slash command ("pod").
+            // facing spelling is the slash command ("fleet").
             assert!(
                 descriptor.cli_invocation.contains(descriptor.slash_command),
                 "{} CLI invocation must name the same canonical noun as its slash command",
@@ -2443,8 +2443,8 @@ mod tests {
     }
 
     #[test]
-    fn pod_is_public_while_fleet_remains_the_durable_domain_key() {
-        assert_eq!(ControlDomain::Fleet.public_name(), "pod");
+    fn fleet_is_public_and_remains_the_durable_domain_key() {
+        assert_eq!(ControlDomain::Fleet.public_name(), "fleet");
         assert_eq!(ControlDomain::Fleet.as_str(), "fleet");
         assert_eq!(
             serde_json::to_string(&ControlDomain::Fleet).expect("serialize durable domain"),

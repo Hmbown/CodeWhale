@@ -324,7 +324,7 @@ pub fn change_receipt(provider: &str, model: &str, change: &FleetModelChange) ->
                 format!(" as {}", roles.join(", "))
             };
             let created = if *created_fleet {
-                " (new user-global Pod, now selected)"
+                " (new user-global fleet, now selected)"
             } else {
                 ""
             };

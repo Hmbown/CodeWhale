@@ -75,7 +75,10 @@ Coordinator state for fleet-backed runs is stored under the workspace in
 A public fleet identity consists only of:
 
 - a stable member id and an optional user-facing name;
-- a semantic role, such as `scout`, `builder`, or `reviewer`;
+- a semantic role, such as `explore`, `implement`, or `reviewer` (the legacy
+  spellings `worker`, `scout`, `builder`, `verifier`, `consultant`, and `oracle`
+  are still accepted on input and map to `general`, `explore`, `implement`,
+  `test`, and `advisor`);
 - an exact provider/model identity, or an explicit inherited route;
 - visible roster state or origin.
 
@@ -91,7 +94,7 @@ Natural-language member selection is deterministic. A caller may name:
 
 - an exact member id, optionally as `member:<id>` or `id:<id>`;
 - a unique user-facing member name, optionally as `name:<name>`;
-- a unique semantic role, for example `scout` or `role:scout`;
+- a unique semantic role, for example `explore` or `role:explore`;
 - an exact pinned model id, for example `deepseek-v4-flash`, or its offline
   display name, for example `DeepSeek V4 Flash`; or
 - an exact `route:<provider>/<model>`.
@@ -100,7 +103,7 @@ An unqualified exact member id wins. Every other match succeeds only when it
 identifies one distinct roster member. Multiple matches produce an ambiguity
 error that names the candidates and asks for `member:<id>`; Codewhale never
 picks whichever match happened to be listed first. Users do not need to know
-an internal role label such as `scout`: a unique member name, display model, or
+an internal role label such as `explore`: a unique member name, display model, or
 exact model id is equally valid. Saved v2 fleets store that optional human name
 as `display_name` (the input alias `name` is also accepted); it must be one
 trimmed printable line of at most 80 characters.

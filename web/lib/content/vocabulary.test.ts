@@ -81,10 +81,10 @@ describe("shared product vocabulary", () => {
     }
   });
 
-  it("uses Consultant publicly and keeps old advisory names as aliases only", () => {
-    expect(ADVISORY_ROLE.term).toBe("Consultant");
+  it("uses Advisor publicly and keeps old advisory names as aliases only", () => {
+    expect(ADVISORY_ROLE.term).toBe("Advisor");
     expect(ADVISORY_ROLE.description.en).toContain("oracle");
-    expect(ADVISORY_ROLE.description.en).toContain("advisor");
+    expect(ADVISORY_ROLE.description.en).toContain("consultant");
     expect(ADVISORY_ROLE.description.en).toContain("compatibility aliases");
   });
 });

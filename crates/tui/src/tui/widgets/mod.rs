@@ -5519,16 +5519,16 @@ mod tests {
     }
 
     #[test]
-    fn slash_completion_migrates_legacy_fleet_to_canonical_pod() {
+    fn slash_completion_migrates_legacy_pod_to_canonical_fleet() {
         let hints =
-            slash_completion_hints("/fleet", 128, &[], Locale::En, None, ApiProvider::Deepseek);
+            slash_completion_hints("/pod", 128, &[], Locale::En, None, ApiProvider::Deepseek);
         let entry = hints
             .iter()
-            .find(|hint| hint.name == "/pod")
-            .expect("legacy /fleet should discover canonical /pod");
+            .find(|hint| hint.name == "/fleet")
+            .expect("legacy /pod should discover canonical /fleet");
 
-        assert_eq!(entry.alias_hint.as_deref(), Some("fleet"));
-        assert!(!hints.iter().any(|hint| hint.name == "/fleet"));
+        assert_eq!(entry.alias_hint.as_deref(), Some("pod"));
+        assert!(!hints.iter().any(|hint| hint.name == "/pod"));
     }
 
     #[test]

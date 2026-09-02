@@ -4983,21 +4983,21 @@ mod tests {
     #[test]
     fn home_subagents_keeps_the_current_session_boundary_in_every_complete_pack() {
         let expected = [
-            (Locale::Ca, "Treballadors de Pod de la sessió actual:"),
-            (Locale::De, "Pod-Worker der aktuellen Sitzung:"),
-            (Locale::En, "Current-session Pod workers:"),
-            (Locale::Es419, "Workers de Pod de la sesión actual:"),
-            (Locale::Fr, "Workers du Pod de la session actuelle :"),
-            (Locale::Hi, "वर्तमान सत्र के Pod वर्कर:"),
-            (Locale::Id, "Worker Pod sesi saat ini:"),
-            (Locale::Ja, "現在のセッションのPodワーカー："),
-            (Locale::Ko, "현재 세션의 Pod 워커:"),
-            (Locale::PtBr, "Workers do Pod da sessão atual:"),
-            (Locale::Ru, "Воркеры Pod текущего сеанса:"),
-            (Locale::Uk, "Воркери Pod поточного сеансу:"),
-            (Locale::Vi, "Worker Pod của phiên hiện tại:"),
-            (Locale::ZhHans, "当前会话的 Pod 工作器："),
-            (Locale::ZhHant, "目前工作階段的 Pod 工作器："),
+            (Locale::Ca, "Treballadors de flota de la sessió actual:"),
+            (Locale::De, "Flotten-Worker der aktuellen Sitzung:"),
+            (Locale::En, "Current-session fleet workers:"),
+            (Locale::Es419, "Workers de flota de la sesión actual:"),
+            (Locale::Fr, "Workers de la flotte de la session actuelle :"),
+            (Locale::Hi, "वर्तमान सत्र के बेड़ा वर्कर:"),
+            (Locale::Id, "Worker armada sesi saat ini:"),
+            (Locale::Ja, "現在のセッションの艦隊ワーカー："),
+            (Locale::Ko, "현재 세션의 플릿 워커:"),
+            (Locale::PtBr, "Workers da frota da sessão atual:"),
+            (Locale::Ru, "Воркеры флота текущего сеанса:"),
+            (Locale::Uk, "Воркери флоту поточного сеансу:"),
+            (Locale::Vi, "Worker hạm đội của phiên hiện tại:"),
+            (Locale::ZhHans, "当前会话的舰队工作器："),
+            (Locale::ZhHant, "目前工作階段的艦隊工作器："),
         ];
         assert_eq!(expected.len(), Locale::shipped_complete().len());
 

@@ -2169,19 +2169,19 @@ mod tests {
         }
 
         // Both control domains are bound.
-        for id in ["slash.lane", "slash.pod"] {
+        for id in ["slash.lane", "slash.fleet"] {
             assert!(registry.get(id).is_some(), "{id} must be bindable");
         }
     }
 
     #[test]
-    fn persisted_slash_fleet_binding_dispatches_the_canonical_pod_action() {
+    fn persisted_slash_pod_binding_dispatches_the_canonical_fleet_action() {
         let registry = HotbarActionRegistry::with_builtins();
         let legacy = registry
-            .get("slash.fleet")
+            .get("slash.pod")
             .expect("legacy persisted id resolves through the compatibility boundary");
-        assert_eq!(legacy.id(), "slash.pod");
-        assert_eq!(legacy.metadata(Locale::En).display_name, "/pod");
+        assert_eq!(legacy.id(), "slash.fleet");
+        assert_eq!(legacy.metadata(Locale::En).display_name, "/fleet");
 
         let mut app = test_app();
         assert_eq!(

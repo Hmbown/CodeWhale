@@ -186,10 +186,10 @@ export const ROUTE_IDENTITY: { term: string; description: LocalizedText }[] = [
 
 /** Public advisory role vocabulary; legacy spellings are input compatibility. */
 export const ADVISORY_ROLE = {
-  term: "Consultant",
+  term: "Advisor",
   description: {
-    en: "The public read-only advisory Pod role. The historical oracle and advisor spellings remain compatibility aliases for saved configuration and replay only; new product surfaces say Consultant.",
-    zh: "面向用户的只读 Pod 咨询角色。历史拼写 oracle 与 advisor 仅作为已保存配置和回放的兼容别名保留；新的产品界面统一使用 Consultant。",
+    en: "The public read-only advisory fleet role. The historical consultant and oracle spellings remain compatibility aliases for saved configuration and replay only; new product surfaces say Advisor.",
+    zh: "面向用户的只读 fleet 咨询角色。历史拼写 consultant 与 oracle 仅作为已保存配置和回放的兼容别名保留；新的产品界面统一使用 Advisor。",
   },
 } as const;
 
