@@ -136,7 +136,8 @@ fn provider_id_is_configured(app: &App, provider_id: &str) -> bool {
     // Named custom provider: allow the active custom route, or any explicit
     // `[providers.<name>]` table.
     if app.api_provider == crate::config::ApiProvider::Custom
-        && app.provider_identity_for_persistence()
+        && app
+            .provider_identity_for_persistence()
             .eq_ignore_ascii_case(provider_id)
     {
         return true;
