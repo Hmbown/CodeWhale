@@ -3256,7 +3256,7 @@ pub(crate) fn apply_loaded_session_with_goal(
     )
     .map_err(|reason| {
         format!(
-            "saved session provider '{}' could not be resolved from the live config: {reason}. Codewhale will not fall back",
+            "saved session provider '{}' could not be resolved from the live config: {reason}. codewhale will not fall back",
             provider_identity.key
         )
     })?;

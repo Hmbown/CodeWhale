@@ -118,7 +118,7 @@ fn default_state_path() -> Result<PathBuf> {
     // Listing, prompt construction, and doctor are read-only. The explicit
     // mutation path creates the parent from `persist` when needed.
     Ok(codewhale_config::codewhale_home()
-        .context("could not resolve Codewhale state directory")?
+        .context("could not resolve codewhale state directory")?
         .join(STATE_FILE_NAME))
 }
 

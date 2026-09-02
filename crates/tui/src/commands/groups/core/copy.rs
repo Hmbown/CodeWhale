@@ -138,7 +138,7 @@ mod tests {
         let result = execute_copy(&mut app);
 
         let expected = format!(
-            "Accepted the last completed assistant response for clipboard delivery; a recovery copy is at {}",
+            "Copied the last response; a backup is at {}.",
             tmp.path().join("exports").join("last-copy.md").display()
         );
         assert_eq!(result.message.as_deref(), Some(expected.as_str()));
@@ -169,7 +169,7 @@ mod tests {
 
         assert_eq!(
             result.message.as_deref(),
-            Some("No completed assistant response is available to copy")
+            Some("Nothing to copy yet — no completed response.")
         );
     }
 
@@ -353,10 +353,7 @@ mod tests {
 
         assert!(!result.is_error);
         let message = result.message.as_deref().unwrap_or_default();
-        assert!(
-            message.contains("no recovery file could be written"),
-            "{message}"
-        );
+        assert!(message.contains("no backup could be written"), "{message}");
         assert!(message.contains("/export file <path>"), "{message}");
     }
 

@@ -4633,7 +4633,7 @@ completion_sound = "bell"
         assert!(search.is_error);
         let search_msg = search.message.unwrap();
         assert!(
-            search_msg.contains("Invalid search.provider"),
+            search_msg.contains("Can't use 'not-a-backend' for search.provider"),
             "{search_msg}"
         );
         assert!(search_msg.contains("firecrawl"), "{search_msg}");
@@ -4642,7 +4642,7 @@ completion_sound = "bell"
         assert!(notifications.is_error);
         let notifications_msg = notifications.message.unwrap();
         assert!(
-            notifications_msg.contains("Invalid notifications.method"),
+            notifications_msg.contains("Can't use 'semaphore' for notifications.method"),
             "{notifications_msg}"
         );
         assert!(notifications_msg.contains("osc9"), "{notifications_msg}");

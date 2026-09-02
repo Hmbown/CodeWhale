@@ -5192,7 +5192,7 @@ impl Config {
                     return self.resolve_provider_identity(name);
                 }
                 return Err(format!(
-                    "legacy session records only the generic `custom` provider kind, but the live config does not select exactly one valid named custom route (selected '{}', valid named routes: {}). Restore the original single `[providers.<name>]` route or repair the saved provider identity; Codewhale will not guess or fall back",
+                    "legacy session records only the generic `custom` provider kind, but the live config does not select exactly one valid named custom route (selected '{}', valid named routes: {}). Restore the original single `[providers.<name>]` route or repair the saved provider identity; codewhale will not guess or fall back",
                     if selected.is_empty() {
                         "<unset>"
                     } else {
@@ -5211,12 +5211,12 @@ impl Config {
             .and_then(|providers| providers.custom_provider_config(exact_key))
             .ok_or_else(|| {
                 format!(
-                    "saved session requires custom provider '{exact_key}', but `[providers.{exact_key}]` is missing from the live config. Restore that exact table and retry; Codewhale will not fall back"
+                    "saved session requires custom provider '{exact_key}', but `[providers.{exact_key}]` is missing from the live config. Restore that exact table and retry; codewhale will not fall back"
                 )
             })?;
         if !entry.is_openai_compatible_custom() {
             return Err(format!(
-                "saved session requires custom provider '{exact_key}', but `[providers.{exact_key}]` must set `kind = \"openai-compatible\"`. Fix the live config and retry; Codewhale will not fall back"
+                "saved session requires custom provider '{exact_key}', but `[providers.{exact_key}]` must set `kind = \"openai-compatible\"`. Fix the live config and retry; codewhale will not fall back"
             ));
         }
         let base_url = entry
@@ -5226,17 +5226,17 @@ impl Config {
             .filter(|base_url| !base_url.is_empty())
             .ok_or_else(|| {
                 format!(
-                    "saved session requires custom provider '{exact_key}', but `[providers.{exact_key}]` has no `base_url`. Fix the live config and retry; Codewhale will not fall back"
+                    "saved session requires custom provider '{exact_key}', but `[providers.{exact_key}]` has no `base_url`. Fix the live config and retry; codewhale will not fall back"
                 )
             })?;
         let parsed = reqwest::Url::parse(base_url).map_err(|err| {
             format!(
-                "saved session requires custom provider '{exact_key}', but `[providers.{exact_key}].base_url` is invalid: {err}. Fix the live config and retry; Codewhale will not fall back"
+                "saved session requires custom provider '{exact_key}', but `[providers.{exact_key}].base_url` is invalid: {err}. Fix the live config and retry; codewhale will not fall back"
             )
         })?;
         if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
             return Err(format!(
-                "saved session requires custom provider '{exact_key}', but `[providers.{exact_key}].base_url` must be an http(s) URL with a host. Fix the live config and retry; Codewhale will not fall back"
+                "saved session requires custom provider '{exact_key}', but `[providers.{exact_key}].base_url` must be an http(s) URL with a host. Fix the live config and retry; codewhale will not fall back"
             ));
         }
 
@@ -5280,7 +5280,7 @@ impl Config {
         let id = persisted.trim();
         if id.is_empty() {
             return Err(
-                "persisted provider route has an empty exact provider id; Codewhale will not guess or fall back"
+                "persisted provider route has an empty exact provider id; codewhale will not guess or fall back"
                     .to_string(),
             );
         }
@@ -5291,14 +5291,14 @@ impl Config {
             .is_some();
         if id.eq_ignore_ascii_case(ApiProvider::Custom.as_str()) && !has_exact_custom_table {
             return Err(format!(
-                "persisted provider route requires exact custom provider '{id}', but `[providers.{id}]` is missing from the live config. Restore that exact table and retry; Codewhale will not fall back"
+                "persisted provider route requires exact custom provider '{id}', but `[providers.{id}]` is missing from the live config. Restore that exact table and retry; codewhale will not fall back"
             ));
         }
 
         let identity = self.resolve_provider_identity(id)?;
         if identity.provider == ApiProvider::Custom && identity.persisted_id() != Some(id) {
             return Err(format!(
-                "persisted provider route requires exact custom provider '{id}', but the live config only provides the legacy root-level custom route. Restore `[providers.{id}]` and retry; Codewhale will not fall back"
+                "persisted provider route requires exact custom provider '{id}', but the live config only provides the legacy root-level custom route. Restore `[providers.{id}]` and retry; codewhale will not fall back"
             ));
         }
         Ok(identity)
@@ -5332,7 +5332,7 @@ impl Config {
             return id.map_or_else(
                 || {
                     Err(
-                        "persisted provider route has neither a provider kind nor an exact provider id; Codewhale will not guess or fall back"
+                        "persisted provider route has neither a provider kind nor an exact provider id; codewhale will not guess or fall back"
                             .to_string(),
                     )
                 },
@@ -5348,7 +5348,7 @@ impl Config {
                 && id != kind
             {
                 return Err(format!(
-                    "persisted provider route has legacy identity '{kind}' but exact provider id '{id}'; repair the mismatched fields because Codewhale will not guess or fall back"
+                    "persisted provider route has legacy identity '{kind}' but exact provider id '{id}'; repair the mismatched fields because codewhale will not guess or fall back"
                 ));
             }
             return match id {
@@ -5370,7 +5370,7 @@ impl Config {
                 let identity = self.resolve_exact_provider_identity(id)?;
                 if identity.provider != ApiProvider::Custom {
                     return Err(format!(
-                        "persisted provider route declares generic kind 'custom' but exact provider id '{id}' resolves as built-in '{}'; use the matching built-in kind or restore `[providers.{id}]`. Codewhale will not guess or fall back",
+                        "persisted provider route declares generic kind 'custom' but exact provider id '{id}' resolves as built-in '{}'; use the matching built-in kind or restore `[providers.{id}]`. codewhale will not guess or fall back",
                         identity.provider.as_str()
                     ));
                 }
@@ -5395,7 +5395,7 @@ impl Config {
                 && ApiProvider::parse(id) == Some(ApiProvider::Ollama))
         {
             return Err(format!(
-                "persisted provider route declares built-in kind '{}' but exact provider id '{id}' names a different route; repair the mismatched fields because Codewhale will not guess or fall back",
+                "persisted provider route declares built-in kind '{}' but exact provider id '{id}' names a different route; repair the mismatched fields because codewhale will not guess or fall back",
                 provider.as_str()
             ));
         }
@@ -5412,7 +5412,7 @@ impl Config {
             .is_some()
         {
             return Err(format!(
-                "persisted provider route requires built-in '{}', but an exact `[providers.{}]` custom route shadows the same selector. Rename the custom route or update the saved provider kind/id pair; Codewhale will not guess or fall back",
+                "persisted provider route requires built-in '{}', but an exact `[providers.{}]` custom route shadows the same selector. Rename the custom route or update the saved provider kind/id pair; codewhale will not guess or fall back",
                 provider.as_str(),
                 provider.as_str()
             ));
@@ -5453,7 +5453,7 @@ impl Config {
     fn validate_legacy_literal_custom_route(&self) -> std::result::Result<(), String> {
         if self.has_literal_custom_provider_table() {
             return Err(
-                "legacy `provider = \"custom\"` is ambiguous because `[providers.custom]` is also present. Move the route to one named `[providers.<name>]` table and update the saved provider identity; Codewhale will not guess or fall back"
+                "legacy `provider = \"custom\"` is ambiguous because `[providers.custom]` is also present. Move the route to one named `[providers.<name>]` table and update the saved provider identity; codewhale will not guess or fall back"
                     .to_string(),
             );
         }
@@ -5465,7 +5465,7 @@ impl Config {
         let selected = self.provider.as_deref().map(str::trim).unwrap_or_default();
         if !self.selects_literal_custom_provider() {
             return Err(format!(
-                "legacy session records only the generic `custom` provider kind, but the live config selects '{}'. Only an unchanged legacy config with `provider = \"custom\"` and root-level `base_url`/`default_text_model` can load this session; Codewhale will not guess or fall back",
+                "legacy session records only the generic `custom` provider kind, but the live config selects '{}'. Only an unchanged legacy config with `provider = \"custom\"` and root-level `base_url`/`default_text_model` can load this session; codewhale will not guess or fall back",
                 if selected.is_empty() {
                     "<unset>"
                 } else {
@@ -5480,17 +5480,17 @@ impl Config {
             .map(str::trim)
             .filter(|base_url| !base_url.is_empty())
             .ok_or_else(|| {
-                "legacy `provider = \"custom\"` requires a non-empty root-level `base_url` to load a saved session; Codewhale will not use the custom-provider placeholder or fall back"
+                "legacy `provider = \"custom\"` requires a non-empty root-level `base_url` to load a saved session; codewhale will not use the custom-provider placeholder or fall back"
                     .to_string()
             })?;
         let parsed = reqwest::Url::parse(base_url).map_err(|err| {
             format!(
-                "legacy `provider = \"custom\"` has an invalid root-level `base_url`: {err}. Fix the live config and retry; Codewhale will not fall back"
+                "legacy `provider = \"custom\"` has an invalid root-level `base_url`: {err}. Fix the live config and retry; codewhale will not fall back"
             )
         })?;
         if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
             return Err(
-                "legacy `provider = \"custom\"` requires a root-level `base_url` with an http(s) scheme and host; Codewhale will not fall back"
+                "legacy `provider = \"custom\"` requires a root-level `base_url` with an http(s) scheme and host; codewhale will not fall back"
                     .to_string(),
             );
         }
@@ -5501,12 +5501,12 @@ impl Config {
             .map(str::trim)
             .filter(|model| !model.is_empty())
             .ok_or_else(|| {
-                "legacy `provider = \"custom\"` requires a non-empty root-level `default_text_model` to load a saved session; Codewhale will not guess or fall back"
+                "legacy `provider = \"custom\"` requires a non-empty root-level `default_text_model` to load a saved session; codewhale will not guess or fall back"
                     .to_string()
             })?;
         if model.eq_ignore_ascii_case("auto") || normalize_custom_model_id(model).is_none() {
             return Err(
-                "legacy `provider = \"custom\"` requires one explicit, valid root-level `default_text_model` (not `auto`) to load a saved session; Codewhale will not guess or fall back"
+                "legacy `provider = \"custom\"` requires one explicit, valid root-level `default_text_model` (not `auto`) to load a saved session; codewhale will not guess or fall back"
                     .to_string(),
             );
         }

@@ -206,7 +206,7 @@ fn drive(
     job.sandbox_pending = false;
     job.sandbox_id = Some(receipt.sandbox_id.clone());
     job.note = format!(
-        "Sandbox {} created; the Codewhale cloud agent turn is running.",
+        "Sandbox {} created; the codewhale cloud agent turn is running.",
         receipt.sandbox_id
     );
     if !store.save_unless_canceled(job)? {
@@ -394,7 +394,7 @@ pub fn compose_pr_body_for_head(job: &CloudJob, patch: &PatchReceipt, head_sha: 
         patch.summary.trim().to_string()
     };
     let body = format!(
-        "Automated change by a Codewhale cloud agent.\n\n\
+        "Automated change by a codewhale cloud agent.\n\n\
          ## What the agent did\n{summary}\n\n\
          ## Task\n{}\n\n\
          ## Receipts\n\
@@ -623,7 +623,7 @@ fn open_pr_gitee(
     body: &str,
 ) -> Result<String> {
     let token = read_service_token("gitee").ok_or_else(|| {
-        anyhow!("a Gitee access token is not configured in the Codewhale service slot; the branch was pushed but no pull request was opened")
+        anyhow!("a Gitee access token is not configured in the codewhale service slot; the branch was pushed but no pull request was opened")
     })?;
     let url = validate_outbound_origin(&gitee_pr_url(slug))?;
     let response = reqwest::blocking::Client::builder()
@@ -666,7 +666,7 @@ fn open_pr_cnb(
     body: &str,
 ) -> Result<String> {
     let token = read_service_token("cnb").ok_or_else(|| {
-        anyhow!("a CNB access token is not configured in the Codewhale service slot; the branch was pushed but no pull request was opened")
+        anyhow!("a CNB access token is not configured in the codewhale service slot; the branch was pushed but no pull request was opened")
     })?;
     let url = validate_outbound_origin(&cnb_pr_url(slug))?;
     let response = reqwest::blocking::Client::builder()
@@ -1358,7 +1358,7 @@ mod tests {
         let title = compose_pr_title(&job, &patch);
         assert_eq!(title, "codewhale cloud: Fix the flaky dispatch test");
         let body = compose_pr_body(&job, &patch);
-        assert!(body.contains("Codewhale cloud agent"));
+        assert!(body.contains("codewhale cloud agent"));
         assert!(body.contains("What the agent did"));
         assert!(body.contains("Fix the flaky dispatch test"));
         assert!(body.contains("open a PR that fixes the flake"));

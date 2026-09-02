@@ -316,7 +316,7 @@ workspace = {other:?}
         assert!(message.contains("active in this workspace"));
         assert!(message.contains("#2 | ask | edit_file"));
         assert!(message.contains("exact normalized path `src/lib.rs`"));
-        assert!(message.contains("not active in this workspace"));
+        assert!(message.contains("inactive in this workspace"));
     }
 
     #[test]
@@ -349,7 +349,7 @@ workspace = {other:?}
         let malformed = permissions_command(&app, Some("list"));
         let malformed_message = malformed.message.expect("malformed message");
         assert!(malformed.is_error);
-        assert!(malformed_message.contains("Permission rule operation failed"));
+        assert!(malformed_message.contains("Could not update the permission rule"));
         assert!(malformed_message.contains(&codewhale_config::quote_os_path(
             &displayed_permissions_path
         )));

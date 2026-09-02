@@ -9355,7 +9355,7 @@ fn enforce_fleet_member_route_requirements(
                         codewhale_config::route::CapabilityState::Supported => unreachable!(),
                     };
                     return Err(ToolError::execution_failed(format!(
-                        "Fleet member '{member_id}' requires vision, but exact route {provider_id}/{model_id} has image_input={state}. Codewhale will not reroute a capability-bound member; pin an exact route with verified image_input support."
+                        "Fleet member '{member_id}' requires vision, but exact route {provider_id}/{model_id} has image_input={state}. codewhale will not reroute a capability-bound member; pin an exact route with verified image_input support."
                     )));
                 }
             }

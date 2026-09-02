@@ -840,7 +840,7 @@ pub async fn run_http_server(
         bail!("Port must be > 0");
     }
     if options.web && options.host != "127.0.0.1" {
-        bail!("Codewhale web is loopback-only and must bind to 127.0.0.1");
+        bail!("codewhale web is loopback-only and must bind to 127.0.0.1");
     }
     if options.web && options.insecure_no_auth {
         bail!("Codewhale web requires Runtime authentication; remove --insecure");
@@ -5918,7 +5918,7 @@ pub(crate) fn runtime_chat_relay_catalog(
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
     {
-        return Err("Codewhale returned an invalid Runtime Chat relay challenge.".to_string());
+        return Err("codewhale returned an invalid Runtime Chat relay challenge.".to_string());
     }
 
     let provider = config.api_provider();

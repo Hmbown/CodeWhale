@@ -1070,7 +1070,7 @@ pub fn format_job(job: &CloudJob) -> String {
     ];
     if let Some(minutes) = runtime_minutes(job) {
         lines.push(format!(
-            "Runtime: {minutes}m (Codewhale bookkeeping, not a bill)"
+            "Runtime: {minutes}m (codewhale bookkeeping, not a bill)"
         ));
     }
     if let Some(summary) = job.agent_summary.as_deref() {
@@ -1093,7 +1093,7 @@ pub fn format_status(
     credentials: &CredentialState,
     recent: &[CloudJob],
 ) -> String {
-    let mut lines = vec!["Codewhale cloud dispatch".to_string()];
+    let mut lines = vec!["codewhale cloud dispatch".to_string()];
     match credentials {
         CredentialState::Missing => {
             if membership_signed_in() {
@@ -1103,7 +1103,7 @@ pub fn format_status(
                 );
             } else {
                 lines.push(
-                    "Cloud agents are included with your Codewhale membership. Sign in with `codewhale login` to enable `/dispatch`; cloud dispatch fails closed until then (no sandbox, no push, no PR)."
+                    "Cloud agents are included with your codewhale membership. Sign in with `codewhale login` to enable `/dispatch`; cloud dispatch fails closed until then (no sandbox, no push, no PR)."
                         .to_string(),
                 );
             }
@@ -1822,7 +1822,7 @@ pub fn missing_credentials_message() -> String {
     if membership_signed_in() {
         "Cloud agents are not available for this account yet; cloud dispatch fails closed (no sandbox, no push, no PR).".to_string()
     } else {
-        "Cloud agents are included with your Codewhale membership. Sign in with `codewhale login` to enable `/dispatch`; cloud dispatch fails closed until then (no sandbox, no push, no PR).".to_string()
+        "Cloud agents are included with your codewhale membership. Sign in with `codewhale login` to enable `/dispatch`; cloud dispatch fails closed until then (no sandbox, no push, no PR).".to_string()
     }
 }
 
@@ -2059,7 +2059,7 @@ fn forge_host(forge: Forge) -> &'static str {
 
 fn proposal_note(plan: &DispatchPlan) -> String {
     format!(
-        "Proposed Codewhale cloud-agent offload to {} ({}) raising branch {}.",
+        "Proposed codewhale cloud-agent offload to {} ({}) raising branch {}.",
         plan.remote.forge.as_str(),
         plan.remote.name,
         plan.branch

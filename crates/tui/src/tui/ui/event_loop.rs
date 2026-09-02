@@ -1281,7 +1281,7 @@ pub(crate) async fn run_event_loop(
             if let Err(err) = completion {
                 tracing::warn!(error = %err, "background terminal clipboard write failed");
                 app.push_status_toast(
-                    format!("Clipboard copy failed: {err}"),
+                    format!("Couldn't copy: {err}"),
                     StatusToastLevel::Error,
                     None,
                 );
