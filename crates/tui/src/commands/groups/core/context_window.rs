@@ -112,7 +112,7 @@ fn persistence_identity(app: &App) -> Result<ProviderIdentity, String> {
         }))
 }
 
-fn apply_live_context_window(app: &mut App, context_window: Option<u32>) {
+pub(crate) fn apply_live_context_window(app: &mut App, context_window: Option<u32>) {
     app.set_active_context_window_override(context_window);
     let mut limits = app.active_route_limits.unwrap_or_default();
     limits.context_tokens = context_window.map(u64::from);

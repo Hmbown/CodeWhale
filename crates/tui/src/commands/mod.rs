@@ -31,6 +31,7 @@ pub use groups::project::share;
 pub(crate) use groups::session::rename_with_manager as rename_session_with_manager;
 
 // Voice capture plumbing shared with the hotbar and the UI event loop.
+pub(crate) use groups::core::apply_live_context_window;
 pub use groups::core::voice;
 
 use crate::tui::app::{App, AppAction};

@@ -9,6 +9,7 @@ mod anchor;
 mod clear;
 mod constitution;
 mod context_window;
+pub(crate) use context_window::apply_live_context_window;
 mod copy;
 // This group dir intentionally has a `core.rs` child module with the same
 // name. The module_inception allow is a permanent structure rationale, not

@@ -1752,6 +1752,7 @@ pub(crate) async fn handle_view_events(
                 provider,
                 provider_id,
                 effort,
+                context_window,
                 previous_model,
                 previous_effort,
                 save_as_startup_default,
@@ -1760,15 +1761,37 @@ pub(crate) async fn handle_view_events(
                     app,
                     engine_handle,
                     config,
-                    model,
+                    model.clone(),
                     provider,
-                    provider_id,
+                    provider_id.clone(),
                     effort,
                     previous_model,
                     previous_effort,
                     save_as_startup_default,
                 )
                 .await;
+                if let Some(context_window) = context_window {
+                    let identity = config
+                        .resolve_persisted_provider_identity(
+                            provider.map(ApiProvider::as_str),
+                            provider_id.as_deref(),
+                        )
+                        .unwrap_or_else(|_| crate::config::ProviderIdentity {
+                            provider: app.api_provider,
+                            key: app.provider_identity_for_persistence().to_string(),
+                            exact_id: app.provider_id_for_persistence().map(str::to_string),
+                            migrated_legacy_ollama_cloud_route: false,
+                        });
+                    if let Err(error) = crate::config::save_model_context_window_for_identity(
+                        &identity,
+                        &model,
+                        context_window,
+                    ) {
+                        app.status_message = Some(error.to_string());
+                    } else {
+                        crate::commands::apply_live_context_window(app, Some(context_window));
+                    }
+                }
             }
             ViewEvent::ModelPickerDismissed {
                 catalog_view,

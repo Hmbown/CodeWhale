@@ -745,6 +745,7 @@ pub enum ViewEvent {
         /// `Custom`; built-in routes leave this unset.
         provider_id: Option<String>,
         effort: crate::tui::app::ReasoningEffort,
+        context_window: Option<u32>,
         previous_model: String,
         previous_effort: crate::tui::app::ReasoningEffort,
         save_as_startup_default: bool,
