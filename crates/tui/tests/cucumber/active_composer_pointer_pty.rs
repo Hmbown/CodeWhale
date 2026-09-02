@@ -187,21 +187,29 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     // Distinguishing assertion: a real submit — the pointer click or keyboard
     // Enter alike — consumes the draft into the deterministic offline queue
     // and paints the queue receipt toast. A no-op click paints no receipt
-    // and times out here.
-    if tui
-        .wait_for(
-            |frame| normalized_text(frame).contains(receipt),
-            SETTLE_WAIT,
-        )
-        .is_err()
-    {
-        panic!(
-            "{size}: click on [↑] at ({send_row},{}) produced no queue receipt \
-             {receipt:?} — pointer submit did not reach the keyboard-submit \
-             dispatch path\n{}",
-            send_col + 1,
-            tui.diagnostics()
-        );
+    // and never grows the queue. The receipt toast is transient, so either
+    // signal (toast seen, or the queue count grew) proves the dispatch.
+    let expected = queued_before.map(|n| n + 1);
+    let deadline = Instant::now() + qa_harness::harness::ci_scaled(SETTLE_WAIT);
+    loop {
+        tui.pump();
+        let text = normalized_text(tui.frame());
+        let grew = queued_count(&text)
+            .zip(expected)
+            .is_some_and(|(seen, want)| seen == want);
+        if text.contains(receipt) || grew {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "{size}: click on [↑] at ({send_row},{}) produced no queue receipt \
+                 {receipt:?} and no queue growth — pointer submit did not reach the \
+                 keyboard-submit dispatch path\n{}",
+                send_col + 1,
+                tui.diagnostics()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 
     // Durable queue proof at every size: the pending-input preview renders

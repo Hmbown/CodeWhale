@@ -225,8 +225,18 @@ fn context_cap_warns_once_in_the_posture_bar() {
     let rows = draw(&mut app, 100, 32);
     let pct = super::info_context_percent(&app);
     assert!(pct >= 80, "fixture must sit at the cap: {pct}");
-    assert_eq!(count_rows_containing(&rows, "surface soon — /compact"), 1);
-    assert_eq!(count_rows_containing(&rows, &format!("{pct}%")), 1);
+    assert_eq!(
+        count_rows_containing(&rows, "surface soon — /compact"),
+        1,
+        "cap warning rows:\n{}",
+        rows.join("\n")
+    );
+    assert_eq!(
+        count_rows_containing(&rows, &format!("{pct}%")),
+        1,
+        "context reading rows:\n{}",
+        rows.join("\n")
+    );
 }
 
 /// The double-tap window advertises itself in the posture bar's hint slot.
