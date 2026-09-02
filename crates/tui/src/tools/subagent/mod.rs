@@ -9464,6 +9464,11 @@ async fn spawn_subagent_from_input(
         effective_model.clone(),
         model_selection.source.as_str(),
     )?;
+    crate::fleet::members::auto_enroll_fleet_model(
+        &runtime.context.workspace,
+        &child_route.provider_id,
+        &child_route.model_id,
+    );
 
     if spawn_request.worktree.is_some() {
         let manager_guard = manager.read().await;

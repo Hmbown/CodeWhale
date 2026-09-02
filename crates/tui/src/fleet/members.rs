@@ -130,8 +130,7 @@ pub fn models_of(fleet: &FleetFile) -> Vec<FleetModel> {
 
 /// Add `provider/model` to the selected Pod (creating and selecting a
 /// user-global `My fleet` when none is selected), one member row per role.
-/// Adding a route that is already present with the same roles is a no-op
-/// that still reports `Added`, so the receipt reads the same either way.
+/// Adding a route that is already present with the same roles is a no-op.
 pub fn add_fleet_model(
     workspace: &Path,
     provider: &str,
@@ -163,6 +162,7 @@ pub fn add_fleet_model(
     } else {
         roles.iter().map(|r| Some(r.as_str())).collect()
     };
+    let mut added_any = false;
     for role in wanted {
         let already = fleet.members.iter().any(|m| {
             m.provider
@@ -188,6 +188,13 @@ pub fn add_fleet_model(
             instructions: None,
             requires: Vec::new(),
         });
+        added_any = true;
+    }
+    if !added_any {
+        return Ok(FleetModelChange::Unchanged {
+            fleet: fleet.name,
+            reason: "already in the fleet".to_string(),
+        });
     }
     save_fleet(&fleet, scope, workspace)?;
     Ok(FleetModelChange::Added {
@@ -195,6 +202,29 @@ pub fn add_fleet_model(
         created_fleet,
         roles,
     })
+}
+
+/// Idempotently enroll a route the user selected or used (`/model`, config,
+/// a subagent run). Never prompts and never fails the caller: a store error is
+/// logged and swallowed. `auto` routes and blank ids are skipped.
+pub fn auto_enroll_fleet_model(workspace: &Path, provider: &str, model: &str) {
+    let provider = provider.trim();
+    let model = model.trim();
+    if provider.is_empty()
+        || model.is_empty()
+        || provider.eq_ignore_ascii_case("auto")
+        || model.eq_ignore_ascii_case("auto")
+    {
+        return;
+    }
+    if let Err(error) = add_fleet_model(workspace, provider, model, &[]) {
+        tracing::debug!(
+            provider,
+            model,
+            error = %error,
+            "could not auto-enroll model in the fleet"
+        );
+    }
 }
 
 /// Remove every member row pinning `provider/model` from the selected Pod.
@@ -459,6 +489,24 @@ mod tests {
 
         let err = remove_fleet_model(&workspace, "openrouter", "nope").expect_err("absent");
         assert!(err.to_string().contains("not in the fleet"), "{err}");
+    }
+
+    #[test]
+    fn auto_enroll_is_idempotent_and_skips_auto_routes() {
+        let _lock = crate::test_support::lock_test_env();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.as_os_str());
+        let workspace = temp.path().join("repo");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+
+        auto_enroll_fleet_model(&workspace, "openrouter", "z-ai/glm-5.3-flash");
+        auto_enroll_fleet_model(&workspace, "openrouter", "z-ai/glm-5.3-flash");
+        assert_eq!(fleet_models(&workspace).len(), 1);
+
+        remove_fleet_model(&workspace, "openrouter", "z-ai/glm-5.3-flash").expect("remove");
+        auto_enroll_fleet_model(&workspace, "auto", "auto");
+        assert!(fleet_models(&workspace).is_empty());
     }
 
     #[test]

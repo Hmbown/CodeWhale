@@ -446,6 +446,26 @@ pub async fn run_tui(
     );
     crate::startup_trace::mark("app_constructed");
     sync_config_provider_from_app(config, &app);
+    if !app.auto_model {
+        let saved_provider_model = config
+            .provider_config_for(app.api_provider)
+            .and_then(|provider| provider.model.as_deref());
+        if let Ok(resolution) = crate::route_runtime::resolve_route_candidate_with_context_metadata(
+            app.api_provider,
+            Some(&app.model),
+            saved_provider_model,
+            Some(config.deepseek_base_url()),
+            app.active_context_window_override,
+            None,
+        ) {
+            let resolved_model = resolution.candidate.wire_model_id().as_str().to_string();
+            crate::fleet::members::auto_enroll_fleet_model(
+                &app.workspace,
+                &app.provider_identity_for_persistence(),
+                &resolved_model,
+            );
+        }
+    }
     surface_prompt_override_notices(&mut app);
 
     if options.resume_session_id.is_none() && !app.launch.visible {

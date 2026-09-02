@@ -63,6 +63,17 @@ pub fn load_effective_roster(
             ));
         }
     };
+    if fleet.operator.is_none()
+        && fleet
+            .members
+            .iter()
+            .all(|member| member.role.trim().is_empty())
+    {
+        return plugins.map_or_else(
+            || FleetRoster::load(fleet_config, workspace),
+            |plugins| FleetRoster::load_with_plugins(fleet_config, workspace, plugins),
+        );
+    }
     roster_from_fleet(&fleet, selected.scope, &selected.path)
 }
 
