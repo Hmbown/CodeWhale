@@ -1001,7 +1001,7 @@ pub(crate) fn resolve_loaded_session_route(app: &mut App, config: &Config) {
             );
             crate::fleet::members::auto_enroll_fleet_model(
                 &app.workspace,
-                &app.provider_identity_for_persistence(),
+                app.provider_identity_for_persistence(),
                 &resolved_model,
             );
         }

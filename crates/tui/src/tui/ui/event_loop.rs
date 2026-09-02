@@ -461,7 +461,7 @@ pub async fn run_tui(
             let resolved_model = resolution.candidate.wire_model_id().as_str().to_string();
             crate::fleet::members::auto_enroll_fleet_model(
                 &app.workspace,
-                &app.provider_identity_for_persistence(),
+                app.provider_identity_for_persistence(),
                 &resolved_model,
             );
         }

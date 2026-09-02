@@ -756,7 +756,7 @@ pub(crate) async fn apply_model_picker_choice(
             apply_picker_effort_choice(app, engine_handle, effort, previous_effort).await;
             crate::fleet::members::auto_enroll_fleet_model(
                 &app.workspace,
-                &app.provider_identity_for_persistence(),
+                app.provider_identity_for_persistence(),
                 &app.model,
             );
             if save_as_startup_default {

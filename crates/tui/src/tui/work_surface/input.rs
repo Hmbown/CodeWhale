@@ -398,10 +398,10 @@ pub fn handle_mouse(app: &mut App, mouse: MouseEvent) -> MouseOutcome {
             && app.work_surface.hovered_tab.take().is_some()
         {
             app.needs_redraw = true;
-        } else if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
-            if app.work_surface.pressed_tab.take().is_some() {
-                app.needs_redraw = true;
-            }
+        } else if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left))
+            && app.work_surface.pressed_tab.take().is_some()
+        {
+            app.needs_redraw = true;
         }
     }
 

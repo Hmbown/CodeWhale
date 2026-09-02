@@ -2103,7 +2103,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.set_model_selection(model.clone());
             crate::fleet::members::auto_enroll_fleet_model(
                 &app.workspace,
-                &app.provider_identity_for_persistence(),
+                app.provider_identity_for_persistence(),
                 &model,
             );
             app.update_model_compaction_budget();
@@ -2793,7 +2793,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 app.set_model_selection(model.clone());
                 crate::fleet::members::auto_enroll_fleet_model(
                     &app.workspace,
-                    &app.provider_identity_for_persistence(),
+                    app.provider_identity_for_persistence(),
                     model,
                 );
                 app.update_model_compaction_budget();
