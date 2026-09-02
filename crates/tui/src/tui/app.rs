@@ -1312,9 +1312,8 @@ pub struct App {
     /// instead of spawning a second dispatch that could reorder ops.
     pub dispatch_in_flight: bool,
     /// Timestamp of the most recent Enter while the engine was busy.
-    /// Retained for session layout compatibility; bare-Enter double-tap
-    /// steering was removed (use Ctrl+Enter instead).
-    #[allow(dead_code)]
+    /// Used by `enter_with_double_tap()` / `double_tap_window_open()` to
+    /// detect a second Enter inside [`Self::DOUBLE_TAP_WINDOW`].
     pub last_enter_instant: Option<Instant>,
     /// Whether the once-per-turn provider-wait incident (#3095) has already
     /// been logged for the current turn.
@@ -5303,14 +5302,66 @@ impl App {
         ComposerSubmitAction::Submit(disposition)
     }
 
-    /// Resolve what bare Enter should do right now.
+    /// How long after a queued Enter a second, empty Enter still means
+    /// "send that now" (the grokbuild double-tap, restored 2026-09-02).
+    pub const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(500);
+
+    /// Resolve what bare Enter should do right now, with double-tap
+    /// detection.
     ///
-    /// Kept for compatibility with older call sites and tests.
+    /// While the engine is busy the first Enter queues and opens the window;
+    /// a second Enter inside it resolves to `Steer` — the same disposition
+    /// Ctrl+Enter takes, so there is one steering path. The event loop pairs
+    /// this with [`Self::take_queued_for_double_tap_steer`] on an empty
+    /// composer, because the first tap already emptied it. Idle Enter
+    /// submits immediately and closes any window.
     #[must_use]
-    #[allow(dead_code)]
     pub fn enter_with_double_tap(&mut self) -> Option<SubmitDisposition> {
-        // Name kept for call-site stability; the double-tap window is gone.
-        Some(self.decide_submit_disposition())
+        let disposition = self.decide_submit_disposition();
+        match disposition {
+            SubmitDisposition::Queue if !self.offline_mode && !self.dispatch_in_flight => {
+                if self.double_tap_window_open() {
+                    self.last_enter_instant = None;
+                    return Some(SubmitDisposition::Steer);
+                }
+                self.last_enter_instant = Some(Instant::now());
+                Some(SubmitDisposition::Queue)
+            }
+            other => {
+                self.last_enter_instant = None;
+                Some(other)
+            }
+        }
+    }
+
+    /// Open the double-tap window: a queued Enter happened while the engine
+    /// was busy. The typed-submit path calls this when it queues.
+    pub fn arm_double_tap_window(&mut self) {
+        self.last_enter_instant = Some(Instant::now());
+    }
+
+    /// True while a second, empty Enter would send the just-queued message
+    /// now — the posture bar advertises the gesture exactly this long.
+    #[must_use]
+    pub fn double_tap_window_open(&self) -> bool {
+        self.is_loading
+            && !self.offline_mode
+            && !self.dispatch_in_flight
+            && self
+                .last_enter_instant
+                .is_some_and(|instant| instant.elapsed() < Self::DOUBLE_TAP_WINDOW)
+    }
+
+    /// Pop the most recently queued message when the double-tap window is
+    /// still open. Clears the window so a third Enter does not re-steer.
+    pub fn take_queued_for_double_tap_steer(&mut self) -> Option<QueuedMessage> {
+        if !self.double_tap_window_open() || self.queued_messages.is_empty() {
+            return None;
+        }
+        match self.enter_with_double_tap() {
+            Some(SubmitDisposition::Steer) => self.queued_messages.pop_back(),
+            _ => None,
+        }
     }
 
     /// Mark the in-flight streaming Assistant cell as interrupted: prepend

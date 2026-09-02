@@ -5240,16 +5240,51 @@ fn composer_submit_state_by_chord_matrix() {
 }
 
 #[test]
-fn bare_enter_while_streaming_stays_queue_not_steer() {
+fn bare_enter_while_streaming_queues_then_double_tap_steers() {
     let mut app = App::new(test_options(false), &Config::default());
-    // Busy + streaming: every bare Enter queues. Steer is Ctrl+Enter only.
+    // Busy + streaming: the first bare Enter queues and opens the window; a
+    // second inside it steers (the same disposition Ctrl+Enter takes); a
+    // second after the window lapses is an ordinary queue.
     app.is_loading = true;
     app.streaming_message_index = Some(0);
 
     let first = app.enter_with_double_tap();
     assert_eq!(first, Some(SubmitDisposition::Queue));
+    assert!(app.double_tap_window_open());
     let second = app.enter_with_double_tap();
-    assert_eq!(second, Some(SubmitDisposition::Queue));
+    assert_eq!(second, Some(SubmitDisposition::Steer));
+    assert!(!app.double_tap_window_open(), "a steer closes the window");
+
+    let first = app.enter_with_double_tap();
+    assert_eq!(first, Some(SubmitDisposition::Queue));
+    app.last_enter_instant =
+        Some(std::time::Instant::now() - App::DOUBLE_TAP_WINDOW - Duration::from_millis(1));
+    assert!(!app.double_tap_window_open());
+    let late = app.enter_with_double_tap();
+    assert_eq!(late, Some(SubmitDisposition::Queue));
+}
+
+#[test]
+fn double_tap_takes_the_just_queued_message_only_inside_the_window() {
+    let mut app = App::new(test_options(false), &Config::default());
+    app.is_loading = true;
+    app.streaming_message_index = Some(0);
+    app.queue_message(QueuedMessage::new("older queued".to_string(), None));
+    app.queue_message(QueuedMessage::new("just typed follow-up".to_string(), None));
+    assert!(
+        app.take_queued_for_double_tap_steer().is_none(),
+        "no window armed"
+    );
+    app.arm_double_tap_window();
+    let taken = app
+        .take_queued_for_double_tap_steer()
+        .expect("the window is open");
+    assert_eq!(taken.display, "just typed follow-up");
+    assert_eq!(app.queued_message_count(), 1);
+    assert!(
+        app.take_queued_for_double_tap_steer().is_none(),
+        "one steer per tap"
+    );
 }
 
 #[test]
@@ -5262,8 +5297,9 @@ fn submit_disposition_does_not_mutate_the_queue() {
     app.queue_message(QueuedMessage::new("just typed follow-up".to_string(), None));
     assert!(app.input.is_empty());
     // The event loop owns empty-Enter queue promotion. Merely asking for the
-    // typed-submit disposition must not mutate queue state.
-    assert_eq!(app.enter_with_double_tap(), Some(SubmitDisposition::Queue));
+    // disposition must not mutate queue state — even when the answer is the
+    // double-tap Steer.
+    assert_eq!(app.enter_with_double_tap(), Some(SubmitDisposition::Steer));
     assert_eq!(app.queued_message_count(), 2);
 }
 

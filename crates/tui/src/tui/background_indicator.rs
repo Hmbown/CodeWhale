@@ -29,16 +29,6 @@
 
 use std::collections::HashSet;
 
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    prelude::Widget,
-    style::Style,
-    text::{Line, Span},
-    widgets::Block,
-};
-use unicode_width::UnicodeWidthStr;
-
 use crate::localization::truncate_to_width;
 use crate::tui::app::{App, TaskPanelEntry, TaskPanelEntryKind};
 
@@ -79,7 +69,7 @@ impl PendingItemKind {
         }
     }
 
-    fn plural_noun(self, count: usize) -> String {
+    pub(crate) fn plural_noun(self, count: usize) -> String {
         if count == 1 {
             self.noun().to_string()
         } else {
@@ -107,11 +97,6 @@ pub struct PendingWork {
 
 impl PendingWork {
     #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
-    #[must_use]
     pub fn count(&self, kind: PendingItemKind) -> usize {
         self.items.iter().filter(|item| item.kind == kind).count()
     }
@@ -120,40 +105,6 @@ impl PendingWork {
     #[cfg(test)]
     pub fn count_state(&self, state: PendingItemState) -> usize {
         self.items.iter().filter(|item| item.state == state).count()
-    }
-
-    /// Compact one-line chip text. `None` when nothing is pending (the
-    /// caller then reserves zero layout rows). `Some(String::new())` for a
-    /// zero-width budget is never rendered.
-    #[must_use]
-    pub fn render_line(&self, width: usize) -> Option<String> {
-        if self.items.is_empty() {
-            return None;
-        }
-        if width == 0 {
-            return Some(String::new());
-        }
-
-        let mut counts: Vec<String> = Vec::new();
-        for kind in [
-            PendingItemKind::Shell,
-            PendingItemKind::Task,
-            PendingItemKind::Agent,
-        ] {
-            let n = self.count(kind);
-            if n > 0 {
-                counts.push(format!("{n} {}", kind.plural_noun(n)));
-            }
-        }
-        let labels = self
-            .items
-            .iter()
-            .map(|item| item.label.as_str())
-            .collect::<Vec<_>>()
-            .join(" · ");
-
-        let line = format!("⏳ {} — {}", counts.join(" · "), labels);
-        Some(truncate_to_width(&line, width))
     }
 }
 
@@ -277,44 +228,10 @@ pub(crate) fn is_live_shell_entry(entry: &TaskPanelEntry) -> bool {
         && (entry.prompt_summary.starts_with("shell: ") || entry.id.starts_with("shell_"))
 }
 
-/// Paint the one-row pending-work chip. No-op when `area` is empty or `work`
-/// holds no items (callers normally gate on `is_empty` for the row budget).
-pub fn render(area: Rect, buf: &mut Buffer, app: &App, work: &PendingWork) {
-    if area.width == 0 || area.height == 0 || work.is_empty() {
-        return;
-    }
-    let Some(line) = work.render_line(usize::from(area.width)) else {
-        return;
-    };
-
-    // Quiet chip surface — never a full-width takeover.
-    Block::default()
-        .style(Style::default().bg(app.ui_theme.surface_bg))
-        .render(area, buf);
-
-    let marker = Span::styled(
-        "⏳",
-        Style::default()
-            .fg(app.ui_theme.status_warning)
-            .add_modifier(ratatui::style::Modifier::BOLD),
-    );
-    let body = Span::styled(line, Style::default().fg(app.ui_theme.text_muted));
-    let width = usize::from(area.width);
-    let mut spans = vec![marker, Span::raw(" ")];
-    let body_width = body.content.width();
-    if body_width > width.saturating_sub(2) {
-        // Whole-line truncation already applied; drop the marker only when
-        // the terminal is too narrow for both marker and text.
-        Line::from(vec![body]).render(area, buf);
-        return;
-    }
-    spans.push(body);
-    Line::from(spans).render(area, buf);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_width::UnicodeWidthStr;
 
     fn shell(label: &str) -> PendingItem {
         PendingItem {
@@ -343,8 +260,7 @@ mod tests {
     #[test]
     fn empty_pending_work_hides_the_indicator() {
         let work = PendingWork::default();
-        assert!(work.is_empty());
-        assert_eq!(work.render_line(80), None, "empty -> no line, no row");
+        assert!(work.items.is_empty());
         assert_eq!(work.count(PendingItemKind::Shell), 0);
         assert_eq!(work.count(PendingItemKind::Task), 0);
         assert_eq!(work.count(PendingItemKind::Agent), 0);
@@ -355,17 +271,13 @@ mod tests {
         let work = PendingWork {
             items: vec![shell("cargo test"), task("run"), agent("Agent 3·scout")],
         };
-        assert!(!work.is_empty());
+        assert!(!work.items.is_empty());
         assert_eq!(work.count(PendingItemKind::Shell), 1);
         assert_eq!(work.count(PendingItemKind::Task), 1);
         assert_eq!(work.count(PendingItemKind::Agent), 1);
-        let line = work.render_line(200).expect("pending work renders");
-        assert!(line.contains("1 shell"), "got: {line}");
-        assert!(line.contains("1 task"), "got: {line}");
-        assert!(line.contains("1 agent"), "got: {line}");
-        assert!(line.contains("cargo test"), "got: {line}");
-        assert!(line.contains("run"), "got: {line}");
-        assert!(line.contains("Agent 3·scout"), "got: {line}");
+        assert_eq!(PendingItemKind::Shell.plural_noun(1), "shell");
+        assert_eq!(PendingItemKind::Task.plural_noun(1), "task");
+        assert_eq!(PendingItemKind::Agent.plural_noun(1), "agent");
     }
 
     #[test]
@@ -373,9 +285,9 @@ mod tests {
         let work = PendingWork {
             items: vec![shell("one"), shell("two"), agent("A")],
         };
-        let line = work.render_line(200).unwrap();
-        assert!(line.contains("2 shells"), "got: {line}");
-        assert!(line.contains("1 agent"), "got: {line}");
+        assert_eq!(work.count(PendingItemKind::Shell), 2);
+        assert_eq!(PendingItemKind::Shell.plural_noun(2), "shells");
+        assert_eq!(work.count(PendingItemKind::Agent), 1);
     }
 
     #[test]
@@ -383,20 +295,9 @@ mod tests {
         let mut work = PendingWork {
             items: vec![shell("cargo test")],
         };
-        assert!(work.render_line(80).is_some());
+        assert!(!work.items.is_empty());
         work.items.clear();
-        assert!(work.is_empty());
-        assert_eq!(work.render_line(80), None, "completion -> clears");
-    }
-
-    #[test]
-    fn narrow_width_truncates_but_keeps_prefix() {
-        let work = PendingWork {
-            items: vec![shell("cargo test"), agent("Agent 3·scout")],
-        };
-        let line = work.render_line(24).unwrap();
-        assert!(line.starts_with("⏳"), "marker survives: got {line}");
-        assert!(line.width() <= 24, "line fits budget: got {line}");
+        assert!(work.items.is_empty());
     }
 
     #[test]
@@ -405,10 +306,10 @@ mod tests {
         let work = PendingWork {
             items: vec![shell(long)],
         };
-        let line = work.render_line(400).unwrap();
         assert!(
-            line.contains('…'),
-            "over-long command ellipsized: got {line}"
+            work.items[0].label.contains('…'),
+            "over-long command ellipsized: got {}",
+            work.items[0].label
         );
         assert!(
             work.items[0].label.width() <= ITEM_LABEL_MAX_WIDTH,
@@ -422,7 +323,7 @@ mod tests {
         let options = crate::test_support::test_tui_options(std::path::PathBuf::from("."));
         let app = crate::test_support::test_app_with_options(options);
         assert!(
-            pending_work_from_app(&app).is_empty(),
+            pending_work_from_app(&app).items.is_empty(),
             "bare app has no pending background work"
         );
     }
@@ -477,20 +378,26 @@ mod tests {
             1,
             "running agent counted"
         );
-        let line = work.render_line(400).unwrap();
+        let labels: Vec<&str> = work.items.iter().map(|item| item.label.as_str()).collect();
         assert!(
-            !line.contains("cargo test"),
-            "shell command must not occupy the crumb: {line}"
+            !labels.iter().any(|label| label.contains("cargo test")),
+            "shell command must not occupy the counts: {labels:?}"
         );
-        assert!(line.contains("run"), "task id labeled: {line}");
-        assert!(line.contains("Agent 1"), "agent label shown: {line}");
+        assert!(
+            labels.iter().any(|label| label.contains("run")),
+            "{labels:?}"
+        );
+        assert!(
+            labels.iter().any(|label| label.contains("Agent 1")),
+            "{labels:?}"
+        );
 
         // Completion clears the snapshot: dropping the running entries hides
         // the indicator entirely.
         app.task_panel.clear();
         app.agent_progress.clear();
         let cleared = pending_work_from_app(&app);
-        assert!(cleared.is_empty(), "completion clears the indicator");
+        assert!(cleared.items.is_empty(), "completion clears the indicator");
     }
 
     #[test]

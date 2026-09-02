@@ -424,11 +424,6 @@ impl LiveActivity {
     }
 
     #[must_use]
-    pub(crate) fn running_tool_count(self) -> usize {
-        self.running_tools
-    }
-
-    #[must_use]
     fn is_explicit(self) -> bool {
         !matches!(self.kind, LiveActivityKind::Working)
     }

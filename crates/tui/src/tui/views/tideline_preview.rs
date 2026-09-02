@@ -158,14 +158,13 @@ pub fn render_tideline_settings_preview(
     let composer = TidelineComposer::new(candidate, draft).focused(true);
     crate::tui::composer_chrome::render_tideline_composer(composer_area, buf, &composer);
 
-    let footer = TidelineFooter::new(
-        candidate,
-        "thinking",
-        ChromeInk::Active,
-        "$0.42 · 61K tok",
-        61,
-        "↑↓ nav · Enter apply · Esc back",
-    )
-    .live_detail(Some("1m 15s"));
+    let counts = [("2 agents".to_string(), ChromeInk::Active)];
+    let footer = TidelineFooter::new(candidate, ("ask", ChromeInk::PermissionAsk))
+        .permission_key(Some("Shift+Tab"))
+        .mode_chip(Some(("work", ChromeInk::PolicyAct)))
+        .mode_key(Some("Tab"))
+        .counts(&counts)
+        .hint(Some(("Esc to interrupt", ChromeInk::MetadataHint)))
+        .context_percent(61);
     crate::tui::phase_strip::render_tideline_footer(footer_area, buf, &footer);
 }

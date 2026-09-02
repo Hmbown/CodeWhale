@@ -4746,11 +4746,6 @@ impl ConfigView {
                     .copied()
             })
             .map_or(palette::UI_THEME, palette::ThemeId::ui_theme);
-        let cost_label = if value_of("cost_currency").as_deref() == Some("cny") {
-            "¥0.00"
-        } else {
-            "$0.00"
-        };
         let context_percent = self.snapshot.context_budget.as_ref().map_or(0, |budget| {
             u8::try_from(budget.percent_basis_points / 100).unwrap_or(100)
         });
@@ -4770,14 +4765,10 @@ impl ConfigView {
         };
         let footer = crate::tui::phase_strip::TidelineFooter::new(
             &theme,
-            "idle",
-            palette::ChromeInk::Metadata,
-            cost_label,
-            context_percent,
-            "",
+            (permission.as_str(), permission_ink),
         )
         .mode_chip(Some((mode.as_str(), mode_ink)))
-        .permission_chip(Some((permission.as_str(), permission_ink)));
+        .context_percent(context_percent);
         crate::tui::phase_strip::render_tideline_footer(
             Rect {
                 x: area.x.saturating_add(label_width),

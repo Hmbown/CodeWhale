@@ -1588,6 +1588,19 @@ impl RemoteControlController {
         }
     }
 
+    /// One word for the posture bar's right slot, `None` while remote
+    /// control is off so the bar paints nothing rather than "off".
+    #[must_use]
+    pub fn status_word(&self) -> Option<&'static str> {
+        match self.status {
+            Status::Off => None,
+            Status::Connecting => Some("connecting"),
+            Status::Connected => Some("connected"),
+            Status::Stopping => Some("stopping"),
+            Status::Failed => Some("failed"),
+        }
+    }
+
     pub fn status_line(&self) -> String {
         match self.status {
             Status::Off => "Remote control: off".to_string(),
