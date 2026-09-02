@@ -21,8 +21,6 @@
   --whale-text-muted-rgb: 147 160 184;
   --whale-text-hint: #8a99b3;
   --whale-text-hint-rgb: 138 153 179;
-  --whale-text-dim: #697791;
-  --whale-text-dim-rgb: 105 119 145;
   --whale-action: #6aa6dc;
   --whale-action-rgb: 106 166 220;
   --whale-cobalt: #1535b2;
@@ -39,12 +37,8 @@
   --whale-brand-magenta-rgb: 240 78 184;
   --whale-human: #f6c453;
   --whale-human-rgb: 246 196 83;
-  --whale-accent-primary: var(--whale-action);
-  --whale-accent-primary-rgb: var(--whale-action-rgb);
   --whale-working-green: #9bd66f;
   --whale-working-green-rgb: 155 214 111;
-  --whale-accent-action: var(--whale-action);
-  --whale-accent-action-rgb: var(--whale-action-rgb);
   --whale-error: #ff86b2;
   --whale-error-rgb: 255 134 178;
   --whale-error-hover: #ff9cc2;
@@ -59,8 +53,6 @@
   --whale-warning-rgb: 255 122 89;
   --whale-success: var(--whale-working-green);
   --whale-success-rgb: var(--whale-working-green-rgb);
-  --whale-info: var(--whale-action);
-  --whale-info-rgb: var(--whale-action-rgb);
   --whale-border: #2a3f72;
   --whale-border-rgb: 42 63 114;
   --whale-reasoning-text: #e09948;
@@ -71,8 +63,6 @@
   --whale-reasoning-tint-rgb: 22 36 74;
   --whale-diff-added: #57c785;
   --whale-diff-added-rgb: 87 199 133;
-  --whale-diff-deleted: var(--whale-error);
-  --whale-diff-deleted-rgb: var(--whale-error-rgb);
   --whale-diff-added-bg: #122a22;
   --whale-diff-added-bg-rgb: 18 42 34;
   --whale-diff-deleted-bg: #341827;
