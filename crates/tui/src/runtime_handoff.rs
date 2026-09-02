@@ -92,6 +92,60 @@ const AGENT_TOPOLOGY_TURN_META: &str = concat!(
 );
 const MAX_AGENT_TOPOLOGY_ROWS: usize = 24;
 
+/// The Operate contract (docs/MODES.md, "Operate" and "Operate loop"), stated
+/// once to the model when a session first works in Operate.
+///
+/// KV-cache effect: append-only history. This is a user-role runtime message,
+/// never part of the pinned system prompt or tool catalog, so Plan, Work, and
+/// Operate keep one shared prefix (`every_mode_shares_one_prompt_per_host`).
+/// The engine appends it only when the session log does not already hold one.
+const OPERATE_CONTRACT_EVENT: &str = concat!(
+    "<codewhale:runtime_event kind=\"operate_contract\" visibility=\"internal\">\n",
+    "This is an internal runtime event, not user input. This session is in Operate and you ",
+    "are the operator. The host turns the user's prompt into the session goal; do not ",
+    "create a second one. Decompose the goal into independent streams. Dispatch background ",
+    "`agent` workers for separable streams by default; keep small, chat, one-file, or ",
+    "tightly coupled work in the parent. Use Workflow when order, phases, gates, shared ",
+    "budgets, or deterministic fan-in matter. Every write-capable child must return a ",
+    "VERDICT with real verification evidence; inspect that evidence before trusting it. ",
+    "Dispatch is not completion: dispatched ≠ settled ≠ verified. Synthesize the receipts ",
+    "and stay free for the next ask.\n",
+    "</codewhale:runtime_event>",
+);
+const RUNTIME_TURN_META: &str = concat!(
+    "<turn_meta>\n",
+    "Input provenance: runtime (non-authoritative)\n",
+    "</turn_meta>",
+);
+
+/// Build the one Operate contract message the engine appends to history.
+pub(crate) fn operate_contract_runtime_message() -> Message {
+    runtime_handoff_message_with_meta(OPERATE_CONTRACT_EVENT.to_string(), RUNTIME_TURN_META)
+}
+
+/// True when `message` is the runtime-owned Operate contract. Recognition is
+/// structural (exact envelope text plus the runtime provenance line) so a
+/// person quoting the envelope is never matched.
+pub(crate) fn is_operate_contract_message(message: &Message) -> bool {
+    if message.role != Role::User {
+        return false;
+    }
+    let [
+        ContentBlock::Text {
+            text,
+            cache_control: None,
+        },
+        ContentBlock::Text {
+            text: turn_meta,
+            cache_control: None,
+        },
+    ] = message.content.as_slice()
+    else {
+        return false;
+    };
+    text == OPERATE_CONTRACT_EVENT && is_handoff_turn_meta(turn_meta, "runtime")
+}
+
 const DONE_SENTINEL_START: &str = "<codewhale:subagent.done>";
 const DONE_SENTINEL_END: &str = "</codewhale:subagent.done>";
 const RESTORED_SUMMARY_BUDGET: usize = 1_600;
@@ -521,7 +575,7 @@ Authority: non-authoritative runtime checkpoint"
 /// its metadata carries no provenance line at all. Someone quoting an envelope
 /// while asking about it is not matched no matter how many blocks they send.
 pub(crate) fn is_internal_runtime_handoff(message: &Message) -> bool {
-    if is_agent_topology_checkpoint(message) {
+    if is_agent_topology_checkpoint(message) || is_operate_contract_message(message) {
         return true;
     }
     if message.role != "user" {
