@@ -82,19 +82,19 @@ impl WhaleSpecies {
 
     /// The single role → species table.
     ///
-    /// Accepts Fleet profile ids / role hints (`manager`, `scout`, `builder`,
-    /// `reviewer`, `verifier`, `consultant`, `synthesizer`, `general`,
-    /// `custom`) and runtime [`FleetRole`] names (`worker`, `planner`).
+    /// Accepts Fleet profile ids / role hints (`manager`, `explore`,
+    /// `implement`, `reviewer`, `test`, `advisor`, `synthesizer`, `general`,
+    /// `custom`) and legacy compatibility aliases.
     /// Anything else is [`WhaleSpecies::Plain`] — never a guess.
     #[must_use]
     pub fn for_role_id(role: &str) -> Self {
         match role.trim().to_ascii_lowercase().as_str() {
-            "scout" => Self::Scout,
-            "builder" => Self::Patch,
+            "scout" | "explore" => Self::Scout,
+            "builder" | "implement" => Self::Patch,
             "manager" | "planner" => Self::Harbor,
             "reviewer" => Self::Lantern,
-            "verifier" => Self::Keel,
-            "consultant" | "synthesizer" => Self::Echo,
+            "verifier" | "test" => Self::Keel,
+            "consultant" | "advisor" | "synthesizer" => Self::Echo,
             _ => Self::Plain,
         }
     }

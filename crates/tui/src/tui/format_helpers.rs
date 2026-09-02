@@ -109,7 +109,7 @@ mod tests {
         ];
         let msg = available_models_message("novita", "deepseek/deepseek-v4-flash", &[], &fleet);
         assert!(
-            msg.contains("  openrouter/deepseek/deepseek-v4-flash · scout"),
+            msg.contains("  openrouter/deepseek/deepseek-v4-flash · explore"),
             "got: {msg}"
         );
         assert!(

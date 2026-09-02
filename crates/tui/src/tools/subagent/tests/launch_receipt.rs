@@ -116,11 +116,11 @@ async fn issue_5305_first_personal_profile_receipt_precedes_status_poll() {
     let (manager, _context, start) = start_personal_consultant(workspace.path()).await;
     assert!(start.content.len() < 1024, "receipt must remain compact");
     let receipt = receipt_from(&start);
-    assert_eq!(receipt["requested_type"], json!("consultant"));
+    assert_eq!(receipt["requested_type"], json!("advisor"));
     assert_eq!(receipt["requested_profile"], serde_json::Value::Null);
     assert_eq!(receipt["resolved_profile_id"], json!("consultant"));
     assert_eq!(receipt["profile_origin"], json!("personal"));
-    assert_eq!(receipt["canonical_role"], json!("consultant"));
+    assert_eq!(receipt["canonical_role"], json!("advisor"));
     assert_eq!(receipt["provider_id"], json!("openai-codex"));
     assert_eq!(receipt["model_id"], json!("gpt-5.6-sol"));
     assert_eq!(receipt["route_source"], json!("agent_profile.model"));
@@ -339,7 +339,7 @@ async fn issue_5305_receipt_survives_ledger_interruption_completion_and_resume()
         requested_profile: None,
         resolved_profile_id: Some("consultant".to_string()),
         profile_origin: Some("personal".to_string()),
-        canonical_role: "consultant".to_string(),
+        canonical_role: "advisor".to_string(),
         provider_id: "openai-codex".to_string(),
         model_id: "gpt-5.6-sol".to_string(),
         route_source: "agent_profile.model".to_string(),

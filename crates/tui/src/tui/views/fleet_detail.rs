@@ -23,6 +23,7 @@ use crate::fleet::store::{
     save_fleet, set_selected,
 };
 use crate::palette;
+use crate::tools::subagent::public_role_label;
 use crate::tui::app::App;
 use crate::tui::views::{
     ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_footer,
@@ -32,12 +33,12 @@ use crate::tui::views::{
 /// order. A Pod member is a role; the user can name anything, these are the
 /// known postures.
 const KNOWN_ROLES: [&str; 8] = [
-    "scout",
-    "builder",
+    "explore",
+    "implement",
     "reviewer",
-    "verifier",
+    "test",
     "manager",
-    "consultant",
+    "advisor",
     "summarizer",
     "general",
 ];
@@ -740,6 +741,7 @@ impl FleetDetailView {
                 } else {
                     role
                 };
+                let role = public_role_label(role);
                 let member_label = member
                     .display_name
                     .as_deref()
@@ -1128,7 +1130,7 @@ mod tests {
 
         view.handle_key(key(KeyCode::Char('a')));
         let ids: Vec<&str> = view.fleet.members.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(ids, vec!["scout", "builder"]);
+        assert_eq!(ids, vec!["scout", "explore"]);
 
         // Remove the new member with the confirmed delete flow.
         view.selected = 2;

@@ -36,7 +36,8 @@ use crate::tools::spec::{
 };
 use crate::tools::subagent::{
     SharedSubAgentManager, SubAgentCompletion, SubAgentManager, SubAgentResult, SubAgentRuntime,
-    SubAgentStatus, WorkflowTaskSpawnIdentity, WorkflowTaskSpawnMetadata, spawn_workflow_task,
+    SubAgentStatus, WorkflowTaskSpawnIdentity, WorkflowTaskSpawnMetadata, public_role_label,
+    spawn_workflow_task,
 };
 use crate::tools::verifier::run_workflow_completion_gates;
 use crate::tools::workflow_plan_approval::{
@@ -1619,7 +1620,7 @@ fn apply_named_fleet_to_task_request(
         true,
     )
     .map_err(|err| DriverError::Rejected(err.to_string()))?;
-    request.role = resolved.resolved_role;
+    request.role = resolved.resolved_role.as_deref().map(public_role_label);
     request.profile = Some(resolved.resolved_profile);
     Ok(())
 }
@@ -3810,7 +3811,7 @@ impl SubAgentWorkflowDriver {
             WorkflowUiEventKind::TaskStarted(Box::new(WorkflowTaskStartedEvent {
                 task_id: agent_id.to_string(),
                 label,
-                role: request.role.clone(),
+                role: request.role.as_deref().map(public_role_label),
                 profile: request.profile.clone(),
                 model: request.model.clone(),
                 strength: request.model_strength.clone(),
@@ -6023,7 +6024,7 @@ mod tests {
 
         apply_named_fleet_to_task_request(Some(&fleet), &mut request).expect("resolve");
 
-        assert_eq!(request.role.as_deref(), Some("implementer"));
+        assert_eq!(request.role.as_deref(), Some("implement"));
         assert_eq!(request.profile.as_deref(), Some("builder"));
     }
 
@@ -6143,7 +6144,7 @@ permissions = "read_only"
         // spawn resolves…
         assert_eq!(request.profile.as_deref(), Some("implementer"));
         // …while the semantic role is preserved for gates and records.
-        assert_eq!(request.role.as_deref(), Some("builder"));
+        assert_eq!(request.role.as_deref(), Some("implement"));
         let member = operation.roster().get("implementer").expect("roster");
         assert_eq!(member.profile.provider.as_deref(), Some("zai"));
         assert_eq!(member.profile.model.as_deref(), Some("glm-5"));
@@ -6322,7 +6323,7 @@ permissions = "read_only"
             request.profile.as_deref(),
             "this fleet's ids and roles differ, which is the whole point"
         );
-        assert_eq!(request.role.as_deref(), Some("builder"));
+        assert_eq!(request.role.as_deref(), Some("implement"));
 
         let err = driver
             .prepare_request_for_gates(&mut request)
@@ -6715,7 +6716,7 @@ permissions = "read_only"
 
         assert_eq!(receipt.fleet, "workspace/glm-pair");
         assert_eq!(receipt.member_id, "implementer");
-        assert_eq!(receipt.member_role, "builder");
+        assert_eq!(receipt.member_role, "implement");
         assert_eq!(receipt.provider, "zai");
         assert_eq!(receipt.model, "glm-5");
         assert_eq!(receipt.requested_reasoning, "auto");
@@ -7174,7 +7175,7 @@ workflow({
             .iter()
             .find(|event| event["type"] == "task_started")
             .expect("task_started receipt");
-        assert_eq!(started["role"], "scout");
+        assert_eq!(started["role"], "explore");
         assert_eq!(started["profile"], "scout");
         assert_eq!(started["resolved_profile"], "scout");
 
@@ -8808,7 +8809,7 @@ reviewer = "reviewer"
             .expect("passed gate should admit implementer");
         assert_eq!(handoffs.len(), 1, "{handoffs:?}");
         assert_eq!(handoffs[0].kind, "findings");
-        assert_eq!(handoffs[0].from_role, "scout");
+        assert_eq!(handoffs[0].from_role, "explore");
         assert_eq!(handoffs[0].to_role, "implementer");
         assert!(
             implementer
@@ -10239,9 +10240,9 @@ FINAL RECEIPT
             .collect::<Vec<_>>();
         assert_eq!(gates.len(), 5, "{gates:#?}");
         assert!(gates.iter().all(|event| event["state"] == "passed"));
-        assert_eq!(gates[0]["role"], "scout");
+        assert_eq!(gates[0]["role"], "explore");
         assert_eq!(gates[0]["blocked_role"], "implementer");
-        assert_eq!(gates[3]["role"], "verifier");
+        assert_eq!(gates[3]["role"], "test");
         assert_eq!(gates[3]["blocked_role"], "release_lead");
         assert_eq!(gates[4]["role"], "release_lead");
         assert!(gates[4]["blocked_role"].is_null());

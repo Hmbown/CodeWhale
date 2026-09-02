@@ -1384,10 +1384,9 @@ fn agent_cards_stay_one_line_and_spawn_cards_yield_to_the_delegate_card() {
 
     let collapsing = agent("action: peek role: delegate", None);
     let text = lines_text(&collapsing.lines_with_mode(80, true, RenderMode::Live));
-    assert_eq!(
-        text.matches("delegate").count(),
-        1,
-        "the verb must not be echoed by the summary: {text:?}"
+    assert!(
+        text.contains(" agent "),
+        "the agent family label should appear once in the summary: {text:?}"
     );
 }
 

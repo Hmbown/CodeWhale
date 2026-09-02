@@ -182,8 +182,8 @@ pub enum SubAgentCell {
 impl SubAgentCell {
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
         match self {
-            SubAgentCell::Delegate(card) => card.render_lines(width),
-            SubAgentCell::Fanout(card) => card.render_lines(width),
+            SubAgentCell::Delegate(card) => card.render_lines(width, &crate::palette::UI_THEME),
+            SubAgentCell::Fanout(card) => card.render_lines(width, &crate::palette::UI_THEME),
         }
     }
 }

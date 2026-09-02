@@ -381,28 +381,28 @@ fn subagent_perf_enabled() -> bool {
     })
 }
 
-const VALID_SUBAGENT_TYPES: &str = "worker, scout, planner, reviewer, builder, verifier, consultant, custom \
-     (legacy aliases remain accepted: general, explore/explorer, plan/awaiter, review, implementer, oracle/advisor)";
+const VALID_SUBAGENT_TYPES: &str = "general, explore, planner, reviewer, implement, test, advisor, custom \
+     (legacy aliases remain accepted: worker, scout, builder, verifier, consultant, general-purpose, general_purpose, default, exploration/explorer, plan/planning/awaiter, review/code-review/code_review, implementer/implementation, verify/verification/validator/tester, oracle)";
 /// Role aliases accepted by `normalize_role_alias`. Kept in sync with the
 /// match arms below so every input that `FleetRole::from_str` accepts also
 /// resolves to a canonical role (avoids the dual-validation rejection in #2649).
-const VALID_ROLE_ALIASES: &str = "default; worker; scout; planner; reviewer; builder; verifier; consultant; custom \
-     (legacy aliases remain accepted)";
+const VALID_ROLE_ALIASES: &str = "general; explore; planner; reviewer; implement; test; advisor; custom \
+     (legacy aliases remain accepted: worker; scout; builder; verifier; consultant; default; general-purpose; general_purpose; exploration; explorer; plan; planning; awaiter; review; code-review; code_review; implementer; implementation; verify; verification; validator; tester; oracle)";
 /// Canonical model-facing Pod role values, in schema order. This is the
 /// closed `enum` advertised on the Agent tool's `type` property. Legacy
 /// aliases are accepted only at replay/deserialization boundaries
 /// ([`migrate_legacy_role_token`]) and are never advertised to models.
 const FLEET_ROLE_SCHEMA_VALUES: [&str; 8] = [
-    "worker",
-    "scout",
+    "general",
+    "explore",
     "planner",
     "reviewer",
-    "builder",
-    "verifier",
-    "consultant",
+    "implement",
+    "test",
+    "advisor",
     "custom",
 ];
-const SUBAGENT_TYPE_DESCRIPTION: &str = "Pod role for this delegated worker. worker: full tool access for multi-step tasks. scout: fast read-only exploration. planner: grounded strategy with read-only probes. reviewer: reads and grades code. builder: lands focused code changes. verifier: runs tests/validation gates and reports evidence. consultant: read-only high-reasoning counsel for judgement calls and design critique. custom: the tools listed in allowed_tools on the parent's posture.";
+const SUBAGENT_TYPE_DESCRIPTION: &str = "Pod role for this delegated worker. general: full tool access for multi-step tasks. explore: fast read-only exploration. planner: grounded strategy with read-only probes. reviewer: reads and grades code. implement: lands focused code changes. test: runs tests/validation gates and reports evidence. advisor: read-only high-reasoning counsel for judgement calls and design critique. custom: the tools listed in allowed_tools on the parent's posture. Legacy aliases remain accepted at deserialization boundaries.";
 
 // === Types ===
 
@@ -423,11 +423,11 @@ impl SubAgentAssignment {
 /// Canonical Pod role for a delegated worker, with specialized behavior
 /// and tool access per role.
 ///
-/// **Public vocabulary is Pod roles** (`worker`, `scout`, `planner`,
-/// `reviewer`, `builder`, `verifier`, `custom`) and the variants match that
+/// **Public vocabulary is Pod roles** (`general`, `explore`, `planner`,
+/// `reviewer`, `implement`, `test`, `advisor`, `custom`) and the variants match that
 /// vocabulary one-to-one. Serialization, prompts, receipts, and UI always
-/// use [`Self::as_str`]. Legacy wire spellings (`general`, `explore`,
-/// `plan`, `review`, `implementer`, …) are accepted only through
+/// use [`Self::as_str`]. Legacy wire spellings (`worker`, `scout`, `plan`,
+/// `review`, `implementer`, …) are accepted only through
 /// [`migrate_legacy_role_token`] at deserialization / parse boundaries.
 ///
 /// This is the closed runtime role set. It is distinct from
@@ -500,13 +500,13 @@ impl<'de> Deserialize<'de> for FleetRole {
 #[must_use]
 pub fn migrate_legacy_role_token(token: &str) -> Option<&'static str> {
     match token.trim().to_ascii_lowercase().as_str() {
-        "general" | "general-purpose" | "general_purpose" | "default" => Some("worker"),
-        "explore" | "exploration" | "explorer" => Some("scout"),
+        "worker" | "general-purpose" | "general_purpose" | "default" => Some("general"),
+        "scout" | "exploration" | "explorer" => Some("explore"),
         "plan" | "planning" | "awaiter" => Some("planner"),
         "review" | "code-review" | "code_review" => Some("reviewer"),
-        "implementer" | "implement" | "implementation" => Some("builder"),
-        "verify" | "verification" | "validator" | "tester" => Some("verifier"),
-        "oracle" | "advisor" => Some("consultant"),
+        "builder" | "implementer" | "implementation" => Some("implement"),
+        "verifier" | "verify" | "verification" | "validator" | "tester" => Some("test"),
+        "consultant" | "oracle" => Some("advisor"),
         _ => None,
     }
 }
@@ -515,20 +515,20 @@ impl FleetRole {
     /// Parse a Pod role from user input or a serialized boundary.
     ///
     /// Accepts Pod role names and, at this parse boundary only, legacy
-    /// aliases (`explore` → scout, `plan` → planner, …).
+    /// aliases (`scout` → explore, `plan` → planner, …).
     #[must_use]
     pub fn from_str(s: &str) -> Option<Self> {
         let normalized = s.trim().to_ascii_lowercase();
         // Boundary migration first, then canonical Pod names.
         let token = migrate_legacy_role_token(&normalized).unwrap_or(normalized.as_str());
         match token {
-            "worker" => Some(Self::Worker),
-            "scout" => Some(Self::Scout),
+            "general" => Some(Self::Worker),
+            "explore" => Some(Self::Scout),
             "planner" => Some(Self::Planner),
             "reviewer" => Some(Self::Reviewer),
-            "builder" => Some(Self::Builder),
-            "verifier" => Some(Self::Verifier),
-            "consultant" => Some(Self::Consultant),
+            "implement" => Some(Self::Builder),
+            "test" => Some(Self::Verifier),
+            "advisor" => Some(Self::Consultant),
             "custom" => Some(Self::Custom),
             _ => None,
         }
@@ -538,13 +538,13 @@ impl FleetRole {
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Worker => "worker",
-            Self::Scout => "scout",
+            Self::Worker => "general",
+            Self::Scout => "explore",
             Self::Planner => "planner",
             Self::Reviewer => "reviewer",
-            Self::Builder => "builder",
-            Self::Verifier => "verifier",
-            Self::Consultant => "consultant",
+            Self::Builder => "implement",
+            Self::Verifier => "test",
+            Self::Consultant => "advisor",
             Self::Custom => "custom",
         }
     }
@@ -587,6 +587,17 @@ impl FleetRole {
             _ => format!("{role_intro}{SUBAGENT_OUTPUT_FORMAT}"),
         }
     }
+}
+
+/// Public label for any role token (canonical, legacy alias, or free-form
+/// profile role). Canonical/legacy tokens collapse to the advertised name;
+/// anything else passes through trimmed.
+#[must_use]
+pub fn public_role_label(token: &str) -> String {
+    FleetRole::from_str(token).map_or_else(
+        || token.trim().to_string(),
+        |role| role.as_str().to_string(),
+    )
 }
 
 /// Status of a sub-agent execution.
@@ -9453,6 +9464,11 @@ async fn spawn_subagent_from_input(
         effective_model.clone(),
         model_selection.source.as_str(),
     )?;
+    crate::fleet::members::auto_enroll_fleet_model(
+        &runtime.context.workspace,
+        &child_route.provider_id,
+        &child_route.model_id,
+    );
 
     if spawn_request.worktree.is_some() {
         let manager_guard = manager.read().await;
@@ -9724,8 +9740,8 @@ fn mint_child_route_receipt(
     let canonical_role = member
         .map(|member| member.profile.role.name.trim())
         .filter(|role| !role.is_empty())
-        .map(str::to_string)
-        .or_else(|| request.assignment.role.clone())
+        .map(public_role_label)
+        .or_else(|| request.assignment.role.as_deref().map(public_role_label))
         .unwrap_or_else(|| request.agent_type.as_str().to_string());
     let provider_id = runtime
         .api_config
@@ -12922,7 +12938,7 @@ fn validate_spawn_write_contract(
     {
         return Err(ToolError::invalid_input(format!(
             "{} implies write capability; write_authority=read_only is a contradiction. \
-             Use type=scout (or another read-only role), or set write_authority to \
+            Use type=explore (or another read-only role), or set write_authority to \
              workspace_write / worktree_write.",
             request.agent_type.as_str()
         )));
@@ -13684,6 +13700,7 @@ pub(crate) fn configured_model_for_role_or_type(
                 .unwrap_or(normalized.as_str())
                 .to_string(),
         );
+        push_key(normalized);
     }
     push_key(agent_type.as_str().to_string());
     if agent_type.legacy_type_name() != agent_type.as_str() {
@@ -14059,14 +14076,13 @@ fn parse_optional_worktree_request(
 /// here by the second validation pass with a misleading four-value hint.
 fn normalize_role_alias(input: &str) -> Option<&'static str> {
     match input.to_ascii_lowercase().as_str() {
-        "default" => Some("default"),
-        "worker" | "general" | "general-purpose" | "general_purpose" => Some("worker"),
-        "scout" | "explorer" | "explore" | "exploration" => Some("scout"),
+        "default" | "worker" | "general" | "general-purpose" | "general_purpose" => Some("general"),
+        "scout" | "explorer" | "explore" | "exploration" => Some("explore"),
         "awaiter" | "plan" | "planner" | "planning" => Some("planner"),
         "reviewer" | "review" | "code-review" | "code_review" => Some("reviewer"),
-        "implementer" | "implement" | "implementation" | "builder" => Some("builder"),
-        "verifier" | "verify" | "verification" | "validator" | "tester" => Some("verifier"),
-        "consultant" | "oracle" | "advisor" => Some("consultant"),
+        "implementer" | "implement" | "implementation" | "builder" => Some("implement"),
+        "verifier" | "verify" | "verification" | "validator" | "tester" => Some("test"),
+        "consultant" | "oracle" | "advisor" => Some("advisor"),
         "custom" => Some("custom"),
         _ => None,
     }
@@ -15308,7 +15324,7 @@ impl SubAgentToolRegistry {
             && !self.agent_action_permitted("claim")
         {
             return Err(anyhow!(
-                "agent action=claim widens an enforced write scope, and the Pod role `{role}` has no write authority to widen. Use a `builder` or `worker` role.",
+                "agent action=claim widens an enforced write scope, and the Pod role `{role}` has no write authority to widen. Use an `implement` or `general` role.",
                 role = self.agent_type.as_str()
             ));
         }
@@ -15334,12 +15350,12 @@ impl SubAgentToolRegistry {
         if !self.posture_permits_tool(name, Some(&input)) {
             if self.allows_bounded_readonly_bash(name) {
                 return Err(anyhow!(
-                    "[shell.readonly.command] Tool {name} input did not match the bounded read-only shell grammar for Pod role `{role}`. Use read-only inspection commands, or a `builder`/`worker` role for mutation or arbitrary execution.",
+                    "[shell.readonly.command] Tool {name} input did not match the bounded read-only shell grammar for Pod role `{role}`. Use read-only inspection commands, or an `implement`/`general` role for mutation or arbitrary execution.",
                     role = self.agent_type.as_str()
                 ));
             }
             return Err(anyhow!(
-                "[role.posture.denied] Tool {name} is not permitted for the read-only Pod role `{role}`. Use a `builder` or `worker` role (or `custom` with an explicit allowed_tools list) to mutate the workspace or run shell commands.",
+                "[role.posture.denied] Tool {name} is not permitted for the read-only Pod role `{role}`. Use an `implement` or `general` role (or `custom` with an explicit allowed_tools list) to mutate the workspace or run shell commands.",
                 role = self.agent_type.as_str()
             ));
         }

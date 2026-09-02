@@ -35,6 +35,7 @@ use crate::fleet::roster::{FleetRoster, ProfileLayer, ProfileOrigin, layers_from
 use crate::fleet::worker_runtime::roster_member_agent_type;
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
+use crate::tools::subagent::public_role_label;
 use crate::tui::app::App;
 use crate::tui::menu_style;
 use crate::tui::views::{
@@ -661,17 +662,18 @@ fn whale_identity_lines(member: &AgentProfile, locale: Locale) -> Vec<Line<'stat
 }
 
 fn member_role_mark(member: &AgentProfile) -> &'static str {
-    match member.id.as_str() {
-        "manager" | "scout" => crate::tui::glyphs::ROLE_MANAGER,
-        "builder" => crate::tui::glyphs::ROLE_BUILDER,
+    let role = public_role_label(&member.id);
+    match role.as_str() {
+        "manager" | "explore" => crate::tui::glyphs::ROLE_MANAGER,
+        "implement" => crate::tui::glyphs::ROLE_BUILDER,
         "reviewer" => crate::tui::glyphs::ROLE_REVIEWER,
-        "verifier" => crate::tui::glyphs::ROLE_VERIFIER,
+        "test" => crate::tui::glyphs::ROLE_VERIFIER,
         "synthesizer" => crate::tui::glyphs::ROLE_SYNTHESIZER,
         _ => match roster_member_agent_type(member).as_str() {
-            "scout" | "manager" => crate::tui::glyphs::ROLE_MANAGER,
-            "builder" => crate::tui::glyphs::ROLE_BUILDER,
+            "explore" | "manager" => crate::tui::glyphs::ROLE_MANAGER,
+            "implement" => crate::tui::glyphs::ROLE_BUILDER,
             "reviewer" => crate::tui::glyphs::ROLE_REVIEWER,
-            "verifier" => crate::tui::glyphs::ROLE_VERIFIER,
+            "test" => crate::tui::glyphs::ROLE_VERIFIER,
             "synthesizer" => crate::tui::glyphs::ROLE_SYNTHESIZER,
             _ => crate::tui::glyphs::NEUTRAL,
         },

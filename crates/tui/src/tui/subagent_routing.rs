@@ -1514,7 +1514,7 @@ mod tests {
             panic!("expected delegate card");
         };
         let rendered = card
-            .render_lines(120)
+            .render_lines(120, &crate::palette::UI_THEME)
             .into_iter()
             .flat_map(|line| line.spans.into_iter().map(|span| span.content.into_owned()))
             .collect::<String>();
@@ -1782,7 +1782,7 @@ mod tests {
                 panic!("expected a delegate card for {agent_id}");
             };
             assert_eq!(card.agent_id, agent_id);
-            card.render_lines(120)
+            card.render_lines(120, &app.ui_theme)
                 .into_iter()
                 .flat_map(|line| line.spans.into_iter().map(|span| span.content.into_owned()))
                 .collect()
@@ -1998,7 +1998,7 @@ mod tests {
             panic!("expected delegate card");
         };
         let rendered: String = card
-            .render_lines(120)
+            .render_lines(120, &crate::palette::UI_THEME)
             .into_iter()
             .flat_map(|line| line.spans.into_iter().map(|span| span.content.into_owned()))
             .collect();

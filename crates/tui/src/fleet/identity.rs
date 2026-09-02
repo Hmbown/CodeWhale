@@ -20,6 +20,7 @@ use super::roster::{FleetRoster, ProfileOrigin};
 use super::store::{
     FleetFile, FleetScope, MemberCapability, load_fleet_at, resolve_selected_fleet,
 };
+use crate::tools::subagent::public_role_label;
 
 /// Maximum member rows one model-visible roster query returns. The total and
 /// truncation flag stay visible so a large local roster is never mistaken for
@@ -62,6 +63,17 @@ pub fn load_effective_roster(
             ));
         }
     };
+    if fleet.operator.is_none()
+        && fleet
+            .members
+            .iter()
+            .all(|member| member.role.trim().is_empty())
+    {
+        return plugins.map_or_else(
+            || FleetRoster::load(fleet_config, workspace),
+            |plugins| FleetRoster::load_with_plugins(fleet_config, workspace, plugins),
+        );
+    }
     roster_from_fleet(&fleet, selected.scope, &selected.path)
 }
 
@@ -80,9 +92,9 @@ pub fn roster_from_fleet(fleet: &FleetFile, scope: FleetScope, source: &Path) ->
             .map(|member| {
                 let role = member.role.trim();
                 let role = if role.is_empty() {
-                    member.id.trim()
+                    member.id.trim().to_string()
                 } else {
-                    role
+                    public_role_label(role)
                 };
                 // A selected Fleet is one atomic routing policy. An explicit
                 // member pair wins; otherwise the Fleet operator pair is the
@@ -112,9 +124,9 @@ pub fn roster_from_fleet(fleet: &FleetFile, scope: FleetScope, source: &Path) ->
                     description: None,
                     requires: member.requires.clone(),
                     profile: FleetProfile {
-                        slot: FleetSlot::from_name(role),
+                        slot: FleetSlot::from_name(&role),
                         role: FleetRole {
-                            name: role.to_string(),
+                            name: role,
                             description: None,
                             instructions: member.instructions.clone(),
                         },
@@ -169,7 +181,7 @@ impl FleetMemberIdentity {
             member_id: bounded_identity_field(&member.id),
             display_name: trimmed_owned(member.display_name.as_deref())
                 .map(|value| bounded_identity_field(&value)),
-            role: bounded_identity_field(member_role(member)),
+            role: bounded_identity_field(&public_role_label(member_role(member))),
             provider_id,
             model_name: friendly_model_name(member).map(|value| bounded_identity_field(&value)),
             model_id,
@@ -327,18 +339,30 @@ pub fn resolve_member_in_profiles<'a>(
         return Ok(Some(member));
     }
 
+    if kind
+        .as_deref()
+        .is_none_or(|kind| kind == "member" || kind == "id")
+        && let Some(member) = profiles.iter().find(|member| {
+            public_role_label(&member.id).eq_ignore_ascii_case(&public_role_label(value))
+        })
+    {
+        return Ok(Some(member));
+    }
+
     let mut candidates = Vec::new();
     for member in profiles {
         let matches = match kind.as_deref() {
             Some("member" | "id") => false,
             Some("name") => matches_display_name(member, value),
-            Some("role") => member_role(member).eq_ignore_ascii_case(value),
+            Some("role") => public_role_label(member_role(member))
+                .eq_ignore_ascii_case(&public_role_label(value)),
             Some("model") => matches_model(member, value),
             Some("route") => matches_route(member, value),
             Some(_) => false,
             None => {
                 matches_display_name(member, value)
-                    || member_role(member).eq_ignore_ascii_case(value)
+                    || public_role_label(member_role(member))
+                        .eq_ignore_ascii_case(&public_role_label(value))
                     || matches_model(member, value)
                     || matches_route(member, value)
                     || friendly_model_name(member)
@@ -522,7 +546,7 @@ mod tests {
         );
         let projected = roster.get("scout-one").expect("case-insensitive id");
         assert_eq!(projected.display_name.as_deref(), Some("Flash Scout"));
-        assert_eq!(projected.profile.role.name, "scout");
+        assert_eq!(projected.profile.role.name, "explore");
         assert_eq!(projected.profile.provider.as_deref(), Some("deepseek"));
         assert_eq!(
             projected.profile.model.as_deref(),
@@ -623,6 +647,24 @@ mod tests {
                 "selector {selector}"
             );
         }
+    }
+
+    #[test]
+    fn canonical_role_selectors_resolve_legacy_builtin_member_ids() {
+        let roster = FleetRoster::built_ins_only();
+
+        assert_eq!(
+            resolve_member(&roster, "explore")
+                .expect("canonical role selector")
+                .map(|member| member.id.as_str()),
+            Some("scout")
+        );
+        assert_eq!(
+            resolve_member(&roster, "advisor")
+                .expect("canonical role selector")
+                .map(|member| member.id.as_str()),
+            Some("consultant")
+        );
     }
 
     #[test]

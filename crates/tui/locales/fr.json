@@ -1099,7 +1099,7 @@
   "ToolFamilyPatch": "corriger",
   "ToolFamilyRun": "exécuter",
   "ToolFamilyFind": "chercher",
-  "ToolFamilyDelegate": "déléguer",
+  "ToolFamilyDelegate": "agent",
   "ToolFamilyFanout": "fanout",
   "ToolFamilyRlm": "rlm",
   "ToolFamilyVerify": "vérifier",

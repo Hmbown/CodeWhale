@@ -735,7 +735,7 @@ mod tests {
         assert!(body.contains("Role: release-lead"), "{body}");
         assert!(body.contains("Profile: roster-release-lead"), "{body}");
         assert!(body.contains("Requested as: release-lead"), "{body}");
-        assert!(body.contains("Type: builder"), "{body}");
+        assert!(body.contains("Type: implement"), "{body}");
         assert!(body.contains("Model: deepseek-v4-pro"), "{body}");
         assert!(body.contains("Provider: deepseek"), "{body}");
         assert!(!body.contains("stale-requested-model"), "{body}");

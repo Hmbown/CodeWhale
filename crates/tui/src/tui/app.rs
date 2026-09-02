@@ -4089,6 +4089,7 @@ impl App {
                 let role = agent.agent_type.as_str().trim();
                 (!role.is_empty()).then(|| role.to_string())
             })
+            .map(|role| crate::tools::subagent::public_role_label(&role))
     }
 
     /// `true` for the `Agent N` counter placeholder assigned before a child's

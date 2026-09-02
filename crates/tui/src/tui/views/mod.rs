@@ -6299,7 +6299,7 @@ mod tests {
             "Failed: 0",
             "Cancelled: 0",
             "Running (1)",
-            "builder",
+            "implement",
             "running",
             "reason: manual review",
             "role: release",

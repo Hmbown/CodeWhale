@@ -3,11 +3,11 @@
 > 阅读简体中文版：[zh_hans/SUBAGENTS.md](zh_hans/SUBAGENTS.md)
 
 Pod roles are the user-facing vocabulary for delegated work: a parent
-launches a focused `worker`, `scout`, `planner`, `reviewer`, `builder`,
-`verifier`, or `consultant` through `agent` and gets back an `agent_id` plus transcript handle
+launches a focused `general`, `explore`, `planner`, `reviewer`, `implement`,
+`test`, or `advisor` through `agent` and gets back an `agent_id` plus transcript handle
 while the worker runs. The internal runtime type is `FleetRole` (formerly
-`SubAgentType`); the older role spellings (`general`, `explore`, `plan`,
-`review`, `implementer`, `oracle`, …) remain accepted only as a persisted/deserialize
+`SubAgentType`); the older role spellings (`worker`, `scout`, `plan`,
+`review`, `builder`, `verifier`, `consultant`, `oracle`, …) remain accepted only as a persisted/deserialize
 compatibility adapter during v0.9.x. New prompts and config should use Pod
 names.
 
@@ -66,13 +66,13 @@ stewardship.
 
 | Role          | Stance                                 | Writes? | Network? | Shell posture | Typical use                                  |
 |---------------|----------------------------------------|---------|----------|---------------|----------------------------------------------|
-| `worker`      | flexible; do whatever the parent says  | yes     | yes      | yes           | the default; multi-step tasks                |
-| `scout`       | read-only; map the relevant code fast  | no      | yes      | read-only (net + bounded verify) | "find every call site of `Foo`; check the PR with gh" |
+| `general`     | flexible; do whatever the parent says  | yes     | yes      | yes           | the default; multi-step tasks                |
+| `explore`     | read-only; map the relevant code fast  | no      | yes      | read-only (net + bounded verify) | "find every call site of `Foo`; check the PR with gh" |
 | `planner`     | analyse and produce a strategy         | no      | yes      | read-only probes | "design the migration; don't execute"        |
 | `reviewer`    | read-and-grade with severity scores    | no      | yes      | read-only (net + bounded verify) | "audit this PR for bugs"                     |
-| `builder`     | land a specific change with min edit   | yes     | yes      | yes           | "rewrite `bar.rs::Foo::bar` to do X"         |
-| `verifier`    | run tests / validation, report outcome | no      | yes      | bounded verification (no writes) | "verify the diff with the bounded test checks; report PASS/FAIL" |
-| `consultant`  | short-lived, high-reasoning counsel     | no      | yes      | none          | "what are we missing in this design?"        |
+| `implement`   | land a specific change with min edit   | yes     | yes      | yes           | "rewrite `bar.rs::Foo::bar` to do X"         |
+| `test`        | run tests / validation, report outcome | no      | yes      | bounded verification (no writes) | "verify the diff with the bounded test checks; report PASS/FAIL" |
+| `advisor`     | short-lived, high-reasoning counsel     | no      | yes      | none          | "what are we missing in this design?"        |
 | `custom`      | explicit narrow tool allowlist         | inherits | inherits | inherits     | hand-picked tools on the parent's posture    |
 
 A role's default is what the role *intends*, and the parent's effective
@@ -253,16 +253,16 @@ OUTPUT: VERDICT, EVIDENCE, GAPS, NEXT.
 
 ### When to pick which role
 
-- **`worker`** — when the task is "do this whole thing", not "go
+- **`general`** — when the task is "do this whole thing", not "go
   look", "design", or "verify". This is the right default; reach for
   a more specific role only when the posture matters.
-- **`scout`** — when the parent needs evidence before deciding what
+- **`explore`** — when the parent needs evidence before deciding what
   to do next. Scouts are cheap and fast; open 2–3 in parallel
   for independent regions.
   They should orient first: confirm the project root, read relevant
   `AGENTS.md`/`README.md` guidance in unfamiliar trees, search only the
   likely scope, and return `path:line-range` evidence instead of a narrative
-  tour. The role name to use is `scout`.
+  tour. The role name to use is `explore`.
 - **`planner`** — when the parent has an objective but no executable
   decomposition. Planners write artifacts (`todo_write` items,
   strategy in the response body) but don't carry them out.
@@ -270,20 +270,20 @@ OUTPUT: VERDICT, EVIDENCE, GAPS, NEXT.
   it graded. Reviewers don't patch — they describe the fix in the
   finding so the parent can dispatch a builder if the verdict
   is "fix it".
-- **`builder`** — when the change is already specified and just
+- **`implement`** — when the change is already specified and just
   needs to land. Builders stay tightly scoped: minimum edit, no
   drive-by refactoring, run a quick verification before handing back.
-- **`verifier`** — when the parent needs an authoritative pass/fail
+- **`test`** — when the parent needs an authoritative pass/fail
   on the test suite or other validation. Verifiers don't fix
   failures; they capture the failing assertion + stack and put fix
   candidates under RISKS. The verifier posture never writes, and shell
   is clamped to the bounded built-in verification surface: the write
   ceiling is read-only and unbounded shell forms are refused (#5186).
-- **`consultant`** — when the operator wants a high-leverage second opinion
+- **`advisor`** — when the operator wants a high-leverage second opinion
   before cheaper execution continues. Consultants read enough to ground a
   recommendation, but cannot write or run shell commands. `oracle` and
   `advisor` remain accepted only when loading older requests or persisted
-  records; new prompts, receipts, and UI use `consultant`.
+  records; new prompts, receipts, and UI use `advisor`.
 - **`custom`** — only when the parent needs to constrain the tool
   set explicitly. Pass the allowlist via the `allowed_tools` field
   on legacy/internal sub-agent records; the model-facing `agent` tool keeps the
@@ -295,13 +295,13 @@ The model can spell each role multiple ways:
 
 | Canonical     | Aliases                                                          |
 |---------------|------------------------------------------------------------------|
-| `worker`      | `general`, `default`, `general-purpose`                          |
-| `scout`       | `explore`, `explorer`, `exploration`                             |
+| `general`     | `worker`, `default`, `general-purpose`, `general_purpose`         |
+| `explore`     | `scout`, `explorer`, `exploration`                               |
 | `planner`     | `plan`, `planning`, `awaiter`                                    |
 | `reviewer`    | `review`, `code-review`, `code_review`                           |
-| `builder`     | `implementer`, `implement`, `implementation`                     |
-| `verifier`    | `verify`, `verification`, `validator`, `tester`                  |
-| `consultant`  | `oracle`, `advisor` (compatibility input only)                    |
+| `implement`   | `builder`, `implementer`, `implementation`                       |
+| `test`        | `verifier`, `verify`, `verification`, `validator`, `tester`       |
+| `advisor`     | `consultant`, `oracle` (compatibility input only)                 |
 | `custom`      | (none; explicit `allowed_tools` array required)                  |
 
 All matching is case-insensitive. Unknown values produce a typed

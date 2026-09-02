@@ -318,13 +318,13 @@ model = "deepseek-v4-pro"
 [[members]]
 id = "implementer"
 display_name = "Release Builder"
-role = "builder"
+role = "implement"
 provider = "zai"
 model = "glm-5.2"
 
 [[members]]
 id = "advice"
-role = "consultant"
+role = "advisor"
 provider = "openai"
 model = "gpt-5.6"
 ```

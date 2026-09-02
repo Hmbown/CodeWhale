@@ -37,7 +37,7 @@ pub enum ToolFamily {
     Run,
     /// Grep, fuzzy file search, web search. `⌕ find`.
     Find,
-    /// Single sub-agent dispatch. `◐ delegate`.
+    /// Single sub-agent dispatch. `◐ agent`.
     Delegate,
     /// Multi-agent fanout dispatch (rlm). `⋮⋮ fanout`.
     Fanout,
@@ -304,7 +304,7 @@ pub fn family_label(family: ToolFamily) -> &'static str {
         ToolFamily::Patch => "patch",
         ToolFamily::Run => "run",
         ToolFamily::Find => "find",
-        ToolFamily::Delegate => "delegate",
+        ToolFamily::Delegate => "agent",
         ToolFamily::Fanout => "fanout",
         ToolFamily::Rlm => "rlm",
         ToolFamily::Verify => "verify",
@@ -542,8 +542,8 @@ mod tests {
             ),
             (
                 MessageId::ToolFamilyDelegate,
-                "delegate",
-                "ủy,委,委,委,delegar,delegar",
+                "agent",
+                "ủy,委,委,委,agente,agente",
             ),
             (
                 MessageId::ToolFamilyVerify,
@@ -577,6 +577,11 @@ mod tests {
             Locale::Uk,
         ] {
             for (id, eng, _) in checks {
+                if *id == MessageId::ToolFamilyDelegate
+                    && matches!(locale, Locale::Ca | Locale::De | Locale::Fr)
+                {
+                    continue;
+                }
                 let msg = tr(locale, *id);
                 assert!(
                     !msg.eq_ignore_ascii_case(eng),
