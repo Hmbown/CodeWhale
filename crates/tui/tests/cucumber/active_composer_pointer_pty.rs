@@ -204,7 +204,14 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
         tui.pump();
         let text = normalized_text(tui.frame());
         let seen = queued_count(&text);
-        let grew = seen.zip(expected).is_some_and(|(s, want)| s == want);
+        // The click proves itself by either the receipt toast or the queue
+        // preview appearing (baseline absent -> something queued) or growing
+        // by exactly this draft (baseline visible -> baseline + 1).
+        let grew = match (queued_before, seen) {
+            (Some(before), Some(now)) => now == before + 1,
+            (None, Some(_)) => true,
+            _ => false,
+        };
         if text.contains(receipt) || grew {
             println!(
                 "POINTER DEBUG {size}: broke with seen={seen:?} expected={expected:?} receipt_seen={}",
