@@ -75,7 +75,7 @@
   --stage-elevated: var(--whale-elevated);
   --stage-line: var(--whale-border); /* blue at 25% on stage */
   --stage-hint: #8491aa;
-  --stage-dim: var(--whale-text-dim);
+  --stage-dim: var(--whale-text-muted);
   --violet: var(--whale-mode-operate); /* 1px rules only, never text */
 
   /* Type stacks. IBM Plex Sans Condensed carries the display voice; IBM Plex
@@ -465,14 +465,28 @@ mark.search-highlight {
 
 .paper-wordmark-text {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   line-height: 1.1;
   min-width: 0;
 }
 
-.paper-wordmark-logo {
+.paper-wordmark-mark {
+  display: block;
+  flex: 0 0 auto;
+}
+
+.paper-wordmark-mark img {
   display: block;
   width: auto;
+  height: 22px;
+}
+
+.paper-wordmark-logo {
+  display: block;
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
   max-width: 100%;
 }
 
@@ -480,7 +494,7 @@ mark.search-highlight {
   display: block;
   width: auto;
   max-width: 100%;
-  height: 22px;
+  height: 20px;
 }
 
 .paper-star-badge {
@@ -719,22 +733,7 @@ mark.search-highlight {
 
 .ticker-sep { color: var(--paper-line-soft); }
 
-/* ---------- terminal player caret ---------- */
-.tp-caret {
-  display: inline-block;
-  width: 0.55em;
-  height: 1.05em;
-  margin-left: 1px;
-  vertical-align: text-bottom;
-  background: var(--action-on-dark);
-  animation: tp-blink 1.06s steps(1, end) infinite;
-}
-@keyframes tp-blink {
-  50% { opacity: 0; }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .tp-caret { animation: none; }
   .ticker-track { animation: none; }
   /* A frozen track would clip every entry past the fold with no way to reach
      them. Stopping the motion must not also remove the content. */
@@ -2179,33 +2178,6 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 /* The sticky nav is the same Tideline chrome on every route — no per-page
    overrides. */
 
-/* Constitution trace pane */
-.paper-decides {
-  border-bottom: 1px solid var(--hairline);
-  background: var(--paper-deep);
-  padding-block: clamp(2.5rem, 5vw, 4rem);
-}
-
-.paper-decides-grid {
-  display: grid;
-  grid-template-columns: minmax(14rem, 0.85fr) minmax(20rem, 1.15fr);
-  gap: clamp(1.5rem, 4vw, 3rem);
-  align-items: start;
-}
-
-.paper-decides-lede {
-  max-width: 28rem;
-  color: var(--ink-soft);
-  font-size: 0.95rem;
-  line-height: 1.7;
-}
-
-/* The trace plate lifts off the panel band: on the deep field, depth as
-   hierarchy is a cast shadow, never a lighter sheet. */
-.terminal-frame {
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
-}
-
 .paper-start {
   border-bottom: 1px solid var(--hairline);
   padding-block: clamp(2.75rem, 5vw, 4.5rem);
@@ -2240,9 +2212,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   line-height: 1.75;
 }
 
-/* Workflow: four numbered steps and a quoted receipt. The steps are panel
-   plates on the field; the receipt below is the composer-dark plate that
-   carries the evidence. */
+/* Workflow: four numbered steps as panel plates on the field. */
 .product-workflow {
   position: relative;
   overflow: hidden;
@@ -2268,7 +2238,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .product-workflow-steps li {
   position: relative;
   min-height: 12rem;
-  padding: 1.35rem 1.5rem 1.5rem;
+  padding: 1rem 1.1rem;
   border: 1px solid var(--stage-line);
   border-radius: 6px;
   background: var(--paper-card);
@@ -2291,34 +2261,6 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   color: var(--ink-soft);
   font-size: 0.84rem;
   line-height: 1.65;
-}
-
-.product-receipt {
-  display: grid;
-  gap: 0.45rem;
-  max-width: 58rem;
-  margin-top: 2.5rem;
-  padding: 1.35rem 1.5rem;
-  border: 1px solid var(--stage-line);
-  background: var(--stage-field-top);
-  color: var(--stage-soft);
-  font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: clamp(0.68rem, 1.2vw, 0.8rem);
-  line-height: 1.45;
-  /* The receipt plate lifts off the field — the same cast depth as the
-     trace pane. */
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
-}
-
-.product-receipt span:first-child {
-  padding-bottom: 0.65rem;
-  border-bottom: 1px solid var(--stage-line);
-  color: var(--stage-text);
-}
-
-.product-receipt strong {
-  color: var(--signal-gold);
-  font-weight: 500;
 }
 
 /* ---------- product: start-here band + shared getting-started steps ---------- */
@@ -2802,8 +2744,7 @@ html[lang="ko"] .ocean-column h2 {
 
 @media (max-width: 1050px) {
   .product-hero-grid,
-  .paper-hero-grid,
-  .paper-decides-grid {
+  .paper-hero-grid {
     grid-template-columns: 1fr;
     min-height: auto;
   }
@@ -2913,11 +2854,6 @@ html[lang="ko"] .ocean-column h2 {
 
   .product-workflow-steps h3 {
     margin-top: 1.25rem;
-  }
-
-  .product-receipt {
-    overflow-x: auto;
-    white-space: nowrap;
   }
 
   .product-community nav {

@@ -4,10 +4,9 @@ import Link from "next/link";
 import { GettingStartedSteps } from "@/components/getting-started-steps";
 import { InstallCodeBlock } from "@/components/install-code-block";
 import { RevealOnScroll } from "@/components/reveal-on-scroll";
-import { TerminalPlayer } from "@/components/terminal-player";
 import { Whale } from "@/components/whale";
 import { getFacts } from "@/lib/facts";
-import { fill, getChrome, getHome, splitToken } from "@/lib/i18n/dictionaries";
+import { fill, getHome, splitToken } from "@/lib/i18n/dictionaries";
 import { REPO_ISSUES_URL, REPO_RELEASES_URL, REPO_URL, DISCORD_URL } from "@/lib/i18n/links";
 import { serializeJsonLd } from "@/lib/json-ld";
 import { buildSoftwareApplicationJsonLd } from "@/lib/software-application-schema";
@@ -19,19 +18,17 @@ export const revalidate = 300;
 /**
  * The newspaper-ocean homepage.
  *
- * Every visible string resolves through `getHome(locale)` / `getChrome(locale)`
+ * Every visible string resolves through `getHome(locale)`
  * — English, Chinese, and every other routed locale take the identical path,
  * with the English dictionary as the build-time-guaranteed fallback. The only
  * literals left in this file are code-owned per docs/VOICE.md: the product
  * control vocabulary (`Plan · Work · Operate`, `Ask · Auto-Review · Full
  * Access`, `TUI · exec · web · API`), the install command, `cargo test
- * --locked`, the receipt verbs, package-manager and mirror proper nouns, and
- * the screenshot path.
+ * --locked`, package-manager and mirror proper nouns, and the screenshot path.
  */
 export default async function HomePage({ params }: { params: Promise<{ locale: string }> }) {
   const { locale } = await params;
   const d = getHome(locale);
-  const chrome = getChrome(locale);
   const facts = await getFacts();
   const sourceVersion = facts.version ?? "unknown";
   const publishedRelease = facts.latestPublishedRelease;
@@ -166,28 +163,6 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         </div>
       </section>
 
-      {/* See how it decides — constitution traces in terminal chrome */}
-      <section className="paper-decides">
-        <div className="product-container paper-decides-grid" data-reveal>
-          <div>
-            <div className="flex items-baseline gap-4 mb-3 hairline-b pb-3">
-              <div>
-                <div className="eyebrow mb-1">{d.decidesEyebrow}</div>
-                <h2 className="font-display text-2xl sm:text-3xl">{d.decidesHeading}</h2>
-              </div>
-            </div>
-            <p className="paper-decides-lede">{d.decidesLede}</p>
-          </div>
-          <div>
-            <TerminalPlayer
-              locale={locale}
-              traceLabel={chrome.traceLabel}
-              tabsAria={chrome.traceTabsAria}
-            />
-          </div>
-        </div>
-      </section>
-
       {/* Workflow */}
       <section className="product-workflow paper-workflow">
         <div className="product-container">
@@ -203,13 +178,6 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
               </li>
             ))}
           </ol>
-          <div className="product-receipt" aria-label={d.receiptAria} data-reveal>
-            <span>$ codewhale exec &quot;fix the failing test&quot;</span>
-            <span>inspect&nbsp;&nbsp; {d.receiptInspect}</span>
-            <span>act&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {d.receiptAct}</span>
-            <span>verify&nbsp;&nbsp;&nbsp; cargo test --locked</span>
-            <strong>report&nbsp;&nbsp;&nbsp; {d.receiptReport}</strong>
-          </div>
         </div>
       </section>
 

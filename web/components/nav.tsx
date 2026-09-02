@@ -30,6 +30,10 @@ export async function Nav({ locale = "en" }: { locale?: Locale }) {
       <div className="site-nav-inner paper-nav-inner">
         <Link href={homeHref} className="site-wordmark paper-wordmark" aria-label={chrome.navHomeAria}>
           <div className="paper-wordmark-text">
+            <picture className="paper-wordmark-mark">
+              <source media="(prefers-color-scheme: dark)" srcSet="/brand/mark-gradient.svg" />
+              <img src="/brand/mark.svg" alt="" />
+            </picture>
             <picture className="paper-wordmark-logo">
               <source media="(prefers-color-scheme: dark)" srcSet="/brand/wordmark-inverted.svg" />
               <img src="/brand/wordmark.svg" alt="" />

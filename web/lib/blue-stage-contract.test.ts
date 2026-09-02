@@ -81,7 +81,8 @@ describe("Tideline public-surface contract", () => {
     expect(mobile).toMatch(
       /\.site-nav-actions select\s*\{[\s\S]*?width:\s*6\.75rem;[\s\S]*?min-width:\s*0/,
     );
-    expect(CSS).toMatch(/\.paper-wordmark-logo img\s*\{[^}]*height:\s*22px;/);
+    expect(CSS).toMatch(/\.paper-wordmark-mark img\s*\{[^}]*height:\s*22px;/);
+    expect(CSS).toMatch(/\.paper-wordmark-logo img\s*\{[^}]*height:\s*20px;/);
     expect(CSS).toMatch(/\.site-nav-actions\s*\{[\s\S]*?flex-shrink:\s*0/);
     expect(CSS).toMatch(/\.site-nav-actions\s*>\s*\*\s*\{\s*flex-shrink:\s*0/);
     expect(CSS).toMatch(/@media \(max-width: 900px\)[\s\S]*?\.site-github-link\s*\{\s*display:\s*none/);
@@ -95,7 +96,7 @@ describe("Tideline public-surface contract", () => {
     // `min-width` is the floor that keeps the wordmark clickable; the shrink
     // factor stays at 1 so the compact controls are never the ones pushed
     // past `overflow-x: clip` when the row is over budget.
-    expect(CSS).toMatch(/\.paper-wordmark\s*\{[\s\S]*?flex:\s*0 1 auto;[\s\S]*?min-width:\s*8\.75rem;/);
-    expect(CSS).not.toMatch(/\.paper-wordmark\s*\{[\s\S]*?flex:\s*0 0 auto;/);
+    expect(CSS).toMatch(/\.paper-wordmark\s*\{[^}]*flex:\s*0 1 auto;[^}]*min-width:\s*8\.75rem;/);
+    expect(CSS).not.toMatch(/\.paper-wordmark\s*\{[^}]*flex:\s*0 0 auto;/);
   });
 });

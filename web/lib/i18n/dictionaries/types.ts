@@ -122,9 +122,9 @@ export interface ChromeDict {
   /** aria-label for the ticker's group landmark. */
   tickerAria: string;
 
-  /** TerminalPlayer title-bar label, e.g. "reasoning trace". */
+  /** Reasoning trace title-bar label, e.g. "reasoning trace". */
   traceLabel: string;
-  /** aria-label for the TerminalPlayer scene tablist. */
+  /** aria-label for the reasoning trace scene tablist. */
   traceTabsAria: string;
 
   /** Mobile-menu toggle labels. */

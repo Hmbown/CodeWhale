@@ -647,18 +647,20 @@ done
 
   it("keeps reduced motion static without hiding the reasoning trace", () => {
     const css = text("web/app/globals.css");
-    const terminalPlayer = text("web/components/terminal-player.tsx");
 
     expect(css).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.tp-caret\s*\{\s*animation:\s*none;\s*\}[\s\S]*?\.ticker-track\s*\{\s*animation:\s*none;\s*\}[\s\S]*?\}/,
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.ticker-track\s*\{\s*animation:\s*none;\s*\}[\s\S]*?\}/,
     );
     // Freezing the track must not also hide the entries it stopped scrolling.
     expect(css).toMatch(/\.ticker-viewport\s*\{\s*overflow-x:\s*auto;\s*\}/);
-    expect(terminalPlayer).toContain(
-      'window.matchMedia("(prefers-reduced-motion: reduce)").matches',
-    );
-    expect(terminalPlayer).toContain("setShown(Number.MAX_SAFE_INTEGER)");
-    expect(terminalPlayer).toContain("Server render shows the full trace");
+  });
+
+  it("keeps the homepage free of fabricated demo panels", () => {
+    const homepage = text("web/app/[locale]/page.tsx");
+
+    expect(homepage).not.toContain("TerminalPlayer");
+    expect(homepage).not.toContain("paper-decides");
+    expect(homepage).not.toContain("product-receipt");
   });
 
   it("keeps every fact-matrix source resolvable in the repository", () => {
