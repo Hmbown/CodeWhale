@@ -10,7 +10,8 @@ use crate::palette;
 use super::constants::{TOOL_OUTPUT_HEAD_LINES, TOOL_OUTPUT_TAIL_LINES, TOOL_TEXT_LIMIT};
 use super::{
     RenderMode, details_affordance_line, looks_like_file_path, render_card_detail_line,
-    render_card_detail_line_single, tool_value_style, truncate_text,
+    render_card_detail_line_single, render_card_detail_line_single_styled,
+    render_card_detail_line_styled, tool_value_style, truncate_text,
 };
 
 pub(super) fn render_tool_output_mode(
@@ -35,7 +36,17 @@ pub(super) fn render_exec_output_mode(
 pub struct OutputRow {
     pub text: String,
     pub intact: bool,
+    /// SGR-styled segments of `text` when the source line carried colour
+    /// (`cargo`, `git`, `gh` with colour forced on, anything run through a
+    /// PTY). Concatenated they equal `text`; `None` for plain rows so the
+    /// common path allocates nothing extra.
+    pub styled: Option<Vec<StyledSegment>>,
 }
+
+/// One run of `OutputRow::text` with the style the tool's own SGR codes
+/// asked for. Only what is painted keeps the colour: the model, the session
+/// store, the pager, clipboard and exports still see stripped text.
+pub type StyledSegment = (String, Style);
 
 /// Heuristic: does the output look like a unified diff? Returns true when
 /// the output contains at least one hunk header (`@@`) or a `diff --git`
@@ -423,17 +434,24 @@ fn output_rows(output: &str, width: u16) -> Vec<OutputRow> {
     for line in output.lines() {
         sanitized.clear();
         crate::tui::osc8::strip_ansi_into(line, &mut sanitized);
+        let styled = styled_segments(line, &sanitized);
         let intact = is_path_or_url_like(&sanitized);
         if intact {
             rows.push(OutputRow {
                 text: sanitized.clone(),
                 intact: true,
+                styled,
             });
         } else {
-            for wrapped in wrap_text(&sanitized, wrap_width) {
+            let parts = wrap_text(&sanitized, wrap_width);
+            let mut styled_parts = styled.map(|segments| split_segments(&segments, &parts));
+            for (idx, wrapped) in parts.into_iter().enumerate() {
                 rows.push(OutputRow {
                     text: wrapped,
                     intact: false,
+                    styled: styled_parts
+                        .as_mut()
+                        .map(|split| std::mem::take(&mut split[idx])),
                 });
             }
         }
@@ -442,9 +460,92 @@ fn output_rows(output: &str, width: u16) -> Vec<OutputRow> {
         rows.push(OutputRow {
             text: String::new(),
             intact: false,
+            styled: None,
         });
     }
     rows
+}
+
+/// Parse the SGR codes in `line` into styled segments whose text
+/// concatenates to `plain` (the fully stripped line). Returns `None` when the
+/// line carries no escape at all, when nothing in it sets a style, or when
+/// the parse disagrees with the plain strip — the plain path is then the
+/// truth, exactly as before.
+fn styled_segments(line: &str, plain: &str) -> Option<Vec<StyledSegment>> {
+    use ansi_to_tui::IntoText;
+
+    if !line.contains('\x1b') {
+        return None;
+    }
+    let mut kept = String::with_capacity(line.len());
+    crate::tui::osc8::strip_ansi_keep_sgr_into(line, &mut kept);
+    let text = kept.into_text().ok()?;
+    let mut segments: Vec<StyledSegment> = Vec::new();
+    for parsed in text.lines {
+        for span in parsed.spans {
+            if span.content.is_empty() {
+                continue;
+            }
+            let style = tool_style(span.style);
+            match segments.last_mut() {
+                Some((last, last_style)) if *last_style == style => {
+                    last.push_str(&span.content);
+                }
+                _ => segments.push((span.content.into_owned(), style)),
+            }
+        }
+    }
+    let round_trip: String = segments.iter().map(|(text, _)| text.as_str()).collect();
+    if round_trip != plain || segments.iter().all(|(_, style)| *style == Style::default()) {
+        return None;
+    }
+    Some(segments)
+}
+
+/// What the tool asked for, expressed relative to the cell's own ink. A
+/// tool's *reset* (`ESC[0m`, or `Color::Reset`) means "back to the
+/// terminal default", and in the transcript that default is the value style
+/// the cell already paints — so resets become "nothing set" instead of a
+/// `Style::reset()` that would wipe the cell's dim/state colour when
+/// patched over it. Only positive requests (a colour, bold, underline)
+/// survive.
+fn tool_style(style: Style) -> Style {
+    let keep = |colour: Option<ratatui::style::Color>| {
+        colour.filter(|c| *c != ratatui::style::Color::Reset)
+    };
+    let mut out = Style::default().add_modifier(style.add_modifier);
+    if let Some(fg) = keep(style.fg) {
+        out = out.fg(fg);
+    }
+    if let Some(bg) = keep(style.bg) {
+        out = out.bg(bg);
+    }
+    out
+}
+
+/// Re-split styled segments along the boundaries `wrap_text` chose, so each
+/// wrapped part keeps the colours of the characters it holds. `parts` must
+/// concatenate to the segments' text (which is how `wrap_text` splits).
+pub(super) fn split_segments(
+    segments: &[StyledSegment],
+    parts: &[String],
+) -> Vec<Vec<StyledSegment>> {
+    let mut chars = segments
+        .iter()
+        .flat_map(|(text, style)| text.chars().map(move |ch| (ch, *style)));
+    parts
+        .iter()
+        .map(|part| {
+            let mut out: Vec<StyledSegment> = Vec::new();
+            for (ch, style) in chars.by_ref().take(part.chars().count()) {
+                match out.last_mut() {
+                    Some((last, last_style)) if *last_style == style => last.push(ch),
+                    _ => out.push((ch.to_string(), style)),
+                }
+            }
+            out
+        })
+        .collect()
 }
 
 fn selected_output_indices(rows: &[OutputRow], line_limit: usize) -> Vec<usize> {
@@ -589,7 +690,23 @@ fn render_output_row(
     let diff_style = diff_line_style(&row.text);
     let file_style = file_line_style(&row.text);
     let value_style = diff_style.or(file_style).unwrap_or_else(tool_value_style);
-    if row.intact {
+    if let Some(segments) = &row.styled {
+        if row.intact {
+            lines.push(render_card_detail_line_single_styled(
+                label,
+                segments,
+                value_style,
+            ));
+        } else {
+            lines.extend(render_card_detail_line_styled(
+                label,
+                &row.text,
+                segments,
+                value_style,
+                width,
+            ));
+        }
+    } else if row.intact {
         lines.push(render_card_detail_line_single(
             label,
             &row.text,
@@ -646,5 +763,144 @@ pub(super) fn wrap_text(text: &str, width: usize) -> Vec<String> {
         vec![String::new()]
     } else {
         lines
+    }
+}
+
+#[cfg(test)]
+mod ansi_colour_tests {
+    use super::*;
+    use ratatui::style::{Color, Modifier};
+
+    fn styled_text(rows: &[OutputRow]) -> Vec<String> {
+        rows.iter()
+            .map(|row| {
+                row.styled
+                    .as_ref()
+                    .map(|segments| segments.iter().map(|(t, _)| t.as_str()).collect())
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn plain_line_carries_no_styled_segments() {
+        let rows = output_rows("   Compiling codewhale v0.9.12", 80);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text, "   Compiling codewhale v0.9.12");
+        assert!(rows[0].styled.is_none());
+    }
+
+    #[test]
+    fn cargo_style_line_keeps_its_green_bold_verb() {
+        let line = "\x1b[1m\x1b[32m   Compiling\x1b[0m codewhale v0.9.12";
+        let rows = output_rows(line, 80);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text, "   Compiling codewhale v0.9.12");
+        let segments = rows[0]
+            .styled
+            .as_ref()
+            .expect("coloured line keeps segments");
+        assert_eq!(segments[0].0, "   Compiling");
+        assert_eq!(segments[0].1.fg, Some(Color::Green));
+        assert!(segments[0].1.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(segments[1].0, " codewhale v0.9.12");
+        assert_eq!(segments[1].1, Style::default());
+        assert_eq!(styled_text(&rows), vec![rows[0].text.clone()]);
+    }
+
+    #[test]
+    fn osc8_link_is_stripped_while_its_sgr_colour_survives() {
+        let line =
+            "see \x1b]8;;https://example.com/x\x1b\\\x1b[31mthe docs\x1b[0m\x1b]8;;\x1b\\ now";
+        let rows = output_rows(line, 80);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text, "see the docs now");
+        let segments = rows[0]
+            .styled
+            .as_ref()
+            .expect("SGR inside an OSC 8 wrapper");
+        assert_eq!(segments[0], ("see ".to_string(), Style::default()));
+        assert_eq!(segments[1].0, "the docs");
+        assert_eq!(segments[1].1.fg, Some(Color::Red));
+        assert_eq!(segments[2], (" now".to_string(), Style::default()));
+    }
+
+    #[test]
+    fn wrapped_rows_split_the_colour_along_wrap_boundaries() {
+        let line = format!("\x1b[33m{}\x1b[0m{}", "y".repeat(10), "p".repeat(10));
+        // width 12 → wrap width 8: rows of 8/8/4 characters.
+        let rows = output_rows(&line, 12);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            styled_text(&rows),
+            rows.iter().map(|r| r.text.clone()).collect::<Vec<_>>()
+        );
+        let second = rows[1].styled.as_ref().unwrap();
+        assert_eq!(
+            second[0],
+            ("yy".to_string(), Style::default().fg(Color::Yellow))
+        );
+        assert_eq!(second[1], ("pppppp".to_string(), Style::default()));
+    }
+
+    #[test]
+    fn painted_span_patches_tool_colour_over_the_cell_style() {
+        let rows = output_rows("\x1b[31merror\x1b[0m: boom", 80);
+        let mut lines = Vec::new();
+        render_output_row(&mut lines, Some("output"), &rows[0], 80);
+        assert_eq!(lines.len(), 1);
+        let spans = &lines[0].spans;
+        // rail, label, gap, "error", ": boom"
+        assert_eq!(spans[3].content, "error");
+        assert_eq!(spans[3].style.fg, Some(Color::Red));
+        assert_eq!(spans[4].content, ": boom");
+        assert_eq!(spans[4].style, tool_value_style());
+        let plain: String = spans[3..].iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(plain, "error: boom");
+    }
+
+    #[test]
+    fn coloured_intact_path_stays_on_one_line_with_the_plain_hitbox() {
+        let path = "crates/tui/src/tui/history/tool_output.rs:812";
+        let coloured = format!("\x1b[35m{path}\x1b[0m");
+        let plain_rows = output_rows(path, 20);
+        let styled_rows = output_rows(&coloured, 20);
+        assert_eq!(plain_rows.len(), 1);
+        assert_eq!(styled_rows.len(), 1);
+        assert!(plain_rows[0].intact && styled_rows[0].intact);
+        assert!(styled_rows[0].styled.is_some());
+
+        let mut plain = Vec::new();
+        render_output_row(&mut plain, Some("output"), &plain_rows[0], 20);
+        let mut styled = Vec::new();
+        render_output_row(&mut styled, Some("output"), &styled_rows[0], 20);
+        assert_eq!(plain.len(), 1, "plain intact row is one line");
+        assert_eq!(styled.len(), 1, "coloured intact row is one line too");
+        let text = |line: &Line<'static>| {
+            line.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        };
+        assert_eq!(text(&styled[0]), text(&plain[0]));
+        // Same prefix (rail + label + gap), so the click region is identical.
+        assert_eq!(
+            styled[0].spans[..3]
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<Vec<_>>(),
+            plain[0].spans[..3]
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(styled[0].spans[3].style.fg, Some(Color::Magenta));
+    }
+
+    #[test]
+    fn a_line_that_only_resets_stays_on_the_plain_path() {
+        let rows = output_rows("done\x1b[0m", 80);
+        assert_eq!(rows[0].text, "done");
+        assert!(rows[0].styled.is_none());
     }
 }

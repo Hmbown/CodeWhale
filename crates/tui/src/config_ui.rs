@@ -1513,7 +1513,7 @@ mod tests {
 
     fn app() -> App {
         let options = TuiOptions {
-            use_alt_screen: false,
+            screen_mode: crate::tui::app::ScreenMode::Inline,
             // Keep this fixture independent from the developer's saved
             // `default_mode` setting.
             start_in_agent_mode: true,
@@ -1613,7 +1613,7 @@ mod tests {
             Config::load(Some(config_path), None).expect("reload persisted config");
         let restored = App::new(
             TuiOptions {
-                use_alt_screen: false,
+                screen_mode: crate::tui::app::ScreenMode::Inline,
                 start_in_agent_mode: true,
                 ..crate::test_support::test_tui_options(PathBuf::from("."))
             },

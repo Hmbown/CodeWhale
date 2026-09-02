@@ -29,6 +29,8 @@ impl CommandGroup for ConfigCommands {
             Box::new(FunctionCommand::new(&STATUS_INFO, run_status)),
             Box::new(FunctionCommand::new(&STATUSLINE_INFO, run_statusline)),
             Box::new(FunctionCommand::new(&MODE_INFO, run_mode)),
+            Box::new(FunctionCommand::new(&FULLSCREEN_INFO, run_fullscreen)),
+            Box::new(FunctionCommand::new(&INLINE_INFO, run_inline)),
             Box::new(FunctionCommand::new(&THEME_INFO, run_theme)),
             Box::new(FunctionCommand::new(&VERBOSE_INFO, run_verbose)),
             Box::new(FunctionCommand::new(&TRUST_INFO, run_trust)),
@@ -100,6 +102,18 @@ static MODE_INFO: CommandInfo = CommandInfo {
     usage: "/mode [act|plan|operate|1|2|3]",
     description_id: MessageId::CmdModeDescription,
 };
+static FULLSCREEN_INFO: CommandInfo = CommandInfo {
+    name: "fullscreen",
+    aliases: &[],
+    usage: "/fullscreen",
+    description_id: MessageId::CmdFullscreenDescription,
+};
+static INLINE_INFO: CommandInfo = CommandInfo {
+    name: "inline",
+    aliases: &[],
+    usage: "/inline",
+    description_id: MessageId::CmdInlineDescription,
+};
 static THEME_INFO: CommandInfo = CommandInfo {
     name: "theme",
     aliases: &[],
@@ -158,6 +172,12 @@ fn run_statusline(app: &mut App, arg: Option<&str>) -> CommandResult {
 fn run_mode(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "mode", arg)
 }
+fn run_fullscreen(app: &mut App, arg: Option<&str>) -> CommandResult {
+    run_registered(app, "fullscreen", arg)
+}
+fn run_inline(app: &mut App, arg: Option<&str>) -> CommandResult {
+    run_registered(app, "inline", arg)
+}
 fn run_theme(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "theme", arg)
 }
@@ -198,6 +218,8 @@ pub(in crate::commands) fn dispatch(
         "status" => status::status(app),
         "statusline" => config::status_line(app),
         "mode" => config::mode(app, arg),
+        "fullscreen" => config::screen(app, crate::tui::app::ScreenMode::Fullscreen, arg),
+        "inline" => config::screen(app, crate::tui::app::ScreenMode::Inline, arg),
         "jihua" => config::mode(app, Some("plan")),
         "zidong" => config::mode(app, Some("yolo")),
         "theme" => config::theme(app, arg),

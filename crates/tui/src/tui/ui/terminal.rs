@@ -226,6 +226,241 @@ pub(crate) fn terminal_input_recovery_relevant(app: &App, has_running_agents: bo
         || active_turn_has_running_tool(app)
 }
 
+/// Which screen the live terminal is on, for teardown paths that cannot see
+/// `App` (the `TerminalCleanupGuard` drop, the panic hook).
+///
+/// A runtime `/inline` or `/fullscreen` switch moves the terminal after the
+/// guard was built, so the guard must read the current screen rather than the
+/// one startup chose — otherwise a rolled-back or switched session emits a
+/// `LeaveAlternateScreen` for a screen it is not on (or skips the one it is).
+static LIVE_ALT_SCREEN: AtomicBool = AtomicBool::new(false);
+
+fn set_live_alt_screen(on_alt_screen: bool) {
+    LIVE_ALT_SCREEN.store(on_alt_screen, Ordering::Release);
+}
+
+pub(crate) fn live_alt_screen() -> bool {
+    LIVE_ALT_SCREEN.load(Ordering::Acquire)
+}
+
+/// Enter the alternate screen and, only once the escape went out, record it
+/// as live. Every alternate-screen entry in the crate goes through here so
+/// `live_alt_screen()` never says a screen the terminal is not on.
+pub(crate) fn enter_alt_screen<W: Write>(writer: &mut W) -> io::Result<()> {
+    execute!(writer, EnterAlternateScreen)?;
+    set_live_alt_screen(true);
+    Ok(())
+}
+
+/// Leave the alternate screen; the counterpart of [`enter_alt_screen`].
+pub(crate) fn leave_alt_screen<W: Write>(writer: &mut W) -> io::Result<()> {
+    execute!(writer, LeaveAlternateScreen)?;
+    set_live_alt_screen(false);
+    Ok(())
+}
+
+/// Program mouse capture for the screen the session is now on, from the same
+/// rule startup used ([`ScreenMode::mouse_capture`]). Returns whether the
+/// terminal's capture state changed.
+pub(crate) fn apply_mouse_capture_for_screen<W: Write>(
+    app: &mut App,
+    writer: &mut W,
+) -> io::Result<bool> {
+    let wanted = app.screen_mode.mouse_capture(app.mouse_capture_preference);
+    if wanted == app.use_mouse_capture {
+        return Ok(false);
+    }
+    if wanted {
+        execute!(writer, EnableMouseCapture)?;
+    } else {
+        execute!(writer, DisableMouseCapture)?;
+    }
+    app.use_mouse_capture = wanted;
+    Ok(true)
+}
+
+fn refresh_composer_arrows_scroll(app: &mut App) {
+    if !app.composer_arrows_scroll_explicit {
+        app.composer_arrows_scroll =
+            crate::tui::app::default_composer_arrows_scroll(app.use_mouse_capture);
+    }
+}
+
+/// Rows a full-height inline viewport should request.
+///
+/// `Viewport::Inline` clamps to the terminal height anyway; asking for the
+/// full height is what makes inline mode a drop-in replacement for the alt
+/// screen rather than a shrunken strip.
+fn inline_viewport_rows(backend: &ColorCompatBackend<Stdout>) -> u16 {
+    ratatui::backend::Backend::size(backend)
+        .map_or(24, |size| size.height)
+        .max(1)
+}
+
+/// Build the ratatui terminal for `mode`.
+///
+/// Inline is the fallible one: `Terminal::with_options` measures the terminal
+/// and appends lines to make room for the viewport, so it is the probe. It is
+/// deliberately given the *full* terminal height, which makes the anchoring
+/// independent of where the cursor happens to be — the newlines it prints
+/// scroll whatever was on screen into the host's real scrollback instead of
+/// being painted over.
+pub(crate) fn build_app_terminal(
+    backend: ColorCompatBackend<Stdout>,
+    mode: ScreenMode,
+) -> io::Result<AppTerminal> {
+    match mode {
+        ScreenMode::Fullscreen => Terminal::new(backend),
+        ScreenMode::Inline => {
+            let rows = inline_viewport_rows(&backend);
+            Terminal::with_options(
+                backend,
+                ratatui::TerminalOptions {
+                    viewport: ratatui::Viewport::Inline(rows),
+                },
+            )
+        }
+    }
+}
+
+/// Move the live terminal to `target` in place, rolling back on failure.
+///
+/// Stock ratatui cannot change an existing terminal's viewport, so the switch
+/// rebuilds one over a fresh backend and only adopts it once the rebuild
+/// succeeded. That ordering *is* the rollback: on failure the caller's
+/// terminal was never touched, so undoing the alternate-screen escape restores
+/// the previous mode exactly.
+///
+/// Nothing is committed to the host scrollback here. Inline mode paints a
+/// full-height viewport, so no transcript row ever leaves the live region and
+/// `Terminal::insert_before` has nothing to commit — see
+/// `docs/CONFIGURATION.md`.
+pub(crate) fn switch_screen_mode(
+    terminal: &mut AppTerminal,
+    app: &mut App,
+    target: ScreenMode,
+) -> std::result::Result<(), String> {
+    let from = app.screen_mode;
+    if from == target {
+        return Ok(());
+    }
+
+    // Everything the previous mode staged must reach the terminal before the
+    // escapes below move the cursor out from under it.
+    let _ = terminal.backend_mut().flush();
+
+    let carried = terminal.backend().respawn(io::stdout());
+    let outcome = transition_screen(
+        terminal,
+        from,
+        target,
+        &mut |on_alt_screen| {
+            let mut stdout = io::stdout();
+            if on_alt_screen {
+                enter_alt_screen(&mut stdout)?;
+                #[cfg(windows)]
+                crate::logging::set_verbose(false);
+            } else {
+                leave_alt_screen(&mut stdout)?;
+                #[cfg(windows)]
+                crate::logging::restore_verbose_state();
+            }
+            Ok(())
+        },
+        move || build_app_terminal(carried, target),
+    );
+
+    // Either way the screen changed underneath the app: repaint.
+    app.needs_redraw = true;
+    if outcome.is_ok() {
+        app.screen_mode = target;
+        // Mouse capture is a per-screen answer (inline leaves selection to
+        // the terminal); re-derive it rather than keeping startup's.
+        if let Err(err) = apply_mouse_capture_for_screen(app, terminal.backend_mut()) {
+            tracing::warn!(?err, "mouse capture could not follow the screen switch");
+        }
+        refresh_composer_arrows_scroll(app);
+        let _ = reset_terminal_viewport(terminal, app.synchronized_output_enabled);
+    }
+    outcome
+}
+
+/// Give an inline session a viewport the size of the terminal it is now in.
+///
+/// Stock ratatui keeps `Viewport::Inline(rows)` at the rows it was built with,
+/// so after the window grows a "full-height" inline viewport would stop at the
+/// old height and leave the new rows blank. Rebuild it over the same
+/// negotiated backend facts, sized to the event-reported `size` (the
+/// `terminal::size()` query can lag a resize — see the `#582` note in the
+/// event loop).
+///
+/// The cursor is parked on row 0 first. A full-height viewport is anchored
+/// there, and from row 0 the full height is exactly the room ratatui asks
+/// for, so it appends no lines and the host scrollback gains nothing. In
+/// inline mode the visible screen is the session's own frame, so nothing of
+/// the user's is painted over.
+pub(crate) fn refit_inline_viewport(terminal: &mut AppTerminal, size: Size) -> io::Result<()> {
+    let _ = terminal.backend_mut().flush();
+    let mut backend = terminal.backend().respawn(io::stdout());
+    backend.force_size(size);
+    backend.set_terminal_size(size);
+    ratatui::backend::Backend::set_cursor_position(
+        &mut backend,
+        ratatui::layout::Position::ORIGIN,
+    )?;
+    *terminal = build_app_terminal(backend, ScreenMode::Inline)?;
+    terminal.backend_mut().clear_forced_size();
+    Ok(())
+}
+
+/// The fallible half of [`switch_screen_mode`], with the terminal escapes and
+/// the rebuild injected so the rollback can be exercised against a fake
+/// backend.
+///
+/// `alt_screen` programs the alternate screen and reports whether the escape
+/// went out; `build` is the probe. Both are part of the switch: an escape
+/// that failed to write is rolled back (the previous screen's escape is put
+/// out again in case the failed write was partial) and the probe is never
+/// run; a failed probe never touched `terminal`, so its rollback is the same
+/// single call. The live-screen record is only ever moved by an escape that
+/// succeeded, so teardown cannot be told a screen the terminal is not on.
+fn transition_screen<B, F>(
+    terminal: &mut Terminal<B>,
+    from: ScreenMode,
+    target: ScreenMode,
+    alt_screen: &mut dyn FnMut(bool) -> io::Result<()>,
+    build: F,
+) -> std::result::Result<(), String>
+where
+    B: ratatui::backend::Backend,
+    F: FnOnce() -> io::Result<Terminal<B>>,
+{
+    if let Err(err) = alt_screen(target.uses_alt_screen()) {
+        let _ = alt_screen(from.uses_alt_screen());
+        return Err(format!(
+            "{} screen escape failed: {err}; staying in {}",
+            target.as_str(),
+            from.as_str()
+        ));
+    }
+    match build() {
+        Ok(rebuilt) => {
+            *terminal = rebuilt;
+            Ok(())
+        }
+        Err(err) => {
+            if let Err(rollback) = alt_screen(from.uses_alt_screen()) {
+                tracing::warn!(?rollback, "alternate-screen rollback escape failed");
+            }
+            Err(format!(
+                "{} viewport probe failed: {err}; staying in {}",
+                target.as_str(),
+                from.as_str()
+            ))
+        }
+    }
+}
+
 pub(crate) fn pause_terminal(
     terminal: &mut AppTerminal,
     use_alt_screen: bool,
@@ -245,7 +480,7 @@ pub(crate) fn pause_terminal(
     execute!(terminal.backend_mut(), DisableFocusChange)?;
     disable_raw_mode()?;
     if use_alt_screen {
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        leave_alt_screen(terminal.backend_mut())?;
         #[cfg(windows)]
         crate::logging::restore_verbose_state();
     }
@@ -270,7 +505,7 @@ pub(crate) fn resume_terminal(
     crate::tui::notifications::set_terminal_focused(true);
     enable_raw_mode()?;
     if use_alt_screen {
-        execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+        enter_alt_screen(terminal.backend_mut())?;
         // Re-entering alt-screen after mode recovery — suppress verbose
         // CLI logging again so eprintln! doesn't leak into the TUI.
         #[cfg(windows)]
@@ -421,7 +656,7 @@ pub fn emergency_restore_terminal() {
     disable_bracketed_paste_mode(&mut stdout);
     let _ = execute!(stdout, DisableMouseCapture);
     let _ = disable_raw_mode();
-    let _ = execute!(stdout, LeaveAlternateScreen);
+    let _ = leave_alt_screen(&mut stdout);
 }
 
 /// On Windows, ensure the console input handle has `ENABLE_WINDOW_INPUT`
@@ -534,4 +769,248 @@ pub(crate) fn active_poll_ms(app: &App) -> u64 {
 
 pub(crate) fn idle_poll_ms(app: &App) -> u64 {
     if app.low_motion { 120 } else { UI_IDLE_POLL_MS }
+}
+
+#[cfg(test)]
+mod screen_mode_tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    fn probe_failure() -> io::Error {
+        io::Error::other("terminal refused the inline viewport")
+    }
+
+    #[test]
+    fn failed_probe_rolls_the_screen_back_and_says_why() {
+        let mut terminal =
+            Terminal::new(TestBackend::new(20, 6)).expect("fullscreen test terminal");
+        let mut alt_screen_writes: Vec<bool> = Vec::new();
+
+        let error = transition_screen(
+            &mut terminal,
+            ScreenMode::Fullscreen,
+            ScreenMode::Inline,
+            &mut |on_alt_screen| {
+                alt_screen_writes.push(on_alt_screen);
+                Ok(())
+            },
+            || Err(probe_failure()),
+        )
+        .expect_err("a failing probe must not report a switch");
+
+        assert!(
+            error.contains("inline viewport probe failed"),
+            "message must name the probe that failed: {error}"
+        );
+        assert!(
+            error.contains("terminal refused the inline viewport"),
+            "message must carry the terminal's own reason: {error}"
+        );
+        assert!(
+            error.contains("staying in fullscreen"),
+            "message must name the mode the user is left in: {error}"
+        );
+        // Left the alt screen for the probe, then went straight back to it.
+        assert_eq!(alt_screen_writes, vec![false, true]);
+        // The caller's terminal is the one it started with.
+        assert_eq!(terminal.get_frame().area(), Rect::new(0, 0, 20, 6));
+    }
+
+    #[test]
+    fn successful_probe_adopts_the_rebuilt_terminal() {
+        let mut terminal =
+            Terminal::new(TestBackend::new(20, 6)).expect("fullscreen test terminal");
+        let mut alt_screen_writes: Vec<bool> = Vec::new();
+
+        transition_screen(
+            &mut terminal,
+            ScreenMode::Fullscreen,
+            ScreenMode::Inline,
+            &mut |on_alt_screen| {
+                alt_screen_writes.push(on_alt_screen);
+                Ok(())
+            },
+            || {
+                Terminal::with_options(
+                    TestBackend::new(20, 6),
+                    ratatui::TerminalOptions {
+                        viewport: ratatui::Viewport::Inline(3),
+                    },
+                )
+                .map_err(|err| io::Error::other(err.to_string()))
+            },
+        )
+        .expect("a successful probe must switch");
+
+        assert_eq!(alt_screen_writes, vec![false], "no rollback write");
+        assert_eq!(
+            terminal.get_frame().area().height,
+            3,
+            "inline viewport adopted"
+        );
+    }
+
+    #[test]
+    fn failed_screen_escape_rolls_back_before_the_probe_runs() {
+        let mut terminal =
+            Terminal::new(TestBackend::new(20, 6)).expect("fullscreen test terminal");
+        let mut alt_screen_writes: Vec<bool> = Vec::new();
+        let mut probed = false;
+
+        let error = transition_screen(
+            &mut terminal,
+            ScreenMode::Fullscreen,
+            ScreenMode::Inline,
+            &mut |on_alt_screen| {
+                alt_screen_writes.push(on_alt_screen);
+                if on_alt_screen {
+                    Ok(())
+                } else {
+                    Err(io::Error::other("stdout closed"))
+                }
+            },
+            || {
+                probed = true;
+                Err(probe_failure())
+            },
+        )
+        .expect_err("an escape that never went out must not report a switch");
+
+        assert!(
+            error.contains("inline screen escape failed") && error.contains("stdout closed"),
+            "message must name the escape and the writer's reason: {error}"
+        );
+        assert!(error.contains("staying in fullscreen"), "{error}");
+        assert!(!probed, "the probe must not run after a failed escape");
+        // The failed leave, then the previous screen put back.
+        assert_eq!(alt_screen_writes, vec![false, true]);
+        assert_eq!(terminal.get_frame().area(), Rect::new(0, 0, 20, 6));
+    }
+
+    /// The live-screen record only moves on an escape that went out.
+    #[cfg(not(windows))]
+    #[test]
+    fn live_screen_record_ignores_an_escape_that_failed_to_write() {
+        struct Closed;
+        impl Write for Closed {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("stdout closed"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Err(io::Error::other("stdout closed"))
+            }
+        }
+        let mut sink: Vec<u8> = Vec::new();
+        enter_alt_screen(&mut sink).expect("a writable sink takes the escape");
+        assert!(live_alt_screen());
+        assert!(leave_alt_screen(&mut Closed).is_err());
+        assert!(
+            live_alt_screen(),
+            "a leave that never reached the terminal must not be recorded"
+        );
+        leave_alt_screen(&mut sink).expect("a writable sink takes the escape");
+        assert!(!live_alt_screen());
+    }
+
+    #[test]
+    fn mouse_capture_is_a_per_screen_answer() {
+        // The one rule startup and the switch share: the preference only
+        // applies on the alternate screen.
+        assert!(ScreenMode::Fullscreen.mouse_capture(true));
+        assert!(!ScreenMode::Fullscreen.mouse_capture(false));
+        assert!(!ScreenMode::Inline.mouse_capture(true));
+        assert!(!ScreenMode::Inline.mouse_capture(false));
+    }
+
+    /// Inline start with a capture-on preference, then `/fullscreen`: capture
+    /// is recomputed per the rule and programmed on the terminal, and the
+    /// way back turns it off again.
+    #[cfg(not(windows))]
+    #[test]
+    fn switching_screens_recomputes_mouse_capture() {
+        let mut app = crate::test_support::test_app_with_options(
+            crate::test_support::test_tui_options(std::path::PathBuf::from(".")),
+        );
+        app.screen_mode = ScreenMode::Inline;
+        app.mouse_capture_preference = true;
+        app.use_mouse_capture = ScreenMode::Inline.mouse_capture(true);
+        assert!(!app.use_mouse_capture, "inline start leaves capture off");
+
+        let mut wire: Vec<u8> = Vec::new();
+        app.screen_mode = ScreenMode::Fullscreen;
+        assert!(apply_mouse_capture_for_screen(&mut app, &mut wire).expect("writable"));
+        assert!(app.use_mouse_capture, "/fullscreen re-derives capture on");
+        assert!(
+            String::from_utf8_lossy(&wire).contains("\x1b[?1000h"),
+            "EnableMouseCapture must reach the terminal: {wire:?}"
+        );
+
+        wire.clear();
+        app.screen_mode = ScreenMode::Inline;
+        assert!(apply_mouse_capture_for_screen(&mut app, &mut wire).expect("writable"));
+        assert!(!app.use_mouse_capture, "/inline hands selection back");
+        assert!(
+            String::from_utf8_lossy(&wire).contains("\x1b[?1000l"),
+            "DisableMouseCapture must reach the terminal: {wire:?}"
+        );
+
+        wire.clear();
+        assert!(
+            !apply_mouse_capture_for_screen(&mut app, &mut wire).expect("writable"),
+            "an unchanged answer writes nothing"
+        );
+        assert!(wire.is_empty());
+    }
+
+    #[test]
+    fn switching_screens_recomputes_derived_composer_arrows_only() {
+        let mut app = crate::test_support::test_app_with_options(
+            crate::test_support::test_tui_options(std::path::PathBuf::from(".")),
+        );
+        app.composer_arrows_scroll_explicit = false;
+
+        app.use_mouse_capture = false;
+        refresh_composer_arrows_scroll(&mut app);
+        assert!(
+            app.composer_arrows_scroll,
+            "inline/no-capture uses arrows to scroll"
+        );
+
+        app.use_mouse_capture = true;
+        refresh_composer_arrows_scroll(&mut app);
+        assert!(
+            !app.composer_arrows_scroll,
+            "fullscreen/capture uses prompt history"
+        );
+
+        app.composer_arrows_scroll_explicit = true;
+        app.composer_arrows_scroll = true;
+        app.use_mouse_capture = true;
+        refresh_composer_arrows_scroll(&mut app);
+        assert!(
+            app.composer_arrows_scroll,
+            "explicit true survives a switch"
+        );
+        app.use_mouse_capture = false;
+        refresh_composer_arrows_scroll(&mut app);
+        assert!(
+            app.composer_arrows_scroll,
+            "explicit true survives the reverse switch"
+        );
+    }
+
+    #[test]
+    fn inline_viewport_asks_for_the_full_terminal_height() {
+        // Inline is a drop-in for the alt screen, not a strip: the viewport is
+        // the whole terminal, which is also what makes its anchoring
+        // independent of where the cursor happened to be.
+        let backend = crate::tui::color_compat::ColorCompatBackend::new(
+            io::stdout(),
+            crate::palette::ColorDepth::TrueColor,
+            crate::palette::PaletteMode::Dark,
+        );
+        let mut backend = backend;
+        backend.set_terminal_size(Size::new(80, 24));
+        assert_eq!(inline_viewport_rows(&backend), 24);
+    }
 }

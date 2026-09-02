@@ -22,7 +22,8 @@ use crate::config_ui::{ConfigUiMode, parse_mode};
 use crate::localization::{MessageId, resolve_locale, tr};
 use crate::settings::Settings;
 use crate::tui::app::{
-    App, AppAction, AppMode, OnboardingState, ReasoningEffort, SettingSelection, VimMode,
+    App, AppAction, AppMode, OnboardingState, ReasoningEffort, ScreenMode, SettingSelection,
+    VimMode,
 };
 use crate::tui::approval::ApprovalMode;
 use anyhow::Result;
@@ -579,6 +580,32 @@ pub fn verbose(app: &mut App, arg: Option<&str>) -> CommandResult {
     } else {
         "Verbose transcript off: live thinking stays compact."
     })
+}
+
+/// `/fullscreen` and `/inline`: move the TUI between the alternate screen and
+/// a full-height inline viewport.
+///
+/// The terminal transition happens where the ratatui terminal lives — this
+/// only emits the action, so a switch the terminal refuses can roll back and
+/// explain itself there.
+pub fn screen(app: &mut App, target: ScreenMode, arg: Option<&str>) -> CommandResult {
+    if let Some(extra) = arg.map(str::trim).filter(|value| !value.is_empty()) {
+        return CommandResult::error(format!(
+            "/{} takes no argument (got {extra:?}). Use /fullscreen or /inline.",
+            target.as_str()
+        ));
+    }
+    if target == app.screen_mode {
+        return CommandResult::message(match target {
+            ScreenMode::Fullscreen => {
+                "Already on the fullscreen screen (alternate screen). /inline keeps the terminal's own scrollback instead."
+            }
+            ScreenMode::Inline => {
+                "Already inline: a full-height viewport with no alternate screen, so this terminal's scrollback survives the session. /fullscreen returns to the alternate screen."
+            }
+        });
+    }
+    CommandResult::action(AppAction::SetScreenMode(target))
 }
 
 /// Place the work rail or pick its panel.
@@ -3281,6 +3308,40 @@ mod tests {
 
     fn create_test_app() -> App {
         create_test_app_with_config(&Config::default())
+    }
+
+    #[test]
+    fn screen_commands_dispatch_to_the_matching_screen_mode() {
+        let mut app = create_test_app();
+        assert_eq!(app.screen_mode, ScreenMode::Fullscreen);
+
+        let switched = crate::commands::execute("/inline", &mut app);
+        assert_eq!(
+            switched.action,
+            Some(AppAction::SetScreenMode(ScreenMode::Inline)),
+            "/inline must ask for the inline screen"
+        );
+        assert!(!switched.is_error, "/inline must not be an error");
+
+        // The action is applied where the terminal lives, so the app is still
+        // fullscreen here; asking for the current mode reports, it does not
+        // emit a second action.
+        let repeated = crate::commands::execute("/fullscreen", &mut app);
+        assert!(
+            repeated.action.is_none(),
+            "already-current mode must not re-switch"
+        );
+        assert!(
+            repeated
+                .message
+                .as_deref()
+                .is_some_and(|msg| msg.contains("Already on the fullscreen screen")),
+            "{:?}",
+            repeated.message
+        );
+
+        let rejected = crate::commands::execute("/inline sideways", &mut app);
+        assert!(rejected.is_error, "/inline takes no argument");
     }
 
     #[test]

@@ -29,8 +29,9 @@ impl App {
             config_path,
             config_profile,
             allow_shell,
-            use_alt_screen,
+            screen_mode,
             use_mouse_capture,
+            mouse_capture_preference,
             use_bracketed_paste,
             max_subagents,
             skills_dir: global_skills_dir,
@@ -697,6 +698,11 @@ impl App {
         // #2069: expose the already-discovered skills as bindable hotbar
         // actions. Reuses the startup skill cache, so no extra filesystem I/O.
         hotbar_actions.register_skills(&cached_skills);
+        let composer_arrows_scroll_explicit = config
+            .tui
+            .as_ref()
+            .and_then(|tui| tui.composer_arrows_scroll)
+            .is_some();
         let mut app = Self {
             mode: initial_mode,
             hotbar_actions,
@@ -836,8 +842,9 @@ impl App {
             project_context_pack_enabled: config.project_context_pack_enabled(),
             memory_path,
             use_memory,
-            use_alt_screen,
+            screen_mode,
             use_mouse_capture,
+            mouse_capture_preference,
             use_bracketed_paste,
             use_paste_burst_detection,
             bracketed_paste_seen: false,
@@ -1094,6 +1101,7 @@ impl App {
                 .as_ref()
                 .and_then(|tui| tui.composer_arrows_scroll)
                 .unwrap_or_else(|| default_composer_arrows_scroll(use_mouse_capture)),
+            composer_arrows_scroll_explicit,
             mention_menu_limit: settings.mention_menu_limit,
             mention_walk_depth: settings.mention_walk_depth,
             mention_menu_behavior: settings.mention_menu_behavior.clone(),

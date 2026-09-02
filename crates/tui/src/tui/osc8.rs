@@ -245,6 +245,19 @@ pub fn take_frame_links() -> Vec<LinkRegion> {
 /// PM, APC, and standalone two-byte ESC sequences. OSC 8 hyperlink wrappers
 /// (`ESC ] 8 ; … BEL` / `ESC \`) are stripped along with the rest.
 pub fn strip_ansi_into(s: &str, out: &mut String) {
+    strip_ansi_impl(s, out, false);
+}
+
+/// Like [`strip_ansi_into`], but SGR sequences (`ESC [ … m`: colour, bold,
+/// underline, reset) pass through untouched so a renderer that understands
+/// them can paint the output as the tool emitted it. Everything else — OSC
+/// (including OSC 8 hyperlink wrappers), cursor movement, DCS, lone control
+/// bytes — is still removed; only the styling survives.
+pub fn strip_ansi_keep_sgr_into(s: &str, out: &mut String) {
+    strip_ansi_impl(s, out, true);
+}
+
+fn strip_ansi_impl(s: &str, out: &mut String, keep_sgr: bool) {
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -254,13 +267,21 @@ pub fn strip_ansi_into(s: &str, out: &mut String) {
                 // CSI: ESC [ ... <final byte 0x40..=0x7E>
                 b'[' => {
                     let mut j = i + 2;
+                    let mut final_byte = 0u8;
                     while j < bytes.len() {
                         let b = bytes[j];
                         if (0x40..=0x7e).contains(&b) {
+                            final_byte = b;
                             j += 1;
                             break;
                         }
                         j += 1;
+                    }
+                    if keep_sgr
+                        && final_byte == b'm'
+                        && let Ok(seq) = std::str::from_utf8(&bytes[i..j])
+                    {
+                        out.push_str(seq);
                     }
                     i = j;
                     continue;
@@ -441,6 +462,19 @@ mod tests {
     fn strip_ansi_removes_csi_sgr_and_keeps_text() {
         let coloured = "526   \x1b[1;32mOPEN\x1b[0m  bug fix";
         assert_eq!(strip_ansi(coloured), "526   OPEN  bug fix");
+    }
+
+    #[test]
+    fn strip_keep_sgr_keeps_colour_and_drops_everything_else() {
+        let mut out = String::new();
+        strip_ansi_keep_sgr_into(
+            "\x1b]8;;https://x\x07\x1b[1;32mok\x1b[0m\x1b]8;;\x07\x1b[2K\x1b[?25l tail",
+            &mut out,
+        );
+        assert_eq!(out, "\x1b[1;32mok\x1b[0m tail");
+        let mut plain = String::new();
+        strip_ansi_into(&out, &mut plain);
+        assert_eq!(plain, "ok tail");
     }
 
     #[test]

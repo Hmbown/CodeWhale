@@ -28,13 +28,13 @@
   "dependencies": {
     "next": "^16.3.3",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "@opennextjs/cloudflare": "^1.19.11",
-    "@types/node": "^22.10.5",
+    "@opennextjs/cloudflare": "^1.20.4",
+    "@types/node": "^26.4.0",
     "@types/react": "^19.0.7",
-    "@types/react-dom": "^19.0.3",
+    "@types/react-dom": "^19.2.5",
     "autoprefixer": "^10.5.4",
     "eslint": "^9.39.4",
     "eslint-config-next": "^15.5.18",

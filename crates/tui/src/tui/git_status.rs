@@ -3,11 +3,13 @@
 //! Cached and non-blocking: probes run off the render path on a background
 //! thread and the renderer only ever reads [`cached_status`].
 //!
-//! A probe shells out to the real `git` binary — up to six invocations
+//! A probe shells out to the real `git` binary — up to seven invocations
 //! (`rev-parse --show-toplevel`, `rev-parse --git-common-dir`,
 //! `symbolic-ref --short HEAD` or its `rev-parse --short HEAD` fallback,
-//! `status --porcelain`, `rev-list --left-right --count`, and
-//! `worktree list --porcelain`). There is no `gix` dependency and no
+//! `status --porcelain`, `rev-list --left-right --count`,
+//! `worktree list --porcelain`, and `remote get-url origin` by way of
+//! [`crate::remote_control::observed_git_repo`]). There is no `gix`
+//! dependency and no
 //! per-invocation timeout; the earlier claim of both here was wrong, and it
 //! misled a contributor reasoning about probe cost in #5617. All of these
 //! run with `GIT_OPTIONAL_LOCKS=0` so a read never contends for
@@ -29,6 +31,13 @@ pub struct GitStatusSnapshot {
     pub root: Option<PathBuf>,
     pub repository_name: Option<String>,
     pub branch: Option<String>,
+    /// `owner/name` when `origin` resolves to a recognised forge, from the
+    /// one normalizer that owns that judgement
+    /// ([`crate::remote_control::normalize_observed_git_repo`]): paths,
+    /// credentials, and unknown hosts are dropped rather than displayed.
+    /// Cached here so chrome can name the repository without probing on the
+    /// render path.
+    pub remote_slug: Option<String>,
     pub dirty: bool,
     pub ahead: u32,
     pub behind: u32,
@@ -136,6 +145,11 @@ fn probe_status(workspace: &Path) -> GitStatusSnapshot {
         .ok()
         .or_else(|| git_output(&root, &["rev-parse", "--short", "HEAD"]).ok())
         .map(|s| s.trim().to_string());
+
+    // The forge slug (`owner/name`), reusing the remote-control probe rather
+    // than parsing `origin` a second time. Rides this cached probe so the
+    // topbar never shells out per frame.
+    snap.remote_slug = crate::remote_control::observed_git_repo(&root);
 
     // Dirty: porcelain status (empty = clean).
     if let Ok(status) = git_output(&root, &["status", "--porcelain"]) {

@@ -2303,6 +2303,13 @@ enum RuntimeTurnInputSource {
         message_id: String,
         persisted_summary: String,
     },
+    /// A host-driven goal pass (kickoff or continuation). The runtime host,
+    /// not the engine, owns the durable goal loop: host-managed engines
+    /// never self-continue, so each pass is claimed here with the same
+    /// durable-turn machinery as any other input.
+    GoalContinuation {
+        continuation_index: u32,
+    },
 }
 
 impl RuntimeTurnInputSource {
@@ -2310,6 +2317,7 @@ impl RuntimeTurnInputSource {
         match self {
             Self::ExternalUser => crate::core::ops::UserInputProvenance::ExternalUser,
             Self::AgentMail { .. } => crate::core::ops::UserInputProvenance::AgentMail,
+            Self::GoalContinuation { .. } => crate::core::ops::UserInputProvenance::Runtime,
         }
     }
 
@@ -2317,6 +2325,7 @@ impl RuntimeTurnInputSource {
         match self {
             Self::ExternalUser => None,
             Self::AgentMail { message_id, .. } => Some(message_id),
+            Self::GoalContinuation { .. } => None,
         }
     }
 
@@ -2329,16 +2338,31 @@ impl RuntimeTurnInputSource {
             Self::AgentMail {
                 persisted_summary, ..
             } => Some(persisted_summary.clone()),
+            // Continuation prompts embed goal JSON and engine framing, so the
+            // same rule applies: persist a bounded marker, not the projection.
+            // Index 0 is the kickoff pass, not a continuation; the summary
+            // must not call it one.
+            Self::GoalContinuation {
+                continuation_index: 0,
+            } => Some("Goal kickoff (host-driven)".to_string()),
+            Self::GoalContinuation { continuation_index } => Some(format!(
+                "Goal continuation pass #{continuation_index} (host-driven)"
+            )),
         }
     }
 
     fn item_metadata(&self) -> Option<Value> {
-        self.mail_message_id().map(|message_id| {
-            json!({
+        match self {
+            Self::ExternalUser => None,
+            Self::AgentMail { message_id, .. } => Some(json!({
                 "input_provenance": "agent_mail",
                 "agent_mail_message_id": message_id,
-            })
-        })
+            })),
+            Self::GoalContinuation { continuation_index } => Some(json!({
+                "input_provenance": "goal_continuation",
+                "goal_continuation_index": continuation_index,
+            })),
+        }
     }
 }
 
@@ -4177,6 +4201,288 @@ impl RuntimeThreadManager {
         tokio::task::spawn_blocking(move || store.delete_goal(&thread_id))
             .await
             .context("goal delete task panicked")?
+    }
+
+    /// Activate a persisted `Active` goal: make sure the engine carries the
+    /// goal state, then dispatch the kickoff turn while the thread is idle.
+    /// A busy thread is left alone — the running turn already carries the
+    /// persisted goal, and its terminal settlement arms the next pass.
+    pub async fn activate_thread_goal(&self, thread_id: &str) -> Result<()> {
+        let Some(goal) = self.store.load_goal(thread_id)? else {
+            return Ok(());
+        };
+        if !matches!(goal.status, codewhale_protocol::ThreadGoalStatus::Active) {
+            return Ok(());
+        }
+        {
+            let active = self.active.lock().await;
+            if let Some(state) = active.engines.get(thread_id)
+                && state.active_turn.is_some()
+            {
+                return Ok(());
+            }
+        }
+        let objective = goal.objective.trim().to_string();
+        if objective.is_empty() {
+            return Ok(());
+        }
+        self.start_goal_turn(thread_id, objective, 0).await?;
+        Ok(())
+    }
+
+    /// Push a durable goal lifecycle transition into a cached engine so its
+    /// prompt surface and tool gates follow the store. Engines are not
+    /// loaded for this; a later load re-derives the state from the record.
+    pub async fn sync_engine_goal_status(
+        &self,
+        thread_id: &str,
+        status: crate::tools::goal::GoalStatus,
+        clear: bool,
+    ) {
+        let engine = {
+            let active = self.active.lock().await;
+            active
+                .engines
+                .get(thread_id)
+                .map(|state| state.engine.clone())
+        };
+        if let Some(engine) = engine {
+            let _ = engine.try_send(Op::SetGoalStatus { status, clear });
+        }
+    }
+
+    /// Claim one host-driven goal turn with the standard durable machinery.
+    /// The caller renders the prompt (kickoff objective or continuation
+    /// frame); `continuation_index` is 0 for the kickoff pass.
+    async fn start_goal_turn(
+        &self,
+        thread_id: &str,
+        prompt: String,
+        continuation_index: u32,
+    ) -> Result<TurnRecord> {
+        let req = StartTurnRequest {
+            prompt,
+            operation_key: None,
+            input_summary: Some(if continuation_index == 0 {
+                "goal kickoff".to_string()
+            } else {
+                format!("goal continuation pass #{continuation_index}")
+            }),
+            model: None,
+            reasoning_effort: None,
+            allowed_tools: None,
+            mode: None,
+            permission_posture: None,
+            allow_shell: None,
+            trust_mode: None,
+            auto_approve: None,
+            dynamic_tools: Vec::new(),
+            environment_id: None,
+        };
+        self.start_turn_with_source(
+            thread_id,
+            req,
+            RuntimeTurnInputSource::GoalContinuation { continuation_index },
+            None,
+        )
+        .await
+    }
+
+    /// Terminal goal settlement for one finished turn.
+    ///
+    /// Host-managed runtime engines never self-continue (the interactive
+    /// sibling schedules `Op::ContinueGoal` in-process), so the runtime host
+    /// owns the durable loop here: turn usage is written back to the goal
+    /// record, the model's terminal decision (`update_goal` complete/blocked)
+    /// is mirrored from the engine snapshot, and the next pass is armed after
+    /// the configured quiet period while the goal is still Active.
+    async fn settle_thread_goal_after_turn(
+        &self,
+        thread_id: &str,
+        turn: &TurnRecord,
+        engine_goal: Option<crate::tools::goal::GoalSnapshot>,
+        turn_tool_catalog: Option<&[codewhale_core::request::Tool]>,
+    ) {
+        let mut goal = match self.store.load_goal(thread_id) {
+            Ok(Some(goal)) => goal,
+            Ok(None) => return,
+            Err(err) => {
+                tracing::warn!("failed to load goal for {thread_id} after turn: {err}");
+                return;
+            }
+        };
+
+        // Accrue this turn's provider spend onto the durable counters. The
+        // engine tracks the same totals in memory; the record is the
+        // cross-restart authority.
+        let token_delta = turn
+            .usage
+            .as_ref()
+            .map(|usage| i64::from(usage.input_tokens) + i64::from(usage.output_tokens))
+            .unwrap_or(0);
+        let time_delta_seconds = turn.duration_ms.map(|ms| (ms / 1000) as i64).unwrap_or(0);
+        if token_delta > 0 || time_delta_seconds > 0 {
+            goal.tokens_used = goal.tokens_used.saturating_add(token_delta);
+            goal.time_used_seconds = goal.time_used_seconds.saturating_add(time_delta_seconds);
+            goal.updated_at = chrono::Utc::now().timestamp();
+        }
+
+        // The engine snapshot is the authority for the continuation counter:
+        // `record_continuation` counts every intra-turn pass the turn actually
+        // ran, while a flat per-turn increment here would diverge (one turn
+        // with N intra-turn passes would count as 1) and could keep arming
+        // passes the engine's own `ContinuationLimit` gate then refuses.
+        // A rehydrated engine starts from the durable count, so this only
+        // ever moves the record forward.
+        if let Some(snapshot) = engine_goal.as_ref() {
+            let engine_count = i64::from(snapshot.continuation_count);
+            if engine_count > goal.continuation_count {
+                goal.continuation_count = engine_count;
+                goal.updated_at = chrono::Utc::now().timestamp();
+            }
+        }
+
+        // Mirror the model's terminal decision into the durable record so a
+        // restarted host does not resume a goal the verifier already closed.
+        if matches!(goal.status, codewhale_protocol::ThreadGoalStatus::Active)
+            && let Some(snapshot) = engine_goal.as_ref()
+            && let Some(projected) = match snapshot.status.as_str() {
+                "complete" => Some(codewhale_protocol::ThreadGoalStatus::Complete),
+                "blocked" => Some(codewhale_protocol::ThreadGoalStatus::Blocked),
+                "paused" => match snapshot.pause_reason {
+                    // Pause reasons that map to the protocol's limit states
+                    // keep their distinct reason; a user pause stays Paused.
+                    Some(crate::tools::goal::GoalPauseReason::UsageLimit) => {
+                        Some(codewhale_protocol::ThreadGoalStatus::UsageLimited)
+                    }
+                    Some(crate::tools::goal::GoalPauseReason::BudgetLimit) => {
+                        Some(codewhale_protocol::ThreadGoalStatus::BudgetLimited)
+                    }
+                    _ => Some(codewhale_protocol::ThreadGoalStatus::Paused),
+                },
+                _ => None,
+            }
+        {
+            goal.status = projected;
+            goal.updated_at = chrono::Utc::now().timestamp();
+        }
+
+        // Only a cleanly completed pass continues the loop. Failed or
+        // interrupted passes leave the goal Active for an explicit resume
+        // (PUT, or the next user turn).
+        let mut continue_after: Option<u64> = None;
+        if turn.status == RuntimeTurnStatus::Completed
+            && matches!(goal.status, codewhale_protocol::ThreadGoalStatus::Active)
+        {
+            let max_continuations = i64::from(self.read_config().goal_max_continuations());
+            // The engine stops its own intra-turn loop at this cap with only
+            // a status line (`goal_continuation_allowed` → Stop), so a
+            // snapshot at or beyond the cap means the engine already refused
+            // the next pass. Mirror that stop as a host-side pause instead of
+            // arming passes that can only trip the same gate; an explicit
+            // PUT resumes the goal.
+            let engine_hit_cap = engine_goal.as_ref().is_some_and(|snapshot| {
+                max_continuations != 0
+                    && i64::from(snapshot.continuation_count) >= max_continuations
+            });
+            // A turn whose catalog lacked `update_goal` (an `allowed_tools`
+            // restriction, or an `isolated_chat` engine) has no tool with
+            // which the model could ever report complete/blocked, so the
+            // engine's own continuation hook skips such turns
+            // (`goal_continuation_message_if_needed`). The host mirrors that
+            // precondition: re-arming would spend one provider call per pass
+            // with no terminal path. A missing catalog means the turn never
+            // reached the request seam, so the same conservative gate holds.
+            let update_goal_available = turn_tool_catalog
+                .is_some_and(|catalog| catalog.iter().any(|tool| tool.name == "update_goal"));
+            if max_continuations != 0 && goal.continuation_count >= max_continuations {
+                tracing::info!(
+                    "goal for {thread_id} reached the continuation cap ({}); stopping",
+                    goal.continuation_count
+                );
+                goal.status = codewhale_protocol::ThreadGoalStatus::Paused;
+                goal.updated_at = chrono::Utc::now().timestamp();
+            } else if engine_hit_cap {
+                tracing::info!(
+                    "goal for {thread_id} hit the engine continuation cap ({}); pausing",
+                    goal.continuation_count
+                );
+                goal.status = codewhale_protocol::ThreadGoalStatus::Paused;
+                goal.updated_at = chrono::Utc::now().timestamp();
+            } else if !update_goal_available {
+                tracing::info!(
+                    "goal for {thread_id} stays parked: the finished turn's catalog lacked update_goal"
+                );
+            } else {
+                continue_after = Some(self.read_config().goal_continuation_delay_seconds());
+            }
+        }
+
+        if let Err(err) = self.store.save_goal(&goal) {
+            tracing::warn!("failed to record goal progress for {thread_id}: {err}");
+            return;
+        }
+        if let Err(err) = self.emit_goal_updated_event(thread_id, goal.clone()).await {
+            tracing::warn!("failed to emit goal update for {thread_id}: {err}");
+        }
+        if let Some(delay_seconds) = continue_after {
+            self.spawn_goal_continuation(thread_id.to_string(), delay_seconds);
+        }
+    }
+
+    /// Arm one goal continuation pass to run after the quiet period. The
+    /// sleep is deliberately never cancelled: a pause, clear, completion, or
+    /// cap that lands while the timer runs is honored by the re-read inside
+    /// `run_goal_continuation`, which is the cancellation path — `DELETE
+    /// /goal` and status syncs therefore do not need to interrupt this task.
+    fn spawn_goal_continuation(&self, thread_id: String, delay_seconds: u64) {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            // Quiet period between passes, mirroring the interactive
+            // engine's `goal_continuation_delay_seconds` behavior (#5508).
+            if delay_seconds > 0 {
+                tokio::time::sleep(std::time::Duration::from_secs(delay_seconds)).await;
+            }
+            if let Err(err) = manager.run_goal_continuation(&thread_id).await {
+                tracing::warn!("goal continuation for {thread_id} failed: {err}");
+            }
+        });
+    }
+
+    /// Dispatch one goal continuation pass after the quiet period. Every
+    /// guard re-reads durable state: the goal may have been paused, cleared,
+    /// completed, or capped while the timer ran.
+    async fn run_goal_continuation(&self, thread_id: &str) -> Result<()> {
+        let Some(goal) = self.store.load_goal(thread_id)? else {
+            return Ok(());
+        };
+        if !matches!(goal.status, codewhale_protocol::ThreadGoalStatus::Active) {
+            return Ok(());
+        }
+        {
+            let active = self.active.lock().await;
+            if let Some(state) = active.engines.get(thread_id)
+                && state.active_turn.is_some()
+            {
+                return Ok(());
+            }
+        }
+        let max_continuations = i64::from(self.read_config().goal_max_continuations());
+        if max_continuations != 0 && goal.continuation_count >= max_continuations {
+            return Ok(());
+        }
+        if goal
+            .token_budget
+            .is_some_and(|budget| goal.tokens_used >= budget)
+        {
+            return Ok(());
+        }
+        let continuation_index = u32::try_from(goal.continuation_count.max(1)).unwrap_or(u32::MAX);
+        let snapshot = crate::tools::goal::GoalSnapshot::from_thread_goal(&goal);
+        let prompt = crate::tools::goal::render_continuation_prompt(&snapshot, continuation_index);
+        self.start_goal_turn(thread_id, prompt, continuation_index)
+            .await?;
+        Ok(())
     }
 
     /// Persist one canonical Agent Mail envelope in the runtime store. The
@@ -6980,14 +7286,36 @@ impl RuntimeThreadManager {
         };
         turn.item_ids.push(user_item_id.clone());
 
+        // Every turn carries the persisted goal alongside its message. The
+        // engine's `handle_send_message` installs these fields into its
+        // host-surface projection unconditionally, so passing `None` here
+        // would clear an injected goal on any ordinary message. Passing the
+        // durable record keeps the engine aligned with the store; a replaced
+        // objective (PUT) still resets counters through the same sync path.
+        let turn_goal = self.store.load_goal(thread_id).ok().flatten();
+        let turn_goal_objective = turn_goal
+            .as_ref()
+            .map(|goal| goal.objective.trim().to_string())
+            .filter(|objective| !objective.is_empty());
+        let turn_goal_token_budget = turn_goal
+            .as_ref()
+            .and_then(|goal| goal.token_budget)
+            .and_then(|value| u32::try_from(value.max(0)).ok());
+        let turn_goal_status = turn_goal
+            .as_ref()
+            .map(|goal| {
+                crate::tools::goal::thread_goal_status_projection(goal.status.clone()).0
+            })
+            .unwrap_or(crate::tools::goal::GoalStatus::Active);
+
         let op = Op::SendMessage {
             content: prompt,
             mode,
             route: Box::new(route),
             compaction: Box::new(compaction),
-            goal_objective: None,
-            goal_token_budget: None,
-            goal_status: crate::tools::goal::GoalStatus::Active,
+            goal_objective: turn_goal_objective,
+            goal_token_budget: turn_goal_token_budget,
+            goal_status: turn_goal_status,
             reasoning_effort,
             reasoning_effort_auto: auto_controls_reasoning,
             auto_model,
@@ -7589,6 +7917,63 @@ impl RuntimeThreadManager {
                         .map(|registry| registry.rediscover_for_workspace(&thread.workspace))
                 })
                 .flatten();
+            // Rehydrate the persisted thread goal into the engine so the
+            // goal loop, prompt surface, and `update_goal` tool operate on
+            // the durable record from the first turn. Usage and continuation
+            // counters are preserved; `sync_from_host_status` would reset
+            // them because the fresh state's objective "changed".
+            let persisted_goal = self.store.load_goal(&thread.id).unwrap_or_else(|err| {
+                tracing::warn!(
+                    "failed to load persisted goal for thread {}: {err}",
+                    thread.id
+                );
+                None
+            });
+            let (goal_objective, goal_token_budget, goal_status, goal_state) = match &persisted_goal
+            {
+                Some(goal) => {
+                    let objective = goal.objective.trim();
+                    if objective.is_empty() {
+                        (
+                            None,
+                            None,
+                            crate::tools::goal::GoalStatus::Active,
+                            crate::tools::goal::new_shared_goal_state(),
+                        )
+                    } else {
+                        let (status, pause_reason) =
+                            crate::tools::goal::thread_goal_status_projection(goal.status.clone());
+                        let tokens_used =
+                            u64::try_from(goal.tokens_used.max(0)).unwrap_or(u64::MAX);
+                        let time_used_seconds =
+                            u64::try_from(goal.time_used_seconds.max(0)).unwrap_or(u64::MAX);
+                        let continuation_count =
+                            u32::try_from(goal.continuation_count.max(0)).unwrap_or(u32::MAX);
+                        (
+                            Some(objective.to_string()),
+                            goal.token_budget
+                                .and_then(|value| u32::try_from(value.max(0)).ok()),
+                            status,
+                            crate::tools::goal::new_shared_goal_state_from_persisted(
+                                objective,
+                                goal.token_budget
+                                    .and_then(|value| u32::try_from(value.max(0)).ok()),
+                                status,
+                                pause_reason,
+                                tokens_used,
+                                time_used_seconds,
+                                continuation_count,
+                            ),
+                        )
+                    }
+                }
+                None => (
+                    None,
+                    None,
+                    crate::tools::goal::GoalStatus::Active,
+                    crate::tools::goal::new_shared_goal_state(),
+                ),
+            };
             let engine_cfg = EngineConfig {
                 model: route_model.clone(),
                 active_route_limits: route_limits,
@@ -7628,7 +8013,7 @@ impl RuntimeThreadManager {
                 compaction,
                 todos: new_shared_todo_list(),
                 plan_state: new_shared_plan_state(),
-                goal_state: crate::tools::goal::new_shared_goal_state(),
+                goal_state,
                 max_spawn_depth: cfg.subagent_max_spawn_depth_for_provider(provider),
                 subagent_token_budget: cfg.subagent_token_budget_for_provider(provider),
                 network_policy,
@@ -7696,9 +8081,9 @@ impl RuntimeThreadManager {
                     .then(|| cfg.vision_model_config())
                     .flatten(),
                 strict_tool_mode: cfg.strict_tool_mode.unwrap_or(false),
-                goal_objective: None,
-                goal_token_budget: None,
-                goal_status: crate::tools::goal::GoalStatus::Active,
+                goal_objective,
+                goal_token_budget,
+                goal_status,
                 goal_max_continuations: cfg.goal_max_continuations(),
                 goal_continuation_delay_seconds: cfg.goal_continuation_delay_seconds(),
                 allowed_tools: isolated_chat.then(Vec::new),
@@ -8039,6 +8424,15 @@ impl RuntimeThreadManager {
         let mut engine_turn_id: Option<String> = None;
         let mut pending_event: Option<EngineEvent> = None;
         let mut event_channel_closed = false;
+        // Latest engine-side goal snapshot observed during this turn. The
+        // model's `update_goal` decision (complete/blocked/paused) lands here
+        // before TurnComplete, so terminal settlement can mirror it into the
+        // durable goal record instead of continuing to spend.
+        let mut latest_goal_snapshot: Option<crate::tools::goal::GoalSnapshot> = None;
+        // Tool definitions of the finished turn's request surface, from the
+        // final TurnComplete receipt. Goal settlement uses it to mirror the
+        // engine's own `update_goal` precondition for continuation.
+        let mut turn_tool_catalog: Option<Vec<codewhale_core::request::Tool>> = None;
 
         loop {
             let event = if let Some(event) = pending_event.take() {
@@ -9058,9 +9452,13 @@ impl RuntimeThreadManager {
                     usage,
                     status,
                     error,
+                    tool_catalog,
                     ..
                 } => {
                     turn_usage = Some(usage);
+                    if tool_catalog.is_some() {
+                        turn_tool_catalog = tool_catalog;
+                    }
                     let reported_status = match status {
                         TurnOutcomeStatus::Completed => RuntimeTurnStatus::Completed,
                         TurnOutcomeStatus::Interrupted => RuntimeTurnStatus::Interrupted,
@@ -9083,6 +9481,9 @@ impl RuntimeThreadManager {
                         turn_error = Some(err);
                     }
                     break;
+                }
+                EngineEvent::GoalUpdated { snapshot } => {
+                    latest_goal_snapshot = Some(snapshot);
                 }
                 _ => {}
             }
@@ -9243,6 +9644,21 @@ impl RuntimeThreadManager {
             }
             touch_lru(&mut active.lru, &thread_id);
         }
+
+        // The same terminal boundary settles the durable goal loop: usage is
+        // written back, the model's terminal decision is mirrored, and the
+        // next pass is armed while the goal is still Active. Runs after the
+        // active-turn cleanup above so an armed pass sees an idle thread. A
+        // goal pass and the mail wake below can race for the same durable
+        // claim; a goal pass that loses the race simply re-arms after the
+        // mail turn's own settlement, so no arbitration is needed here.
+        self.settle_thread_goal_after_turn(
+            &thread_id,
+            &turn,
+            latest_goal_snapshot,
+            turn_tool_catalog.as_deref(),
+        )
+        .await;
 
         // A terminal turn is the declared safe boundary. Wake at most the
         // oldest eligible envelope; its own terminal boundary may advance the

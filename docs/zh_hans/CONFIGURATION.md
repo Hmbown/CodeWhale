@@ -1141,7 +1141,7 @@ DeepSeek V4 前缀缓存让 token 标签变得重要。这些数量保持分离�
 - `[notifications].quiet`(bool，可选)：默认 `false`。安静模式——抑制每个桌面通知(所有类别、所有投递方式)和配对的 `event_sound` 提示，不改变 `method` 或逐类别开关。回合完成提示音(`completion_sound`)单独管辖。
 - `[notifications.events]`(表，可选)：逐类别桌面通知开关；每个键默认 `true`。键：`turn-complete`、`subagent-terminal`、`approval-needed`、`input-needed`、`elevation-needed`、`model-notify`。禁用的类别在每个投递机制(OSC 9、Kitty、Ghostty、BEL、macOS 通知中心)上被抑制。
 - `[notifications.event_sound]`(表，可选)：选择加入、确定性的逐事件声音提示。键：`enabled`(bool，默认 `false`)、`events`(kebab-case 事件名数组，默认 `["turn-complete", "approval-needed"]`)、`min_interval_ms`(int，默认 `2000`)、`quiet`(bool，默认 `false`)。见下方"事件声音提示"。
-- `tui.alternate_screen`(字符串，可选)：`auto`、`always` 或 `never`。为配置兼容性保留，但交互式会话现在总是使用 TUI 拥有的备用屏幕，这样宿主终端滚动缓冲区不能劫持视口。
+- `tui.alternate_screen`(字符串，可选，默认 `auto`)：交互式会话启动时使用哪个屏幕。`auto` 和 `always` 在 TUI 拥有的备用屏幕上启动；`never` 以内联模式启动——与终端等高、不使用备用屏幕的 ratatui 视口，因此 shell 的回滚缓冲在会话期间保持完好，退出后仍可滚动。`/fullscreen` 与 `/inline` 在进程内切换；终端拒绝的切换会回滚并说明原因。内联模式在其视口内绘制整个转录——会话运行期间不会向宿主回滚缓冲写入任何内容。
 - `tui.mouse_capture`(bool，可选，非 Windows 终端和备用屏幕活动时的 Windows Terminal/ConEmu/Cmder 上默认 `true`；旧 Windows 控制台和 JetBrains JediTerm 内部——PyCharm/IDEA/CLion 等——为 `false`，那里鼠标事件转义作为乱码文本漏进输入流，见 #878 / #898)：启用内部鼠标滚动、转录选择、右键上下文动作和转录滚动条拖动。TUI 拥有的拖拽选择只复制转录文本，从段落中移除视觉换行列断点，保持选择限于转录窗格。设为 `false` 或带 `--no-mouse-capture` 运行使用原始终端选择；设为 `true` 或带 `--mouse-capture` 运行可在任何默认关闭处选择加入。在原始终端选择上，尤其是旧 Windows 控制台或鼠标捕获禁用时，选择可能跨越右侧栏并包含视觉换行，因为选择由终端而不是 TUI 拥有。
 - `tui.terminal_probe_timeout_ms`(int，可选，默认 `500`)：启动终端模式探测超时毫秒。值钳制到 `100..=5000`；超时发出警告并中止启动，而不是无限挂起。
 - `tui.stream_chunk_timeout_secs`(int，可选，默认 `900`)：流式模型响应的每 SSE 块空闲超时。慢的本地或兼容服务器可以用 `/config stream_chunk_timeout_secs <seconds>` 提高；`0` 映射到默认，显式值必须 `1..=3600`。省略该键时旧 `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` 环境变量仍被遵循。

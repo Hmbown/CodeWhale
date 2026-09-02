@@ -183,7 +183,7 @@ fn frame_cursor_is_hidden_during_diff_then_positioned_before_reveal() {
 
 #[test]
 fn composer_rows_stay_pinned_across_turn_state_transitions() {
-    // The Tideline shell: a one-row topbar, the stage, and one merged
+    // The Tideline shell: the stage, one merged footer row, and the info line
     // footer row (slots 6+8 collapsed, spec §3). Sending a prompt must not
     // displace the composer, relocate the route into the footer, or drop
     // the phase verb from the footer's left half.
@@ -221,27 +221,28 @@ fn composer_rows_stay_pinned_across_turn_state_transitions() {
             .last_composer_area
             .expect("idle frame records the composer area");
 
-        // The topbar is the screen's first row and now owns the route; the
-        // merged footer is the bottom row and carries the phase verb plus
-        // cost, never the route.
+        // The info line is the screen's last row and owns the route; the
+        // posture row (merged footer) sits directly above it and carries the
+        // phase verb plus cost, never the route. Nothing paints above the
+        // stage (SHELL-DESIGN-20260901 §2.0).
         let (_, model) = idle.effective_route_identity_display();
-        let topbar_row = idle_rows.first().expect("topbar row");
+        let info_row = idle_rows.last().expect("info row");
         assert!(
-            topbar_row.contains(model.as_str()),
-            "{width}x{height} topbar lost the route {model:?}: {topbar_row:?}"
+            info_row.contains(model.as_str()),
+            "{width}x{height} info line lost the route {model:?}: {info_row:?}"
         );
         assert!(
-            topbar_row.contains("CODEWHALE"),
-            "{width}x{height} topbar lost the brand: {topbar_row:?}"
+            !info_row.contains("CODEWHALE"),
+            "{width}x{height} info line carries no wordmark: {info_row:?}"
         );
-        let footer_row = idle_rows.last().expect("merged footer row");
+        let footer_row = &idle_rows[idle_rows.len() - 2];
         assert!(
             !footer_row.contains(model.as_str()),
             "{width}x{height} footer duplicated the route: {footer_row:?}"
         );
 
-        // A live turn: the composer keeps its exact rows, the topbar keeps
-        // the route, and the merged footer carries the phase verb.
+        // A live turn: the composer keeps its exact rows, the info line keeps
+        // the route, and the posture row carries the phase verb.
         let mut working = frame_app();
         working.is_loading = true;
         working.turn_started_at = Some(std::time::Instant::now());
@@ -253,12 +254,12 @@ fn composer_rows_stay_pinned_across_turn_state_transitions() {
         );
         assert!(
             working_rows
-                .first()
-                .expect("topbar row")
+                .last()
+                .expect("info row")
                 .contains(model.as_str()),
-            "{width}x{height}: sending a prompt dropped the route from the topbar"
+            "{width}x{height}: sending a prompt dropped the route from the info line"
         );
-        let working_footer = working_rows.last().expect("merged footer row");
+        let working_footer = &working_rows[working_rows.len() - 2];
         assert!(
             !working_footer.contains(model.as_str()),
             "{width}x{height} working footer duplicated the route: {working_footer:?}"
@@ -278,17 +279,11 @@ fn composer_rows_stay_pinned_across_turn_state_transitions() {
             "{width}x{height}: completion displaced the composer"
         );
         assert!(
-            done_rows
-                .first()
-                .expect("topbar row")
-                .contains(model.as_str()),
-            "{width}x{height}: completion dropped the route from the topbar"
+            done_rows.last().expect("info row").contains(model.as_str()),
+            "{width}x{height}: completion dropped the route from the info line"
         );
         assert!(
-            !done_rows
-                .last()
-                .expect("merged footer row")
-                .contains(model.as_str()),
+            !done_rows[done_rows.len() - 2].contains(model.as_str()),
             "{width}x{height}: completion leaked the route into the footer"
         );
     }
@@ -23659,7 +23654,7 @@ mod work_surface {
         // At and above the threshold the rows are genuinely spare, so the rail
         // takes its full auto-fit height over an intact 16-row ocean. The
         // Tideline shell charges one row less than the classic shell did
-        // (one-row topbar, merged footer instead of two standing bands), so
+        // (one-row info line, merged footer instead of two standing bands), so
         // the threshold sits one row lower again.
         for rows in [29_u16, 30, 32] {
             let mut app = busy_rail_app(panel);
@@ -23682,7 +23677,7 @@ mod work_surface {
         }
 
         // 21 rows now seats the ocean floor exactly — the merged footer
-        // returned the activity band's row to the stage (topbar 1 + footer 1
+        // returned the activity band's row to the stage (info line 1 + footer 1
         // + composer floor 3 + the 16-row ambient floor = 21). 20 rows
         // cannot seat the ocean at any strip height. That is pre-rail
         // behavior and the yield rule must not pretend otherwise.
@@ -23995,14 +23990,12 @@ mod work_surface {
         let short = strip_height(&mut app, 80, 22);
         assert_eq!(short, 0, "80x22 has no spare rows for a strip");
         let rendered = render_underwater_test_app(&mut app, 80, 22);
-        // Probe the strip's own rows — directly under the one-row topbar —
-        // not the whole frame: the background-work chip (slot 4) is a
-        // different surface and may legitimately spend its spare row on the
-        // same agent's name now that the merged footer freed one.
-        let strip_slot_row = rendered
-            .lines()
-            .nth(1)
-            .expect("a body row under the topbar");
+        // Probe the strip's own rows — the first body row, now that nothing
+        // paints above the stage — not the whole frame: the background-work
+        // chip (slot 4) is a different surface and may legitimately spend its
+        // spare row on the same agent's name now that the merged footer
+        // freed one.
+        let strip_slot_row = rendered.lines().next().expect("the first body row");
         assert!(
             !strip_slot_row.contains(AGENT_MARK),
             "strip_height says {short} rows at 80x22, but the panel painted \

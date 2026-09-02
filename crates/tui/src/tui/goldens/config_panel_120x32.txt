@@ -1,0 +1,32 @@
+                                                                                                                        
+   Config  ──────────────────────────────────────────────────────────────────────────────────────────────────────────── 
+                                                                                                                        
+   Appearance   Models & providers   Pod   Work   Tools & MCP   Trust   Motion   Advanced                               
+   Search: type to filter  (17/55)                                                                                      
+  ❯ Display         │  Display                                                │Theme                                    
+                    │❯Theme                                 terminal    ‹ ›   │theme                                    
+                    │ Language                              auto        ‹ ›   │                                         
+                    │ Background                            (default)   ✎     │current   terminal                       
+                    │ Ocean treatment                       flat        ‹ ›   │saved     terminal                       
+                    │ Quiet transcript                      On          [x]   │startup   terminal                       
+                    │ Model reasoning in chat               Off         [ ]   │source    settings.toml                  
+                    │ Thinking Default Expanded             Off         [ ]   │scope     SAVED                          
+                    │ Thinking Preview Lines                2           ✎     │apply     applies on save                
+                    │ Reasoning background highlight        On          [x]   │kind      choice                         
+                    │ Help Expand Groups                    Off         [ ]   │available not observed this session      
+                    │ Pin Last Prompt                       On          [x]   │                                         
+                    │ Tool detail level                     Off         [ ]   │system | terminal | dark | light |       
+                    │ Inline file changes                   Full diff   ‹ ›   │grayscale | catppuccin-mocha |           
+                    │ Output pacing                         auto        ‹ ›   │tokyo-night | dracula | gruvbox-dark |   
+                    │ Cost currency                         usd         ‹ ›   │claude | matrix | solarized-light | uwu  
+                    │ Transcript spacing                    comfort...  ‹ ›   │Enter or click again: Enter opens        
+                    │ Tool cards                            compact     ‹ ›   │choices                                  
+                    │                                                         │                                         
+                    │                                                         │                                         
+                    │                                                         │                                         
+  system | terminal | dark | light | grayscale | catppuccin-mocha | tokyo-night | dracula | gruvbox-dark | claude |…    
+  Preview: <·> idle │ $0.00 · agent · ask                                                                               
+  type=filter, Up/Down=select, Enter/e=edit, Esc/q=close                                                                
+                                                                                                                        
+ ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 
+                                                                                                                        

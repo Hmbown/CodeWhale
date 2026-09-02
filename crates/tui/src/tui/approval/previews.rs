@@ -6,9 +6,6 @@
 
 use std::borrow::Cow;
 
-/// Cap on rows previewed per approval card.
-const PREVIEW_LIMIT: usize = 7;
-
 use serde_json::Value;
 
 use crate::localization::{Locale, MessageId, tr};
@@ -179,6 +176,8 @@ fn append_preview_truncation(lines: &mut Vec<String>, line: String, limit: usize
 }
 
 pub(super) fn apply_patch_preview_lines(patch: &str) -> Option<Vec<String>> {
+    const PREVIEW_LIMIT: usize = 7;
+
     let mut lines = Vec::new();
     let mut omitted = 0usize;
     for line in patch.lines().filter(|line| !line.trim().is_empty()) {
@@ -220,6 +219,8 @@ pub(super) fn apply_patch_preview_lines(patch: &str) -> Option<Vec<String>> {
 }
 
 fn changes_preview_lines(changes: &[Value]) -> Option<Vec<String>> {
+    const PREVIEW_LIMIT: usize = 7;
+
     let mut lines = Vec::new();
     let mut rendered_changes = 0usize;
     for (idx, change) in changes.iter().enumerate() {

@@ -37,4 +37,4 @@
                                                                                                    │ the preview is the product▌                               │
 ? help                                                                                             │                                                       [↑] │
 / file issue                                                                                       ╰───────────────────────────────────────────────────────────╯
-f feedback                                                                                         <·> thinking 1m▁▂▄▆▆∿∿∿∿ 61% ↑↓ nav · Enter apply · Esc back
+f feedback                                                                                         <·> thinking 1m 15s │ $0.42  ↑↓ nav · Enter apply · Esc back

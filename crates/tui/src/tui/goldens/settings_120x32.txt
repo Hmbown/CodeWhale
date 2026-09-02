@@ -29,4 +29,4 @@
                                                                           │ the preview is the product▌                │
 ? help                                                                    │                                        [↑] │
 / file issue                                                              ╰────────────────────────────────────────────╯
-f feedback                                                                ▁▂▄▆▆∿∿∿∿ 61%1↑↓ nav · Enter apply · Esc back
+f feedback                                                                <·> thinking 1↑↓ nav · Enter apply · Esc back

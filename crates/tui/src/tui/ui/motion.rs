@@ -121,7 +121,7 @@ pub(crate) fn rail_row_budget(
         crate::tui::widgets::composer_enclosure_enabled(app),
     ));
     terminal_height
-        .saturating_sub(header_height_for(terminal_height))
+        .saturating_sub(info_row_height_for(terminal_height))
         // The merged Tideline footer is one row (spec §3: slots 6+8
         // collapsed into it) — the shell no longer brackets the composer
         // with two standing bands.
@@ -130,10 +130,10 @@ pub(crate) fn rail_row_budget(
         .saturating_sub(chat_floor)
 }
 
-/// The header is the one-row Tideline topbar (spec §5b:
+/// The info line is one row under the posture row (spec §5b:
 /// `Constraint::Length(1)`), at every terminal height. Shared so the rail
 /// budget charges the same chrome the layout actually reserves.
-pub(crate) fn header_height_for(_terminal_height: u16) -> u16 {
+pub(crate) fn info_row_height_for(_terminal_height: u16) -> u16 {
     1
 }
 

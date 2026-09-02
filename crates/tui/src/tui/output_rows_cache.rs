@@ -259,6 +259,7 @@ mod tests {
         OutputRow {
             text: text.to_string(),
             intact: false,
+            styled: None,
         }
     }
 

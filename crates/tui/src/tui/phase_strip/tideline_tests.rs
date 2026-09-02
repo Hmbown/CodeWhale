@@ -1,14 +1,12 @@
 //! Golden-buffer contract for the Tideline merged footer (spec §3 slots
 //! 6+8, §5c). Goldens: `footer_{w}x{h}` — the one-row band at the bottom of
-//! each blocker-size buffer. Re-bless with `CODEWHALE_BLESS_GOLDENS=1`.
+//! each blocker-size buffer. Re-bless by DELETING the golden and running with
+//! `CODEWHALE_BLESS_GOLDENS=1`.
 
-use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
 
-use super::{
-    ChromeInk, TidelineFooter, depth_ink_for, render_tideline_footer, tideline_footer_depth_hitbox,
-};
+use super::{ChromeInk, TidelineFooter, render_tideline_footer};
 use crate::palette::UI_THEME;
 use crate::tui::golden_harness::{BLOCKER_SIZES, assert_matches_golden, render_golden_text};
 
@@ -76,13 +74,13 @@ fn footer_matches_goldens_at_blocker_sizes() {
     }
 }
 
-// The scheduled-work slot moved to the topbar (TUI band contract: work in
-// the top strip; the merged footer owns phase/cost/detail). Its topbar
+// The scheduled-work slot moved to the info line (TUI band contract: work in
+// the top strip; the merged footer owns phase/cost/detail). Its info-line
 // rendering is pinned by `ui/frame.rs` tests reading the same
 // `AutomationPanelState` projection.
 
 #[test]
-fn footer_merges_phase_cost_left_and_depth_keys_right() {
+fn footer_merges_phase_cost_left_and_keys_right() {
     let footer = thinking_footer().widget(&UI_THEME);
     let text = draw(100, 30, &footer);
     let band = text.trim_end().to_string();
@@ -93,7 +91,6 @@ fn footer_merges_phase_cost_left_and_depth_keys_right() {
     );
     // The posture chips ride after the cost, whole or not at all.
     assert!(band.contains("$0.42 · 61K tok · act · ask"), "{band}");
-    assert!(band.contains("61%"), "depth percent: {band}");
     assert!(band.ends_with(KEYS), "keys legend right: {band}");
 }
 
@@ -144,7 +141,6 @@ fn footer_notice_owns_the_trailing_slot_over_the_keys() {
         !text.contains(KEYS),
         "the notice outranks the keys legend: {text}"
     );
-    assert!(text.contains("61%"), "the depth line stays: {text}");
 }
 
 #[test]
@@ -158,15 +154,22 @@ fn nonurgent_notice_keeps_compact_help_when_the_floor_fits() {
     assert!(text.contains("? help"), "{text}");
 }
 
+/// The context reading is the info line's, and only the info line's. This band used
+/// to print the same percentage from the same snapshot, beside a nine-cell
+/// sparkline encoding the number printed next to it.
 #[test]
-fn footer_depth_line_is_a_hand_built_ramp_not_a_gauge() {
-    let footer = TidelineFooter::new(&UI_THEME, "idle", ChromeInk::Metadata, "$0.00", 61, KEYS);
-    let cells = footer.depth_cells();
-    assert!(cells.starts_with("▁▂▄▆"), "ramp rises: {cells}");
-    assert!(cells.contains('∿'), "open water waves: {cells}");
-    assert!(cells.width() <= 16, "depth line stays ≤16 cells");
-    // Pure function of the count: same percent, same cells.
-    assert_eq!(cells, footer.depth_cells());
+fn footer_states_no_context_reading() {
+    for pct in [0u8, 12, 61, 79] {
+        let footer =
+            TidelineFooter::new(&UI_THEME, "idle", ChromeInk::Metadata, "$0.00", pct, KEYS);
+        let text = draw(120, 32, &footer);
+        assert!(
+            !text.contains(&format!("{pct}%")),
+            "{pct}: the footer must not repeat the info line's reading: {text}"
+        );
+        assert!(!text.contains('∿'), "{pct}: the sparkline is gone: {text}");
+        assert!(!text.contains('▆'), "{pct}: the sparkline is gone: {text}");
+    }
 }
 
 #[test]
@@ -182,8 +185,10 @@ fn footer_warns_at_eighty_percent_cap() {
         !text.contains(KEYS),
         "the warning owns the right side over the keys legend: {text}"
     );
-    assert_eq!(depth_ink_for(83), ChromeInk::Attention);
-    assert_eq!(depth_ink_for(79), ChromeInk::Info);
+    assert!(
+        !text.contains("83%"),
+        "the reading itself stays in the info line: {text}"
+    );
 }
 
 #[test]
@@ -207,31 +212,10 @@ fn footer_ascii_safe_projects_glyphs() {
         .ascii_safe(true);
     let text = draw(100, 30, &footer);
     assert!(text.contains("<.>"), "chip projects: {text}");
-    assert!(text.contains("__"), "ramp projects to underscores: {text}");
-    assert!(text.contains("~~~"), "waves project: {text}");
     for ch in text.chars() {
         if ch != '\n' {
             assert_eq!(ch.width(), Some(1), "ascii-safe single-width: {ch:?}");
         }
-    }
-}
-
-#[test]
-fn footer_depth_hitbox_matches_painted_cells() {
-    for (w, h) in BLOCKER_SIZES {
-        let footer = thinking_footer().widget(&UI_THEME);
-        let band = Rect::new(0, h - 1, w, 1);
-        let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
-        render_tideline_footer(band, &mut buf, &footer);
-        let hitbox = tideline_footer_depth_hitbox(band, &footer);
-        let cells: String = (hitbox.x..hitbox.x + hitbox.width)
-            .map(|x| buf[(x, hitbox.y)].symbol().to_string())
-            .collect();
-        assert!(
-            cells.contains("61%"),
-            "depth hitbox covers the painted percent at {w}x{h}: {cells:?}"
-        );
-        assert!(hitbox.x + hitbox.width <= w);
     }
 }
 

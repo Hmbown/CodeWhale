@@ -16,6 +16,7 @@ mod provider_defaults;
 mod provider_kind;
 pub mod provider_templates;
 pub mod route;
+pub mod settings_schema;
 pub mod setup_state;
 pub mod user_constitution;
 mod xai_credentials;
@@ -37,6 +38,10 @@ pub use provider_templates::{
     GROQ_DEFAULT_MODEL, GROQ_TEMPLATE_ID, ProviderSetupApply, ProviderSetupTemplate,
     SENSENOVA_API_KEY_ENV, SENSENOVA_BASE_URL, SENSENOVA_DEFAULT_MODEL, SENSENOVA_TEMPLATE_ID,
     compatible_provider_setup_templates, provider_setup_template, provider_setup_templates,
+};
+pub use settings_schema::{
+    SETTINGS_SCHEMA, SettingDef, SettingKind, SettingOption, SettingUi, schema_groups, schema_rows,
+    schema_tabs, setting, setting_index,
 };
 pub use setup_state::{
     ConstitutionAuthoring, ConstitutionChoice, ConstitutionSource, ConstitutionValidity,

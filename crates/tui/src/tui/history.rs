@@ -2662,6 +2662,72 @@ fn render_card_detail_line(
     lines
 }
 
+/// `render_card_detail_line` for a row whose text carries its own SGR
+/// colours: every segment's style is patched over `value_style`, so the
+/// tool's colour wins where it set one and the cell's own ink (dim, state,
+/// file:line emphasis) shows through where it did not. `text` is the row's
+/// plain text (what the segments concatenate to); wrapping follows the same
+/// boundaries as the plain path.
+fn render_card_detail_line_styled(
+    label: Option<&str>,
+    text: &str,
+    segments: &[tool_output::StyledSegment],
+    value_style: Style,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let label_text = label.map(|text| format!("{text}:"));
+    let prefix_width = UnicodeWidthStr::width(TRANSCRIPT_RAIL)
+        + label_text.as_deref().map_or(0, UnicodeWidthStr::width)
+        + usize::from(label.is_some());
+    let content_width = usize::from(width).saturating_sub(prefix_width).max(1);
+
+    let parts = wrap_text(text, content_width);
+    let split = tool_output::split_segments(segments, &parts);
+
+    let mut lines = Vec::new();
+    for (idx, part) in split.into_iter().enumerate() {
+        let mut spans = vec![Span::styled(
+            TRANSCRIPT_RAIL.to_string(),
+            Style::default().fg(palette::TEXT_DIM),
+        )];
+        if idx == 0 {
+            if let Some(label_text) = label_text.as_deref() {
+                spans.push(Span::styled(
+                    label_text.to_string(),
+                    tool_detail_label_style(),
+                ));
+                spans.push(Span::raw(" "));
+            }
+        } else if let Some(label_text) = label_text.as_deref() {
+            spans.push(Span::raw(
+                " ".repeat(UnicodeWidthStr::width(label_text) + 1),
+            ));
+        }
+        for (text, style) in part {
+            spans.push(Span::styled(text, value_style.patch(style)));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+
+/// `render_card_detail_line_single` for a coloured row: one line, never
+/// wrapped, so an intact path or URL keeps the same hitbox with or without
+/// colour.
+fn render_card_detail_line_single_styled(
+    label: Option<&str>,
+    segments: &[tool_output::StyledSegment],
+    value_style: Style,
+) -> Line<'static> {
+    let mut line = render_card_detail_line_single(label, "", value_style);
+    line.spans.pop();
+    for (text, style) in segments {
+        line.spans
+            .push(Span::styled(text.clone(), value_style.patch(*style)));
+    }
+    line
+}
+
 fn render_card_detail_line_single(
     label: Option<&str>,
     value: &str,

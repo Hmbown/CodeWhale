@@ -70,7 +70,8 @@ rusqlite.workspace = true
 rmcp = { version = "2.2.0", default-features = false, features = ["auth", "client"] }
 rustls.workspace = true
 qrcode = { version = "0.14", default-features = false }
-similar = "3"
+similar = { version = "3", features = ["unicode"] }
+ansi-to-tui = { version = "8.0.1", default-features = false }
 syntect = { version = "5.2", default-features = false, features = ["default-fancy"] }
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }

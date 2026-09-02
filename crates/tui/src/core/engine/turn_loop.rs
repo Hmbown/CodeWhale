@@ -4842,10 +4842,14 @@ impl Engine {
             .await
             .as_ref()?;
 
-        // This within-turn hook is the only goal-continuation dispatch site
-        // for every session, so the configured between-continuation quiet
-        // period is awaited right here unconditionally — non-host-managed
-        // sessions (e.g. `codewhale resume --last`) must honor the delay too.
+        // There are exactly two goal-continuation dispatchers, split by
+        // scope: this within-turn hook owns the intra-turn passes for every
+        // session (bounded by the step budget), and the runtime host's
+        // `RuntimeThreadManager::settle_thread_goal_after_turn` owns the
+        // cross-turn re-arm for host-managed engines, which never
+        // self-continue. The configured between-continuation quiet period is
+        // awaited right here unconditionally — non-host-managed sessions
+        // (e.g. `codewhale resume --last`) must honor the delay too.
         // The wait is cancellable: the cancel token (Esc) wins biased over the
         // timer, and a pause/clear or terminal update_goal observed after the
         // wait cancels the pending pass before anything is recorded or

@@ -127,6 +127,11 @@ pub enum MessageId {
     HistoryHintRestore,
     HistoryNoMatches,
     TranscriptReasoningExpand,
+    ScreenModeFullscreenNotice,
+    ScreenModeInlineNotice,
+    ScreenModeMouseCaptureOn,
+    ScreenModeMouseCaptureOff,
+    ScreenModeUnchanged,
     // First-run anonymous usage disclosure.
     TelemetryNoticeHeadline,
     TelemetryNoticeBody,
@@ -200,6 +205,8 @@ pub enum MessageId {
     CommandPaletteTitle,
     CommandPaletteSubtitle,
     ConfigTitle,
+    ConfigPreviewLabel,
+    ConfigHintExternalCredentials,
     ConfigSubtitle,
     ConfigModalTitle,
     ConfigSearchPlaceholder,
@@ -635,6 +642,8 @@ pub enum MessageId {
     CmdReviewDescription,
     CmdRlmDescription,
     CmdSaveDescription,
+    CmdFullscreenDescription,
+    CmdInlineDescription,
     CmdForkDescription,
     CmdNewDescription,
     CmdSessionsDescription,
@@ -1462,6 +1471,10 @@ pub enum MessageId {
     FooterHintKeys,
     FooterHintOutput,
     FooterHintContext,
+    InfoLineHelp,
+    InfoLineWhales,
+    InfoLineAutomation,
+    InfoLineNotConnected,
     // Session metrics strip short labels (phase strip ledger and /status).
     SessionMetricsTurn,
     SessionMetricsTurns,
@@ -2200,6 +2213,11 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::HistoryHintRestore,
     MessageId::HistoryNoMatches,
     MessageId::TranscriptReasoningExpand,
+    MessageId::ScreenModeFullscreenNotice,
+    MessageId::ScreenModeInlineNotice,
+    MessageId::ScreenModeMouseCaptureOn,
+    MessageId::ScreenModeMouseCaptureOff,
+    MessageId::ScreenModeUnchanged,
     MessageId::TelemetryNoticeHeadline,
     MessageId::TelemetryNoticeBody,
     MessageId::TelemetryNoticeCompactBody,
@@ -2270,6 +2288,8 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CommandPaletteTitle,
     MessageId::CommandPaletteSubtitle,
     MessageId::ConfigTitle,
+    MessageId::ConfigPreviewLabel,
+    MessageId::ConfigHintExternalCredentials,
     MessageId::ConfigSubtitle,
     MessageId::ConfigModalTitle,
     MessageId::ConfigSearchPlaceholder,
@@ -2704,6 +2724,8 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::CmdReviewDescription,
     MessageId::CmdRlmDescription,
     MessageId::CmdSaveDescription,
+    MessageId::CmdFullscreenDescription,
+    MessageId::CmdInlineDescription,
     MessageId::CmdNewDescription,
     MessageId::CmdSessionsDescription,
     MessageId::CmdSettingsDescription,
@@ -3483,6 +3505,10 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
     MessageId::FooterHintKeys,
     MessageId::FooterHintOutput,
     MessageId::FooterHintContext,
+    MessageId::InfoLineHelp,
+    MessageId::InfoLineWhales,
+    MessageId::InfoLineAutomation,
+    MessageId::InfoLineNotConnected,
     MessageId::SessionMetricsTurn,
     MessageId::SessionMetricsTurns,
     MessageId::SessionMetricsStep,
@@ -4177,6 +4203,16 @@ pub const ALL_MESSAGE_IDS: &[MessageId] = &[
 
 pub fn tr(locale: Locale, id: MessageId) -> Cow<'static, str> {
     rust_i18n::t!(format!("{id:?}"), locale = locale.tag())
+}
+
+/// Resolve a message by its registry key — the `MessageId` variant name.
+///
+/// The settings schema (`codewhale_config::SETTINGS_SCHEMA`) names the string
+/// a setting shows rather than carrying its prose, so it needs to resolve a
+/// key it holds as a `&str`. An unknown key returns the key itself, which the
+/// schema binding test in `crate::tui::views` fails on.
+pub fn tr_key(locale: Locale, key: &'static str) -> Cow<'static, str> {
+    rust_i18n::t!(key, locale = locale.tag())
 }
 
 pub fn thinking_translation_placeholder(locale: Locale) -> &'static str {

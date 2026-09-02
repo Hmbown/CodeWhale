@@ -93,6 +93,32 @@ impl<W: Write> ColorCompatBackend<W> {
         }
     }
 
+    /// Build a second backend over `writer`, carrying every terminal fact this
+    /// one already negotiated (colour depth, palette, theme, measured
+    /// background, cached size).
+    ///
+    /// The screen-mode switch needs this: stock ratatui cannot change an
+    /// existing `Terminal`'s viewport, so `/inline` and `/fullscreen` rebuild
+    /// the terminal — and the rebuilt one must not re-detect a palette or
+    /// forget an in-session `/theme` choice.
+    pub(crate) fn respawn<W2: Write>(&self, writer: W2) -> ColorCompatBackend<W2> {
+        ColorCompatBackend {
+            inner: CrosstermBackend::new(writer),
+            depth: self.depth,
+            palette_mode: self.palette_mode,
+            theme_id: self.theme_id,
+            active_ui_theme: self.active_ui_theme,
+            // Deliberately not carried: a size forced for one resize frame is
+            // scoped to that frame, and the new terminal measures its own.
+            forced_size: None,
+            terminal_size: self.terminal_size,
+            tracked_cursor: self.tracked_cursor,
+            render_debug: RenderDebugLog::from_env(),
+            ascii_safe: self.ascii_safe,
+            detected_background: self.detected_background,
+        }
+    }
+
     /// Record the measured terminal background. See the field docs.
     pub(crate) fn set_detected_background(&mut self, color: Option<ratatui::style::Color>) {
         self.detected_background = color;

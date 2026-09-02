@@ -38,6 +38,30 @@ pub fn new_shared_goal_state_from_host_status(
     Arc::new(Mutex::new(state))
 }
 
+/// Create shared state restored from a persisted goal record, keeping the
+/// accumulated usage and continuation counters. See
+/// [`GoalState::from_persisted`].
+#[must_use]
+pub fn new_shared_goal_state_from_persisted(
+    objective: &str,
+    token_budget: Option<u32>,
+    status: GoalStatus,
+    pause_reason: Option<GoalPauseReason>,
+    tokens_used: u64,
+    time_used_seconds: u64,
+    continuation_count: u32,
+) -> SharedGoalState {
+    Arc::new(Mutex::new(GoalState::from_persisted(
+        objective,
+        token_budget,
+        status,
+        pause_reason,
+        tokens_used,
+        time_used_seconds,
+        continuation_count,
+    )))
+}
+
 /// A goal declaration stated in ordinary user prose rather than as a leading
 /// `/goal <objective>` command.
 ///
@@ -338,6 +362,44 @@ impl GoalState {
         self.last_gap_fingerprint = None;
         self.repeated_gap_count = 0;
         Ok(())
+    }
+
+    /// Restore goal state from a persisted runtime goal, keeping the
+    /// accumulated usage and continuation counters.
+    ///
+    /// Unlike [`Self::sync_from_host_status`], which resets the counters
+    /// whenever the objective changes, this constructor treats the persisted
+    /// values as the authoritative history: the durable store owns them and
+    /// the engine is rehydrating, not re-declaring, the goal. Evidence,
+    /// blockers, and review notes are runtime-only and start empty; the
+    /// durable loop re-derives them on the next pass.
+    #[must_use]
+    pub fn from_persisted(
+        objective: &str,
+        token_budget: Option<u32>,
+        status: GoalStatus,
+        pause_reason: Option<GoalPauseReason>,
+        tokens_used: u64,
+        time_used_seconds: u64,
+        continuation_count: u32,
+    ) -> Self {
+        Self {
+            objective: Some(objective.to_string()),
+            token_budget,
+            status: Some(status),
+            tokens_used,
+            time_used_seconds,
+            continuation_count,
+            started_at: Some(Instant::now()),
+            finished_at: (status != GoalStatus::Active).then(Instant::now),
+            evidence: None,
+            blocker: None,
+            pause_reason,
+            completion_verification: None,
+            advisories: Vec::new(),
+            last_gap_fingerprint: None,
+            repeated_gap_count: 0,
+        }
     }
 
     pub fn record_usage(&mut self, token_delta: u64, time_delta_seconds: u64) {
@@ -1717,5 +1779,57 @@ mod tests {
     fn update_goal_contract_treats_required_user_input_as_blocking() {
         let update = UpdateGoalTool::new(new_shared_goal_state());
         assert!(update.description().contains("requires user input"));
+    }
+
+    #[test]
+    fn from_persisted_keeps_counters_that_sync_from_host_status_resets() {
+        // Rehydration treats the durable record as history: the counters
+        // survive, evidence starts empty, and only a terminal status carries
+        // a finish time.
+        let restored = GoalState::from_persisted(
+            "ship the goal loop",
+            Some(50_000),
+            GoalStatus::Active,
+            None,
+            1_234,
+            56,
+            3,
+        );
+        assert_eq!(restored.objective.as_deref(), Some("ship the goal loop"));
+        assert_eq!(restored.token_budget, Some(50_000));
+        assert_eq!(restored.status, Some(GoalStatus::Active));
+        assert_eq!(restored.tokens_used, 1_234);
+        assert_eq!(restored.time_used_seconds, 56);
+        assert_eq!(restored.continuation_count, 3);
+        assert!(restored.started_at.is_some());
+        assert!(restored.finished_at.is_none());
+        assert!(restored.evidence.is_none());
+        assert!(restored.blocker.is_none());
+        assert!(restored.advisories.is_empty());
+
+        let blocked = GoalState::from_persisted(
+            "ship the goal loop",
+            None,
+            GoalStatus::Blocked,
+            None,
+            0,
+            0,
+            0,
+        );
+        assert!(blocked.finished_at.is_some());
+
+        // The same objective through the host-status path keeps the counters
+        // (it is not a re-declaration)…
+        let mut state = restored;
+        state.sync_from_host_status(Some("ship the goal loop"), Some(50_000), GoalStatus::Active);
+        assert_eq!(state.tokens_used, 1_234);
+        assert_eq!(state.continuation_count, 3);
+
+        // …while a changed objective resets them — the contrast that makes
+        // `from_persisted` necessary for rehydration.
+        state.sync_from_host_status(Some("a different objective"), None, GoalStatus::Active);
+        assert_eq!(state.tokens_used, 0);
+        assert_eq!(state.time_used_seconds, 0);
+        assert_eq!(state.continuation_count, 0);
     }
 }

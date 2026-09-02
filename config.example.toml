@@ -1055,7 +1055,7 @@ max_subagents = 10 # optional (default 64, clamped to 1-128)
 # TUI
 # ─────────────────────────────────────────────────────────────────────────────────
 [tui]
-alternate_screen = "auto"   # auto/always use the TUI screen; never uses terminal scrollback
+alternate_screen = "auto"   # auto/always start on the alternate screen; never starts inline (keeps terminal scrollback). /fullscreen and /inline switch at runtime
 mouse_capture = true        # true copies only transcript user/assistant text; false uses raw terminal selection/copy
 terminal_probe_timeout_ms = 500 # optional startup terminal-mode timeout (100-5000ms)
 stream_chunk_timeout_secs = 900 # optional SSE idle timeout per chunk (0 = default, 1-3600)

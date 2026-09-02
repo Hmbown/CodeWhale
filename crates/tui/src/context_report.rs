@@ -1192,7 +1192,7 @@ mod tests {
         .expect("parse config");
         let app = App::new(
             crate::tui::app::TuiOptions {
-                use_alt_screen: false,
+                screen_mode: crate::tui::app::ScreenMode::Inline,
                 use_bracketed_paste: false,
                 memory_path: memory_path.clone(),
                 notes_path: tmp.path().join("notes.txt"),
@@ -1278,7 +1278,7 @@ mod tests {
         config.context.project_pack = Some(true);
         let app = App::new(
             crate::tui::app::TuiOptions {
-                use_alt_screen: false,
+                screen_mode: crate::tui::app::ScreenMode::Inline,
                 use_bracketed_paste: false,
                 notes_path: tmp.path().join("notes.txt"),
                 mcp_config_path: tmp.path().join("mcp.json"),

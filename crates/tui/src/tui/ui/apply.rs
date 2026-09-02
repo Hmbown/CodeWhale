@@ -1713,7 +1713,7 @@ pub(crate) async fn apply_command_result(
                 ConfigUiMode::Tui => {
                     pause_terminal(
                         terminal,
-                        app.use_alt_screen,
+                        app.use_alt_screen(),
                         app.use_mouse_capture,
                         app.use_bracketed_paste,
                     )?;
@@ -1721,7 +1721,7 @@ pub(crate) async fn apply_command_result(
                         .and_then(|doc| config_ui::apply_document(doc, app, config, true));
                     resume_terminal(
                         terminal,
-                        app.use_alt_screen,
+                        app.use_alt_screen(),
                         app.use_mouse_capture,
                         app.use_bracketed_paste,
                         app.synchronized_output_enabled,
@@ -1893,6 +1893,43 @@ pub(crate) async fn apply_command_result(
             }
             AppAction::StartChatgptRevoke => {
                 run_chatgpt_revoke_from_tui(app, config).await;
+            }
+            AppAction::SetScreenMode(mode) => {
+                // The terminal transition is the only fallible part; a failed
+                // probe leaves the previous screen live and says why.
+                match switch_screen_mode(terminal, app, mode) {
+                    Ok(()) => {
+                        let screen = match mode {
+                            crate::tui::app::ScreenMode::Fullscreen => {
+                                app.tr(MessageId::ScreenModeFullscreenNotice)
+                            }
+                            crate::tui::app::ScreenMode::Inline => {
+                                app.tr(MessageId::ScreenModeInlineNotice)
+                            }
+                        };
+                        let capture = if app.use_mouse_capture {
+                            app.tr(MessageId::ScreenModeMouseCaptureOn)
+                        } else {
+                            app.tr(MessageId::ScreenModeMouseCaptureOff)
+                        };
+                        app.add_message(HistoryCell::System {
+                            content: format!("{screen} {capture}"),
+                        });
+                    }
+                    Err(reason) => {
+                        let unchanged = app
+                            .tr(MessageId::ScreenModeUnchanged)
+                            .replace("{reason}", &reason);
+                        app.add_message(HistoryCell::System {
+                            content: unchanged.clone(),
+                        });
+                        app.push_status_toast(
+                            unchanged.trim_end_matches('.').to_string(),
+                            StatusToastLevel::Warning,
+                            Some(8_000),
+                        );
+                    }
+                }
             }
             AppAction::OpenModePicker => {
                 if app.view_stack.top_kind() != Some(ModalKind::ModePicker) {

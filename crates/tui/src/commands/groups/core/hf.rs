@@ -177,7 +177,7 @@ mod tests {
     fn app_with_mcp_path(mcp_config_path: PathBuf) -> App {
         App::new(
             TuiOptions {
-                use_alt_screen: false,
+                screen_mode: crate::tui::app::ScreenMode::Inline,
                 max_subagents: 2,
                 mcp_config_path,
                 ..crate::test_support::test_tui_options(PathBuf::from("."))

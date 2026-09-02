@@ -1,0 +1,1218 @@
+//! One declaration per setting: type, default, and an optional `ui` block.
+//!
+//! # What this replaces
+//!
+//! This table is the single source that the settings surface projects. It
+//! replaces, and is the reason for deleting, these hand-maintained key tables
+//! that used to live beside `ConfigView` in `crates/tui/src/tui/views/mod.rs`:
+//!
+//! - the `Vec<ConfigRow>` literal's `section:` field (row → heading),
+//!   and `ConfigCategory::for_section` / `ConfigRowFacts::category`
+//!   (row → rail tab),
+//! - `config_boolean_key` and `config_integer_key` (key → editor kind),
+//! - `config_choice_values` (key → enum values),
+//! - `config_choice_label` / `config_choice_detail` (value → label/detail),
+//! - `config_label_message` (key → label string),
+//! - `config_hint_for_key` (key → description string).
+//!
+//! # The rule
+//!
+//! A setting is declared once, here. `ui: Some(..)` puts it on the settings
+//! screen; `ui: None` keeps the declaration (type, default, and the fact that
+//! the key is known) without giving it a row. Visibility is a property of the
+//! declaration, not of the renderer.
+//!
+//! `label`, `description`, and the per-value `label`/`description` are
+//! *message keys*, not prose: the localization pack owns the text in fifteen
+//! languages, this table owns which string a setting shows. An empty key means
+//! "no string" — the surface humanizes the setting key instead.
+//!
+//! `tab` and `group` are ids the settings screen resolves to its rail
+//! categories and section headings. Declaration order is render order:
+//! distinct tabs appear in the order they are first declared, groups in the
+//! order they are first declared within a tab, and rows in declaration order
+//! within a group.
+//!
+//! Three settings take their values from a runtime registry rather than this
+//! table (`theme` from the shipped palettes, `locale` from the shipped packs,
+//! `reasoning_effort` from the active route's efforts). They are declared
+//! `String`; the surface supplies the live value list.
+
+/// One selectable value of a [`SettingKind::Enum`] (or a boolean override).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettingOption {
+    pub value: &'static str,
+    /// Message key for the value's label; empty means "show the raw value".
+    pub label: &'static str,
+    /// Message key for the value's one-line detail; empty means none.
+    pub description: &'static str,
+}
+
+impl SettingOption {
+    const fn new(value: &'static str, label: &'static str, description: &'static str) -> Self {
+        Self {
+            value,
+            label,
+            description,
+        }
+    }
+}
+
+/// The value type of a setting, and for closed value sets, the values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingKind {
+    /// `true` / `false`. An empty option slice means the surface's default
+    /// on/off labels; a non-empty one overrides them per value.
+    Bool(&'static [SettingOption]),
+    Int,
+    Enum(&'static [SettingOption]),
+    String,
+}
+
+/// Where a setting appears, and what it says. Absent ⇒ no row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettingUi {
+    pub tab: &'static str,
+    pub group: &'static str,
+    /// Message key for the row label; empty ⇒ humanize the setting key.
+    pub label: &'static str,
+    /// Message key for the row's description sentence.
+    pub description: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettingDef {
+    pub key: &'static str,
+    pub kind: SettingKind,
+    /// The value in force when nothing is configured, as it is written to
+    /// disk. Empty for session-owned rows, actions, and receipts.
+    pub default: &'static str,
+    pub ui: Option<SettingUi>,
+}
+
+impl SettingDef {
+    /// The closed value set, when this setting has one. `None` means the
+    /// surface supplies values (free text, an integer, or a runtime registry).
+    pub fn values(&self) -> Option<Vec<&'static str>> {
+        match self.kind {
+            SettingKind::Bool(_) => Some(vec!["false", "true"]),
+            SettingKind::Enum(options) => Some(options.iter().map(|o| o.value).collect()),
+            SettingKind::Int | SettingKind::String => None,
+        }
+    }
+
+    /// Per-value label/description metadata for `value`, when declared.
+    pub fn option(&self, value: &str) -> Option<&'static SettingOption> {
+        let options = match self.kind {
+            SettingKind::Bool(options) | SettingKind::Enum(options) => options,
+            SettingKind::Int | SettingKind::String => return None,
+        };
+        options.iter().find(|option| option.value == value)
+    }
+
+    pub fn is_bool(&self) -> bool {
+        matches!(self.kind, SettingKind::Bool(_))
+    }
+
+    pub fn is_int(&self) -> bool {
+        matches!(self.kind, SettingKind::Int)
+    }
+}
+
+const ON_OFF: &[SettingOption] = &[];
+
+const TELEMETRY: &[SettingOption] = &[
+    SettingOption::new("false", "ConfigValueTelemetryOff", ""),
+    SettingOption::new("true", "ConfigValueTelemetryOn", ""),
+];
+
+const LOW_MOTION: &[SettingOption] = &[
+    SettingOption::new("false", "ConfigValueOff", "ConfigChoiceDetailLowMotionOff"),
+    SettingOption::new("true", "ConfigValueOn", "ConfigChoiceDetailLowMotionOn"),
+];
+
+const FANCY_ANIMATIONS: &[SettingOption] = &[
+    SettingOption::new("false", "ConfigValueOff", "ConfigChoiceDetailFancyOff"),
+    SettingOption::new("true", "ConfigValueOn", "ConfigChoiceDetailFancyOn"),
+];
+
+const SHOW_THINKING: &[SettingOption] = &[
+    SettingOption::new(
+        "false",
+        "ConfigValueOff",
+        "ConfigChoiceDetailShowThinkingOff",
+    ),
+    SettingOption::new("true", "ConfigValueOn", "ConfigChoiceDetailShowThinkingOn"),
+];
+
+const THINKING_HIGHLIGHT: &[SettingOption] = &[
+    SettingOption::new(
+        "false",
+        "ConfigValueOff",
+        "ConfigChoiceDetailThinkingHighlightOff",
+    ),
+    SettingOption::new(
+        "true",
+        "ConfigValueOn",
+        "ConfigChoiceDetailThinkingHighlightOn",
+    ),
+];
+
+const PERMISSION_POSTURE: &[SettingOption] = &[
+    SettingOption::new("ask", "ConfigChoiceAsk", "ConfigChoiceDetailAsk"),
+    SettingOption::new(
+        "auto-review",
+        "ConfigChoiceAutoReview",
+        "ConfigChoiceDetailAutoReview",
+    ),
+    SettingOption::new(
+        "full-access",
+        "ConfigChoiceFullAccess",
+        "ConfigChoiceDetailFullAccess",
+    ),
+];
+
+const APPROVAL_MODE: &[SettingOption] = &[
+    SettingOption::new("ask", "ConfigChoiceAsk", "ConfigChoiceDetailAsk"),
+    SettingOption::new(
+        "auto-review",
+        "ConfigChoiceAutoReview",
+        "ConfigChoiceDetailAutoReview",
+    ),
+    SettingOption::new(
+        "full-access",
+        "ConfigChoiceFullAccess",
+        "ConfigChoiceDetailFullAccess",
+    ),
+];
+
+const APPROVAL_POLICY: &[SettingOption] = &[
+    SettingOption::new(
+        "use-tui-default",
+        "ConfigChoiceUseTuiDefault",
+        "ConfigChoiceDetailUseTuiDefault",
+    ),
+    SettingOption::new("ask", "ConfigChoiceAsk", "ConfigChoiceDetailAsk"),
+    SettingOption::new(
+        "auto-review",
+        "ConfigChoiceAutoReview",
+        "ConfigChoiceDetailAutoReview",
+    ),
+    SettingOption::new(
+        "full-access",
+        "ConfigChoiceFullAccess",
+        "ConfigChoiceDetailFullAccess",
+    ),
+    // `never` is a managed-policy value only: it is accepted from config.toml and
+    // shown read-only, never offered by the editor.
+];
+
+const DEFAULT_MODE: &[SettingOption] = &[
+    SettingOption::new(
+        "agent",
+        "ConfigChoiceModeAct",
+        "ConfigChoiceDetailModeAgent",
+    ),
+    SettingOption::new("plan", "ConfigChoiceModePlan", "ConfigChoiceDetailModePlan"),
+    SettingOption::new(
+        "operate",
+        "ConfigChoiceModeOperate",
+        "ConfigChoiceDetailModeOperate",
+    ),
+];
+
+const OCEAN_TREATMENT: &[SettingOption] = &[
+    SettingOption::new("deepsea", "", "ConfigChoiceDetailOceanDeepsea"),
+    SettingOption::new("flat", "", "ConfigChoiceDetailOceanFlat"),
+];
+
+const FOCUS_TEXTURE: &[SettingOption] = &[
+    SettingOption::new("off", "ConfigValueOff", ""),
+    SettingOption::new("scrim", "", ""),
+    SettingOption::new("grain", "", ""),
+];
+
+const INLINE_DIFFS: &[SettingOption] = &[
+    SettingOption::new("full", "ConfigChoiceDiffFull", ""),
+    SettingOption::new("summary", "ConfigChoiceDiffSummary", ""),
+    SettingOption::new("off", "ConfigValueOff", ""),
+];
+
+const STATUS_INDICATOR: &[SettingOption] = &[
+    SettingOption::new("cw", "ConfigChoiceStatusCw", ""),
+    SettingOption::new("whale", "ConfigChoiceStatusWhale", ""),
+    SettingOption::new("dots", "ConfigChoiceStatusDots", ""),
+    SettingOption::new("off", "ConfigValueOff", ""),
+];
+
+const SYNCHRONIZED_OUTPUT: &[SettingOption] = &[
+    SettingOption::new("auto", "", ""),
+    SettingOption::new("on", "", ""),
+    SettingOption::new("off", "", ""),
+];
+
+const COST_CURRENCY: &[SettingOption] = &[
+    SettingOption::new("usd", "", ""),
+    SettingOption::new("cny", "", ""),
+];
+
+const DENSITY: &[SettingOption] = &[
+    SettingOption::new("compact", "", ""),
+    SettingOption::new("comfortable", "", ""),
+    SettingOption::new("spacious", "", ""),
+];
+
+const TOOL_COLLAPSE: &[SettingOption] = &[
+    SettingOption::new("compact", "", ""),
+    SettingOption::new("expanded", "", ""),
+    SettingOption::new("calm", "", ""),
+];
+
+const VIM_MODE: &[SettingOption] = &[
+    SettingOption::new("normal", "", ""),
+    SettingOption::new("vim", "", ""),
+];
+
+const MENTION_MENU_BEHAVIOR: &[SettingOption] = &[
+    SettingOption::new("fuzzy", "", ""),
+    SettingOption::new("browser", "", ""),
+];
+
+const WORK_SURFACE_PLACEMENT: &[SettingOption] = &[
+    SettingOption::new(
+        "top",
+        "ConfigChoicePlacementTop",
+        "ConfigChoiceDetailPlacementTop",
+    ),
+    SettingOption::new(
+        "left",
+        "ConfigChoicePlacementLeft",
+        "ConfigChoiceDetailPlacementLeft",
+    ),
+    SettingOption::new(
+        "right",
+        "ConfigChoicePlacementRight",
+        "ConfigChoiceDetailPlacementRight",
+    ),
+    SettingOption::new("off", "ConfigValueOff", "ConfigChoiceDetailPlacementOff"),
+];
+
+const RAIL_PANEL: &[SettingOption] = &[
+    SettingOption::new(
+        "tasks",
+        "ConfigChoiceRailTasks",
+        "ConfigChoiceDetailRailTasks",
+    ),
+    SettingOption::new(
+        "agents",
+        "ConfigChoiceRailAgents",
+        "ConfigChoiceDetailRailAgents",
+    ),
+    SettingOption::new(
+        "context",
+        "ConfigChoiceRailContext",
+        "ConfigChoiceDetailRailContext",
+    ),
+    SettingOption::new(
+        "pinned",
+        "ConfigChoiceRailPinned",
+        "ConfigChoiceDetailRailPinned",
+    ),
+];
+
+/// Rail tab ids.
+pub const TAB_APPEARANCE: &str = "appearance";
+pub const TAB_MODELS: &str = "models";
+pub const TAB_POD: &str = "pod";
+pub const TAB_WORK: &str = "work";
+pub const TAB_TOOLS: &str = "tools";
+pub const TAB_TRUST: &str = "trust";
+pub const TAB_MOTION: &str = "motion";
+pub const TAB_ADVANCED: &str = "advanced";
+
+const fn ui(
+    tab: &'static str,
+    group: &'static str,
+    label: &'static str,
+    description: &'static str,
+) -> Option<SettingUi> {
+    Some(SettingUi {
+        tab,
+        group,
+        label,
+        description,
+    })
+}
+
+const fn def(
+    key: &'static str,
+    kind: SettingKind,
+    default: &'static str,
+    ui: Option<SettingUi>,
+) -> SettingDef {
+    SettingDef {
+        key,
+        kind,
+        default,
+        ui,
+    }
+}
+
+/// Every setting the shell knows about, in render order.
+pub const SETTINGS_SCHEMA: &[SettingDef] = &[
+    // ── appearance ──────────────────────────────────────────────────────
+    def(
+        "theme",
+        SettingKind::String,
+        "terminal",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "ConfigLabelTheme",
+            // Described by its shipped value list, not prose (`config_hint_for_key`).
+            "",
+        ),
+    ),
+    def(
+        "locale",
+        SettingKind::String,
+        "auto",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "ConfigLabelLocale",
+            // Described by its shipped value list, not prose (`config_hint_for_key`).
+            "",
+        ),
+    ),
+    def(
+        "background_color",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "ConfigLabelBackground",
+            "ConfigHintBackgroundColor",
+        ),
+    ),
+    def(
+        "ocean_treatment",
+        SettingKind::Enum(OCEAN_TREATMENT),
+        "flat",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "ConfigLabelOceanTreatment",
+            "ConfigHintOceanTreatment",
+        ),
+    ),
+    // No sentence anywhere justifies this prototype toggle, so it keeps its
+    // declaration and loses its row.
+    def(
+        "focus_texture",
+        SettingKind::Enum(FOCUS_TEXTURE),
+        "off",
+        None,
+    ),
+    def(
+        "calm_mode",
+        SettingKind::Bool(ON_OFF),
+        "true",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "ConfigLabelCalmMode",
+            "ConfigHintCalmMode",
+        ),
+    ),
+    def(
+        "show_thinking",
+        SettingKind::Bool(SHOW_THINKING),
+        "false",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "ConfigLabelShowThinking",
+            "ConfigHintShowThinking",
+        ),
+    ),
+    def(
+        "thinking_default_expanded",
+        SettingKind::Bool(ON_OFF),
+        "false",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "",
+            "ConfigHintThinkingDefaultExpanded",
+        ),
+    ),
+    def(
+        "thinking_preview_lines",
+        SettingKind::Int,
+        "2",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "",
+            "ConfigHintThinkingPreviewLines",
+        ),
+    ),
+    def(
+        "thinking_highlight",
+        SettingKind::Bool(THINKING_HIGHLIGHT),
+        "true",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "ConfigLabelThinkingHighlight",
+            "ConfigHintThinkingHighlight",
+        ),
+    ),
+    def(
+        "help_expand_groups",
+        SettingKind::Bool(ON_OFF),
+        "false",
+        ui(TAB_APPEARANCE, "display", "", "ConfigHintHelpExpandGroups"),
+    ),
+    def(
+        "pin_last_prompt",
+        SettingKind::Bool(ON_OFF),
+        "true",
+        ui(TAB_APPEARANCE, "display", "", "ConfigHintPinLastPrompt"),
+    ),
+    def(
+        "show_tool_details",
+        SettingKind::Bool(ON_OFF),
+        "false",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "ConfigLabelShowToolDetails",
+            "ConfigHintBooleanValues",
+        ),
+    ),
+    def(
+        "inline_diffs",
+        SettingKind::Enum(INLINE_DIFFS),
+        "full",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "ConfigLabelInlineDiffs",
+            "ConfigHintInlineDiffs",
+        ),
+    ),
+    // No sentence: the glyph set is discoverable from the row's own values.
+    def(
+        "status_indicator",
+        SettingKind::Enum(STATUS_INDICATOR),
+        "cw",
+        None,
+    ),
+    def(
+        "synchronized_output",
+        SettingKind::Enum(SYNCHRONIZED_OUTPUT),
+        "auto",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "ConfigLabelSynchronizedOutput",
+            "ConfigHintSynchronizedOutput",
+        ),
+    ),
+    def(
+        "cost_currency",
+        SettingKind::Enum(COST_CURRENCY),
+        "usd",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "ConfigLabelCostCurrency",
+            "ConfigHintCostCurrency",
+        ),
+    ),
+    def(
+        "transcript_spacing",
+        SettingKind::Enum(DENSITY),
+        "comfortable",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "ConfigLabelTranscriptSpacing",
+            "ConfigHintDensity",
+        ),
+    ),
+    def(
+        "tool_collapse",
+        SettingKind::Enum(TOOL_COLLAPSE),
+        "compact",
+        ui(
+            TAB_APPEARANCE,
+            "display",
+            "ConfigLabelToolCollapse",
+            "ConfigHintToolCollapse",
+        ),
+    ),
+    // ── models & providers ──────────────────────────────────────────────
+    def(
+        "provider",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_MODELS,
+            "provider",
+            "ConfigLabelProvider",
+            "ConfigHintProvider",
+        ),
+    ),
+    def(
+        "provider_templates",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_MODELS,
+            "provider",
+            "ConfigLabelProviderTemplates",
+            "ConfigHintProviderTemplates",
+        ),
+    ),
+    def(
+        "model",
+        SettingKind::String,
+        "",
+        ui(TAB_MODELS, "model", "ConfigLabelModel", "ConfigHintModel"),
+    ),
+    def(
+        "reasoning_effort",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_MODELS,
+            "model",
+            "ConfigLabelReasoningEffort",
+            "ConfigHintReasoningEffort",
+        ),
+    ),
+    // ── pod ─────────────────────────────────────────────────────────────
+    def(
+        "fleet.exec.max_spawn_depth",
+        SettingKind::Int,
+        "3",
+        ui(
+            TAB_POD,
+            "fleet",
+            "ConfigLabelFleetSpawnDepth",
+            "ConfigHintFleetMaxSpawnDepth",
+        ),
+    ),
+    // ── work ────────────────────────────────────────────────────────────
+    def(
+        "composer_density",
+        SettingKind::Enum(DENSITY),
+        "comfortable",
+        ui(
+            TAB_WORK,
+            "composer",
+            "ConfigLabelComposerDensity",
+            "ConfigHintDensity",
+        ),
+    ),
+    def(
+        "composer_border",
+        SettingKind::Bool(ON_OFF),
+        "true",
+        ui(
+            TAB_WORK,
+            "composer",
+            "ConfigLabelComposerBorder",
+            "ConfigHintBooleanValues",
+        ),
+    ),
+    def(
+        "composer_multiline_mode",
+        SettingKind::Bool(ON_OFF),
+        "false",
+        ui(
+            TAB_WORK,
+            "composer",
+            "ConfigLabelComposerMultilineMode",
+            "ConfigHintComposerMultilineMode",
+        ),
+    ),
+    // Settable via `/set`, surfaced through the composer keymap rather than a
+    // settings row.
+    def(
+        "composer_vim_mode",
+        SettingKind::Enum(VIM_MODE),
+        "normal",
+        None,
+    ),
+    // Terminal protocol toggle; available through `/set` but not given a row.
+    def("bracketed_paste", SettingKind::Bool(ON_OFF), "true", None),
+    def(
+        "paste_burst_detection",
+        SettingKind::Bool(ON_OFF),
+        "true",
+        ui(
+            TAB_WORK,
+            "composer",
+            "ConfigLabelPasteBurstDetection",
+            "ConfigHintBooleanValues",
+        ),
+    ),
+    // Mention-completion tuning knobs; exposed via `/set`, not the settings row.
+    def("mention_menu_limit", SettingKind::Int, "128", None),
+    def(
+        "mention_menu_behavior",
+        SettingKind::Enum(MENTION_MENU_BEHAVIOR),
+        "fuzzy",
+        None,
+    ),
+    def("mention_walk_depth", SettingKind::Int, "10", None),
+    // Workspace discovery option for symlinked layouts; advanced, `/set`-only.
+    def(
+        "workspace_follow_symlinks",
+        SettingKind::Bool(ON_OFF),
+        "false",
+        None,
+    ),
+    def(
+        "work_surface_placement",
+        SettingKind::Enum(WORK_SURFACE_PLACEMENT),
+        "left",
+        ui(
+            TAB_WORK,
+            "sidebar",
+            "ConfigLabelWorkSurfacePlacement",
+            "ConfigHintWorkSurfacePlacement",
+        ),
+    ),
+    def(
+        "work_surface_top_height",
+        SettingKind::Int,
+        "8",
+        ui(
+            TAB_WORK,
+            "sidebar",
+            "ConfigLabelTopHeight",
+            "ConfigHintWorkSurfaceTopHeight",
+        ),
+    ),
+    def(
+        "work_surface_side_width",
+        SettingKind::Int,
+        "30",
+        ui(
+            TAB_WORK,
+            "sidebar",
+            "ConfigLabelSideWidth",
+            "ConfigHintWorkSurfaceSideWidth",
+        ),
+    ),
+    def(
+        "rail_panel",
+        SettingKind::Enum(RAIL_PANEL),
+        "tasks",
+        ui(TAB_WORK, "sidebar", "", "ConfigHintRailPanel"),
+    ),
+    // Sidebar panel toggles; driven by view actions and startup flags, not rows.
+    def("context_panel", SettingKind::Bool(ON_OFF), "false", None),
+    def("sessions_rail", SettingKind::Bool(ON_OFF), "false", None),
+    def(
+        "session_auto_resume",
+        SettingKind::Bool(ON_OFF),
+        "false",
+        None,
+    ),
+    def(
+        "auto_compact",
+        SettingKind::Bool(ON_OFF),
+        "false",
+        ui(
+            TAB_WORK,
+            "history",
+            "ConfigLabelAutoCompact",
+            "ConfigHintBooleanValues",
+        ),
+    ),
+    def(
+        "auto_compact_threshold_percent",
+        SettingKind::Int,
+        "80",
+        ui(
+            TAB_WORK,
+            "history",
+            "ConfigLabelAutoCompactThreshold",
+            "ConfigHintAutoCompactThreshold",
+        ),
+    ),
+    // A computed receipt from auto_compact + threshold; no user-facing row.
+    def("effective_auto_compact", SettingKind::String, "", None),
+    def(
+        "max_history",
+        SettingKind::Int,
+        "100",
+        ui(
+            TAB_WORK,
+            "history",
+            "ConfigLabelMaxHistory",
+            "ConfigHintMaxHistory",
+        ),
+    ),
+    def(
+        "goal_command",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_WORK,
+            "session",
+            "ConfigLabelGoalCommand",
+            "ConfigHintGoalCommand",
+        ),
+    ),
+    def(
+        "workflow",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_WORK,
+            "workflow",
+            "ConfigLabelWorkflow",
+            "ConfigHintWorkflow",
+        ),
+    ),
+    // ── tools & MCP ─────────────────────────────────────────────────────
+    def(
+        "mcp_open",
+        SettingKind::String,
+        "",
+        ui(TAB_TOOLS, "mcp", "ConfigLabelMcpOpen", "ConfigHintMcpOpen"),
+    ),
+    def(
+        "mcp_reconnect",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_TOOLS,
+            "mcp",
+            "ConfigLabelMcpReconnect",
+            "ConfigHintMcpReconnect",
+        ),
+    ),
+    def(
+        "mcp_diagnose",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_TOOLS,
+            "mcp",
+            "ConfigLabelMcpDiagnose",
+            "ConfigHintMcpDiagnose",
+        ),
+    ),
+    def(
+        "plugins_open",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_TOOLS,
+            "mcp",
+            "ConfigLabelPluginsOpen",
+            "ConfigHintPluginsOpen",
+        ),
+    ),
+    def(
+        "mcp_config_path",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_TOOLS,
+            "mcp",
+            "ConfigLabelMcpConfigPath",
+            "ConfigHintMcpConfigPath",
+        ),
+    ),
+    // ── trust ───────────────────────────────────────────────────────────
+    def(
+        "approval_mode",
+        SettingKind::Enum(APPROVAL_MODE),
+        "",
+        ui(
+            TAB_TRUST,
+            "permissions",
+            "ConfigLabelApprovalMode",
+            "ConfigHintApprovalMode",
+        ),
+    ),
+    def(
+        "permission_posture",
+        SettingKind::Enum(PERMISSION_POSTURE),
+        "ask",
+        ui(
+            TAB_TRUST,
+            "permissions",
+            "ConfigLabelPermissionPosture",
+            "ConfigHintPermissionPosture",
+        ),
+    ),
+    def(
+        "approval_policy",
+        SettingKind::Enum(APPROVAL_POLICY),
+        "ask",
+        ui(
+            TAB_TRUST,
+            "permissions",
+            "ConfigLabelApprovalPolicy",
+            "ConfigHintApprovalPolicy",
+        ),
+    ),
+    def(
+        "managed_approval_policy",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_TRUST,
+            "permissions",
+            "ConfigLabelManagedApprovalPolicy",
+            "ConfigHintManagedApprovalPolicy",
+        ),
+    ),
+    def(
+        "default_mode",
+        SettingKind::Enum(DEFAULT_MODE),
+        "agent",
+        ui(
+            TAB_TRUST,
+            "permissions",
+            "ConfigLabelDefaultMode",
+            "ConfigHintDefaultMode",
+        ),
+    ),
+    def(
+        "allow_shell",
+        SettingKind::Bool(ON_OFF),
+        "true",
+        ui(
+            TAB_TRUST,
+            "permissions",
+            "ConfigLabelAllowShell",
+            "ConfigHintAllowShell",
+        ),
+    ),
+    def(
+        "managed_allow_shell",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_TRUST,
+            "permissions",
+            "ConfigLabelManagedAllowShell",
+            "ConfigHintManagedAllowShell",
+        ),
+    ),
+    def(
+        "telemetry",
+        SettingKind::Bool(TELEMETRY),
+        "false",
+        ui(
+            TAB_TRUST,
+            "network",
+            "ConfigLabelTelemetry",
+            "ConfigHintTelemetry",
+        ),
+    ),
+    // ── motion ──────────────────────────────────────────────────────────
+    def(
+        "low_motion",
+        SettingKind::Bool(LOW_MOTION),
+        "false",
+        ui(
+            TAB_MOTION,
+            "display",
+            "ConfigLabelLowMotion",
+            "ConfigHintLowMotion",
+        ),
+    ),
+    def(
+        "fancy_animations",
+        SettingKind::Bool(FANCY_ANIMATIONS),
+        "true",
+        ui(
+            TAB_MOTION,
+            "display",
+            "ConfigLabelFancyAnimations",
+            "ConfigHintFancyAnimations",
+        ),
+    ),
+    // ── advanced ────────────────────────────────────────────────────────
+    def(
+        "base_url",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_ADVANCED,
+            "provider",
+            "ConfigLabelBaseUrlDeepseek",
+            "ConfigHintBaseUrl",
+        ),
+    ),
+    def(
+        "provider_url",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_ADVANCED,
+            "provider",
+            "ConfigLabelProviderUrl",
+            "ConfigHintProviderUrl",
+        ),
+    ),
+    def(
+        "context_window",
+        SettingKind::Int,
+        "",
+        ui(TAB_ADVANCED, "provider", "", "ConfigHintContextWindow"),
+    ),
+    def(
+        "effective_context_window",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_ADVANCED,
+            "provider",
+            "",
+            "ConfigHintEffectiveContextWindow",
+        ),
+    ),
+    // Trust receipts: which external credential file a provider may read, and
+    // under what access. Read-only here; `/provider` owns changing them.
+    def(
+        "external_credentials.openai-codex",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_ADVANCED,
+            "provider",
+            "",
+            "ConfigHintExternalCredentials",
+        ),
+    ),
+    def(
+        "external_credentials.xai",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_ADVANCED,
+            "provider",
+            "",
+            "ConfigHintExternalCredentials",
+        ),
+    ),
+    def(
+        "fast_model",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_ADVANCED,
+            "model",
+            "ConfigLabelFastModel",
+            "ConfigHintFastModel",
+        ),
+    ),
+    // A transport timeout; advanced networking, available through `/set` only.
+    def("stream_chunk_timeout_secs", SettingKind::Int, "900", None),
+    def(
+        "default_model",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_ADVANCED,
+            "legacy",
+            "ConfigLabelDefaultModel",
+            "ConfigHintDefaultModel",
+        ),
+    ),
+    def(
+        "features.vision_model",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_ADVANCED,
+            "experimental",
+            "",
+            "ConfigHintFeatureVisionModel",
+        ),
+    ),
+    def(
+        "features.subagents",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_ADVANCED,
+            "experimental",
+            "",
+            "ConfigHintFeatureSubagents",
+        ),
+    ),
+    def(
+        "features.web_search",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_ADVANCED,
+            "experimental",
+            "",
+            "ConfigHintFeatureWebSearch",
+        ),
+    ),
+    def(
+        "features.apply_patch",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_ADVANCED,
+            "experimental",
+            "",
+            "ConfigHintFeatureApplyPatch",
+        ),
+    ),
+    def(
+        "features.mcp",
+        SettingKind::String,
+        "",
+        ui(TAB_ADVANCED, "experimental", "", "ConfigHintFeatureMcp"),
+    ),
+    def(
+        "features.exec_policy",
+        SettingKind::String,
+        "",
+        ui(
+            TAB_ADVANCED,
+            "experimental",
+            "",
+            "ConfigHintFeatureExecPolicy",
+        ),
+    ),
+];
+
+/// The declaration for `key`, if the shell knows it.
+pub fn setting(key: &str) -> Option<&'static SettingDef> {
+    SETTINGS_SCHEMA.iter().find(|def| def.key == key)
+}
+
+/// Position of `key` in declaration order; `None` for unknown keys.
+pub fn setting_index(key: &str) -> Option<usize> {
+    SETTINGS_SCHEMA.iter().position(|def| def.key == key)
+}
+
+/// Distinct `ui.tab` ids, in the order they are first declared.
+pub fn schema_tabs() -> Vec<&'static str> {
+    let mut tabs: Vec<&'static str> = Vec::new();
+    for ui in SETTINGS_SCHEMA.iter().filter_map(|def| def.ui.as_ref()) {
+        if !tabs.contains(&ui.tab) {
+            tabs.push(ui.tab);
+        }
+    }
+    tabs
+}
+
+/// Distinct `ui.group` ids within `tab`, in the order they are first declared.
+pub fn schema_groups(tab: &str) -> Vec<&'static str> {
+    let mut groups: Vec<&'static str> = Vec::new();
+    for ui in SETTINGS_SCHEMA
+        .iter()
+        .filter_map(|def| def.ui.as_ref())
+        .filter(|ui| ui.tab == tab)
+    {
+        if !groups.contains(&ui.group) {
+            groups.push(ui.group);
+        }
+    }
+    groups
+}
+
+/// Settings declared with a row, in declaration order.
+pub fn schema_rows() -> impl Iterator<Item = &'static SettingDef> {
+    SETTINGS_SCHEMA.iter().filter(|def| def.ui.is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn schema_keys_are_unique() {
+        let mut seen = BTreeSet::new();
+        for def in SETTINGS_SCHEMA {
+            assert!(seen.insert(def.key), "duplicate setting key: {}", def.key);
+        }
+        assert_eq!(seen.len(), SETTINGS_SCHEMA.len());
+    }
+
+    #[test]
+    fn every_row_declares_a_tab_group_and_description() {
+        for def in schema_rows() {
+            let ui = def.ui.as_ref().expect("schema_rows filters on ui");
+            assert!(!ui.tab.is_empty(), "{} has an empty tab", def.key);
+            assert!(!ui.group.is_empty(), "{} has an empty group", def.key);
+            // theme and locale are described by their shipped value lists,
+            // which the TUI composes at render time; no prose key exists.
+            if matches!(def.key, "theme" | "locale") {
+                continue;
+            }
+            assert!(
+                !ui.description.is_empty(),
+                "{} has a row but no sentence justifying it",
+                def.key
+            );
+        }
+    }
+
+    #[test]
+    fn declaration_order_groups_rows_by_tab_then_group() {
+        // The surface renders runs of rows; a tab or group that reappears
+        // after another one would paint two headings with the same name.
+        let mut seen_tabs: Vec<&str> = Vec::new();
+        let mut seen_pairs: Vec<(&str, &str)> = Vec::new();
+        let mut current: Option<(&str, &str)> = None;
+        for def in schema_rows() {
+            let ui = def.ui.as_ref().expect("row");
+            if current.map(|(tab, _)| tab) != Some(ui.tab) {
+                assert!(!seen_tabs.contains(&ui.tab), "tab {} is split", ui.tab);
+                seen_tabs.push(ui.tab);
+            }
+            if current != Some((ui.tab, ui.group)) {
+                assert!(
+                    !seen_pairs.contains(&(ui.tab, ui.group)),
+                    "group {}/{} is split",
+                    ui.tab,
+                    ui.group
+                );
+                seen_pairs.push((ui.tab, ui.group));
+            }
+            current = Some((ui.tab, ui.group));
+        }
+        assert_eq!(schema_tabs(), seen_tabs);
+    }
+
+    #[test]
+    fn enum_values_are_unique_and_defaults_are_declared_values() {
+        for def in SETTINGS_SCHEMA {
+            if let Some(values) = def.values() {
+                let unique: BTreeSet<_> = values.iter().collect();
+                assert_eq!(unique.len(), values.len(), "{} repeats a value", def.key);
+                if !def.default.is_empty() {
+                    assert!(
+                        values.contains(&def.default),
+                        "{} defaults to {} which is not one of its values",
+                        def.key,
+                        def.default
+                    );
+                }
+            }
+        }
+    }
+}

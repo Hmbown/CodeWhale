@@ -66,7 +66,7 @@ pub(crate) use status::StatusToastKind;
 pub use status::{StatusToast, StatusToastLevel};
 pub use types::{
     AppAction, AppMode, AppModeUi, AutomationAction, ComposerDensity, ComposerSubmitAction,
-    ComposerSubmitChord, InitialInput, McpUiAction, QueuedMessage, ReasoningEffort,
+    ComposerSubmitChord, InitialInput, McpUiAction, QueuedMessage, ReasoningEffort, ScreenMode,
     SettingSelection, ShellJobAction, SubmitDisposition, TaskPanelEntry, TaskPanelEntryKind,
     ToolCollapseMode, ToolDetailRecord, TranscriptSpacing, TuiOptions, VimMode,
 };
@@ -750,10 +750,10 @@ pub struct ViewportState {
     /// WorkflowPanel rect above the composer (#4121), for mouse toggle/cancel.
     pub last_workflow_panel_area: Option<Rect>,
     pub last_workflow_cancel_area: Option<Rect>,
-    /// Topbar segment rects (Tideline shell, spec §6), recorded at render so
+    /// Info-line segment rects (Tideline shell, spec §6), recorded at render so
     /// hover and — in a follow-up slice — click routing can hit-test the
     /// painted cells. Mirrors the workflow-panel cancel-area storage pattern.
-    pub last_topbar_hitboxes: Vec<crate::tui::topbar::TopbarHitbox>,
+    pub last_infoline_hitboxes: Vec<crate::tui::infoline::InfoLineHitbox>,
     /// Live plugin CTA row above the composer, plus review/dismiss hitboxes.
     pub last_plugin_cta_area: Option<Rect>,
     pub last_plugin_cta_review_area: Option<Rect>,
@@ -791,7 +791,7 @@ impl Default for ViewportState {
             last_approval_area: None,
             last_workflow_panel_area: None,
             last_workflow_cancel_area: None,
-            last_topbar_hitboxes: Vec::new(),
+            last_infoline_hitboxes: Vec::new(),
             last_plugin_cta_area: None,
             last_plugin_cta_review_area: None,
             last_plugin_cta_dismiss_area: None,
@@ -1500,14 +1500,23 @@ pub struct App {
     /// the `/memory` slash command, and tool registration for
     /// `remember`.
     pub use_memory: bool,
-    pub use_alt_screen: bool,
+    /// Screen the TUI is painting on right now. `/fullscreen` and `/inline`
+    /// move it at runtime; `use_alt_screen()` is derived from it so no second
+    /// flag can drift out of step with the live terminal.
+    pub screen_mode: ScreenMode,
+    /// Mouse capture as programmed on the live terminal. Re-derived from
+    /// `mouse_capture_preference` and `screen_mode` on every screen switch.
     pub use_mouse_capture: bool,
+    /// See [`TuiOptions::mouse_capture_preference`].
+    pub mouse_capture_preference: bool,
     /// When true, plain Up/Down on an empty composer scroll the transcript
     /// instead of navigating input history.  Defaults to `true` when mouse
     /// capture is off: terminals that convert mouse-wheel events to arrow-key
     /// sequences (e.g. Windows CMD without `WT_SESSION`) get page-scrolling
     /// without any explicit config (#1443).
     pub composer_arrows_scroll: bool,
+    /// Whether `composer_arrows_scroll` came from explicit configuration.
+    pub composer_arrows_scroll_explicit: bool,
     /// Data-side cap for the `@`-mention popup. The renderer still limits the
     /// visible rows to available terminal height.
     pub mention_menu_limit: usize,
@@ -1853,8 +1862,8 @@ pub struct App {
     pub status_items: Vec<crate::config::StatusItem>,
     /// Optional header items enabled from `tui.header_items` in `config.toml`
     /// at startup. Built-in header content remains independent of this list.
-    /// Unread since the classic header was superseded by the Tideline topbar
-    /// (2026-08-29): the topbar carries the context meter by default and the
+    /// Unread since the classic header was superseded by the Tideline info
+    /// line (2026-08-29): the info line carries the context meter by default and the
     /// token breakdown lives behind `/cost` (spec §3). The field stays so the
     /// config surface keeps parsing; its reader returns with the classic
     /// renderer deletion slice.
@@ -2280,7 +2289,7 @@ impl std::ops::DerefMut for App {
 
 // === App State ===
 
-fn default_composer_arrows_scroll(use_mouse_capture: bool) -> bool {
+pub(crate) fn default_composer_arrows_scroll(use_mouse_capture: bool) -> bool {
     default_composer_arrows_scroll_for_platform(use_mouse_capture, cfg!(windows))
 }
 
@@ -2334,6 +2343,16 @@ impl App {
             return Focus::Panel;
         }
         Focus::Composer
+    }
+
+    /// Whether the live terminal is on the alternate screen buffer.
+    ///
+    /// Derived from [`App::screen_mode`] rather than stored, so every
+    /// pause/resume/teardown site reads the mode the terminal is actually in
+    /// after a `/fullscreen` or `/inline` switch.
+    #[must_use]
+    pub const fn use_alt_screen(&self) -> bool {
+        self.screen_mode.uses_alt_screen()
     }
 
     /// Persist the pending session route as the explicit choice (`/pod save`,

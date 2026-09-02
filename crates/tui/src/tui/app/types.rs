@@ -654,10 +654,17 @@ pub struct TuiOptions {
     pub config_path: Option<PathBuf>,
     pub config_profile: Option<String>,
     pub allow_shell: bool,
-    /// Use the alternate screen buffer (fullscreen TUI).
-    pub use_alt_screen: bool,
-    /// Capture mouse input for internal scrolling/selection.
+    /// Screen the TUI starts on (alternate screen, or a full-height inline
+    /// viewport that leaves the host scrollback intact).
+    pub screen_mode: ScreenMode,
+    /// Capture mouse input for internal scrolling/selection, on the screen
+    /// the session starts on.
     pub use_mouse_capture: bool,
+    /// The user's mouse-capture answer with the screen factored out (CLI
+    /// flag, `tui.mouse_capture`, or the host default). `/fullscreen` and
+    /// `/inline` re-derive `use_mouse_capture` from it, so the documented
+    /// default keeps applying after a runtime switch.
+    pub mouse_capture_preference: bool,
     /// Enable terminal bracketed-paste mode (OSC `?2004h` / `?2004l`). Defaults
     /// on; settable via `bracketed_paste = false` in `settings.toml` for the
     /// rare terminal that mishandles it.
@@ -877,6 +884,64 @@ pub(crate) struct PendingGoalControl {
     pub dispatched: bool,
 }
 
+/// Which screen the TUI paints on.
+///
+/// This is the single source of truth for the alternate screen: `App` stores
+/// the mode and derives `use_alt_screen()` from it, so a switch cannot leave
+/// the flag and the live terminal disagreeing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScreenMode {
+    /// Alternate screen buffer. The TUI owns the whole terminal; the host
+    /// scrollback is preserved but unreachable until the session exits.
+    #[default]
+    Fullscreen,
+    /// A ratatui inline viewport the full height of the terminal, with no
+    /// alternate screen. The shell's scrollback stays intact and scrollable
+    /// after exit, at the cost of the TUI no longer owning a private buffer.
+    Inline,
+}
+
+impl ScreenMode {
+    /// Whether this mode runs on the alternate screen buffer.
+    #[must_use]
+    pub const fn uses_alt_screen(self) -> bool {
+        matches!(self, Self::Fullscreen)
+    }
+
+    /// Whether mouse capture is on for this screen, given the user's
+    /// preference. This is the one rule: startup and the `/fullscreen` ·
+    /// `/inline` switch both ask it. Capture needs the alternate screen —
+    /// inline mode exists so the terminal owns selection and scrollback.
+    #[must_use]
+    pub const fn mouse_capture(self, preferred: bool) -> bool {
+        self.uses_alt_screen() && preferred
+    }
+
+    /// Canonical name, as `/screen` prints it and `parse` accepts it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fullscreen => "fullscreen",
+            Self::Inline => "inline",
+        }
+    }
+
+    /// Parse a user-supplied mode word, including the legacy
+    /// `tui.alternate_screen` vocabulary (`auto`/`always` → fullscreen,
+    /// `never` → inline) so the existing config key keeps selecting a real
+    /// behaviour instead of being parsed and ignored.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "fullscreen" | "full" | "alt" | "alt-screen" | "auto" | "always" => {
+                Some(Self::Fullscreen)
+            }
+            "inline" | "scrollback" | "never" | "off" => Some(Self::Inline),
+            _ => None,
+        }
+    }
+}
+
 /// Actions emitted by the UI event loop.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppAction {
@@ -921,6 +986,10 @@ pub enum AppAction {
     StartChatgptRevoke,
     /// Open the `/mode` picker modal for Act / Plan / Operate.
     OpenModePicker,
+    /// Switch the live terminal between `/fullscreen` and `/inline`. Handled
+    /// where the ratatui `Terminal` lives, because stock ratatui cannot change
+    /// an existing terminal's viewport — the switch rebuilds it behind a probe.
+    SetScreenMode(ScreenMode),
     /// Refresh the engine prompt after the UI operating mode changes.
     ModeChanged(AppMode),
     /// Synchronize a saved top-level approval policy into the live Config,

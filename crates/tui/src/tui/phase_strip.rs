@@ -56,7 +56,7 @@ fn working_detail(app: &App, activity: LiveActivity) -> Option<String> {
     }
 }
 
-/// Route identity for a rail or topbar segment, shed field by field until it
+/// Route identity for a rail or info line segment, shed field by field until it
 /// fits `budget`.
 ///
 /// The old version composed the full `provider · model · effort` label and
@@ -446,8 +446,8 @@ mod tests {
 
     /// The merged footer owns phase/cost/detail only: scheduled automation
     /// work is the TOP strip's fact (TUI band contract), so the footer facts
-    /// must never carry an automation slot. The topbar-side rendering is
-    /// pinned by `ui/frame.rs` tests (`topbar_segments` reads the same
+    /// must never carry an automation slot. The info line-side rendering is
+    /// pinned by `ui/frame.rs` tests (`info_segments` reads the same
     /// `AutomationPanelState` projection).
     #[test]
     fn the_footer_does_not_carry_automation_work() {
@@ -501,11 +501,11 @@ mod tests {
         );
     }
 
-    /// The route identity (the topbar Model segment's value) sheds whole
+    /// The route identity (the info line Model segment's value) sheds whole
     /// fields — provider first, then the effort label — and stands down
     /// entirely rather than clip a model name. Ported from the identity
     /// band to `route_identity_fields`, the live shedding authority the
-    /// topbar calls with the same budget rule.
+    /// info line calls with the same budget rule.
     #[test]
     fn route_identity_sheds_qualifiers_before_it_would_clip_a_model_name() {
         let model = "deepseek-v4-flash-preview-2026-05-01";
@@ -518,15 +518,11 @@ mod tests {
         );
         app.ui_locale = crate::localization::Locale::En;
 
-        // The topbar's own budget rule (ui/frame.rs): width minus the brand
+        // The info line's own budget rule (ui/frame.rs): width minus the brand
         // lockup, meter, and clock floor, never below 24.
-        let topbar_budget = |width: u16| (usize::from(width)).saturating_sub(60).max(24);
+        let info_budget = |width: u16| (usize::from(width)).saturating_sub(60).max(24);
         let fields = |width: u16| {
-            route_identity_fields(
-                &app,
-                ShellTier::for_chrome_width(width),
-                topbar_budget(width),
-            )
+            route_identity_fields(&app, ShellTier::for_chrome_width(width), info_budget(width))
         };
 
         let wide = fields(140).expect("wide budget keeps the route");
@@ -569,14 +565,11 @@ mod tests {
         );
         app.model = model.to_string();
 
-        let topbar_budget = |width: u16| (usize::from(width)).saturating_sub(60).max(24);
+        let info_budget = |width: u16| (usize::from(width)).saturating_sub(60).max(24);
         for width in [30u16, 40, 50, 60, 70, 80, 160] {
-            let shed = route_identity_fields(
-                &app,
-                ShellTier::for_chrome_width(width),
-                topbar_budget(width),
-            )
-            .unwrap_or_default();
+            let shed =
+                route_identity_fields(&app, ShellTier::for_chrome_width(width), info_budget(width))
+                    .unwrap_or_default();
             for field in &shed {
                 assert!(
                     !field.contains('…'),
@@ -599,25 +592,23 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// Tideline merged footer (spec §3 slots 6+8 merged, §5a "Footer", §5e depth
-// line): one band — phase·cost on the left, depth line·keys on the right.
+// Tideline merged footer (spec §3 slots 6+8 merged, §5a "Footer"): one
+// band — phase·cost on the left, the notice/keys slot on the right.
 // Wired into `ui/frame.rs` as the shell's single footer row: the classic
 // activity band (slot 6) and identity band (slot 8) collapsed into it, with
 // the old header's mode/permission chips carried in the left half per §3.
 //
 // Motion contract (spec §5e): the echolocation chip renders its still frame
 // `<·>` — the animated family is the landing slice's job through the 420 ms
-// heartbeat. The depth line is a hand-rolled span builder, never `Gauge`,
-// and changes only when the token count changes (no private clock).
+// heartbeat.
+//
+// The depth sparkline and its percentage are gone: the info line's context
+// meter is the one reading, and this band was printing the same number from
+// the same snapshot a second time on every screen. A nine-cell sparkline
+// encoding a number printed beside it is decoration, not a fact.
 
-/// Depth-line cells: 9 rising ramp cells then wave cells for open water,
-/// plus the percentage — always ≤16 cells in the footer right.
-const DEPTH_CELLS: usize = 9;
-/// Ramp glyphs for the filled prefix (matches the spec's `▁▂▄▆` rise).
-const DEPTH_RAMP: [&str; 4] = ["▁", "▂", "▄", "▆"];
-/// Wave cell for unfilled depth (open water).
-const DEPTH_WAVE: &str = "∿";
-/// The depth cap warning at ≥80% (spec §5a/§5e).
+/// The context cap warning at ≥80% (spec §5a/§5e). The reading itself lives
+/// in the info line; this band still says what to do about it.
 const DEPTH_WARN: &str = "surface soon — /compact";
 
 /// What the caller owes the merged footer. All injected, deterministic.
@@ -631,7 +622,8 @@ pub struct TidelineFooter<'a> {
     pub live_detail: Option<&'a str>,
     /// Cost ledger label, e.g. `$0.42 · 61K tok`.
     pub cost_label: &'a str,
-    /// Context window percentage 0–100 (depth line source).
+    /// Context window percentage 0–100. The info line paints the reading; this
+    /// band only uses it to decide whether the ≥80% cap warning is owed.
     pub context_percent: u8,
     /// Key legend, e.g. `Enter send · Ctrl+K clear · ? help`.
     pub keys_legend: &'a str,
@@ -718,40 +710,6 @@ impl<'a> TidelineFooter<'a> {
             })
             .collect()
     }
-
-    /// The depth sparkline for the current percent: filled prefix on the
-    /// `▁▂▄▆` ramp, `∿` waves for open water. Pure function of the count —
-    /// it never moves on its own (spec §5e).
-    #[must_use]
-    pub fn depth_cells(&self) -> String {
-        let pct = self.context_percent.clamp(0, 100);
-        let filled = (usize::from(pct) * DEPTH_CELLS / 100).min(DEPTH_CELLS);
-        let mut out = String::new();
-        for i in 0..DEPTH_CELLS {
-            if i < filled {
-                out.push_str(DEPTH_RAMP[i.min(DEPTH_RAMP.len() - 1)]);
-            } else {
-                out.push_str(DEPTH_WAVE);
-            }
-        }
-        self.sym(&out)
-    }
-
-    /// Depth ink: Info below 80%, Attention at the cap (§5a "80% warn").
-    #[must_use]
-    pub fn depth_ink(&self) -> crate::palette::ChromeInk {
-        depth_ink_for(self.context_percent)
-    }
-}
-
-/// Shared warn threshold ink rule (mirrors `topbar::meter_ink_for`).
-#[must_use]
-pub fn depth_ink_for(pct: u8) -> crate::palette::ChromeInk {
-    if pct >= 80 {
-        crate::palette::ChromeInk::Attention
-    } else {
-        crate::palette::ChromeInk::Info
-    }
 }
 
 fn tchrome(theme: &crate::palette::UiTheme, ink: crate::palette::ChromeInk) -> Style {
@@ -785,35 +743,25 @@ impl TrailingExtra {
 ///
 /// Left half: still-frame echolocation chip, phase word, live detail, the
 /// cost ledger, then the posture chips (`mode · permission`) the old header
-/// carried. Right half, pinned: the depth line + percent, with the trailing
-/// slot going to the live notice if one is owed, else the ≥80% cap warning,
-/// else the key legend.
+/// carried. Right half, pinned: the live notice if one is owed, else the
+/// ≥80% cap warning, else the key legend. The context reading itself is the
+/// info line's, painted once per screen.
 pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFooter<'_>) {
     if area.width < 8 || area.height < 1 {
         return;
     }
     let theme = footer.theme;
-    let pct = footer.context_percent.clamp(0, 100);
-    let warn = pct >= 80;
 
-    // Right block first (spec §5a: depth·keys is pinned right; the left
-    // half's cost truncates against whatever the right half claims).
-    let depth = footer.depth_cells();
-    let pct_text = format!("{pct}%");
-    let mut right = format!("{depth} {pct_text}");
-    if warn {
-        right = format!("{} {right}", footer.sym("▲"));
-    }
-    let right_base_w = right.width() as u16;
-    let depth_ink = footer.depth_ink();
-
+    // Right block first (it is pinned; the left half's cost truncates
+    // against whatever the right half claims).
+    //
     // Trailing-slot precedence: a live notice outranks the cap warning,
     // which outranks the posture chips, which outrank the key chorus (the
     // classic bands' own rule that identity outranks hints). A non-urgent
     // notice may keep the compact help route when both fit beside the minimum
-    // phase/depth floor; warnings and failures remain undiluted.
-    let extra = trailing_extra(footer, area.width, usize::from(right_base_w));
-    let right_width = right_base_w + 1 + extra.width(footer) as u16 + 1;
+    // phase floor; warnings and failures remain undiluted.
+    let extra = trailing_extra(footer, area.width);
+    let right_width = extra.width(footer) as u16 + 1;
 
     // Left: still-frame echolocation chip + phase word + live detail + cost.
     // Scheduled automation work lives on the top strip, not this footer.
@@ -906,8 +854,6 @@ pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFoo
     let mut sx = (area.x + area.width)
         .saturating_sub(right_width)
         .max(area.x);
-    tput(buf, sx, area.y, &right, tchrome(theme, depth_ink));
-    sx += right.width() as u16 + 1;
     let budget = (area.x + area.width).saturating_sub(sx) as usize;
     let text_budget = budget.saturating_sub(if extra.append_help {
         ITEM_SEPARATOR_WIDTH + footer.sym(COMPACT_KEYS_LEGEND).width()
@@ -951,10 +897,9 @@ fn truncate_owned(text: &str, width: usize) -> String {
 }
 
 /// Pick the full key chorus when it fits without displacing posture. When it
-/// does not, keep the pinned help route if the minimum phase/depth facts still
-/// fit; small terminals should not lose every discoverable keyboard action.
+/// does not, keep the pinned help route if the minimum phase facts still fit;
+/// small terminals should not lose every discoverable keyboard action.
 fn trailing_keys_legend(footer: &TidelineFooter<'_>, area_width: u16) -> String {
-    let pct = footer.context_percent.clamp(0, 100);
     let keys = footer.sym(footer.keys_legend);
     let keys_w = keys.width();
     let posture_w: usize = [footer.mode_chip, footer.permission_chip]
@@ -975,18 +920,15 @@ fn trailing_keys_legend(footer: &TidelineFooter<'_>, area_width: u16) -> String 
         .unwrap_or(0);
     let cost = footer.sym(footer.cost_label);
     let prefix_w = chip.width() + 1 + phase.width() + 1 + detail_w + 2 + cost.width();
-    let depth = footer.depth_cells();
-    let right_base_w = format!("{depth} {pct}%").width();
     let available_with_keys = usize::from(area_width)
-        .saturating_sub(right_base_w + 1 + keys_w + 1)
+        .saturating_sub(keys_w + 1)
         .saturating_sub(1);
     if prefix_w + posture_w <= available_with_keys {
         return keys;
     }
 
     let compact = footer.sym(COMPACT_KEYS_LEGEND);
-    let compact_floor =
-        chip.width() + 1 + phase.width() + 1 + right_base_w + 1 + compact.width() + 1;
+    let compact_floor = chip.width() + 1 + phase.width() + 1 + compact.width() + 1;
     if compact_floor <= usize::from(area_width) {
         compact
     } else {
@@ -994,7 +936,7 @@ fn trailing_keys_legend(footer: &TidelineFooter<'_>, area_width: u16) -> String 
     }
 }
 
-fn minimum_footer_width(footer: &TidelineFooter<'_>, right_base_w: usize, extra_w: usize) -> usize {
+fn minimum_footer_width(footer: &TidelineFooter<'_>, extra_w: usize) -> usize {
     let chip = footer.sym("<·>");
     let phase = footer.sym(footer.phase_word);
     let detail_w = footer
@@ -1002,24 +944,16 @@ fn minimum_footer_width(footer: &TidelineFooter<'_>, right_base_w: usize, extra_
         .map(|detail| footer.sym(detail).width() + 1)
         .unwrap_or(0);
     let left_floor = chip.width() + 1 + phase.width() + 1 + detail_w;
-    let right = right_base_w + 1 + extra_w + 1;
-    left_floor + 1 + right
+    left_floor + 1 + extra_w + 1
 }
 
-fn trailing_extra(
-    footer: &TidelineFooter<'_>,
-    area_width: u16,
-    right_base_w: usize,
-) -> TrailingExtra {
+fn trailing_extra(footer: &TidelineFooter<'_>, area_width: u16) -> TrailingExtra {
     if let Some((text, ink)) = footer.notice {
         let text = footer.sym(text);
         let help = footer.sym(COMPACT_KEYS_LEGEND);
         let can_append_help = !matches!(ink, ChromeInk::Attention | ChromeInk::Failure)
-            && minimum_footer_width(
-                footer,
-                right_base_w,
-                text.width() + ITEM_SEPARATOR_WIDTH + help.width(),
-            ) <= usize::from(area_width);
+            && minimum_footer_width(footer, text.width() + ITEM_SEPARATOR_WIDTH + help.width())
+                <= usize::from(area_width);
         return TrailingExtra {
             text,
             ink,
@@ -1027,8 +961,10 @@ fn trailing_extra(
         };
     }
     if footer.context_percent.clamp(0, 100) >= 80 {
+        // The cap mark stays with the microcopy now that the percentage it
+        // used to precede lives in the info line.
         return TrailingExtra {
-            text: footer.sym(DEPTH_WARN),
+            text: format!("{} {}", footer.sym("▲"), footer.sym(DEPTH_WARN)),
             ink: ChromeInk::Attention,
             append_help: false,
         };
@@ -1037,39 +973,6 @@ fn trailing_extra(
         text: trailing_keys_legend(footer, area_width),
         ink: ChromeInk::MetadataHint,
         append_help: false,
-    }
-}
-
-/// The trailing right-slot's width at this row width, shared by the render
-/// and the depth hitbox so the two can never disagree.
-fn trailing_extra_width(footer: &TidelineFooter<'_>, area_width: u16) -> usize {
-    let pct = footer.context_percent.clamp(0, 100);
-    let depth = footer.depth_cells();
-    let right_base_w = format!("{depth} {pct}%").width();
-    trailing_extra(footer, area_width, right_base_w).width(footer)
-}
-
-/// Depth-segment hitbox → context inspector (spec §6). Returns the rect
-/// covering the painted depth line + percentage.
-#[must_use]
-#[allow(dead_code)] // depth-segment click routing (spec §6) is a follow-up slice
-pub fn tideline_footer_depth_hitbox(area: Rect, footer: &TidelineFooter<'_>) -> Rect {
-    let pct = footer.context_percent.clamp(0, 100);
-    let depth = footer.depth_cells();
-    let mut right = format!("{depth} {pct}%");
-    if pct >= 80 {
-        right = format!("{} {right}", footer.sym("▲"));
-    }
-    // Mirror the render's right-block arithmetic through the shared
-    // trailing-width rule, so the rect always matches the painted cells.
-    let extra_w = trailing_extra_width(footer, area.width);
-    let total = right.width() as u16 + 1 + extra_w as u16 + 1;
-    let x = (area.x + area.width).saturating_sub(total).max(area.x);
-    Rect {
-        x,
-        y: area.y,
-        width: right.width() as u16,
-        height: 1,
     }
 }
 
@@ -1136,8 +1039,8 @@ impl TidelineFooterFacts {
     }
 }
 
-/// Context window percentage for the depth line — the same snapshot the old
-/// header's meter and the Tideline topbar's meter read.
+/// Context window percentage — the snapshot the info line's context
+/// meter reads, and the footer's ≥80% cap-warning trigger.
 pub(crate) fn context_percent_from_app(app: &App) -> u8 {
     crate::tui::ui::context_usage_snapshot(app)
         .map(|(_, _, percent)| percent.round().clamp(0.0, 100.0) as u8)
@@ -1185,14 +1088,14 @@ pub(crate) fn tideline_footer_from_app(app: &mut App, width: u16) -> TidelineFoo
     };
 
     // Scheduled automation work is NOT a footer fact: the TUI band contract
-    // puts work in the top strip, so `topbar_segments` reads the
+    // puts work in the top strip, so `info_segments` reads the
     // `AutomationPanelState` projection directly.
 
     // The notice: the live status toast if one is owed, else the compact MCP
     // or plugin boot chip. A slow optional server must not look like a hung
     // turn, while plugin diagnostics stay available through `/plugins` rather
     // than taking rows from the transcript. Clause-shed against half the row
-    // — the depth line owns the other half.
+    // — the keys legend owns the other half.
     let notice_budget = (usize::from(width) / 2).max(8);
     let notice = selected_notice(app.active_status_toast(), phase, &phase_word)
         .map(|(text, ink, _urgent)| (text, ink))

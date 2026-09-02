@@ -4647,6 +4647,12 @@ async fn upsert_thread_goal(
         .runtime_threads
         .emit_goal_updated_event(&id, goal.clone())
         .await;
+    // Inject the goal into a cached engine (if any) and dispatch the kickoff
+    // turn while the thread is idle. Errors are advisory: the goal record is
+    // already durable and a subsequent turn still carries it.
+    if let Err(err) = state.runtime_threads.activate_thread_goal(&id).await {
+        tracing::warn!("failed to activate goal for thread '{id}': {err}");
+    }
     Ok((status_code, Json(goal)))
 }
 
@@ -4670,6 +4676,10 @@ async fn delete_thread_goal(
         return Err(ApiError::not_found(format!("thread '{id}' has no goal")));
     }
     let _ = state.runtime_threads.emit_goal_cleared_event(&id).await;
+    state
+        .runtime_threads
+        .sync_engine_goal_status(&id, crate::tools::goal::GoalStatus::Active, true)
+        .await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -4711,6 +4721,10 @@ async fn complete_thread_goal(
     let _ = state
         .runtime_threads
         .emit_goal_updated_event(&id, updated.clone())
+        .await;
+    state
+        .runtime_threads
+        .sync_engine_goal_status(&id, crate::tools::goal::GoalStatus::Complete, false)
         .await;
     Ok(Json(updated))
 }
@@ -4754,6 +4768,10 @@ async fn block_thread_goal(
     let _ = state
         .runtime_threads
         .emit_goal_updated_event(&id, updated.clone())
+        .await;
+    state
+        .runtime_threads
+        .sync_engine_goal_status(&id, crate::tools::goal::GoalStatus::Blocked, false)
         .await;
     Ok(Json(updated))
 }

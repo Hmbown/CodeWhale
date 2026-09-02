@@ -17,7 +17,7 @@ use std::process::Command;
 use crossterm::{
     event::DisableFocusChange,
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
 use ratatui::Terminal;
 use tempfile::Builder;
@@ -143,7 +143,7 @@ pub(crate) fn spawn_editor_for_input(
     );
     let _ = disable_raw_mode();
     if use_alt_screen {
-        let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+        let _ = super::ui::leave_alt_screen(terminal.backend_mut());
     }
 
     // 2. Run the editor (synchronous; inherits stdio).
@@ -152,7 +152,7 @@ pub(crate) fn spawn_editor_for_input(
     // 3. Resume — best-effort restoration regardless of `result`.
     let _ = enable_raw_mode();
     if use_alt_screen {
-        let _ = execute!(terminal.backend_mut(), EnterAlternateScreen);
+        let _ = super::ui::enter_alt_screen(terminal.backend_mut());
     }
     super::ui::recover_terminal_modes(
         terminal.backend_mut(),
