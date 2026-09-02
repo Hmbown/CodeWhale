@@ -42,6 +42,7 @@ use crate::config::Config;
 use crate::fleet::profile::FleetProfileScope;
 use crate::localization::{MessageId, tr};
 use crate::palette;
+use crate::tools::subagent::public_role_label;
 use crate::tui::app::App;
 use crate::tui::menu_style;
 use crate::tui::views::{
@@ -107,14 +108,14 @@ const ROLES: [Choice; 9] = [
         ),
     },
     Choice {
-        label: Cow::Borrowed("scout"),
+        label: Cow::Borrowed("explore"),
         summary: Cow::Borrowed("Read-first research"),
         description: Cow::Borrowed(
             "Research and evidence gathering. Reads and summarizes before anything is written.",
         ),
     },
     Choice {
-        label: Cow::Borrowed("builder"),
+        label: Cow::Borrowed("implement"),
         summary: Cow::Borrowed("Implements bounded changes"),
         description: Cow::Borrowed(
             "Implements changes strictly inside its assigned task scope; writes only what the slice needs.",
@@ -128,14 +129,14 @@ const ROLES: [Choice; 9] = [
         ),
     },
     Choice {
-        label: Cow::Borrowed("verifier"),
+        label: Cow::Borrowed("test"),
         summary: Cow::Borrowed("Bounded validation"),
         description: Cow::Borrowed(
             "Runs bounded validation (test/check selections) and reports receipts back to the orchestrator. Never writes — patching is denied; unbounded shell forms are refused.",
         ),
     },
     Choice {
-        label: Cow::Borrowed("consultant"),
+        label: Cow::Borrowed("advisor"),
         summary: Cow::Borrowed("Read-only second opinion"),
         description: Cow::Borrowed(
             "Short-lived, high-reasoning counsel for difficult decisions and overlooked risks. Read-only and shell-less.",
@@ -794,9 +795,10 @@ impl FleetSetupView {
 
     fn from_snapshot_for_role(snapshot: FleetSetupSnapshot, role: &str) -> Self {
         let mut view = Self::from_snapshot(snapshot);
+        let role = public_role_label(role);
         view.role_idx = ROLES
             .iter()
-            .position(|choice| choice.label.eq_ignore_ascii_case(role.trim()))
+            .position(|choice| choice.label.eq_ignore_ascii_case(&role))
             .unwrap_or(ROLES.len() - 1);
         view.step = Step::Model;
         // Reopening a SAVED member edits what is on disk: preselect its route,
@@ -807,7 +809,7 @@ impl FleetSetupView {
             .snapshot
             .roster_details
             .iter()
-            .find(|detail| detail.id == role_id)
+            .find(|detail| detail.id == role_id || public_role_label(&detail.id) == role)
             .cloned();
         if let Some(saved) = saved {
             view.profile_scope = saved.scope;
@@ -2741,7 +2743,7 @@ mod tests {
     fn destination_step_sits_between_model_and_review_and_names_the_exact_file() {
         let temp = tempfile::tempdir().expect("temp workspace");
         let mut view = FleetSetupView::from_snapshot(workspace_snapshot(temp.path()));
-        view.handle_key(key(KeyCode::Down)); // scout
+        view.handle_key(key(KeyCode::Down)); // explore
         view.handle_key(key(KeyCode::Enter)); // -> Model
         view.handle_key(key(KeyCode::Enter)); // inherit -> Destination
         assert_eq!(view.step, Step::Destination);
@@ -2755,7 +2757,7 @@ mod tests {
         assert!(text.contains("Personal"), "{text}");
         assert!(text.contains("Step 3/4"), "{text}");
         // The highlighted (Personal) row shows its resolved file.
-        let personal = test_personal_dir().join("scout.toml");
+        let personal = test_personal_dir().join("explore.toml");
         assert!(
             text.contains("File:") && text.contains("agents"),
             "resolved file must be visible: {text}"
@@ -2764,7 +2766,7 @@ mod tests {
         // Up -> This project shows the workspace file.
         view.handle_key(key(KeyCode::Up));
         let text = rendered_text(&view, 120, 32);
-        let project = temp.path().join(PROFILE_DIR).join("scout.toml");
+        let project = temp.path().join(PROFILE_DIR).join("explore.toml");
         assert!(!text.contains("Will replace"), "{text}");
         assert_eq!(view.destinations.as_ref().unwrap()[0].target, project);
     }
@@ -2917,13 +2919,13 @@ mod tests {
     #[test]
     fn precedence_consequences_are_stated_for_both_destinations() {
         let temp = tempfile::tempdir().expect("temp workspace");
-        let project_source = temp.path().join(PROFILE_DIR).join("scout.toml");
+        let project_source = temp.path().join(PROFILE_DIR).join("explore.toml");
         let mut snap = workspace_snapshot(temp.path());
-        snap.roster_members.retain(|(id, _)| id != "scout");
+        snap.roster_members.retain(|(id, _)| id != "explore");
         snap.roster_members
-            .push(("scout".to_string(), "project".to_string()));
+            .push(("explore".to_string(), "project".to_string()));
         snap.roster_details.push(RosterMemberDetail {
-            id: "scout".to_string(),
+            id: "explore".to_string(),
             scope: FleetProfileScope::Project,
             source: project_source,
             provider: Some("deepseek".to_string()),
@@ -2931,7 +2933,7 @@ mod tests {
             reasoning_effort: None,
         });
         let mut view = FleetSetupView::from_snapshot(snap);
-        view.handle_key(key(KeyCode::Down)); // scout
+        view.handle_key(key(KeyCode::Down)); // explore
         view.handle_key(key(KeyCode::Enter));
         view.handle_key(key(KeyCode::Enter)); // -> Destination (Personal highlighted)
         let text = rendered_text(&view, 120, 32);
@@ -3428,7 +3430,7 @@ mod tests {
         else {
             panic!("expected fresh deterministic starter");
         };
-        assert_eq!(draft.id, "scout");
+        assert_eq!(draft.id, "explore");
     }
 
     #[test]
@@ -3678,8 +3680,8 @@ mod tests {
             panic!("expected one-Enter starter save");
         };
         let content = draft.render_toml();
-        assert!(content.contains("id = \"builder\""));
-        assert!(content.contains("role_hint = \"builder\""));
+        assert!(content.contains("id = \"implement\""));
+        assert!(content.contains("role_hint = \"implement\""));
         assert!(content.contains("model = \"deepseek-v4-pro\""));
         assert!(content.contains("reasoning_effort = \"max\""));
         // A concrete cross-provider route pin names its own provider
@@ -3694,7 +3696,7 @@ mod tests {
         }
 
         assert_eq!(scope, FleetProfileScope::Personal);
-        assert_eq!(draft.id, "builder");
+        assert_eq!(draft.id, "implement");
         assert_eq!(draft.role_hint, "implement");
         assert_eq!(draft.model.as_deref(), Some("deepseek-v4-pro"));
         assert_eq!(draft.provider.as_deref(), Some("deepseek"));

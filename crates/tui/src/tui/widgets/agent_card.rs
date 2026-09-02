@@ -19,11 +19,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::palette;
-use crate::todo_snapshot::{card_omission_line, card_todo_projection, TodoCardProjection};
-use crate::tools::subagent::{public_role_label, MailboxMessage};
+use crate::todo_snapshot::{TodoCardProjection, card_omission_line, card_todo_projection};
+use crate::tools::subagent::{MailboxMessage, public_role_label};
 use crate::tools::todo::TodoListSnapshot;
 use crate::tui::ui_text::truncate_line_to_width;
-use crate::tui::widgets::tool_card::{family_glyph, ToolFamily};
+use crate::tui::widgets::tool_card::{ToolFamily, family_glyph};
 use unicode_width::UnicodeWidthStr;
 
 /// Maximum number of recent actions kept on a `DelegateCard`. Older entries
@@ -279,7 +279,7 @@ impl DelegateCard {
             let prefix = "\u{2570} ";
             lines.push(Line::from(Span::styled(
                 format!("{prefix}{terminal}"),
-                Style::default().fg(self.status.ink().color(theme)),
+                Style::default().fg(self.status.color(theme)),
             )));
         }
         lines
@@ -448,7 +448,7 @@ impl FanoutCard {
             Span::styled(
                 family_glyph(ToolFamily::Fanout),
                 Style::default()
-                    .fg(header_status.ink().color(theme))
+                    .fg(header_status.color(theme))
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -521,7 +521,7 @@ fn delegate_header(
         Span::styled(
             glyph,
             Style::default()
-                .fg(status.ink().color(theme))
+                .fg(status.color(theme))
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -698,7 +698,7 @@ mod tests {
     fn delegate_card_header_does_not_duplicate_verb_as_role() {
         let card = DelegateCard::new("agent_1", "explore");
         let rendered =
-            render_to_strings(&card.render_lines(80, &crate::palette::themes::UI_THEME)).join("\n");
+            render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME)).join("\n");
         assert!(
             !rendered.contains("delegate"),
             "delegate must not be visible in the card: {rendered:?}"
@@ -706,8 +706,7 @@ mod tests {
         assert!(!rendered.contains("[running]"), "{rendered:?}");
         let explore = DelegateCard::new("agent_2", "scout");
         let explore_rendered =
-            render_to_strings(&explore.render_lines(80, &crate::palette::themes::UI_THEME))
-                .join("\n");
+            render_to_strings(&explore.render_lines(80, &crate::palette::UI_THEME)).join("\n");
         assert!(explore_rendered.contains("explore"), "{explore_rendered:?}");
     }
 
@@ -720,7 +719,7 @@ mod tests {
         );
         card.push_action("objective: QUESTION: Add Zhipu GLM as a first-class provider-scoped route for 中文输出".to_string());
 
-        let rendered = render_to_strings(&card.render_lines(40, &crate::palette::themes::UI_THEME));
+        let rendered = render_to_strings(&card.render_lines(40, &crate::palette::UI_THEME));
 
         assert!(rendered[0].contains("implement"), "{rendered:?}");
         for line in rendered {
@@ -748,7 +747,7 @@ mod tests {
             "stable steady-state size"
         );
 
-        let rendered = render_to_strings(&card.render_lines(80, &crate::palette::themes::UI_THEME));
+        let rendered = render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME));
         assert!(
             rendered.iter().any(|line| line.contains('\u{2026}')),
             "ellipsis indicator must render: got {rendered:?}"
@@ -782,7 +781,7 @@ mod tests {
         };
         assert!(apply_to_delegate(&mut card, &msg));
         assert_eq!(card.status, AgentLifecycle::Completed);
-        let rendered = render_to_strings(&card.render_lines(80, &crate::palette::themes::UI_THEME));
+        let rendered = render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME));
         assert!(
             rendered.iter().any(|line| line.contains("╰ done")),
             "terminal status row renders done: got {rendered:?}"
@@ -809,7 +808,7 @@ mod tests {
         );
 
         let rendered =
-            render_to_strings(&card.render_lines(80, &crate::palette::themes::UI_THEME)).join("\n");
+            render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME)).join("\n");
         assert!(!rendered.contains("step 1/100"), "{rendered}");
         assert!(
             !rendered.contains("requesting model response"),
@@ -844,7 +843,7 @@ mod tests {
         ));
 
         let rendered =
-            render_to_strings(&card.render_lines(80, &crate::palette::themes::UI_THEME)).join("\n");
+            render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME)).join("\n");
         assert!(rendered.contains("read_file"), "{rendered}");
         assert!(
             !rendered.contains("[7]"),
@@ -885,7 +884,7 @@ mod tests {
         card.upsert_worker("w_3", AgentLifecycle::Completed);
         card.upsert_worker("w_4", AgentLifecycle::Failed);
         let rendered =
-            render_to_strings(&card.render_lines(80, &crate::palette::themes::UI_THEME)).join("\n");
+            render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME)).join("\n");
         assert!(
             rendered.contains("4 agents"),
             "header should show count: {rendered}"
@@ -999,7 +998,7 @@ mod tests {
         assert_eq!(card.status, AgentLifecycle::Interrupted);
 
         let rendered =
-            render_to_strings(&card.render_lines(80, &crate::palette::themes::UI_THEME)).join("\n");
+            render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME)).join("\n");
         assert!(rendered.contains("╰ interrupted"), "{rendered}");
         assert!(rendered.contains("API call timed out"), "{rendered}");
     }
@@ -1027,7 +1026,7 @@ mod tests {
         // Copy dedupe (Wave 5c #4): the counts line is gone — the header and
         // dot grid carry the aggregate state instead.
         let rendered =
-            render_to_strings(&card.render_lines(80, &crate::palette::themes::UI_THEME)).join("\n");
+            render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME)).join("\n");
         assert!(rendered.contains("2 agents"), "{rendered}");
         assert!(
             rendered.contains('\u{25D0}'),
@@ -1044,7 +1043,7 @@ mod tests {
         };
         assert!(apply_to_fanout(&mut card, &msg));
         let rendered =
-            render_to_strings(&card.render_lines(80, &crate::palette::themes::UI_THEME)).join("\n");
+            render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME)).join("\n");
         assert!(rendered.contains("2 agents"), "{rendered}");
     }
 
@@ -1057,7 +1056,7 @@ mod tests {
         }
         card.upsert_worker("w_12", AgentLifecycle::Running);
 
-        let rendered = render_to_strings(&card.render_lines(80, &crate::palette::themes::UI_THEME));
+        let rendered = render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME));
         assert!(
             rendered.iter().any(|line| line.contains('\u{25CF}')),
             "dot grid should remain: {rendered:?}"
@@ -1123,8 +1122,7 @@ mod tests {
         ));
 
         let rendered =
-            render_to_strings(&card.render_lines(100, &crate::palette::themes::UI_THEME))
-                .join("\n");
+            render_to_strings(&card.render_lines(100, &crate::palette::UI_THEME)).join("\n");
         assert!(rendered.contains("To-do 1/2"), "{rendered}");
         assert!(rendered.contains("50% settled"), "{rendered}");
         assert!(
@@ -1152,8 +1150,7 @@ mod tests {
         ));
         assert!(card.todo_projection().is_none());
         let rendered =
-            render_to_strings(&card.render_lines(100, &crate::palette::themes::UI_THEME))
-                .join("\n");
+            render_to_strings(&card.render_lines(100, &crate::palette::UI_THEME)).join("\n");
         assert!(!rendered.contains("sibling only work"), "{rendered}");
         assert!(!rendered.contains("To-do"), "{rendered}");
     }
@@ -1197,8 +1194,7 @@ mod tests {
         );
 
         let rendered =
-            render_to_strings(&card.render_lines(100, &crate::palette::themes::UI_THEME))
-                .join("\n");
+            render_to_strings(&card.render_lines(100, &crate::palette::UI_THEME)).join("\n");
         assert_eq!(card.status, AgentLifecycle::Running, "still mid-turn");
         assert!(rendered.contains("[~] #2 add the regression"), "{rendered}");
         assert!(rendered.contains("[x] #1 draft the fix"), "{rendered}");
@@ -1231,8 +1227,7 @@ mod tests {
 
         assert!(card.todo_projection().is_none());
         let rendered =
-            render_to_strings(&card.render_lines(100, &crate::palette::themes::UI_THEME))
-                .join("\n");
+            render_to_strings(&card.render_lines(100, &crate::palette::UI_THEME)).join("\n");
         assert!(
             !rendered.contains("To-do"),
             "an empty list states nothing: {rendered}"
@@ -1283,7 +1278,7 @@ mod tests {
             "the active item is never the one dropped: {projection:?}"
         );
 
-        let rendered = render_to_strings(&card.render_lines(60, &crate::palette::themes::UI_THEME));
+        let rendered = render_to_strings(&card.render_lines(60, &crate::palette::UI_THEME));
         assert!(
             rendered.iter().any(|line| line.contains("+6 more")),
             "elision must be stated: {rendered:?}"
@@ -1328,8 +1323,7 @@ mod tests {
             apply_to_delegate(&mut card, &terminal);
 
             let rendered =
-                render_to_strings(&card.render_lines(100, &crate::palette::themes::UI_THEME))
-                    .join("\n");
+                render_to_strings(&card.render_lines(100, &crate::palette::UI_THEME)).join("\n");
             assert!(card.status.is_terminal(), "{:?}", card.status);
             assert!(
                 rendered.contains("[~] #2 run the suite"),
@@ -1351,8 +1345,7 @@ mod tests {
             ),
         ));
         let rendered =
-            render_to_strings(&card.render_lines(100, &crate::palette::themes::UI_THEME))
-                .join("\n");
+            render_to_strings(&card.render_lines(100, &crate::palette::UI_THEME)).join("\n");
         assert!(!rendered.contains("worker one work"), "{rendered}");
         assert!(!rendered.contains("To-do"), "{rendered}");
     }

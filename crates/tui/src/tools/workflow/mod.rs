@@ -36,7 +36,8 @@ use crate::tools::spec::{
 };
 use crate::tools::subagent::{
     SharedSubAgentManager, SubAgentCompletion, SubAgentManager, SubAgentResult, SubAgentRuntime,
-    SubAgentStatus, WorkflowTaskSpawnIdentity, WorkflowTaskSpawnMetadata, spawn_workflow_task,
+    SubAgentStatus, WorkflowTaskSpawnIdentity, WorkflowTaskSpawnMetadata, public_role_label,
+    spawn_workflow_task,
 };
 use crate::tools::verifier::run_workflow_completion_gates;
 use crate::tools::workflow_plan_approval::{
@@ -1619,7 +1620,7 @@ fn apply_named_fleet_to_task_request(
         true,
     )
     .map_err(|err| DriverError::Rejected(err.to_string()))?;
-    request.role = resolved.resolved_role;
+    request.role = resolved.resolved_role.as_deref().map(public_role_label);
     request.profile = Some(resolved.resolved_profile);
     Ok(())
 }
@@ -3810,7 +3811,7 @@ impl SubAgentWorkflowDriver {
             WorkflowUiEventKind::TaskStarted(Box::new(WorkflowTaskStartedEvent {
                 task_id: agent_id.to_string(),
                 label,
-                role: request.role.clone(),
+                role: request.role.as_deref().map(public_role_label),
                 profile: request.profile.clone(),
                 model: request.model.clone(),
                 strength: request.model_strength.clone(),
@@ -6023,7 +6024,7 @@ mod tests {
 
         apply_named_fleet_to_task_request(Some(&fleet), &mut request).expect("resolve");
 
-        assert_eq!(request.role.as_deref(), Some("implementer"));
+        assert_eq!(request.role.as_deref(), Some("implement"));
         assert_eq!(request.profile.as_deref(), Some("builder"));
     }
 
@@ -7175,8 +7176,8 @@ workflow({
             .find(|event| event["type"] == "task_started")
             .expect("task_started receipt");
         assert_eq!(started["role"], "explore");
-        assert_eq!(started["profile"], "explore");
-        assert_eq!(started["resolved_profile"], "explore");
+        assert_eq!(started["profile"], "scout");
+        assert_eq!(started["resolved_profile"], "scout");
 
         let explicit_result = tool
             .execute(

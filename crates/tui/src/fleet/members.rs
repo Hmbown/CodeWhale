@@ -10,8 +10,8 @@
 use std::path::Path;
 
 use super::store::{
-    load_fleet_at, resolve_selected_fleet, save_fleet, set_selected, slugify, FleetFile,
-    FleetMember, FleetScope, FleetStoreError,
+    FleetFile, FleetMember, FleetScope, FleetStoreError, load_fleet_at, resolve_selected_fleet,
+    save_fleet, set_selected, slugify,
 };
 use crate::tools::subagent::public_role_label;
 

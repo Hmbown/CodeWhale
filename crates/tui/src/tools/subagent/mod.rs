@@ -21,10 +21,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use unicode_normalization::UnicodeNormalization;
@@ -33,22 +33,22 @@ use uuid::Uuid;
 use crate::client::DeepSeekClient;
 use crate::config::MAX_SUBAGENTS;
 use crate::core::engine::tool_catalog::{
-    active_tools_for_request, apply_native_tool_deferral, ensure_advanced_tooling,
-    execute_tool_search_with_cache, initial_active_tools, is_tool_search_tool,
-    remove_evicted_cache_activations, tool_matches_any_rule, touch_cached_tool_after_execution,
-    TOOL_SEARCH_NAME,
+    TOOL_SEARCH_NAME, active_tools_for_request, apply_native_tool_deferral,
+    ensure_advanced_tooling, execute_tool_search_with_cache, initial_active_tools,
+    is_tool_search_tool, remove_evicted_cache_activations, tool_matches_any_rule,
+    touch_cached_tool_after_execution,
 };
 use crate::core::events::{AgentProgressEventMeta, Event};
 use crate::core::session::ToolActivationCache;
 use crate::dependencies::{ExternalTool, Git};
 use crate::llm_client::{LlmClient, LlmError};
 use crate::models::{
-    is_incomplete_stop_reason, is_output_limit_stop_reason, stop_reason_detail, ContentBlock,
-    Message, MessageRequest, MessageResponse, SystemPrompt, Tool, Usage,
+    ContentBlock, Message, MessageRequest, MessageResponse, SystemPrompt, Tool, Usage,
+    is_incomplete_stop_reason, is_output_limit_stop_reason, stop_reason_detail,
 };
 use crate::request_tuning::RequestTuning;
 use crate::tools::canonical_action::{
-    canonical_action_alias, is_action_family, CANONICAL_ACTION_ALIASES,
+    CANONICAL_ACTION_ALIASES, canonical_action_alias, is_action_family,
 };
 use crate::tools::handle::VarHandle;
 use crate::tools::plan::{PlanState, SharedPlanState};
@@ -82,20 +82,20 @@ pub mod mailbox;
 mod naming;
 mod worktree;
 
+use worktree::{SubAgentWorktreeRequest, prepare_child_workspace};
 #[cfg(test)]
 use worktree::{create_isolated_worktree, git_repo_root};
-use worktree::{prepare_child_workspace, SubAgentWorktreeRequest};
 
 use crate::models::Role;
 #[allow(unused_imports)] // re-exported for hosts / tests; registration uses concrete types
 pub use advisor::{
-    build_advisor_prompt, extract_tool_call_pairs, run_advisor_for_turn, AdvisorConfig,
-    EmissionGuard, ToolCallPair,
+    AdvisorConfig, EmissionGuard, ToolCallPair, build_advisor_prompt, extract_tool_call_pairs,
+    run_advisor_for_turn,
 };
 #[allow(unused_imports)] // re-exported for hosts / tests; registration uses concrete types
 pub use coord::{
-    register_coordination_tools, AgentsCoordinateTool, AgentsFollowupTool, AgentsInterruptTool,
-    AgentsListTool, AgentsMessageTool, AgentsWaitTool, CoordinationDetailProjection,
+    AgentsCoordinateTool, AgentsFollowupTool, AgentsInterruptTool, AgentsListTool,
+    AgentsMessageTool, AgentsWaitTool, CoordinationDetailProjection, register_coordination_tools,
 };
 #[allow(unused_imports)]
 pub use mailbox::{Mailbox, MailboxEnvelope, MailboxMessage, MailboxReceiver};
@@ -103,7 +103,7 @@ use naming::generated_whale_name_base;
 pub(crate) use naming::localized_whale_display_names;
 #[allow(unused_imports)] // compatibility path; some consumers exist only in test builds today
 pub use naming::{
-    assign_unique_whale_name_in_locale, whale_name_for_id_in_locale, WHALE_NICKNAMES,
+    WHALE_NICKNAMES, assign_unique_whale_name_in_locale, whale_name_for_id_in_locale,
 };
 #[cfg(test)]
 use naming::{
@@ -9735,8 +9735,8 @@ fn mint_child_route_receipt(
     let canonical_role = member
         .map(|member| member.profile.role.name.trim())
         .filter(|role| !role.is_empty())
-        .map(str::to_string)
-        .or_else(|| request.assignment.role.clone())
+        .map(public_role_label)
+        .or_else(|| request.assignment.role.as_deref().map(public_role_label))
         .unwrap_or_else(|| request.agent_type.as_str().to_string());
     let provider_id = runtime
         .api_config
@@ -12933,7 +12933,7 @@ fn validate_spawn_write_contract(
     {
         return Err(ToolError::invalid_input(format!(
             "{} implies write capability; write_authority=read_only is a contradiction. \
-             Use type=scout (or another read-only role), or set write_authority to \
+            Use type=explore (or another read-only role), or set write_authority to \
              workspace_write / worktree_write.",
             request.agent_type.as_str()
         )));
@@ -13695,6 +13695,7 @@ pub(crate) fn configured_model_for_role_or_type(
                 .unwrap_or(normalized.as_str())
                 .to_string(),
         );
+        push_key(normalized);
     }
     push_key(agent_type.as_str().to_string());
     if agent_type.legacy_type_name() != agent_type.as_str() {
@@ -14557,7 +14558,7 @@ impl SubAgentToolRegistry {
         name: &str,
         input: &Value,
     ) -> ChildGateVerdict {
-        use crate::core::engine::{auto_review_plan_decision_for_context, AutoReviewPlanDecision};
+        use crate::core::engine::{AutoReviewPlanDecision, auto_review_plan_decision_for_context};
         use crate::core::events::{ToolGate, ToolGateVerdict};
         use crate::tui::approval::ApprovalMode;
         use crate::tui::auto_review::{AutoReviewContext, RunOrigin};
@@ -14687,7 +14688,7 @@ impl SubAgentToolRegistry {
         review_context: &crate::tui::auto_review::AutoReviewContext<'_>,
         held_reason: &str,
     ) -> ChildGateVerdict {
-        use crate::core::engine::reviewer::{consult_reviewer, ReviewerOutcome};
+        use crate::core::engine::reviewer::{ReviewerOutcome, consult_reviewer};
         use crate::core::events::{ToolGate, ToolGateVerdict};
 
         let context_text =
@@ -14842,7 +14843,7 @@ impl SubAgentToolRegistry {
     }
 
     fn is_delegated_builtin_verification(name: &str, input: &Value) -> bool {
-        use crate::tools::execution_envelope::{classify_verification, VerificationBound};
+        use crate::tools::execution_envelope::{VerificationBound, classify_verification};
 
         // Reuse the same classifier as the execution envelope. This prevents a
         // second, looser notion of "test command" from growing in this module.
@@ -15318,7 +15319,7 @@ impl SubAgentToolRegistry {
             && !self.agent_action_permitted("claim")
         {
             return Err(anyhow!(
-                "agent action=claim widens an enforced write scope, and the Pod role `{role}` has no write authority to widen. Use a `builder` or `worker` role.",
+                "agent action=claim widens an enforced write scope, and the Pod role `{role}` has no write authority to widen. Use an `implement` or `general` role.",
                 role = self.agent_type.as_str()
             ));
         }
@@ -15344,12 +15345,12 @@ impl SubAgentToolRegistry {
         if !self.posture_permits_tool(name, Some(&input)) {
             if self.allows_bounded_readonly_bash(name) {
                 return Err(anyhow!(
-                    "[shell.readonly.command] Tool {name} input did not match the bounded read-only shell grammar for Pod role `{role}`. Use read-only inspection commands, or a `builder`/`worker` role for mutation or arbitrary execution.",
+                    "[shell.readonly.command] Tool {name} input did not match the bounded read-only shell grammar for Pod role `{role}`. Use read-only inspection commands, or an `implement`/`general` role for mutation or arbitrary execution.",
                     role = self.agent_type.as_str()
                 ));
             }
             return Err(anyhow!(
-                "[role.posture.denied] Tool {name} is not permitted for the read-only Pod role `{role}`. Use a `builder` or `worker` role (or `custom` with an explicit allowed_tools list) to mutate the workspace or run shell commands.",
+                "[role.posture.denied] Tool {name} is not permitted for the read-only Pod role `{role}`. Use an `implement` or `general` role (or `custom` with an explicit allowed_tools list) to mutate the workspace or run shell commands.",
                 role = self.agent_type.as_str()
             ));
         }
@@ -15662,7 +15663,7 @@ fn reject_network_reaching_input(name: &str, input: &Value) -> Result<()> {
 /// So the tools stay and the arbitrary arguments go. The default form — the one
 /// the deny list's comment actually promises is bounded — keeps working.
 fn reject_unbounded_verification(name: &str, input: &Value, shell: bool) -> Result<()> {
-    use crate::tools::execution_envelope::{classify_verification, VerificationBound};
+    use crate::tools::execution_envelope::{VerificationBound, classify_verification};
 
     match classify_verification(canonical_action_alias(name, input), input) {
         None | Some(VerificationBound::Default) => Ok(()),
@@ -15921,8 +15922,7 @@ const SUBAGENT_SUMMARY_TAIL_CHARS: usize = 4_000;
 /// One-line provenance suffix reinforcing that a sub-agent summary is a
 /// self-report (issue #2652). Appended only when the summary was NOT
 /// length-truncated, so every summary carries exactly one boundary marker.
-const SUBAGENT_SELF_REPORT_NOTE: &str =
-    "\n[Sub-agent self-report — re-verify material claims (read changed files, \
+const SUBAGENT_SELF_REPORT_NOTE: &str = "\n[Sub-agent self-report — re-verify material claims (read changed files, \
 run the relevant tests) before relying on it.]";
 
 /// Stamp a sub-agent summary with a provenance/clip marker (issue #2652).

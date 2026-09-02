@@ -2174,10 +2174,12 @@ mod tests {
                 prompt.contains("Pod member (advisor)"),
                 "prompt must canonicalize {alias}: {prompt}"
             );
-            assert!(
-                !prompt.contains(&format!("Pod member ({alias})")),
-                "prompt must not emit compatibility alias {alias}: {prompt}"
-            );
+            if alias != "advisor" {
+                assert!(
+                    !prompt.contains(&format!("Pod member ({alias})")),
+                    "prompt must not emit compatibility alias {alias}: {prompt}"
+                );
+            }
 
             let config = explicit_deepseek_config();
             let resolved = resolve_fleet_route_with_config(&task, &[], None, Some(&config))
@@ -4251,7 +4253,8 @@ mod tests {
             )
             .expect("worker spec with empty profiles");
 
-            assert_eq!(spec.role.as_deref(), Some(role));
+            let public_role = crate::tools::subagent::public_role_label(role);
+            assert_eq!(spec.role.as_deref(), Some(public_role.as_str()));
             assert_eq!(spec.agent_type, expected_type, "role {role}");
             assert_eq!(spec.tool_profile, expected_tools, "role {role}");
             assert_eq!(spec.model, model, "role {role}");

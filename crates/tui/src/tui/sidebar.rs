@@ -16,12 +16,12 @@ use ratatui::{
 
 use crate::palette;
 use crate::tools::subagent::{
-    localized_whale_display_names, public_role_label, AgentWorkerStatus, SubAgentStatus,
+    AgentWorkerStatus, SubAgentStatus, localized_whale_display_names, public_role_label,
 };
 use crate::tools::todo::TodoStatus;
 
 use super::app::{AgentCurrentActivity, AgentCurrentActivityStatus, App, SidebarRowAction};
-use super::history::{summarize_tool_output, HistoryCell, ToolCell, ToolStatus};
+use super::history::{HistoryCell, ToolCell, ToolStatus, summarize_tool_output};
 use super::ui_text::truncate_line_to_width;
 
 /// Tolerance for floating-point cost comparison in the sidebar breakdown.
@@ -962,7 +962,7 @@ fn subagent_panel_rows(
         let row_color = if sidebar_agent_status_is_terminal(row.status.as_str()) {
             theme.text_muted
         } else {
-            theme.text_primary
+            theme.text_body
         };
         lines.push(Line::from(vec![
             Span::styled(visible_prefix, Style::default().fg(color)),
@@ -1281,10 +1281,10 @@ fn context_panel_cost_line(app: &App) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
+        SidebarAgentRow, SidebarSubagentSummary, SidebarWorkChecklistItem, SidebarWorkSummary,
         cached_agent_activity_is_live, context_panel_cost_line, sidebar_agent_rows,
         sidebar_work_summary, subagent_output_handle, subagent_panel_lines, subagent_panel_rows,
-        work_panel_empty_hint, work_panel_lines, SidebarAgentRow, SidebarSubagentSummary,
-        SidebarWorkChecklistItem, SidebarWorkSummary,
+        work_panel_empty_hint, work_panel_lines,
     };
     use crate::config::Config;
     use crate::localization::Locale;
@@ -2061,14 +2061,14 @@ mod tests {
         // not already part of the name.
         assert_eq!(
             app.ensure_agent_label("agent_named"),
-            "branch-triage · worker"
+            "branch-triage · general"
         );
         // Unnamed children are disambiguated per role (each role's counter
         // starts at 1).
         assert_eq!(app.ensure_agent_label("agent_role"), "reviewer · 1");
         assert_eq!(app.ensure_agent_label("agent_profile"), "release-lead · 1");
         assert_eq!(app.ensure_agent_label("agent_canonical"), "planner · 1");
-        assert_eq!(app.ensure_agent_label("agent_typed"), "builder · 1");
+        assert_eq!(app.ensure_agent_label("agent_typed"), "implement · 1");
 
         // A progress-only agent first seen before its metadata arrives gets a
         // counter placeholder, then upgrades once the identity is observed.
@@ -2076,7 +2076,7 @@ mod tests {
         let mut late = cached_agent("agent_late", None);
         late.assignment.role = Some("verifier".to_string());
         app.subagent_cache.push(late);
-        assert_eq!(app.ensure_agent_label("agent_late"), "verifier · 1");
+        assert_eq!(app.ensure_agent_label("agent_late"), "test · 1");
     }
 
     #[test]
@@ -2093,11 +2093,11 @@ mod tests {
         second.agent_type = crate::tools::subagent::FleetRole::Builder;
         app.subagent_cache.push(second);
 
-        assert_eq!(app.ensure_agent_label("agent_builder_a"), "builder · 1");
-        assert_eq!(app.ensure_agent_label("agent_builder_b"), "builder · 2");
+        assert_eq!(app.ensure_agent_label("agent_builder_a"), "implement · 1");
+        assert_eq!(app.ensure_agent_label("agent_builder_b"), "implement · 2");
         // Stability: re-seeing a known builder keeps its assigned label.
-        assert_eq!(app.ensure_agent_label("agent_builder_a"), "builder · 1");
-        assert_eq!(app.ensure_agent_label("agent_builder_b"), "builder · 2");
+        assert_eq!(app.ensure_agent_label("agent_builder_a"), "implement · 1");
+        assert_eq!(app.ensure_agent_label("agent_builder_b"), "implement · 2");
 
         // A different role has its own sequence.
         let mut reviewer = cached_agent("agent_reviewer_a", None);

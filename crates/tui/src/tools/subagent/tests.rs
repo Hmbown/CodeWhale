@@ -3,11 +3,11 @@ use crate::config::ApiProvider;
 use crate::fleet::roster::FleetRoster;
 use crate::tools::{AgentToolSurfaceOptions, ToolRegistryBuilder};
 use crate::worker_profile::ShellPolicy;
-use axum::{http::StatusCode, response::IntoResponse, routing::post, Json, Router};
+use axum::{Json, Router, http::StatusCode, response::IntoResponse, routing::post};
 use std::collections::HashSet;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tempfile::{tempdir, Builder as TempDirBuilder};
+use tempfile::{Builder as TempDirBuilder, tempdir};
 
 mod launch_receipt;
 
@@ -257,10 +257,12 @@ fn active_worker_records_are_never_pruned_by_history_retention() {
         MAX_AGENT_WORKER_RECORDS + 1
     );
     assert!(manager.get_worker_record("active-worker-000").is_some());
-    assert!(manager
-        .list_worker_records()
-        .iter()
-        .all(|record| !record.status.is_terminal()));
+    assert!(
+        manager
+            .list_worker_records()
+            .iter()
+            .all(|record| !record.status.is_terminal())
+    );
 }
 
 #[test]
@@ -332,16 +334,20 @@ fn headless_worker_record_tracks_lifecycle_without_tui_projection() {
         Some("handle_read")
     );
     assert!(record.takeover.supported);
-    assert!(record
-        .takeover
-        .instructions
-        .contains("transcript_handle with handle_read"));
+    assert!(
+        record
+            .takeover
+            .instructions
+            .contains("transcript_handle with handle_read")
+    );
     assert_eq!(record.usage.status, "unknown");
     assert_eq!(record.verification.status, "self_report_only");
-    assert!(record
-        .artifacts
-        .iter()
-        .any(|artifact| artifact.kind == "transcript"));
+    assert!(
+        record
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.kind == "transcript")
+    );
     let statuses: Vec<_> = record.events.iter().map(|event| event.status).collect();
     assert!(statuses.contains(&AgentWorkerStatus::Queued));
     assert!(statuses.contains(&AgentWorkerStatus::ModelWait));
@@ -356,10 +362,12 @@ fn headless_worker_record_tracks_lifecycle_without_tui_projection() {
         Some("worker summary".len() as u64),
         "persisted worker results become byte-count receipts, never raw graph output"
     );
-    assert!(record
-        .events
-        .iter()
-        .any(|event| event.tool_name.as_deref() == Some("read_file")));
+    assert!(
+        record
+            .events
+            .iter()
+            .any(|event| event.tool_name.as_deref() == Some("read_file"))
+    );
 }
 
 #[test]
@@ -739,10 +747,12 @@ fn headless_worker_records_persist_with_subagent_state() {
     assert_eq!(record.status, AgentWorkerStatus::Failed);
     assert_eq!(record.error.as_deref(), Some("boom"));
     assert_eq!(record.steps_taken, 3);
-    assert!(record
-        .events
-        .iter()
-        .any(|event| event.status == AgentWorkerStatus::Failed));
+    assert!(
+        record
+            .events
+            .iter()
+            .any(|event| event.status == AgentWorkerStatus::Failed)
+    );
 }
 
 #[test]
@@ -829,9 +839,11 @@ fn coordination_ledger_persists_and_replays_bounded_contracts() {
 
     let mut loaded = SubAgentManager::new(tmp.path().to_path_buf(), 4).with_state_path(state_path);
     loaded.load_state().expect("reload coordination");
-    assert!(loaded
-        .validate_write_scope("agent_writer", &["src/lib.rs".into()])
-        .is_ok());
+    assert!(
+        loaded
+            .validate_write_scope("agent_writer", &["src/lib.rs".into()])
+            .is_ok()
+    );
     let err = loaded
         .validate_write_scope("agent_writer", &["docs/readme.md".into()])
         .unwrap_err();
@@ -1023,13 +1035,15 @@ fn headless_worker_registration_enforces_live_claims_and_projects_context() {
         .get_worker_record("worker-a")
         .expect("worker record");
     assert!(record.spec.objective.contains("src-a-contract"));
-    assert!(record
-        .spec
-        .launch_manifest
-        .as_ref()
-        .expect("launch manifest")
-        .prompt
-        .contains("src-a-contract"));
+    assert!(
+        record
+            .spec
+            .launch_manifest
+            .as_ref()
+            .expect("launch manifest")
+            .prompt
+            .contains("src-a-contract")
+    );
 
     let overlap = manager
         .preflight_worker_coordination(&worker("worker-b", "src/a/nested"))
@@ -1835,11 +1849,13 @@ fn coordination_acceptance_preserves_scopes_candidates_and_replay() {
     assert_eq!(replayed.coordination.contentions.len(), 2);
     assert_eq!(replayed.coordination.projections.len(), 2);
     assert_eq!(replayed.coordination.reconciliations.len(), 1);
-    assert!(replayed
-        .coordination
-        .write_claims
-        .iter()
-        .any(|claim| claim.claim.owner == agent_a));
+    assert!(
+        replayed
+            .coordination
+            .write_claims
+            .iter()
+            .any(|claim| claim.claim.owner == agent_a)
+    );
     let sequences = replayed
         .coordination
         .decisions
@@ -2175,9 +2191,11 @@ async fn detached_interactive_usage_after_mailbox_seal_reaches_session_accountin
             worker.usage_source_fingerprints,
             [fingerprint.clone()].into()
         );
-        assert!(session_usage
-            .usage_source_fingerprints
-            .contains(&fingerprint));
+        assert!(
+            session_usage
+                .usage_source_fingerprints
+                .contains(&fingerprint)
+        );
     }
 }
 
@@ -2543,7 +2561,7 @@ fn fleet_role_labels_are_canonical_while_legacy_snapshot_wire_stays_readable() {
     let migrated: FleetRole = serde_json::from_str("\"explore\"").expect("migrate legacy explore");
     assert_eq!(
         serde_json::to_string(&migrated).expect("re-serialize after migration"),
-        "\"scout\""
+        "\"explore\""
     );
 }
 
@@ -2559,13 +2577,13 @@ fn fleet_role_deserialize_rejects_unknown_values_with_canonical_hint() {
         "error should name the rejected token: {message}"
     );
     for canonical in [
-        "worker",
-        "scout",
+        "general",
+        "explore",
         "planner",
         "reviewer",
-        "builder",
-        "verifier",
-        "consultant",
+        "implement",
+        "test",
+        "advisor",
         "custom",
     ] {
         assert!(
@@ -2574,7 +2592,11 @@ fn fleet_role_deserialize_rejects_unknown_values_with_canonical_hint() {
         );
     }
     assert!(
-        !message.contains("implementer") && !message.contains("explore"),
+        !message.contains("worker")
+            && !message.contains("scout")
+            && !message.contains("builder")
+            && !message.contains("verifier")
+            && !message.contains("consultant"),
         "error must not advertise legacy aliases: {message}"
     );
 }
@@ -2943,7 +2965,7 @@ fn builder_plus_read_only_authority_fails_closed() {
         .expect_err("builder + read_only must fail closed");
         let message = err.to_string();
         assert!(
-            message.contains("contradiction") && message.contains("builder"),
+            message.contains("contradiction") && message.contains("implement"),
             "{spelling}: {message}"
         );
     }
@@ -3649,9 +3671,10 @@ fn test_parse_spawn_request_rejects_invalid_model_strength() {
         "model_strength": "automatic"
     });
     let err = parse_spawn_request(&input).expect_err("invalid model_strength should fail");
-    assert!(err
-        .to_string()
-        .contains("model_strength must be one of: same, faster"));
+    assert!(
+        err.to_string()
+            .contains("model_strength must be one of: same, faster")
+    );
 }
 
 #[test]
@@ -3661,9 +3684,10 @@ fn test_parse_spawn_request_rejects_invalid_child_thinking() {
         "thinking": "forever"
     });
     let err = parse_spawn_request(&input).expect_err("invalid thinking should fail");
-    assert!(err
-        .to_string()
-        .contains("thinking must be one of: inherit, auto, off, low, medium, high, max"));
+    assert!(
+        err.to_string()
+            .contains("thinking must be one of: inherit, auto, off, low, medium, high, max")
+    );
 }
 
 #[test]
@@ -3699,9 +3723,10 @@ fn test_parse_spawn_request_rejects_out_of_range_max_depth() {
         "max_depth": ceiling + 1
     });
     let err = parse_spawn_request(&input).expect_err("max_depth should be capped at schema range");
-    assert!(err
-        .to_string()
-        .contains(&format!("max_depth must be between 0 and {ceiling}")));
+    assert!(
+        err.to_string()
+            .contains(&format!("max_depth must be between 0 and {ceiling}"))
+    );
 }
 
 fn fleet_roster_with(id: &str, profile: codewhale_config::FleetProfile) -> FleetRoster {
@@ -3933,7 +3958,7 @@ fn test_apply_spawn_profile_rejects_conflicting_explicit_type() {
         "{message}"
     );
     assert!(
-        message.contains("conflicting explicit type 'builder'"),
+        message.contains("conflicting explicit type 'implement'"),
         "{message}"
     );
 }
@@ -4927,15 +4952,15 @@ fn test_parse_spawn_request_accepts_full_role_vocabulary() {
     // also pass the second `normalize_role_alias` validation pass instead of
     // being rejected with a stale hint.
     for (role, expected_type, expected_role) in [
-        ("general", FleetRole::Worker, "worker"),
-        ("general-purpose", FleetRole::Worker, "worker"),
-        ("general_purpose", FleetRole::Worker, "worker"),
-        ("worker", FleetRole::Worker, "worker"),
-        ("default", FleetRole::Worker, "default"),
-        ("scout", FleetRole::Scout, "scout"),
-        ("explore", FleetRole::Scout, "scout"),
-        ("exploration", FleetRole::Scout, "scout"),
-        ("explorer", FleetRole::Scout, "scout"),
+        ("general", FleetRole::Worker, "general"),
+        ("general-purpose", FleetRole::Worker, "general"),
+        ("general_purpose", FleetRole::Worker, "general"),
+        ("worker", FleetRole::Worker, "general"),
+        ("default", FleetRole::Worker, "general"),
+        ("scout", FleetRole::Scout, "explore"),
+        ("explore", FleetRole::Scout, "explore"),
+        ("exploration", FleetRole::Scout, "explore"),
+        ("explorer", FleetRole::Scout, "explore"),
         ("plan", FleetRole::Planner, "planner"),
         ("planning", FleetRole::Planner, "planner"),
         ("planner", FleetRole::Planner, "planner"),
@@ -4944,18 +4969,18 @@ fn test_parse_spawn_request_accepts_full_role_vocabulary() {
         ("code-review", FleetRole::Reviewer, "reviewer"),
         ("code_review", FleetRole::Reviewer, "reviewer"),
         ("reviewer", FleetRole::Reviewer, "reviewer"),
-        ("implementer", FleetRole::Builder, "builder"),
-        ("implement", FleetRole::Builder, "builder"),
-        ("implementation", FleetRole::Builder, "builder"),
-        ("builder", FleetRole::Builder, "builder"),
-        ("verifier", FleetRole::Verifier, "verifier"),
-        ("verify", FleetRole::Verifier, "verifier"),
-        ("verification", FleetRole::Verifier, "verifier"),
-        ("validator", FleetRole::Verifier, "verifier"),
-        ("tester", FleetRole::Verifier, "verifier"),
-        ("consultant", FleetRole::Consultant, "consultant"),
-        ("oracle", FleetRole::Consultant, "consultant"),
-        ("advisor", FleetRole::Consultant, "consultant"),
+        ("implementer", FleetRole::Builder, "implement"),
+        ("implement", FleetRole::Builder, "implement"),
+        ("implementation", FleetRole::Builder, "implement"),
+        ("builder", FleetRole::Builder, "implement"),
+        ("verifier", FleetRole::Verifier, "test"),
+        ("verify", FleetRole::Verifier, "test"),
+        ("verification", FleetRole::Verifier, "test"),
+        ("validator", FleetRole::Verifier, "test"),
+        ("tester", FleetRole::Verifier, "test"),
+        ("consultant", FleetRole::Consultant, "advisor"),
+        ("oracle", FleetRole::Consultant, "advisor"),
+        ("advisor", FleetRole::Consultant, "advisor"),
         ("custom", FleetRole::Custom, "custom"),
     ] {
         assert_eq!(
@@ -5092,13 +5117,13 @@ fn subagent_tool_schemas_advertise_real_type_and_role_vocabulary() {
 
     let description = schema_property_description(&agent_schema, "type");
     for alias in [
-        "worker",
-        "scout",
+        "general",
+        "explore",
         "planner",
         "reviewer",
-        "builder",
-        "verifier",
-        "consultant",
+        "implement",
+        "test",
+        "advisor",
         "custom",
     ] {
         assert!(
@@ -5281,13 +5306,13 @@ fn agent_tool_role_schema_is_a_closed_canonical_enum() {
     // Exact canonical values, exact order. New models are told the closed
     // Fleet vocabulary and nothing else.
     let expected = json!([
-        "worker",
-        "scout",
+        "general",
+        "explore",
         "planner",
         "reviewer",
-        "builder",
-        "verifier",
-        "consultant",
+        "implement",
+        "test",
+        "advisor",
         "custom"
     ]);
     assert_eq!(
@@ -5295,25 +5320,27 @@ fn agent_tool_role_schema_is_a_closed_canonical_enum() {
         "model-facing role schema must advertise exactly the canonical Pod enum"
     );
 
-    // The description teaches each canonical role and never advertises
-    // legacy aliases; those stay at replay/deserialization boundaries.
+    // The description teaches each canonical role; legacy aliases stay at
+    // replay/deserialization boundaries.
     let description = schema_property_description(&agent_schema, "type");
     assert!(
         description.starts_with("Pod role for this delegated worker."),
         "type description should lead with the Pod role contract: {description}"
     );
     let lowered = description.to_ascii_lowercase();
-    for legacy in [
+    for canonical in [
         "general",
         "explore",
-        "implementer",
-        "awaiter",
-        "legacy",
-        "alias",
+        "planner",
+        "reviewer",
+        "implement",
+        "test",
+        "advisor",
+        "custom",
     ] {
         assert!(
-            !lowered.contains(legacy),
-            "type description must not advertise legacy vocabulary {legacy:?}: {description}"
+            lowered.contains(canonical),
+            "type description must advertise canonical vocabulary {canonical:?}: {description}"
         );
     }
 }
@@ -5326,13 +5353,13 @@ fn provider_schema_sanitizers_preserve_the_closed_fleet_role_enum() {
     let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 1);
     let agent_schema = AgentTool::new(manager, stub_runtime()).input_schema();
     let expected = json!([
-        "worker",
-        "scout",
+        "general",
+        "explore",
         "planner",
         "reviewer",
-        "builder",
-        "verifier",
-        "consultant",
+        "implement",
+        "test",
+        "advisor",
         "custom"
     ]);
 
@@ -6174,9 +6201,10 @@ fn test_parse_spawn_request_rejects_conflicting_type_and_role() {
         "role": "worker"
     });
     let err = parse_spawn_request(&input).expect_err("conflicting type+role should fail");
-    assert!(err
-        .to_string()
-        .contains("Pod role conflicts with the explicit legacy agent type"));
+    assert!(
+        err.to_string()
+            .contains("Pod role conflicts with the explicit legacy agent type")
+    );
 }
 
 #[test]
@@ -6286,8 +6314,8 @@ fn test_build_assignment_prompt_includes_metadata() {
     );
     let prompt = build_assignment_prompt("Inspect parser behavior", &assignment, &FleetRole::Scout);
     assert!(prompt.contains("Assignment metadata"));
-    assert!(prompt.contains("resolved_type: scout"));
-    assert!(prompt.contains("role: scout"));
+    assert!(prompt.contains("resolved_type: explore"));
+    assert!(prompt.contains("role: explore"));
 }
 
 #[test]
@@ -9209,11 +9237,13 @@ async fn cleanup_auto_cancels_stale_running_agent_and_releases_slot() {
         .expect("agent should remain inspectable");
     assert_eq!(snapshot.status, SubAgentStatus::Cancelled);
     assert_eq!(manager.running_count(), 0);
-    assert!(snapshot
-        .result
-        .as_deref()
-        .unwrap_or_default()
-        .contains("Auto-cancelled"));
+    assert!(
+        snapshot
+            .result
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Auto-cancelled")
+    );
     let completion = completion_rx
         .try_recv()
         .expect("stale cleanup should wake the immediate parent");
@@ -9281,10 +9311,12 @@ async fn status_projection_reconciles_stale_running_agent() {
     assert_eq!(agent["status"], "cancelled");
     assert_eq!(agent["terminal"], true);
     assert_eq!(agent["snapshot"]["status"], "Cancelled");
-    assert!(agent["snapshot"]["result"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("Auto-cancelled"));
+    assert!(
+        agent["snapshot"]["result"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Auto-cancelled")
+    );
 }
 
 #[tokio::test]
@@ -10442,15 +10474,19 @@ fn failed_subagent_completion_is_high_priority_and_retrievable() {
     assert!(completion.is_high_priority_failure());
     assert!(completion.payload.contains(r#""event":"subagent.failed""#));
     assert!(completion.payload.contains(r#""priority":"high""#));
-    assert!(completion
-        .payload
-        .contains(r#""failure_class":"empty_turn""#));
+    assert!(
+        completion
+            .payload
+            .contains(r#""failure_class":"empty_turn""#)
+    );
     assert!(completion.payload.contains(r#""name":"Tide""#));
     assert!(completion.payload.contains(r#""steps":7"#));
     assert!(completion.payload.contains(r#""elapsed_ms":12345"#));
-    assert!(completion
-        .payload
-        .contains(r#""transcript_handle":"agent:agent_test/full_transcript""#));
+    assert!(
+        completion
+            .payload
+            .contains(r#""transcript_handle":"agent:agent_test/full_transcript""#)
+    );
 
     let completed = subagent_completion_from_result(&make_snapshot(SubAgentStatus::Completed));
     assert!(!completed.is_high_priority_failure());
@@ -10462,12 +10498,16 @@ fn budget_exhaustion_is_a_high_priority_failure_event() {
         subagent_completion_from_result(&make_snapshot(SubAgentStatus::BudgetExhausted));
 
     assert!(completion.is_high_priority_failure());
-    assert!(completion
-        .payload
-        .contains(r#""status":"budget_exhausted""#));
-    assert!(completion
-        .payload
-        .contains(r#""failure_class":"token_budget""#));
+    assert!(
+        completion
+            .payload
+            .contains(r#""status":"budget_exhausted""#)
+    );
+    assert!(
+        completion
+            .payload
+            .contains(r#""failure_class":"token_budget""#)
+    );
 }
 
 #[test]
@@ -11931,7 +11971,7 @@ async fn general_delegation_still_blocks_suggest_write_without_parent_auto_appro
         .expect_err("general agent should not silently gain write permission");
     let msg = err.to_string();
     assert!(
-        msg.contains("not delegated to worker sub-agents"),
+        msg.contains("not delegated to general sub-agents"),
         "general writes should be rejected with a role-aware message: {msg}"
     );
 
@@ -11972,7 +12012,7 @@ async fn explore_role_still_blocks_suggest_writes_without_parent_auto_approve() 
         .expect_err("explore agents must not write");
     let msg = err.to_string();
     assert!(
-        msg.contains("scout") && msg.contains("not permitted"),
+        msg.contains("explore") && msg.contains("not permitted"),
         "explore writes should be rejected with a role-aware message: {msg}"
     );
     assert!(
@@ -12551,10 +12591,12 @@ async fn turn_owned_descendants_join_and_park_with_the_same_foreground_registry(
     assert_eq!(registry.active_count(), 0);
 
     let detached = root.background_runtime();
-    assert!(detached
-        .foreground_child_registration("agent_detached_park")
-        .expect("detached admission does not consult the foreground barrier")
-        .is_none());
+    assert!(
+        detached
+            .foreground_child_registration("agent_detached_park")
+            .expect("detached admission does not consult the foreground barrier")
+            .is_none()
+    );
     assert!(!detached.cancel_token.is_cancelled());
 }
 
@@ -12590,11 +12632,13 @@ fn derived_child_cancellation_reaches_tool_context_while_detached_stays_independ
     let rebound = stub_runtime().with_cancel_token(replacement.clone());
     replacement.cancel();
     assert!(rebound.cancel_token.is_cancelled());
-    assert!(rebound
-        .context
-        .cancel_token
-        .as_ref()
-        .is_some_and(CancellationToken::is_cancelled));
+    assert!(
+        rebound
+            .context
+            .cancel_token
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+    );
 }
 
 #[tokio::test]
@@ -13613,9 +13657,11 @@ fn spawn_child_client_inherits_session_provider_without_pin() {
         same_client.api_provider(),
         crate::config::ApiProvider::Deepseek
     );
-    assert!(same_client
-        .base_url()
-        .contains("session-provider.example.com"));
+    assert!(
+        same_client
+            .base_url()
+            .contains("session-provider.example.com")
+    );
 }
 
 fn coexisting_ollama_cloud_config(active_provider: &str) -> crate::config::Config {
@@ -13959,9 +14005,11 @@ fn active_session_owns_every_roster_and_control_resolution() {
             .cancel_agent_for_session("session-b", &agent_a)
             .expect_err("foreign cancel"),
     ];
-    assert!(foreign_errors
-        .iter()
-        .all(|error| { error.to_string() == "Agent not found in the active session" }));
+    assert!(
+        foreign_errors
+            .iter()
+            .all(|error| { error.to_string() == "Agent not found in the active session" })
+    );
     assert_eq!(
         manager
             .get_result(&agent_a)
@@ -14025,12 +14073,16 @@ fn ownerless_legacy_rows_fail_closed_and_scoped_close_preserves_foreign_workers(
     manager.register_worker(make_worker_spec("legacy", workspace.path().to_path_buf()));
     let legacy = "legacy".to_string();
     assert!(manager.list_for_session("session-a").is_empty());
-    assert!(manager
-        .list_worker_records_for_session("session-a")
-        .is_empty());
-    assert!(manager
-        .get_result_by_ref_for_session("session-a", &legacy)
-        .is_err());
+    assert!(
+        manager
+            .list_worker_records_for_session("session-a")
+            .is_empty()
+    );
+    assert!(
+        manager
+            .get_result_by_ref_for_session("session-a", &legacy)
+            .is_err()
+    );
 
     let agent_a = manager.insert_test_running_agent("close_a", workspace.path());
     let agent_b = manager.insert_test_running_agent("keep_b", workspace.path());
@@ -14050,11 +14102,13 @@ fn ownerless_legacy_rows_fail_closed_and_scoped_close_preserves_foreign_workers(
             .status,
         SubAgentStatus::Running
     );
-    assert!(!manager
-        .get_worker_record(&agent_b)
-        .expect("foreign B worker retained")
-        .status
-        .is_terminal());
+    assert!(
+        !manager
+            .get_worker_record(&agent_b)
+            .expect("foreign B worker retained")
+            .status
+            .is_terminal()
+    );
 }
 
 #[test]
@@ -15548,7 +15602,7 @@ fn role_model_validation_accepts_provider_native_ids() {
 
 #[test]
 fn consultant_reads_released_advisory_role_model_override_keys() {
-    for legacy_key in ["oracle", "advisor"] {
+    for legacy_key in ["oracle", "consultant"] {
         let mut runtime = stub_runtime();
         runtime
             .role_models
@@ -15565,13 +15619,13 @@ fn canonical_consultant_model_override_precedes_compatibility_keys() {
     let mut runtime = stub_runtime();
     runtime
         .role_models
-        .insert("consultant".to_string(), "deepseek-v4-pro".to_string());
+        .insert("advisor".to_string(), "deepseek-v4-pro".to_string());
     runtime
         .role_models
         .insert("oracle".to_string(), "deepseek-v4-flash".to_string());
     runtime
         .role_models
-        .insert("advisor".to_string(), "deepseek-v4-flash".to_string());
+        .insert("consultant".to_string(), "deepseek-v4-flash".to_string());
 
     let model = configured_model_for_role_or_type(&runtime, None, &FleetRole::Consultant)
         .expect("canonical consultant override should resolve");
@@ -15580,11 +15634,11 @@ fn canonical_consultant_model_override_precedes_compatibility_keys() {
 
 #[test]
 fn raw_advisory_role_prefers_canonical_consultant_model_override() {
-    for alias in ["oracle", "advisor"] {
+    for alias in ["oracle", "consultant"] {
         let mut runtime = stub_runtime();
         runtime
             .role_models
-            .insert("consultant".to_string(), "deepseek-v4-pro".to_string());
+            .insert("advisor".to_string(), "deepseek-v4-pro".to_string());
         runtime
             .role_models
             .insert(alias.to_string(), "deepseek-v4-flash".to_string());
@@ -16027,10 +16081,12 @@ async fn queued_turn_owned_child_parks_without_a_false_start_transition() {
         .get_result(&agent_id)
         .expect("parked queued child remains inspectable");
     assert!(matches!(snapshot.status, SubAgentStatus::Interrupted(_)));
-    assert!(snapshot
-        .checkpoint
-        .as_ref()
-        .is_some_and(|checkpoint| checkpoint.continuable));
+    assert!(
+        snapshot
+            .checkpoint
+            .as_ref()
+            .is_some_and(|checkpoint| checkpoint.continuable)
+    );
     let worker = manager
         .get_worker_record(&agent_id)
         .expect("parked queued worker remains inspectable");
@@ -16047,10 +16103,12 @@ async fn queued_turn_owned_child_parks_without_a_false_start_transition() {
             .any(|event| event.status == AgentWorkerStatus::Starting && event.seq > queued_seq),
         "parking must not emit a second Starting transition after Queued: {worker:?}"
     );
-    assert!(!worker
-        .events
-        .iter()
-        .any(|event| event.status == AgentWorkerStatus::Cancelled));
+    assert!(
+        !worker
+            .events
+            .iter()
+            .any(|event| event.status == AgentWorkerStatus::Cancelled)
+    );
 
     drop(manager);
     drop(held_launch_permit);
@@ -17562,10 +17620,12 @@ async fn agent_wait_returns_immediately_with_no_children() {
     let payload: serde_json::Value =
         serde_json::from_str(&result.content).expect("wait payload should be json");
     assert_eq!(payload["running"], json!(0));
-    assert!(payload["settled"]
-        .as_array()
-        .expect("settled array")
-        .is_empty());
+    assert!(
+        payload["settled"]
+            .as_array()
+            .expect("settled array")
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -17624,10 +17684,12 @@ async fn agent_wait_times_out_and_reports_running_child() {
         serde_json::from_str(&result.content).expect("wait payload should be json");
     assert_eq!(payload["timed_out"], json!(true));
     assert_eq!(payload["running"], json!(1));
-    assert!(payload["settled"]
-        .as_array()
-        .expect("settled array")
-        .is_empty());
+    assert!(
+        payload["settled"]
+            .as_array()
+            .expect("settled array")
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -19792,11 +19854,11 @@ async fn spawn_receipt_compacts_and_verbose_restores_the_archive() {
 
 fn spawn_route_metadata(provider: &str, model: &str, source: &str) -> WorkflowTaskSpawnMetadata {
     let child_route = ChildRouteReceipt {
-        requested_type: "scout".to_string(),
+        requested_type: "explore".to_string(),
         requested_profile: None,
         resolved_profile_id: None,
         profile_origin: None,
-        canonical_role: "scout".to_string(),
+        canonical_role: "explore".to_string(),
         provider_id: provider.to_string(),
         model_id: model.to_string(),
         route_source: source.to_string(),
@@ -19848,9 +19910,10 @@ fn spawn_receipt_route_names_the_provider_and_model_the_child_actually_got() {
         .keys()
         .map(String::as_str)
         .collect();
-    assert!(keys
-        .iter()
-        .all(|key| { !matches!(*key, "base_url" | "api_key" | "workspace" | "source_path") }));
+    assert!(
+        keys.iter()
+            .all(|key| { !matches!(*key, "base_url" | "api_key" | "workspace" | "source_path") })
+    );
 
     // The receipt exposes the resolved wire id and route source, without a
     // mutable config reference that could reveal path or credential data.
@@ -20654,15 +20717,19 @@ mod child_permission_gate {
                 }
                 let approval_id = approval_id.expect("child prompt must reach the host");
                 assert_eq!(manager_for_answer.read().await.pending_child_approvals(), 1);
-                assert!(manager_for_answer
-                    .write()
-                    .await
-                    .resolve_child_approval(&approval_id, answer));
+                assert!(
+                    manager_for_answer
+                        .write()
+                        .await
+                        .resolve_child_approval(&approval_id, answer)
+                );
                 // Answering twice finds no waiter.
-                assert!(!manager_for_answer
-                    .write()
-                    .await
-                    .resolve_child_approval(&approval_id, answer));
+                assert!(
+                    !manager_for_answer
+                        .write()
+                        .await
+                        .resolve_child_approval(&approval_id, answer)
+                );
             });
             let result = registry
                 .execute("agent_gate", "bash", json!({"command": "echo gated"}))

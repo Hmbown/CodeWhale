@@ -20,10 +20,10 @@
 
 use ratatui::text::Line;
 
+use crate::tools::subagent::public_role_label;
 use crate::tui::app::App;
 use crate::tui::sidebar::{self, SidebarSubagentSummary, WorkPanelOpts};
 use crate::tui::subagent_routing::active_fanout_counts;
-use crate::tools::subagent::public_role_label;
 
 use super::model::RailPanel;
 

@@ -3175,7 +3175,7 @@ mod tests {
         assert_eq!(pins.len(), 2, "fleet model then the person's pin: {pins:?}");
         assert_eq!(pins[0].provider, "openrouter");
         assert_eq!(pins[0].model, "z-ai/glm-5.3-flash");
-        assert_eq!(pins[0].label.as_deref(), Some("fleet · scout"));
+        assert_eq!(pins[0].label.as_deref(), Some("fleet · explore"));
         assert_eq!(pins[1].model, "claude-haiku-4-5");
     }
 

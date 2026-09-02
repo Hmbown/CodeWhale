@@ -4,18 +4,19 @@ use std::time::{Duration, Instant};
 
 use crate::task_manager::{TaskRecord, TaskStatus, TaskSummary};
 use crate::tools::subagent::{
-    subagent_progress_tool_display_name, AgentWorkerStatus, MailboxMessage, SubAgentResult,
-    SubAgentStatus,
+    AgentWorkerStatus, MailboxMessage, SubAgentResult, SubAgentStatus,
+    subagent_progress_tool_display_name,
 };
 use crate::tui::app::{
-    bound_agent_activity_text, AgentCurrentActivity, AgentCurrentActivityStatus, AgentProgressMeta,
-    AgentRecentAction, App, AppMode, TaskPanelEntry, TaskPanelEntryKind, MAX_AGENT_RECENT_ACTIONS,
+    AgentCurrentActivity, AgentCurrentActivityStatus, AgentProgressMeta, AgentRecentAction, App,
+    AppMode, MAX_AGENT_RECENT_ACTIONS, TaskPanelEntry, TaskPanelEntryKind,
+    bound_agent_activity_text,
 };
-use crate::tui::history::{summarize_tool_output, HistoryCell, SubAgentCell};
+use crate::tui::history::{HistoryCell, SubAgentCell, summarize_tool_output};
 use crate::tui::pager::PagerView;
 use crate::tui::tool_routing::refreshes_workspace_context_on_completion;
 use crate::tui::widgets::agent_card::{
-    apply_to_delegate, apply_to_fanout, AgentLifecycle, DelegateCard, FanoutCard,
+    AgentLifecycle, DelegateCard, FanoutCard, apply_to_delegate, apply_to_fanout,
 };
 use crate::tui::workspace_context;
 
@@ -1513,7 +1514,7 @@ mod tests {
             panic!("expected delegate card");
         };
         let rendered = card
-            .render_lines(120, &crate::palette::themes::UI_THEME)
+            .render_lines(120, &crate::palette::UI_THEME)
             .into_iter()
             .flat_map(|line| line.spans.into_iter().map(|span| span.content.into_owned()))
             .collect::<String>();
@@ -1997,7 +1998,7 @@ mod tests {
             panic!("expected delegate card");
         };
         let rendered: String = card
-            .render_lines(120, &crate::palette::themes::UI_THEME)
+            .render_lines(120, &crate::palette::UI_THEME)
             .into_iter()
             .flat_map(|line| line.spans.into_iter().map(|span| span.content.into_owned()))
             .collect();

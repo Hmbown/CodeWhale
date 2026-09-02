@@ -11,30 +11,30 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use serde_json::Value;
 
-use codewhale_config::{route::RouteLimits, ProviderChain};
+use codewhale_config::{ProviderChain, route::RouteLimits};
 
 use crate::artifacts::ArtifactRecord;
 use crate::client::{CacheWarmupKey, PromptInspection};
 use crate::compaction::CompactionConfig;
 use crate::config::{
-    has_api_key, has_api_key_for, ApiProvider, ApprovalPolicyControl, Config, DEFAULT_TEXT_MODEL,
+    ApiProvider, ApprovalPolicyControl, Config, DEFAULT_TEXT_MODEL, has_api_key, has_api_key_for,
 };
 use crate::config_ui::ConfigUiMode;
-use crate::core::authority::{base_policy_for_mode, ModeSessionPrefs};
+use crate::core::authority::{ModeSessionPrefs, base_policy_for_mode};
 use crate::core::events::TurnRoute;
 use crate::hooks::{HookContext, HookEvent, HookExecutor, HookResult};
-use crate::localization::{resolve_locale, tr, Locale, MessageId};
+use crate::localization::{Locale, MessageId, resolve_locale, tr};
 use crate::models::{Message, SystemPrompt, Tool, Usage};
 use crate::palette::{self, UiTheme};
 use crate::pricing::{CostCurrency, CostEstimate};
 use crate::resource_telemetry::TokenThroughput;
 use crate::session_manager::{SessionContextReference, SessionMetadata, SessionWorkState};
 use crate::settings::{InlineDiffMode, Settings};
-use crate::tools::plan::{new_shared_plan_state, PlanState, SharedPlanState};
+use crate::tools::plan::{PlanState, SharedPlanState, new_shared_plan_state};
 use crate::tools::shell::new_shared_shell_manager;
 use crate::tools::spec::RuntimeToolServices;
 use crate::tools::subagent::{AgentWorkerStatus, SubAgentResult};
-use crate::tools::todo::{new_shared_todo_list, SharedTodoList, TodoList};
+use crate::tools::todo::{SharedTodoList, TodoList, new_shared_todo_list};
 use crate::tui::active_cell::ActiveCell;
 use crate::tui::approval::ApprovalMode;
 use crate::tui::clipboard::{ClipboardContent, ClipboardHandler};
@@ -57,10 +57,10 @@ mod status;
 mod types;
 
 pub use composer::ComposerHistorySearch;
-pub(crate) use composer::{char_count, InputHistoryDraft};
+pub(crate) use composer::{InputHistoryDraft, char_count};
 #[cfg(test)]
 pub(crate) use composer::{
-    next_grapheme_boundary, prev_grapheme_boundary, MAX_SUBMITTED_INPUT_CHARS,
+    MAX_SUBMITTED_INPUT_CHARS, next_grapheme_boundary, prev_grapheme_boundary,
 };
 pub(crate) use status::StatusToastKind;
 pub use status::{StatusToast, StatusToastLevel};
@@ -2363,7 +2363,7 @@ impl App {
         &mut self,
         choice: crate::tui::views::route_save_prompt::RouteSaveChoice,
     ) -> String {
-        use crate::fleet::store::{save_fleet, set_selected, FleetFile, FleetOperator};
+        use crate::fleet::store::{FleetFile, FleetOperator, save_fleet, set_selected};
         use crate::tui::views::route_save_prompt::RouteSaveChoice;
         let Some(pending) = self.pending_route_save.take() else {
             return "No pending route change to save.".to_string();

@@ -49,6 +49,7 @@ use crate::fleet::profile::AgentProfile;
 use crate::fleet::roster::{FleetRoster, ProfileOrigin};
 use crate::llm_client::LlmClient;
 use crate::models::Role;
+use crate::tools::subagent::public_role_label;
 use crate::tui::app::ReasoningEffort;
 
 /// Where exact Pod definitions and Reasoning Router profiles are looked up,
@@ -580,14 +581,14 @@ pub(crate) fn posture_role_for(ceiling: PermissionCeiling) -> &'static str {
     if !ceiling.tools {
         // No tools at all; the narrowest posture, and the allowlist is empty
         // anyway.
-        return "scout";
+        return "explore";
     }
     if ceiling.write {
-        return "builder";
+        return "implement";
     }
     match ceiling.shell {
-        ShellCeiling::None | ShellCeiling::ReadOnly => "scout",
-        ShellCeiling::Full => "verifier",
+        ShellCeiling::None | ShellCeiling::ReadOnly => "explore",
+        ShellCeiling::Full => "test",
     }
 }
 
@@ -1362,7 +1363,7 @@ impl ExactFleetWorkflow {
 
         Ok(ExactMemberBinding {
             member_id: member.id.clone(),
-            member_role: member.role.clone(),
+            member_role: public_role_label(&member.role),
             route: route.clone(),
             requires_router: member.requested_reasoning.is_auto(),
             authority: ChildAuthority::from_runtime_role(&member.role, session),

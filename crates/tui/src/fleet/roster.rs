@@ -837,7 +837,7 @@ mod tests {
         assert_eq!(members[0].profile.slot, FleetSlot::Manager);
         assert_eq!(members[1].profile.slot, FleetSlot::Operator);
         assert_eq!(members[2].profile.loadout, FleetLoadout::Inherit);
-        assert_eq!(members[6].profile.slot.as_str(), "advisor");
+        assert_eq!(members[6].profile.slot.as_str(), "consultant");
         assert_eq!(members[7].profile.slot, FleetSlot::Summarizer);
         assert_eq!(members[7].profile.loadout, FleetLoadout::Inherit);
     }

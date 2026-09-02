@@ -31,16 +31,16 @@ use ratatui::{
 
 use crate::config::Config;
 use crate::fleet::profile::AgentProfile;
-use crate::fleet::roster::{layers_from_parts, FleetRoster, ProfileLayer, ProfileOrigin};
+use crate::fleet::roster::{FleetRoster, ProfileLayer, ProfileOrigin, layers_from_parts};
 use crate::fleet::worker_runtime::roster_member_agent_type;
-use crate::localization::{tr, Locale, MessageId};
+use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
 use crate::tools::subagent::public_role_label;
 use crate::tui::app::App;
 use crate::tui::menu_style;
 use crate::tui::views::{
-    render_modal_footer, truncate_view_text, ActionHint, ModalKind, ModalView, ViewAction,
-    ViewEvent,
+    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_footer,
+    truncate_view_text,
 };
 use crate::tui::whales;
 use crate::worker_profile::{ShellPolicy, WorkerRuntimeProfile};

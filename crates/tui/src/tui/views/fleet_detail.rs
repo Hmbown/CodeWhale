@@ -19,14 +19,14 @@ use ratatui::{
 
 use crate::config::{ApiProvider, Config};
 use crate::fleet::store::{
-    load_fleet_in_scope, save_fleet, set_selected, FleetFile, FleetMember, FleetOperator,
-    FleetScope, MemberCapability,
+    FleetFile, FleetMember, FleetOperator, FleetScope, MemberCapability, load_fleet_in_scope,
+    save_fleet, set_selected,
 };
 use crate::palette;
 use crate::tools::subagent::public_role_label;
 use crate::tui::app::App;
 use crate::tui::views::{
-    render_modal_footer, ActionHint, ModalKind, ModalView, ViewAction, ViewEvent,
+    ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_footer,
 };
 
 /// The built-in role vocabulary offered when adding a member, in a useful
@@ -1060,12 +1060,13 @@ mod tests {
 
         // Vision requirement toggles on and off.
         view.handle_key(key(KeyCode::Char('v')));
-        assert!(view
-            .fleet
-            .member("scout")
-            .unwrap()
-            .requires
-            .contains(&"vision".to_string()));
+        assert!(
+            view.fleet
+                .member("scout")
+                .unwrap()
+                .requires
+                .contains(&"vision".to_string())
+        );
         view.handle_key(key(KeyCode::Char('v')));
         assert!(view.fleet.member("scout").unwrap().requires.is_empty());
     }
@@ -1129,7 +1130,7 @@ mod tests {
 
         view.handle_key(key(KeyCode::Char('a')));
         let ids: Vec<&str> = view.fleet.members.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(ids, vec!["scout", "builder"]);
+        assert_eq!(ids, vec!["scout", "explore"]);
 
         // Remove the new member with the confirmed delete flow.
         view.selected = 2;

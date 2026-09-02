@@ -571,14 +571,18 @@ mod tests {
 
         assert!(result.is_error);
         assert!(result.action.is_none());
-        assert!(result
-            .message
-            .as_deref()
-            .is_some_and(|message| message.contains("Unknown /pod target 'bogus'")));
-        assert!(result
-            .message
-            .as_deref()
-            .is_some_and(|message| message.contains("Use members, setup, pods")));
+        assert!(
+            result
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("Unknown /pod target 'bogus'"))
+        );
+        assert!(
+            result
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("Use members, setup, pods"))
+        );
     }
 
     #[test]

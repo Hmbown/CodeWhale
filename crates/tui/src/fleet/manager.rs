@@ -4786,9 +4786,9 @@ esac
         assert_eq!(
             roles,
             BTreeSet::from([
-                "builder".to_string(),
-                "scout".to_string(),
-                "verifier".to_string()
+                "implement".to_string(),
+                "explore".to_string(),
+                "test".to_string()
             ])
         );
         assert_eq!(state.receipts.len(), 10);

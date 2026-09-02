@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 
 use crate::tui::app::ReasoningEffort;
@@ -1130,7 +1130,7 @@ concurrency = 2
         .expect("explicit fleet profile parses");
 
         assert_eq!(profile.slot, FleetSlot::Reviewer);
-        assert_eq!(profile.role.name, "test");
+        assert_eq!(profile.role.name, "verifier");
         assert_eq!(
             profile.role.instructions.as_deref(),
             Some("Review the patch and produce verification evidence.")
@@ -1157,7 +1157,7 @@ model = "deepseek-v4-flash"
         )
         .expect("compact fleet profile parses");
 
-        assert_eq!(profile.role.name, "explore");
+        assert_eq!(profile.role.name, "scout");
         assert_eq!(profile.loadout, FleetLoadout::Fast);
         assert_eq!(profile.model.as_deref(), Some("deepseek-v4-flash"));
         assert_eq!(profile.permissions, FleetProfilePermissions::default());
