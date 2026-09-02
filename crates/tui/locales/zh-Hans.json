@@ -1395,7 +1395,7 @@
   "PickerActionApply": "应用",
   "PickerActionSetStartupDefault": "设为启动默认值",
   "PickerActionPin": "固定",
-  "PickerActionFleet": "船队",
+  "PickerActionFleet": "Pod",
   "PickerActionCancel": "取消",
   "PickerActionClear": "清除",
   "PickerActionClearSearch": "清除搜索",
