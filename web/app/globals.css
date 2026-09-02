@@ -32,7 +32,7 @@
   --paper-deep: var(--whale-panel);
   --paper-edge: var(--whale-border);
   /* Cards are the TUI's panel plate resting on the deep field. */
-  --paper-card: #101d33;
+  --paper-card: var(--whale-panel);
   --paper-line: var(--whale-border);
   --paper-line-soft: var(--whale-border);
   --ink: var(--whale-text-body);
@@ -110,7 +110,7 @@ body {
      authored panel → chrome → deep descent. Fixed so the page scrolls over
      the water instead of dragging a second gradient with it. */
   background:
-    radial-gradient(1100px 460px at 68% -6%, rgba(33, 149, 214, 0.13), transparent 67%),
+    radial-gradient(1100px 460px at 68% -6%, rgb(var(--whale-action-rgb) / 0.13), transparent 67%),
     linear-gradient(174deg, var(--stage-field-top) 0%, var(--stage-field-mid) 42%, var(--stage-field-deep) 82%);
   background-attachment: fixed;
   background-color: var(--paper);
@@ -419,7 +419,7 @@ mark.search-highlight {
   z-index: 30;
   top: 0;
   border-bottom: 1px solid var(--hairline);
-  background: rgba(8, 17, 28, 0.88);
+  background: rgb(var(--whale-bg-rgb) / 0.88);
   backdrop-filter: blur(10px);
 }
 
@@ -1028,7 +1028,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
     ellipse 82% 44% at 24% -22%,
     transparent 0,
     transparent 2.7rem,
-    rgba(104, 143, 157, 0.18) 2.76rem,
+    rgb(var(--whale-text-dim-rgb) / 0.18) 2.76rem,
     transparent 2.83rem
   );
   mask-image: linear-gradient(to bottom, transparent, black 24%, black 72%, transparent);
@@ -1123,7 +1123,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 .portal-quickstart {
   padding: clamp(1.35rem, 3vw, 2rem);
-  border: 1px solid rgba(209, 235, 244, 0.22);
+  border: 1px solid rgb(var(--whale-ice-rgb) / 0.22);
   border-radius: 8px;
   background: var(--ocean-deep);
   box-shadow: 0 1.25rem 3rem rgba(0, 0, 0, 0.45);
@@ -1154,8 +1154,8 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 .portal-quickstart pre.code-block {
   margin-top: 1.15rem;
-  border-color: rgba(209, 235, 244, 0.2);
-  background: rgba(2, 8, 18, 0.6);
+  border-color: rgb(var(--whale-ice-rgb) / 0.2);
+  background: rgb(var(--whale-bg-rgb) / 0.6);
 }
 
 .portal-quickstart > a {
@@ -1686,7 +1686,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .portal-community {
   padding-block: clamp(3.25rem, 6vw, 4.75rem);
   background:
-    radial-gradient(circle at 84% -30%, rgba(111, 183, 204, 0.14), transparent 30rem),
+    radial-gradient(circle at 84% -30%, rgb(var(--whale-cyan-rgb) / 0.14), transparent 30rem),
     var(--ocean-deep);
   color: var(--stage-soft);
 }
@@ -1717,7 +1717,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   gap: 0.8rem 1.5rem;
   margin-top: 1.5rem;
   padding-top: 1.25rem;
-  border-top: 1px solid rgba(209, 235, 244, 0.18);
+  border-top: 1px solid rgb(var(--whale-ice-rgb) / 0.18);
 }
 
 .portal-community-links a {
@@ -1835,8 +1835,8 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 }
 
 .contribute-dev-loop pre.code-block {
-  border-color: rgba(209, 235, 244, 0.2);
-  background: rgba(2, 8, 18, 0.62);
+  border-color: rgb(var(--whale-ice-rgb) / 0.2);
+  background: rgb(var(--whale-bg-rgb) / 0.62);
 }
 
 @media (max-width: 900px) {
@@ -2114,7 +2114,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   position: relative;
   margin: 0;
   overflow: hidden;
-  border: 1px solid rgba(15, 22, 38, 0.88);
+  border: 1px solid rgb(var(--whale-chrome-rgb) / 0.88);
   border-radius: 6px;
   background: var(--ocean-deep);
 }
@@ -2127,8 +2127,8 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   justify-content: space-between;
   gap: 1rem;
   padding: 0.5rem 0.8rem;
-  border-bottom: 1px solid rgba(79, 209, 197, 0.16);
-  background: linear-gradient(180deg, #131d31 0%, #0a1220 100%);
+  border-bottom: 1px solid rgb(var(--whale-accent-secondary-rgb) / 0.16);
+  background: linear-gradient(180deg, var(--whale-chrome) 0%, var(--whale-bg) 100%);
   color: var(--stage-muted);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
   font-size: 0.7rem;
@@ -2152,8 +2152,8 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 .product-shot figcaption {
   padding: 0.6rem 0.8rem;
-  border-top: 1px solid rgba(79, 209, 197, 0.12);
-  background: #060b16;
+  border-top: 1px solid rgb(var(--whale-accent-secondary-rgb) / 0.12);
+  background: var(--whale-bg);
   color: var(--stage-muted);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
   font-size: 0.75rem;
@@ -3336,8 +3336,8 @@ html[data-theme="light"] .docs-theme {
   /* 5.3:1 on --paper and 4.9:1 on --paper-deep, so the 0.62rem release-truth
      label clears body-text contrast on the light sheet too. */
   --cyan: #0b6f8c;
-  /* The whale silhouette re-inks to the light sheet's body navy. */
-  --mark-ink: #14213a;
+  /* The whale silhouette re-inks to the brand navy (#142352). */
+  --mark-ink: var(--whale-composer);
   --hairline: rgba(20, 35, 70, 0.14);
   --code-bg: var(--whale-bg);
   --code-fg: var(--whale-text-body);
