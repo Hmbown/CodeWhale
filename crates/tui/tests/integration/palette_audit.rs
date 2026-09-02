@@ -135,27 +135,27 @@ fn verify_status_success_uses_success_token() {
     );
     assert_ne!(
         crate::palette::STATUS_SUCCESS,
-        crate::palette::WHALE_ACCENT_PRIMARY,
+        crate::palette::WHALE_ACTION,
         "STATUS_SUCCESS should not regress to the primary accent"
     );
 }
 
 #[test]
 fn whale_roles_are_pinned_and_non_colliding() {
-    assert_eq!(crate::palette::WHALE_BG_RGB, (3, 7, 13));
-    assert_eq!(crate::palette::WHALE_PANEL_RGB, (14, 23, 41));
-    assert_eq!(crate::palette::WHALE_ELEVATED_RGB, (24, 39, 66));
-    assert_eq!(crate::palette::WHALE_ACTION_RGB, (106, 174, 242));
+    assert_eq!(crate::palette::WHALE_BG_RGB, (7, 12, 29));
+    assert_eq!(crate::palette::WHALE_PANEL_RGB, (16, 28, 64));
+    assert_eq!(crate::palette::WHALE_ELEVATED_RGB, (26, 44, 99));
+    assert_eq!(crate::palette::WHALE_ACTION_RGB, (106, 166, 220));
     assert_eq!(crate::palette::WHALE_ACCENT_SECONDARY_RGB, (79, 209, 197));
     assert_eq!(crate::palette::WHALE_HUMAN_RGB, (246, 196, 83));
     assert_eq!(crate::palette::WHALE_WARNING_RGB, (255, 122, 89));
     assert_eq!(crate::palette::WHALE_ERROR_RGB, (255, 134, 178));
-    assert_eq!(crate::palette::WHALE_MODE_AGENT_RGB, (118, 181, 245));
+    assert_eq!(crate::palette::WHALE_MODE_AGENT_RGB, (126, 180, 232));
     assert_eq!(crate::palette::WHALE_MODE_YOLO_RGB, (255, 112, 160));
     assert_eq!(crate::palette::WHALE_MODE_PLAN_RGB, (185, 220, 236));
     assert_eq!(crate::palette::WHALE_MODE_OPERATE_RGB, (173, 136, 255));
     assert_eq!(crate::palette::LIGHT_SUCCESS_FG_RGB, (20, 118, 61));
-    assert_eq!(crate::palette::LIGHT_MODE_AGENT_RGB, (50, 95, 216));
+    assert_eq!(crate::palette::LIGHT_MODE_AGENT_RGB, (22, 54, 178));
     assert_eq!(crate::palette::LIGHT_MODE_PLAN_RGB, (52, 92, 128));
     assert_eq!(crate::palette::LIGHT_OPERATE_RGB, (112, 71, 184));
     assert_eq!(crate::palette::LIGHT_MODE_YOLO_RGB, (181, 35, 90));

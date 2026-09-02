@@ -179,7 +179,7 @@ impl ModalView for StatusPickerView {
             .title(Line::from(Span::styled(
                 tr(self.locale, MessageId::StatusPickerTitle),
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)

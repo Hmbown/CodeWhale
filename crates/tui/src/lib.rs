@@ -3763,8 +3763,8 @@ fn run_setup(
     use crate::palette;
     use colored::Colorize;
 
-    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_INFO_RGB;
-    let (sky_r, sky_g, sky_b) = palette::WHALE_INFO_RGB;
+    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_ACTION_RGB;
+    let (sky_r, sky_g, sky_b) = palette::WHALE_ACTION_RGB;
 
     let any_explicit = args.mcp || args.skills || args.tools || args.plugins;
     let run_mcp = args.mcp || args.all || !any_explicit;
@@ -4110,8 +4110,8 @@ fn run_setup_status(
     use crate::palette;
     use colored::Colorize;
 
-    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_INFO_RGB;
-    let (sky_r, sky_g, sky_b) = palette::WHALE_INFO_RGB;
+    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_ACTION_RGB;
+    let (sky_r, sky_g, sky_b) = palette::WHALE_ACTION_RGB;
 
     println!(
         "{}",
@@ -4380,8 +4380,8 @@ async fn run_doctor(
     use colored::Colorize;
 
     let (accent_r, accent_g, accent_b) = palette::WHALE_HUMAN_RGB;
-    let (sky_r, sky_g, sky_b) = palette::WHALE_INFO_RGB;
-    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_INFO_RGB;
+    let (sky_r, sky_g, sky_b) = palette::WHALE_ACTION_RGB;
+    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_ACTION_RGB;
     let (red_r, red_g, red_b) = palette::WHALE_ERROR_RGB;
 
     println!(
@@ -7829,8 +7829,8 @@ fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
 
     let (action_r, action_g, action_b) = palette::WHALE_ACTION_RGB;
     let (human_r, human_g, human_b) = palette::WHALE_HUMAN_RGB;
-    let (sky_r, sky_g, sky_b) = palette::WHALE_INFO_RGB;
-    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_INFO_RGB;
+    let (sky_r, sky_g, sky_b) = palette::WHALE_ACTION_RGB;
+    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_ACTION_RGB;
 
     let manager = SessionManager::default_location()?;
 
@@ -7896,8 +7896,8 @@ fn init_project() -> Result<()> {
     use colored::Colorize;
     use project_context::create_default_agents_md;
 
-    let (sky_r, sky_g, sky_b) = palette::WHALE_INFO_RGB;
-    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_INFO_RGB;
+    let (sky_r, sky_g, sky_b) = palette::WHALE_ACTION_RGB;
+    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_ACTION_RGB;
     let (red_r, red_g, red_b) = palette::WHALE_ERROR_RGB;
 
     let workspace = std::env::current_dir()?;

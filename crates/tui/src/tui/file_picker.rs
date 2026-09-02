@@ -653,13 +653,13 @@ impl ModalView for FilePickerView {
         let mut lines: Vec<Line<'static>> = Vec::new();
         // Query line.
         lines.push(Line::from(vec![
-            Span::styled("> ", Style::default().fg(palette::WHALE_INFO).bold()),
+            Span::styled("> ", Style::default().fg(palette::WHALE_ACTION).bold()),
             Span::raw(self.query.clone()),
             Span::styled(
                 " ",
                 Style::default()
                     .fg(palette::WHALE_BG)
-                    .bg(palette::WHALE_INFO),
+                    .bg(palette::WHALE_ACTION),
             ),
         ]));
         lines.push(Line::from(""));

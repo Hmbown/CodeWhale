@@ -223,6 +223,7 @@ fn treatment_parses_saved_values_and_migrates_legacy_ombre_values() {
     assert_eq!(OceanTreatment::parse(" FLAT "), OceanTreatment::Flat);
     assert_eq!(OceanTreatment::parse("deepsea"), OceanTreatment::Deepsea);
     assert_eq!(OceanTreatment::parse("ombre"), OceanTreatment::Deepsea);
+    assert_eq!(OceanTreatment::parse("underwater"), OceanTreatment::Deepsea);
     assert_eq!(OceanTreatment::parse("kelp"), OceanTreatment::Flat);
     assert_eq!(OceanTreatment::parse(""), OceanTreatment::Flat);
     // Migration aliases remain deterministic for older persisted settings.

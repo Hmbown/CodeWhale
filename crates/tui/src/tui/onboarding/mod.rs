@@ -184,7 +184,7 @@ fn heading(out: &mut Vec<Line<'static>>, app: &App, id: MessageId, width: usize)
         out.push(Line::from(Span::styled(
             segment,
             Style::default()
-                .fg(palette::WHALE_INFO)
+                .fg(palette::WHALE_ACTION)
                 .add_modifier(Modifier::BOLD),
         )));
     }

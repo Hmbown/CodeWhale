@@ -391,7 +391,7 @@ impl ModalView for FleetRosterView {
                 ),
                 Span::styled(
                     tr(self.locale, MessageId::FleetRosterTabRoster),
-                    Style::default().fg(palette::WHALE_INFO).bold(),
+                    Style::default().fg(palette::WHALE_ACTION).bold(),
                 ),
                 Span::styled(
                     format!(
@@ -684,7 +684,7 @@ fn member_role_mark(member: &AgentProfile) -> &'static str {
 fn detail_field(lines: &mut Vec<Line<'static>>, label: &str, body: String) {
     lines.push(Line::from(Span::styled(
         label.to_string(),
-        Style::default().fg(palette::WHALE_INFO).bold(),
+        Style::default().fg(palette::WHALE_ACTION).bold(),
     )));
     lines.push(Line::from(Span::styled(
         body,

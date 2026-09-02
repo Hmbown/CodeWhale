@@ -59,7 +59,7 @@ pub fn lines(app: &App, width: usize, height: usize) -> Vec<Line<'static>> {
     let title = Line::from(Span::styled(
         app.tr(MessageId::OnboardLanguageTitle).to_string(),
         Style::default()
-            .fg(palette::WHALE_INFO)
+            .fg(palette::WHALE_ACTION)
             .add_modifier(Modifier::BOLD),
     ));
 

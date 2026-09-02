@@ -925,7 +925,7 @@ impl ModalView for ContextInspectorView {
                         .replace("{used}", &self.used.to_string())
                         .replace("{max}", &self.max.to_string()),
                     Style::default()
-                        .fg(palette::WHALE_INFO)
+                        .fg(palette::WHALE_ACTION)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
@@ -950,7 +950,7 @@ impl ModalView for ContextInspectorView {
             lines.push(Line::from(vec![
                 Span::styled(
                     "#".repeat(system_cells),
-                    Style::default().fg(palette::WHALE_INFO),
+                    Style::default().fg(palette::WHALE_ACTION),
                 ),
                 Span::styled(
                     "=".repeat(message_cells),
