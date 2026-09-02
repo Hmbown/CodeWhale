@@ -459,7 +459,7 @@ pub async fn run_tui(
             None,
         ) {
             let resolved_model = resolution.candidate.wire_model_id().as_str().to_string();
-            crate::fleet::members::auto_enroll_fleet_model(
+            app.fleet_roster_stale |= crate::fleet::members::auto_enroll_fleet_model(
                 &app.workspace,
                 app.provider_identity_for_persistence(),
                 &resolved_model,
@@ -1236,6 +1236,10 @@ pub(crate) async fn run_event_loop(
         // A manual compaction deferred by a full engine mailbox retries here
         // each iteration until a slot frees or a live pass supersedes it.
         flush_deferred_manual_compaction(app, config, &engine_handle);
+        // Any fleet mutation since the last iteration (`/fleet add|remove`,
+        // ⇧F, auto-enroll) reaches the engine here, through the one roster
+        // path the saved-fleet views already use.
+        flush_stale_fleet_roster(app, config, &engine_handle);
         // Goal controls are accepted only after their bounded sidecar is
         // durable. Mailbox backpressure must therefore defer delivery, never
         // block keyboard input or silently drop the accepted control.
@@ -6603,7 +6607,7 @@ mod pod_workers_status_tests {
     fn current_session_pod_worker_status_keeps_the_english_session_boundary() {
         assert_eq!(
             current_session_pod_workers_status(Locale::En, 3),
-            "Current-session Pod workers: 3 total"
+            "Current-session fleet workers: 3 total"
         );
     }
 }

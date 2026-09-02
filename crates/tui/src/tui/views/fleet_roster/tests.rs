@@ -575,9 +575,9 @@ fn fleet_roster_is_usable_and_opaque_at_blocker_sizes() {
             );
             // Some action label is always visible.
             assert!(text.contains("close"), "{label} {w}x{h}: missing footer");
-            // The first impression names Pod as the worker/orchestration surface.
+            // The first impression names the fleet as the worker/orchestration surface.
             assert!(
-                text.contains("pod") && text.contains("workers"),
+                text.contains("fleet") && text.contains("workers"),
                 "{label} {w}x{h}: missing framing"
             );
             // The selected row's detail is on screen.

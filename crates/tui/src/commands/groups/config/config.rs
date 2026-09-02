@@ -2101,7 +2101,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
                 model
             };
             app.set_model_selection(model.clone());
-            crate::fleet::members::auto_enroll_fleet_model(
+            app.fleet_roster_stale |= crate::fleet::members::auto_enroll_fleet_model(
                 &app.workspace,
                 app.provider_identity_for_persistence(),
                 &model,
@@ -2791,7 +2791,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             ) && let Some(ref model) = settings.default_model
             {
                 app.set_model_selection(model.clone());
-                crate::fleet::members::auto_enroll_fleet_model(
+                app.fleet_roster_stale |= crate::fleet::members::auto_enroll_fleet_model(
                     &app.workspace,
                     app.provider_identity_for_persistence(),
                     model,

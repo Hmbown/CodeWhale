@@ -1270,7 +1270,10 @@ pub(crate) fn provider_scoped_model_completion_ids(app: &App) -> Vec<String> {
 /// selected Pod's operator and every pinned member, labelled with the roles
 /// each fills — design §10 F1), then the person's own pins.
 fn picker_pins_for_app(app: &App) -> Vec<PinnedModel> {
+    // A selected fleet that cannot be read contributes no pins; ⇧F on any
+    // row then surfaces that store error instead of writing past it.
     crate::fleet::members::fleet_models(&app.workspace)
+        .unwrap_or_default()
         .into_iter()
         .map(|member| PinnedModel {
             provider: member.provider.clone(),

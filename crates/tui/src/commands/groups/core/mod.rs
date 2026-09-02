@@ -17,7 +17,7 @@ mod core;
 mod effort;
 mod exit;
 mod feedback;
-mod fleet;
+pub(in crate::commands) mod fleet;
 mod help;
 mod hf;
 mod home;

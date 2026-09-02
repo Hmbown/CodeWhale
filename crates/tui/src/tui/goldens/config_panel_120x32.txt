@@ -1,7 +1,7 @@
                                                                                                                         
    Config  ──────────────────────────────────────────────────────────────────────────────────────────────────────────── 
                                                                                                                         
-   Appearance   Models & providers   Pod   Work   Tools & MCP   Trust   Motion   Advanced                               
+   Appearance   Models & providers   Fleet   Work   Tools & MCP   Trust   Motion   Advanced                             
    Search: type to filter  (17/55)                                                                                      
   ❯ Display         │  Display                                                │Theme                                    
                     │❯Theme                                 terminal    ‹ ›   │theme                                    

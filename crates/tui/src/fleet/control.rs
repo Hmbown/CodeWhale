@@ -859,8 +859,8 @@ mod tests {
         FleetManager::open(dir.path()).unwrap();
         assert_eq!(
             ControlOperation::FleetStatus.descriptor().cli_invocation,
-            "codewhale pod status",
-            "Pod remains the canonical public command"
+            "codewhale fleet status",
+            "fleet remains the canonical public command"
         );
         let mut rendered = std::collections::BTreeSet::new();
         for surface in ControlSurface::ALL {

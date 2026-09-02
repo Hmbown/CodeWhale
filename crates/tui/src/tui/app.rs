@@ -1474,10 +1474,6 @@ pub struct App {
     pub plugin_registry: std::sync::Arc<crate::plugins::PluginRegistry>,
     pub config_path: Option<PathBuf>,
     pub config_profile: Option<String>,
-    /// The configuration used to construct the app. Commands that need to
-    /// consult configured providers (for example `/pod add`) read from this
-    /// snapshot rather than re-loading credentials-bearing config from disk.
-    pub config: Config,
     /// Legacy executable plugin-tool directory resolved from the already
     /// loaded configuration. Slash-command inventory must not reload the full
     /// config (and thereby re-read credential-bearing fields) merely to find
@@ -2135,6 +2131,10 @@ pub struct App {
     pub session_started_at: chrono::DateTime<chrono::Utc>,
     /// Whether the UI needs to be redrawn.
     pub needs_redraw: bool,
+    /// A fleet mutation (`/fleet add|remove`, ⇧F, auto-enroll) landed on
+    /// disk since the engine last received its roster. The event loop
+    /// flushes it through `Op::SetFleetRoster` (`sync_fleet_roster`).
+    pub fleet_roster_stale: bool,
     /// When true, the next draw will be a full repaint (terminal clear +
     /// all cells redrawn) instead of a ratatui incremental diff. Used by
     /// theme switches where the diff engine may miss color-only changes

@@ -21,13 +21,12 @@ if grep -En '": "[^"]*(YOLO|Multitask|Bypass)' crates/tui/locales/*.json; then
   exit 1
 fi
 
-# `Fleet` survives in compatibility identifiers, parser aliases, config keys,
-# and durable serialization. Localized values are the customer surface and
-# must consistently call the assembled model team a Pod.
-if grep -En \
-  '": "[^"]*(Fleet|fleet|艦隊|("|[[:space:]/])플릿([[:space:]/:]|$))' \
-  crates/tui/locales/*.json; then
-  printf '%s\n' 'internal Fleet vocabulary remains in localized product copy' >&2
+# Founder decision 2026-09-01: `fleet` is the public product term for the
+# assembled model team; `Pod` is retired from customer-facing copy. The
+# English source locale is the gate; other locale packs migrate with their
+# translation sweep. `/pod` and `codewhale pod` remain parser aliases.
+if grep -En '": "[^"]*[Pp]od' crates/tui/locales/en.json; then
+  printf '%s\n' 'retired Pod vocabulary remains in English product copy' >&2
   exit 1
 fi
 

@@ -62,9 +62,10 @@ no hosted runtime to sell.
   site must not ship mockups as screenshots. The one real screenshot on hand is
   `web/public/codewhale-tui.webp` (0.9.11).
 - `/context-window` does not exist on the current base; do not document it.
-- Subagent role identifiers are those the code accepts (`worker`, `scout`,
-  `planner`, `reviewer`, `builder`, `verifier`, `consultant`, `custom`);
-  do not invent public role names.
+- Subagent role identifiers are those the code accepts (`general`, `explore`,
+  `planner`, `reviewer`, `implement`, `test`, `advisor`, `custom`); the older
+  spellings `worker`, `scout`, `builder`, `verifier`, `consultant`, and `oracle`
+  are accepted as compatibility aliases only. Do not invent public role names.
 
 ## Brand Commitments
 

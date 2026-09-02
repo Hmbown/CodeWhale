@@ -369,7 +369,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
         app.provider_models
             .insert(provider_identity.clone(), model_id.clone());
         app.enable_provider_model(&provider_identity, &model_id);
-        crate::fleet::members::auto_enroll_fleet_model(
+        app.fleet_roster_stale |= crate::fleet::members::auto_enroll_fleet_model(
             &app.workspace,
             &provider_identity,
             &model_id,

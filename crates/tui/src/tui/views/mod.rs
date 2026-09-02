@@ -5466,7 +5466,7 @@ impl ModalView for SubAgentsView {
             KeyCode::Char('f') | KeyCode::Char('F') => {
                 ViewAction::Emit(ViewEvent::CommandPaletteSelected {
                     action: CommandPaletteAction::ExecuteCommand {
-                        command: "/pod".to_string(),
+                        command: "/fleet".to_string(),
                     },
                 })
             }
@@ -6189,11 +6189,11 @@ mod tests {
         empty.render(area, &mut empty_buf);
         let empty_text = buffer_text(&empty_buf, area);
         assert!(
-            empty_text.contains("No current-session Pod workers."),
+            empty_text.contains("No current-session fleet workers."),
             "{empty_text}"
         );
         assert!(
-            empty_text.contains("Configure roles and launch posture with /pod."),
+            empty_text.contains("Configure roles and launch posture with /fleet."),
             "{empty_text}"
         );
 
@@ -6205,11 +6205,11 @@ mod tests {
         english.render(area, &mut english_buf);
         let english_text = buffer_text(&english_buf, area);
         assert!(
-            english_text.contains("Current-session Pod workers"),
+            english_text.contains("Current-session fleet workers"),
             "{english_text}"
         );
         assert!(
-            english_text.contains("Sub-agent roles are current-session Pod worker roles."),
+            english_text.contains("Sub-agent roles are current-session fleet worker roles."),
             "{english_text}"
         );
 
@@ -6233,18 +6233,18 @@ mod tests {
                 Locale::ZhHans,
                 MessageId::SubagentsCurrentSessionPodWorkersTitle
             ),
-            "当前会话的 Pod 工作器"
+            "当前会话的舰队工作器"
         );
         assert!(
-            zh_hans_compact.contains("当前会话的Pod工作器"),
+            zh_hans_compact.contains("当前会话的舰队工作器"),
             "{zh_hans_text}"
         );
         assert!(
-            zh_hans_compact.contains("子代理角色是当前会话的Pod工作器角色。"),
+            zh_hans_compact.contains("子代理角色是当前会话的舰队工作器角色。"),
             "{zh_hans_text}"
         );
         assert!(
-            !zh_hans_text.contains("Current-session Pod workers"),
+            !zh_hans_text.contains("Current-session fleet workers"),
             "{zh_hans_text}"
         );
     }
@@ -6283,7 +6283,7 @@ mod tests {
         english.render(area, &mut english_buf);
         let english_text = buffer_text(&english_buf, area);
         for expected in [
-            "Current-session Pod workers",
+            "Current-session fleet workers",
             "Running: 1",
             "Completed: 0",
             "Interrupted: 1",
@@ -6323,7 +6323,7 @@ mod tests {
             .filter(|ch| !ch.is_whitespace())
             .collect::<String>();
         for expected in [
-            "当前会话的Pod工作器",
+            "当前会话的舰队工作器",
             "运行中：1",
             "已中断：1",
             "名册设置工作器",
@@ -6813,8 +6813,8 @@ mod tests {
         match action {
             ViewAction::Emit(ViewEvent::CommandPaletteSelected {
                 action: CommandPaletteAction::ExecuteCommand { command },
-            }) => assert_eq!(command, "/pod"),
-            other => panic!("expected /pod jump action, got {other:?}"),
+            }) => assert_eq!(command, "/fleet"),
+            other => panic!("expected /fleet jump action, got {other:?}"),
         }
     }
 
@@ -8871,7 +8871,7 @@ context_window = 262144
             [
                 "Appearance",
                 "Models & providers",
-                "Pod",
+                "Fleet",
                 "Work",
                 "Tools & MCP",
                 "Trust",
@@ -9327,7 +9327,7 @@ context_window = 262144
     fn config_search_indexes_categories_and_category_click_clears_filter() {
         let app = create_test_app();
         let mut view = ConfigView::new_for_app(&app);
-        type_filter(&mut view, "pod");
+        type_filter(&mut view, "fleet");
         assert!(
             visible_row_keys(&view).contains(&"fleet.exec.max_spawn_depth"),
             "{:?}",
@@ -9418,7 +9418,7 @@ context_window = 262144
             assert_eq!(view.category, ConfigCategory::Pod);
             assert_eq!(view.rows[view.selected].key, "fleet.exec.max_spawn_depth");
             let dump = snapshot(&view, "after → → (Pod)");
-            assert!(dump.contains("Pod"), "{w}x{h}:\n{dump}");
+            assert!(dump.contains("Fleet"), "{w}x{h}:\n{dump}");
             assert!(
                 dump.contains(super::setting_affordance(SettingKind::ReadOnly, None)),
                 "{w}x{h} read-only affordance:\n{dump}"
