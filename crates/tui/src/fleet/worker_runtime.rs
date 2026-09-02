@@ -1,14 +1,14 @@
-//! Fleet worker runtime — bridges fleet task specs to headless sub-agent execution.
+//! Pod worker runtime — bridges Fleet task specs to headless sub-agent execution.
 //!
-//! This module makes fleet workers real: instead of simulating task completion,
-//! each fleet worker spawns a headless sub-agent that runs the task instructions
-//! and streams progress back into the fleet ledger.
+//! This module makes Pod workers real: instead of simulating task completion,
+//! each Pod worker spawns a headless sub-agent that runs the task instructions
+//! and streams progress back into the Pod ledger.
 //!
 //! Architecture:
 //! - `FleetTaskSpec` + `FleetWorkerSpec` → `AgentWorkerSpec`
 //! - `SubAgentManager::register_worker()` tracks the worker
 //! - Sub-agent spawn happens through the existing `agent` machinery
-//! - Mailbox events stream into fleet ledger as `FleetWorkerEventPayload`
+//! - Mailbox events stream into the Pod ledger as `FleetWorkerEventPayload`
 //! - `FleetWorkerInspection` reads both ledger state and sub-agent worker records
 
 #![allow(dead_code)]
@@ -82,7 +82,7 @@ impl FrozenFleetMember {
 
     fn into_profile(self) -> Result<AgentProfile> {
         if self.schema_version != 1 || self.id.trim().is_empty() || self.role.trim().is_empty() {
-            bail!("invalid frozen Fleet member snapshot");
+            bail!("invalid frozen Pod member snapshot");
         }
         Ok(AgentProfile {
             id: self.id,
@@ -145,7 +145,7 @@ pub(crate) fn freeze_fleet_task_members(
         let Some(worker) = task.worker.as_ref() else {
             if require_exact_member {
                 bail!(
-                    "fleet task {} must name one member from the explicitly selected Fleet",
+                    "Pod task {} must name one member from the explicitly selected Pod",
                     task.id
                 );
             }
@@ -167,13 +167,13 @@ pub(crate) fn freeze_fleet_task_members(
         let selected = if let Some(selector) = explicit_selector.as_deref() {
             let selected = resolve_member_in_profiles(agent_profiles, selector).map_err(|error| {
                 anyhow::anyhow!(
-                    "fleet task {} has invalid worker.agent_profile selector {selector:?}: {error}",
+                    "Pod task {} has invalid worker.agent_profile selector {selector:?}: {error}",
                     task.id
                 )
             })?;
             Some(selected.ok_or_else(|| {
                 anyhow::anyhow!(
-                    "fleet task {} references unknown agent profile selector {selector:?}",
+                    "Pod task {} references unknown agent profile selector {selector:?}",
                     task.id
                 )
             })?)
@@ -184,14 +184,14 @@ pub(crate) fn freeze_fleet_task_members(
             // selected team launch an anonymous session-route worker.
             match resolve_member_in_profiles(agent_profiles, selector).map_err(|error| {
                 anyhow::anyhow!(
-                    "fleet task {} has invalid worker.role member selector {selector:?}: {error}",
+                    "Pod task {} has invalid worker.role member selector {selector:?}: {error}",
                     task.id
                 )
             })? {
                 Some(profile) => Some(profile),
                 None if require_exact_member => {
                     bail!(
-                        "fleet task {} worker.role selector {selector:?} does not name a member in the explicitly selected Fleet",
+                        "Pod task {} worker.role selector {selector:?} does not name a member in the explicitly selected Pod",
                         task.id
                     )
                 }
@@ -199,7 +199,7 @@ pub(crate) fn freeze_fleet_task_members(
             }
         } else if require_exact_member {
             bail!(
-                "fleet task {} must name one member from the explicitly selected Fleet",
+                "Pod task {} must name one member from the explicitly selected Pod",
                 task.id
             );
         } else {
@@ -256,7 +256,7 @@ pub fn validate_fleet_task_routes(
         let explicit_provider = explicit_fleet_provider_id(agent_profile);
         if config.is_none() && explicit_provider.is_none() {
             bail!(
-                "Fleet task `{}` has no provider authority for model `{model}` (source={source}); attach the resolved route config or set the agent profile provider explicitly",
+                "Pod task `{}` has no provider authority for model `{model}` (source={source}); attach the resolved route config or set the agent profile provider explicitly",
                 task.id,
             );
         }
@@ -266,7 +266,7 @@ pub fn validate_fleet_task_routes(
                 .is_none_or(|provider| provider == ApiProvider::Custom)
         {
             bail!(
-                "Fleet task `{}` names custom provider=`{provider_id}`, but a provider name alone does not prove its endpoint or model; attach the live route config before creating the run",
+                "Pod task `{}` names custom provider=`{provider_id}`, but a provider name alone does not prove its endpoint or model; attach the live route config before creating the run",
                 task.id,
             );
         }
@@ -276,7 +276,7 @@ pub fn validate_fleet_task_routes(
             if let Err(reason) =
                 crate::route_runtime::validate_unpinned_model_provider(provider, &model, &base_url)
             {
-                bail!("Fleet task `{}`: {reason} (source={source})", task.id);
+                bail!("Pod task `{}`: {reason} (source={source})", task.id);
             }
         }
 
@@ -289,7 +289,7 @@ pub fn validate_fleet_task_routes(
         if route.is_none() {
             if pinned_model {
                 bail!(
-                    "Fleet task `{}` pins model `{}` with {} (source={source}), but that route does not \
+                    "Pod task `{}` pins model `{}` with {} (source={source}), but that route does not \
                      resolve to a real model on any configured provider, so the worker cannot launch. \
                      The runtime never infers a provider from a model's spelling — set an explicit \
                      provider for this model in the profile, or switch the role to `inherit`.",
@@ -299,7 +299,7 @@ pub fn validate_fleet_task_routes(
                 );
             }
             bail!(
-                "Fleet task `{}` cannot resolve its inherited model `{model}` with {provider} \
+                "Pod task `{}` cannot resolve its inherited model `{model}` with {provider} \
                  (source={source}); attach the live route config for custom providers before \
                  creating the run",
                 task.id,
@@ -344,7 +344,7 @@ fn validate_fleet_reasoning_effort(
         return Ok(());
     }
     bail!(
-        "Fleet task `{}` requests thinking tier `{effort}` for `{}` / `{}`, but that exact model route does not support thinking; choose inherit, auto, or off, or select a reasoning-capable model",
+        "Pod task `{}` requests thinking tier `{effort}` for `{}` / `{}`, but that exact model route does not support thinking; choose inherit, auto, or off, or select a reasoning-capable model",
         task.id,
         route.provider_id,
         route.wire_model_id,
@@ -426,7 +426,7 @@ pub fn fleet_task_to_worker_spec_with_profiles(
         && coordination_contracts.is_empty()
     {
         bail!(
-            "fleet task '{}' is write-capable but declares no workspace.writable_paths or metadata.coordination_contracts",
+            "Pod task '{}' is write-capable but declares no workspace.writable_paths or metadata.coordination_contracts",
             task_spec.id
         );
     }
@@ -538,7 +538,7 @@ fn normalize_fleet_relative_path(
         })
     {
         bail!(
-            "fleet task '{task_id}' {field} path '{}' must be one repo-relative line and cannot escape the workspace",
+            "Pod task '{task_id}' {field} path '{}' must be one repo-relative line and cannot escape the workspace",
             path.display()
         );
     }
@@ -548,7 +548,7 @@ fn normalize_fleet_relative_path(
             "" | "." => {}
             ".." => {
                 bail!(
-                    "fleet task '{task_id}' {field} path '{}' cannot contain parent traversal",
+                    "Pod task '{task_id}' {field} path '{}' cannot contain parent traversal",
                     path.display()
                 );
             }
@@ -568,13 +568,13 @@ fn fleet_coordination_contracts(task_spec: &FleetTaskSpec) -> Result<Vec<String>
     };
     let Some(values) = value.as_array() else {
         bail!(
-            "fleet task '{}' metadata.coordination_contracts must be an array of strings",
+            "Pod task '{}' metadata.coordination_contracts must be an array of strings",
             task_spec.id
         );
     };
     if values.len() > 16 {
         bail!(
-            "fleet task '{}' metadata.coordination_contracts accepts at most 16 entries",
+            "Pod task '{}' metadata.coordination_contracts accepts at most 16 entries",
             task_spec.id
         );
     }
@@ -582,7 +582,7 @@ fn fleet_coordination_contracts(task_spec: &FleetTaskSpec) -> Result<Vec<String>
     for value in values {
         let Some(value) = value.as_str() else {
             bail!(
-                "fleet task '{}' metadata.coordination_contracts must contain only strings",
+                "Pod task '{}' metadata.coordination_contracts must contain only strings",
                 task_spec.id
             );
         };
@@ -592,7 +592,7 @@ fn fleet_coordination_contracts(task_spec: &FleetTaskSpec) -> Result<Vec<String>
             || value.chars().any(|ch| matches!(ch, '\0' | '\r' | '\n'))
         {
             bail!(
-                "fleet task '{}' coordination contracts must be one non-empty line of at most 128 characters",
+                "Pod task '{}' coordination contracts must be one non-empty line of at most 128 characters",
                 task_spec.id
             );
         }
@@ -835,17 +835,17 @@ fn fleet_task_prompt_with_profile(
     let role = effective_fleet_role(task_spec.worker.as_ref(), agent_profile)
         .unwrap_or_else(|| "general".to_string());
     let mut prompt = String::new();
-    prompt.push_str("You have been summoned as a Codewhale Fleet member (");
+    prompt.push_str("You have been summoned as a Codewhale Pod member (");
     prompt.push_str(&role);
-    prompt.push_str(") by the Fleet orchestrator.\n\n");
-    prompt.push_str("Fleet operating contract:\n");
+    prompt.push_str(") by the Pod orchestrator.\n\n");
+    prompt.push_str("Pod operating contract:\n");
     prompt.push_str("- Work only the assigned slice; keep sibling or topology assumptions out of your answer.\n");
     prompt.push_str("- Use the policy-gated tools available in this headless worker run.\n");
     prompt.push_str("- Treat the active provider/model route as inherited unless this task or profile pins a model.\n");
     prompt.push_str(
         "- Return concise evidence, gaps, and next actions; the orchestrator will integrate and verify.\n\n",
     );
-    prompt.push_str("Fleet task: ");
+    prompt.push_str("Pod task: ");
     prompt.push_str(&task_spec.name);
 
     if let Some(objective) = task_spec.objective.as_deref() {
@@ -878,7 +878,7 @@ fn fleet_task_prompt_with_profile(
     }
 
     if let Some(agent_profile) = agent_profile {
-        prompt.push_str("\nFleet profile: ");
+        prompt.push_str("\nPod profile: ");
         prompt.push_str(&agent_profile.id);
         if let Some(display_name) = agent_profile.display_name.as_deref() {
             prompt.push_str(" (");
@@ -906,7 +906,7 @@ fn resolve_task_agent_profile<'a>(
         let snapshot: FrozenFleetMember =
             serde_json::from_value(snapshot.clone()).map_err(|error| {
                 anyhow::anyhow!(
-                    "fleet task {} has an invalid durable member snapshot: {error}",
+                    "Pod task {} has an invalid durable member snapshot: {error}",
                     task_spec.id
                 )
             })?;
@@ -923,13 +923,13 @@ fn resolve_task_agent_profile<'a>(
     {
         let profile = resolve_member_in_profiles(agent_profiles, selector).map_err(|error| {
             anyhow::anyhow!(
-                "fleet task {} has invalid worker.agent_profile selector {selector:?}: {error}",
+                "Pod task {} has invalid worker.agent_profile selector {selector:?}: {error}",
                 task_spec.id
             )
         })?;
         let Some(profile) = profile else {
             bail!(
-                "fleet task {} references unknown agent profile selector {selector:?}",
+                "Pod task {} references unknown agent profile selector {selector:?}",
                 task_spec.id
             );
         };
@@ -950,7 +950,7 @@ fn resolve_task_agent_profile<'a>(
     // historical Runtime posture instead of breaking an existing task.
     let profile = resolve_member_in_profiles(agent_profiles, selector).map_err(|error| {
         anyhow::anyhow!(
-            "fleet task {} has invalid worker.role member selector {selector:?}: {error}",
+            "Pod task {} has invalid worker.role member selector {selector:?}: {error}",
             task_spec.id
         )
     })?;
@@ -982,7 +982,7 @@ fn validate_selected_member_model(task_spec: &FleetTaskSpec, profile: &AgentProf
     };
     if !task_model.eq_ignore_ascii_case(profile_model) {
         bail!(
-            "fleet task {} selects member {:?} with frozen route {}/{}; worker.model {:?} conflicts with that member route",
+            "Pod task {} selects member {:?} with frozen route {}/{}; worker.model {:?} conflicts with that member route",
             task_spec.id,
             profile.id,
             profile_provider,
@@ -1568,7 +1568,7 @@ pub(crate) fn network_posture_warning_for_task(
     }
 
     Some(format!(
-        "Fleet task `{}` mentions network-backed verification, but role `{}` has network=off and shell={}. Dispatch a `worker` role with shell `read_only` for gh/curl evidence, or revise the brief.",
+        "Pod task `{}` mentions network-backed verification, but role `{}` has network=off and shell={}. Dispatch a `worker` role with shell `read_only` for gh/curl evidence, or revise the brief.",
         task.id,
         role.as_deref().unwrap_or("worker"),
         shell_policy_label(runtime.shell),
@@ -1747,7 +1747,7 @@ mod tests {
             &[],
             None,
         )
-        .expect_err("unscoped Fleet writer must fail before registration");
+        .expect_err("unscoped Pod writer must fail before registration");
         assert!(error.to_string().contains("declares no"), "{error:#}");
 
         let scoped = fleet_task_to_worker_spec_with_profiles(
@@ -1761,7 +1761,7 @@ mod tests {
             &[],
             None,
         )
-        .expect("bounded Fleet writer");
+        .expect("bounded Pod writer");
         let manifest = scoped.launch_manifest.expect("launch manifest");
         assert_eq!(manifest.child_id, "worker-1");
         assert_eq!(manifest.writable_roots, ["."]);
@@ -2171,11 +2171,11 @@ mod tests {
 
             let prompt = fleet_task_prompt(&task);
             assert!(
-                prompt.contains("Fleet member (consultant)"),
+                prompt.contains("Pod member (consultant)"),
                 "prompt must canonicalize {alias}: {prompt}"
             );
             assert!(
-                !prompt.contains(&format!("Fleet member ({alias})")),
+                !prompt.contains(&format!("Pod member ({alias})")),
                 "prompt must not emit compatibility alias {alias}: {prompt}"
             );
 
@@ -2352,8 +2352,8 @@ mod tests {
 
         let prompt = fleet_task_prompt(&task);
 
-        assert!(prompt.contains("summoned as a Codewhale Fleet member (general)"));
-        assert!(prompt.contains("Fleet operating contract:"));
+        assert!(prompt.contains("summoned as a Codewhale Pod member (general)"));
+        assert!(prompt.contains("Pod operating contract:"));
         assert!(prompt.contains("keep sibling or topology assumptions out of your answer"));
         assert!(prompt.contains("Review protocol"));
         assert!(prompt.contains("Find protocol regressions"));
@@ -2409,9 +2409,9 @@ mod tests {
         assert_eq!(spec.agent_type, FleetRole::Reviewer);
         assert!(
             spec.objective
-                .contains("summoned as a Codewhale Fleet member (reviewer)")
+                .contains("summoned as a Codewhale Pod member (reviewer)")
         );
-        assert!(spec.objective.contains("Fleet profile: reviewer"));
+        assert!(spec.objective.contains("Pod profile: reviewer"));
         assert!(
             spec.objective
                 .contains("Focus on regressions and missing tests.")
@@ -2774,7 +2774,7 @@ mod tests {
             None,
             Some(&config),
         )
-        .expect_err("known foreign model must fail before Fleet dispatch");
+        .expect_err("known foreign model must fail before Pod dispatch");
         let msg = err.to_string();
         assert!(msg.contains("deepseek-v4-pro"), "names model: {msg}");
         assert!(msg.contains("moonshot"), "names resolved route: {msg}");
@@ -3467,7 +3467,7 @@ mod tests {
             assert_eq!(spec.model, "deepseek-v4-flash");
             assert_eq!(spec.role.as_deref(), Some("scout"));
             assert_eq!(spec.agent_type, FleetRole::Scout);
-            assert!(spec.objective.contains("Fleet profile: flash-scout"));
+            assert!(spec.objective.contains("Pod profile: flash-scout"));
         }
     }
 
@@ -3590,7 +3590,7 @@ mod tests {
             std::slice::from_ref(&profile),
             true,
         )
-        .expect_err("an exact Fleet cannot silently fall back to a posture");
+        .expect_err("an exact Pod cannot silently fall back to a posture");
         assert!(
             error.to_string().contains("does not name a member"),
             "{error:#}"
@@ -3599,7 +3599,7 @@ mod tests {
         let mut unspecified = fleet_task("unspecified-member", None);
         let error =
             freeze_fleet_task_members(std::slice::from_mut(&mut unspecified), &[profile], true)
-                .expect_err("an exact Fleet task must name a member");
+                .expect_err("an exact Pod task must name a member");
         assert!(
             error.to_string().contains("must name one member"),
             "{error:#}"
@@ -4257,7 +4257,7 @@ mod tests {
             assert_eq!(spec.model, model, "role {role}");
             assert_ne!(
                 spec.model, parent_model,
-                "Fleet fanout child {role} must use its resolved loadout, not blindly inherit"
+                "Pod fanout child {role} must use its resolved loadout, not blindly inherit"
             );
             assert_eq!(
                 spec.runtime_profile.model,
@@ -4273,7 +4273,7 @@ mod tests {
                 "deepseek-v4-flash".to_string(),
                 "deepseek-v4-pro".to_string(),
             ]),
-            "Fleet fanout should preserve a mixed scout/builder/verifier loadout"
+            "Pod fanout should preserve a mixed scout/builder/verifier loadout"
         );
     }
 

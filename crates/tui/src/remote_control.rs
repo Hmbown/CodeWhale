@@ -1778,6 +1778,15 @@ impl RemoteControlController {
     }
 
     pub fn activate_prompt(&mut self, run_id: &str, turn_id: &str) -> Result<(), String> {
+        self.activate_prompt_with_lease_id(run_id, turn_id, String::new())
+    }
+
+    fn activate_prompt_with_lease_id(
+        &mut self,
+        run_id: &str,
+        turn_id: &str,
+        lease_id: String,
+    ) -> Result<(), String> {
         let active = ActiveRelayRun {
             run_id: run_id.to_string(),
             turn_id: turn_id.to_string(),
@@ -1785,11 +1794,24 @@ impl RemoteControlController {
         self.begin_classic_lease(ClassicRunLease {
             run_id: active.run_id.clone(),
             turn_id: Some(active.turn_id.clone()),
-            lease_id: String::new(),
+            lease_id,
             seq_floor: self.runtime_seq_floor(&active.run_id),
         })?;
         self.active_run = Some(active);
         Ok(())
+    }
+
+    fn promote_pending_local_turn(&mut self, run_id: &str, turn_id: &str) -> Result<(), String> {
+        let lease_id = self
+            .journal
+            .as_ref()
+            .and_then(RuntimeEventJournal::classic_lease)
+            .filter(|lease| lease.run_id == run_id && lease.turn_id.is_none())
+            .map(|lease| lease.lease_id)
+            .ok_or_else(|| {
+                "Remote control lost its durable pre-dispatch lease generation.".to_string()
+            })?;
+        self.activate_prompt_with_lease_id(run_id, turn_id, lease_id)
     }
 
     #[cfg(test)]
@@ -1897,12 +1919,10 @@ impl RemoteControlController {
             .filter(|previous| previous.run_id == lease.run_id)
         {
             lease.seq_floor = lease.seq_floor.max(previous.seq_floor);
-            if lease.lease_id.is_empty()
-                && (previous.turn_id.is_none() || previous.turn_id == lease.turn_id)
-            {
-                lease.lease_id = previous.lease_id;
-            }
         }
+        // A blank id always starts a fresh generation. The dispatch-window
+        // promotion above is the only valid reuse and supplies its durable id
+        // explicitly so a stale pre-dispatch lease cannot be inherited here.
         if lease.lease_id.is_empty() {
             lease.lease_id = format!("classic_lease_{}", uuid::Uuid::new_v4().simple());
         }
@@ -2198,7 +2218,7 @@ impl RemoteControlController {
         if let EngineEvent::TurnStarted { turn_id, .. } = event
             && self.active_run.is_none()
             && let Some(run_id) = self.pending_local_turn_run.take()
-            && self.activate_prompt(&run_id, turn_id).is_err()
+            && self.promote_pending_local_turn(&run_id, turn_id).is_err()
         {
             self.pending_local_turn_run = Some(run_id);
             return;
@@ -6259,6 +6279,12 @@ mod tests {
         controller.try_next_event().unwrap();
 
         assert!(controller.attach_current_local_turn(None));
+        let pending_lease = controller
+            .journal
+            .as_ref()
+            .and_then(RuntimeEventJournal::classic_lease)
+            .expect("dispatch-window lease is durable");
+        assert!(pending_lease.turn_id.is_none());
         assert!(
             controller.has_active_run(),
             "the dispatch window gates stop"
@@ -6284,6 +6310,19 @@ mod tests {
         assert_eq!(envelopes[0]["seq"], 4);
         assert_eq!(envelopes[0]["event"], "turn.started");
         assert_eq!(envelopes[0]["turn_id"], "turn_started_later");
+        let promoted_lease = controller
+            .journal
+            .as_ref()
+            .and_then(RuntimeEventJournal::classic_lease)
+            .expect("typed start keeps the durable lease");
+        assert_eq!(
+            promoted_lease.turn_id.as_deref(),
+            Some("turn_started_later")
+        );
+        assert_eq!(
+            promoted_lease.lease_id, pending_lease.lease_id,
+            "typed start promotes the same dispatch generation"
+        );
         let started_envelope = envelopes[0].clone();
         assert!(
             controller.can_share_approval_with_web(),
@@ -8048,6 +8087,48 @@ mod tests {
         assert_eq!(recovered.envelope["turn_id"], "turn_floor_fixture");
         assert_eq!(recovered.envelope["payload"]["turn"]["status"], "failed");
         assert!(!reopened.has_durable_classic_lease());
+    }
+
+    #[test]
+    fn blank_predispatch_lease_id_always_starts_a_fresh_generation() {
+        let root = tempfile::tempdir().unwrap();
+        let mut controller = RemoteControlController::default();
+        controller.journal = Some(
+            RuntimeEventJournal::open(root.path(), "target_generation", "session_generation")
+                .unwrap(),
+        );
+        controller
+            .begin_classic_lease(ClassicRunLease {
+                run_id: "run_generation".to_string(),
+                turn_id: None,
+                lease_id: String::new(),
+                seq_floor: 0,
+            })
+            .unwrap();
+        let stale_lease = controller
+            .journal
+            .as_ref()
+            .and_then(RuntimeEventJournal::classic_lease)
+            .unwrap();
+
+        controller
+            .begin_classic_lease(ClassicRunLease {
+                run_id: "run_generation".to_string(),
+                turn_id: None,
+                lease_id: String::new(),
+                seq_floor: 0,
+            })
+            .unwrap();
+        let fresh_lease = controller
+            .journal
+            .as_ref()
+            .and_then(RuntimeEventJournal::classic_lease)
+            .unwrap();
+
+        assert_ne!(
+            fresh_lease.lease_id, stale_lease.lease_id,
+            "a stale empty-turn lease cannot define the next recovery identity"
+        );
     }
 
     #[test]

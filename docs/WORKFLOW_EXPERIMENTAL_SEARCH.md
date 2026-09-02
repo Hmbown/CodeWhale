@@ -1,12 +1,12 @@
 # Workflow Experimental Search
 
 Experimental search is an option for **Workflow**, not a fourth mode and not a
-second scheduler. Fleet owns the roster and deterministic member selection.
+second scheduler. Pod owns the roster and deterministic member selection.
 Runtime owns execution routes, concurrency, leases, and receipts. Workflow owns
 the frozen order: independent generation, evaluation, selection, repair, and
 verification.
 
-The product vocabulary is Fleet (roster and selected member), Workflow (what
+The product vocabulary is Pod (roster and selected member), Workflow (what
 order), Lane (one running Workflow), Runtime (where/how/authority), and Operate
 (the mode). Do not introduce
 "WhaleFlow" as a current synonym.
@@ -17,8 +17,8 @@ order), Lane (one running Workflow), Runtime (where/how/authority), and Operate
   tasks at once. The host's per-run concurrency gate is a semaphore sized
   `WORKFLOW_MAX_CONCURRENT = 16` (`codewhale-workflow-js`); additional
   `task()` spawns block on that gate until a live slot frees, then route
-  through Fleet. A larger declared population therefore queues at the gate,
-  not through Fleet itself.
+  through Pod. A larger declared population therefore queues at the gate,
+  not through Pod itself.
 - `WorkflowSearchSpec` is a provider-neutral TOML/Rust authoring boundary. It
   validates bounded worktree writes, rounds, budgets, mandatory anti-test-
   weakening posture, hard-gate commands, deterministic scoring, selection, and
@@ -52,7 +52,7 @@ The evaluator host must:
 4. apply each patch to a clean baseline, reject forbidden/test changes, then
    run hard gates before performance scoring;
 5. record commands, exit codes, environment, token/cache/cost usage, artifacts,
-   promotion reasons, and failures on top of Fleet receipts;
+   promotion reasons, and failures on top of Pod receipts;
 6. replay the provisional winner cleanly and run an independent read-only
    adversarial review; and
 7. return `NONE` when all candidates fail and never apply or merge a winner

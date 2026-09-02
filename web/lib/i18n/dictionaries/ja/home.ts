@@ -9,7 +9,7 @@ import type { HomeDict } from "../types";
  *
  * Product vocabulary stays literal and matches the TUI locale pack:
  * Plan / Work / Operate, Ask / Auto-Review / Full Access, Codewhale, TUI,
- * `codewhale exec`, Runtime API + MCP, Fleet, Node 18+, Rust, MIT.
+ * `codewhale exec`, Runtime API + MCP, Pod, Node 18+, Rust, MIT.
  * "Permission posture" renders as 権限 (the TUI's own wording), not ポスチャ.
  *
  * `sealCommunity` uses the Japanese form 衆 rather than the English
@@ -73,7 +73,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "Codewhale は初めてですか？ 4 ステップで最後まで。",
   startLede:
-    "インストール → キー不要の最初のセッション → プロバイダー接続 → 最初の Fleet ワークフロー。用語は用語集ページに。",
+    "インストール → キー不要の最初のセッション → プロバイダー接続 → 最初の Pod ワークフロー。用語は用語集ページに。",
   startGuideLink: "はじめかたガイドを読む →",
   startVocabularyLink: "製品用語を見る →",
 
@@ -94,7 +94,7 @@ export const home: HomeDict = {
     ["codewhale exec", "スクリプトと CI"],
     ["Web クライアント", "ループバック限定のブラウザクライアント"],
     ["Runtime API + MCP", "ローカル連携"],
-    ["Fleet", "永続的なマルチエージェント作業"],
+    ["Pod", "永続的なマルチエージェント作業"],
   ],
   runtimeLink: "ランタイムの各画面と安定性の注記を見る →",
 

@@ -113,8 +113,12 @@ impl App {
             false
         };
         settings.apply_env_overrides();
-        let launch_visible =
-            settings.launch_screen && resume_session_id.is_none() && initial_input.is_none();
+        // Tideline Startup is the fresh interactive landing surface. It must
+        // not be bypassed by a stale historical `launch_screen = false`, a
+        // provider/config notice, or a previous session record: only an
+        // intentional resume or explicit initial input enters the live session
+        // path directly.
+        let launch_visible = resume_session_id.is_none() && initial_input.is_none();
         let launch = LaunchState::new(launch_visible, &workspace);
 
         // If settings.toml exists on disk but couldn't be parsed (we fell back
@@ -297,7 +301,13 @@ impl App {
             .eq_ignore_ascii_case("vim");
         let transcript_spacing = TranscriptSpacing::from_setting(&settings.transcript_spacing);
         let max_input_history = settings.max_input_history;
-        let use_paste_burst_detection = settings.paste_burst_detection;
+        // The rapid-keystroke heuristic is the fallback for terminals
+        // without bracketed paste, not a second guess layered on top of a
+        // working one: when bracketed paste is enabled it must stay off, or
+        // every fast-typed command goes through hold/buffer windows that
+        // scramble the composer (Y-7, 2026-08-31 QA). The setting remains
+        // the fallback's switch, honored only when bracketed paste is off.
+        let use_paste_burst_detection = settings.paste_burst_detection && !use_bracketed_paste;
         // Resolve the named theme from settings; unknown values were already
         // normalised to "system" in Settings::load. The background_color
         // setting still overlays on top.
@@ -729,6 +739,7 @@ impl App {
             goal: HostGoalState::default(),
             session: SessionState::default(),
             last_billed_input_tokens: None,
+            last_compaction: None,
             active_allowed_tools: None,
             pausable: false,
             pending_route_save: None,
@@ -848,6 +859,7 @@ impl App {
             focus_texture,
             launch,
             pending_launch_action: None,
+            pending_composer_submit: None,
             pending_hotbar_slot: None,
             synchronized_output_enabled,
             status_indicator,
@@ -969,6 +981,7 @@ impl App {
             runtime_services: RuntimeToolServices {
                 shell_manager: Some(shell_manager),
                 work: Some(work_runtime),
+                media_originals_dir: crate::media_originals::default_store_dir(),
                 ..RuntimeToolServices::default()
             },
             coordination_detail: None,
@@ -1041,6 +1054,8 @@ impl App {
             workspace_context_refreshed_at: None,
             memory_size_hint: None,
             task_panel: Vec::new(),
+            automation_panel: crate::tui::automation_panel::AutomationPanelState::default(),
+            automation_scan: None,
             behavioral_tips: crate::tui::behavioral_tips::BehavioralTipState::default(),
             workflow_panel: None,
             session_started_at: chrono::Utc::now(),

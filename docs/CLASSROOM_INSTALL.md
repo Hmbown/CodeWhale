@@ -90,7 +90,7 @@ previous Codewhale install:
 
 | # | Scenario | Expected result | Done? |
 |---|----------|-----------------|-------|
-| 1 | Install with no existing CodeWhale PATH entry | Adds exactly `%LOCALAPPDATA%\Programs\CodeWhale\bin` | ☐ |
+| 1 | Install with no existing Codewhale PATH entry | Adds exactly `%LOCALAPPDATA%\Programs\CodeWhale\bin` | ☐ |
 | 2 | Install twice | PATH is not duplicated | ☐ |
 | 3 | Install with a neighboring PATH entry such as `C:\Tools\CodeWhale\bin-extra` | Neighboring entry is preserved | ☐ |
 | 4 | Upgrade by installing a newer `CodeWhaleSetup.exe` over an older one | Apps & Features version and both `--version` outputs match the new build | ☐ |

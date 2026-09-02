@@ -303,7 +303,7 @@ ordinary durable tasks.
 
 1. Create skill directory with `SKILL.md`
 2. Define skill prompt and optional scripts
-3. Place in a CodeWhale-owned root (`~/.codewhale/skills/` or
+3. Place in a Codewhale-owned root (`~/.codewhale/skills/` or
    `<workspace>/.codewhale/skills/`), or import from a compatible harness root
    through `/skills`
 

@@ -8,7 +8,7 @@ import type { ChromeDict } from "../types";
  * (ty), standard polskich narzędzi deweloperskich.
  *
  * Tryby i postawy uprawnień zostają dosłowne (Plan / Work / Operate, Ask /
- * Auto-Review / Full Access); `Runtime`, `Fleet` i `TUI` to nazwy produktu;
+ * Auto-Review / Full Access); `Runtime`, `Pod` i `TUI` to nazwy produktu;
  * „receipt" to potwierdzenie.
  *
  * Drugie etykiety nawigacji parują polską etykietę z krótkim angielskim

@@ -11,6 +11,7 @@ use std::{
     fs::{self, File},
     path::{Path, PathBuf},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
@@ -1556,16 +1557,42 @@ impl RelayScopeLock {
         }
         #[cfg(unix)]
         {
-            use std::os::fd::AsRawFd as _;
             use std::os::unix::fs::PermissionsExt as _;
             file.set_permissions(fs::Permissions::from_mode(0o600))
                 .context("protect Runtime Chat owner lock")?;
+        }
+        // Same-process drop-then-reopen can observe WouldBlock for a brief
+        // window while the previous fd is still closing (#5735). Retry only
+        // that contention; a lock that stays held is still ownership.
+        let deadline = Instant::now() + Duration::from_millis(25);
+        loop {
+            match Self::try_lock_exclusive(&file) {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Err(error).context("acquire Runtime Chat owner lock");
+                    }
+                    std::thread::yield_now();
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => {
+                    return Err(error).context("acquire Runtime Chat owner lock");
+                }
+            }
+        }
+        Ok(Self { _file: file })
+    }
+
+    fn try_lock_exclusive(file: &File) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd as _;
             // SAFETY: `file` owns a valid descriptor for the duration of the
             // call and remains alive in `Self` for the full lock lifetime.
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-                return Err(std::io::Error::last_os_error())
-                    .context("acquire Runtime Chat owner lock");
+                return Err(std::io::Error::last_os_error());
             }
+            Ok(())
         }
         #[cfg(windows)]
         {
@@ -1573,11 +1600,39 @@ impl RelayScopeLock {
             use windows_sys::Win32::Storage::FileSystem::LockFile;
             // SAFETY: `file` owns a valid handle that remains alive in `Self`.
             if unsafe { LockFile(file.as_raw_handle() as _, 0, 0, u32::MAX, u32::MAX) } == 0 {
-                return Err(std::io::Error::last_os_error())
-                    .context("acquire Runtime Chat owner lock");
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = file;
+            Ok(())
+        }
+    }
+}
+
+impl Drop for RelayScopeLock {
+    fn drop(&mut self) {
+        // close() also releases, but unlocking first lets a same-process
+        // reopen proceed without racing the previous fd's teardown (#5735).
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd as _;
+            // SAFETY: Drop runs only while `_file` still owns this descriptor.
+            unsafe {
+                libc::flock(self._file.as_raw_fd(), libc::LOCK_UN);
             }
         }
-        Ok(Self { _file: file })
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle as _;
+            use windows_sys::Win32::Storage::FileSystem::UnlockFile;
+            // SAFETY: Drop runs only while `_file` still owns this handle.
+            unsafe {
+                UnlockFile(self._file.as_raw_handle() as _, 0, 0, u32::MAX, u32::MAX);
+            }
+        }
     }
 }
 

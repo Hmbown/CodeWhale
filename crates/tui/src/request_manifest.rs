@@ -732,7 +732,7 @@ impl RequestManifest {
         out.push_str("Session\n");
         push_row(out, "agent role", &self.session.agent_role);
         push_row(out, "lane", &self.session.lane_kind);
-        push_row(out, "Fleet assignment", &self.session.fleet_assignment);
+        push_row(out, "Pod assignment", &self.session.fleet_assignment);
         push_row(
             out,
             "model (requested)",

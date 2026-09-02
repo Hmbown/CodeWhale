@@ -1,4 +1,8 @@
-Codewhale empty-state whale mark — CURRENT (main) vs NEW (Signal Cut)
+ARCHIVED REFERENCE — removed portrait artwork, not the current Codewhale mark.
+The canonical mark is a raster asset with no approved ASCII or block-glyph
+substitute; the terminal startup intentionally uses direct copy instead.
+
+Former Codewhale empty-state whale portrait — CURRENT (main) vs NEW (Signal Cut)
 
 == classic ==
 
@@ -43,4 +47,3 @@ Codewhale empty-state whale mark — CURRENT (main) vs NEW (Signal Cut)
       .#######.
 
   block width: 21 -> 16 columns
-

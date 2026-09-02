@@ -1309,6 +1309,18 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   max-width: 42rem;
 }
 
+.public-account-entry {
+  max-width: 32rem;
+}
+
+.public-account-mark {
+  display: block;
+  width: 64px;
+  height: 64px;
+  margin: 0 0 1.15rem;
+  border-radius: 14px;
+}
+
 .pricing-list {
   list-style: none;
   padding: 0;
