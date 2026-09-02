@@ -495,6 +495,11 @@ fn wait_for_callback(listeners: &[TcpListener], expected_state: &str) -> Result<
 }
 
 fn handle_callback_stream(mut stream: TcpStream, expected_state: &str) -> Result<String> {
+    // BSD sockets (macOS) hand the accepted stream the listener's O_NONBLOCK;
+    // the bounded read below needs a blocking socket with a timeout.
+    stream
+        .set_nonblocking(false)
+        .context("ChatGPT OAuth callback stream could not be set blocking")?;
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
     // One read is not one request: TCP may deliver the callback in
     // fragments, and a truncated query parses as a missing parameter.
