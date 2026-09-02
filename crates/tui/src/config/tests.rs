@@ -805,7 +805,6 @@ enabled = true
         "empty table must leave the socket off"
     );
 }
-}
 
 #[test]
 fn tui_config_parses_hotbar_bindings() {

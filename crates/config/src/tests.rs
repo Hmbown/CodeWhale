@@ -172,7 +172,6 @@ fn control_socket_toml_is_off_by_default_and_parses_when_enabled() {
         "enabled = false must keep the socket off"
     );
 }
-}
 
 #[test]
 fn permissions_toml_deserializes_typed_ask_rules() {
