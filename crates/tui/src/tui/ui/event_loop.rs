@@ -410,12 +410,16 @@ pub async fn run_tui(
     // `palette::probe_terminal_background`. The result is cached process-wide,
     // so every later `PaletteMode::detect()` sees the same answer.
     let background = palette::probe_terminal_background();
+    // Same window, same reason: the kitty graphics capability query answers
+    // on stdin, so it is asked before the input pump exists.
+    let kitty_graphics = crate::tui::mark::probe_kitty_graphics();
     let palette_mode = background.mode();
     tracing::debug!(
         ?color_depth,
         ?palette_mode,
         background_source = ?background.source(),
         background_color = ?background.color(),
+        kitty_graphics,
         "terminal color profile detected"
     );
     let mut backend = ColorCompatBackend::new(stdout, color_depth, palette_mode);
@@ -433,6 +437,13 @@ pub async fn run_tui(
     let sync_output_at_init = !crate::settings::detected_ptyxis_terminal()
         && !crate::settings::detected_legacy_windows_console_host();
     reset_terminal_viewport(&mut terminal, sync_output_at_init)?;
+    // The launch mark's image tier: transmit the PNG once; the launch header
+    // then places it through ordinary placeholder cells (`tui::mark`).
+    let cell_height_px = ratatui::backend::Backend::window_size(terminal.backend_mut())
+        .ok()
+        .filter(|size| size.columns_rows.height > 0 && size.pixels.height > 0)
+        .map(|size| size.pixels.height / size.columns_rows.height);
+    crate::tui::mark::transmit_kitty_mark(terminal.backend_mut(), cell_height_px);
     let event_broker = EventBroker::new();
 
     // Local mutable copy so runtime config flips (e.g. `/provider` switch)
@@ -833,6 +844,7 @@ pub async fn run_tui(
 
     cleanup_guard.defused = true;
     crate::tui::cursor_accent::restore_cursor_accent();
+    crate::tui::mark::delete_kitty_mark(terminal.backend_mut());
     pop_keyboard_enhancement_flags(terminal.backend_mut());
     disable_alternate_scroll_mode(terminal.backend_mut());
     execute!(terminal.backend_mut(), DisableFocusChange)?;
@@ -4254,48 +4266,8 @@ pub(crate) async fn run_event_loop(
                     return Ok(());
                 }
                 if let Some(action) = app.pending_launch_action.take() {
-                    // Work and Chat choose only this new session's posture.
-                    // `set_mode` deliberately does not write startup defaults.
-                    if let Some(mode) = action.session_mode() {
-                        let _ = app.set_mode(mode);
-                    }
                     match action {
                         crate::tui::underwater::LaunchAction::None => {}
-                        crate::tui::underwater::LaunchAction::Connect => {
-                            open_launch_provider_picker(app, config, &engine_handle).await;
-                        }
-                        crate::tui::underwater::LaunchAction::NewSession => {
-                            let result = begin_launch_session(app, None);
-                            if apply_command_result(
-                                terminal,
-                                app,
-                                &mut engine_handle,
-                                &task_manager,
-                                config,
-                                &mut web_config_session,
-                                result,
-                            )
-                            .await?
-                            {
-                                return Ok(());
-                            }
-                        }
-                        crate::tui::underwater::LaunchAction::NewChat => {
-                            let result = begin_launch_session(app, None);
-                            if apply_command_result(
-                                terminal,
-                                app,
-                                &mut engine_handle,
-                                &task_manager,
-                                config,
-                                &mut web_config_session,
-                                result,
-                            )
-                            .await?
-                            {
-                                return Ok(());
-                            }
-                        }
                         crate::tui::underwater::LaunchAction::CreateWorktree(name) => {
                             app.launch.status =
                                 Some(app.tr(MessageId::LaunchCreatingWorktree).into_owned());
@@ -4332,9 +4304,6 @@ pub(crate) async fn run_event_loop(
                                 app.view_stack
                                     .push(SessionPickerView::new(&app.workspace, app.ui_locale));
                             }
-                        }
-                        crate::tui::underwater::LaunchAction::Theme => {
-                            open_theme_picker(app);
                         }
                         crate::tui::underwater::LaunchAction::Help => {
                             toggle_help_view(app);
@@ -4773,13 +4742,12 @@ pub(crate) async fn run_event_loop(
                 let mut composer_authority = false;
                 if app.launch.composer_focus {
                     match crate::tui::underwater::handle_launch_composer_key(app, key) {
-                        crate::tui::underwater::LaunchComposerKey::Blur => {
+                        crate::tui::underwater::LaunchComposerKey::Consumed => {
                             app.needs_redraw = true;
                             continue;
                         }
-                        crate::tui::underwater::LaunchComposerKey::BlurToMenu
-                        | crate::tui::underwater::LaunchComposerKey::MenuChord => {
-                            // The same key then drives the startup menu.
+                        crate::tui::underwater::LaunchComposerKey::MenuChord => {
+                            // The same key then drives the launch chords.
                         }
                         crate::tui::underwater::LaunchComposerKey::ComposerAuthority => {
                             // Skip the menu handler; the conversation
@@ -4845,46 +4813,8 @@ pub(crate) async fn run_event_loop(
                         key,
                         launch_locale,
                     );
-                    if let Some(mode) = action.session_mode() {
-                        let _ = app.set_mode(mode);
-                    }
                     match action {
                         crate::tui::underwater::LaunchAction::None => {}
-                        crate::tui::underwater::LaunchAction::Connect => {
-                            open_launch_provider_picker(app, config, &engine_handle).await;
-                        }
-                        crate::tui::underwater::LaunchAction::NewSession => {
-                            let result = begin_launch_session(app, None);
-                            if apply_command_result(
-                                terminal,
-                                app,
-                                &mut engine_handle,
-                                &task_manager,
-                                config,
-                                &mut web_config_session,
-                                result,
-                            )
-                            .await?
-                            {
-                                return Ok(());
-                            }
-                        }
-                        crate::tui::underwater::LaunchAction::NewChat => {
-                            let result = begin_launch_session(app, None);
-                            if apply_command_result(
-                                terminal,
-                                app,
-                                &mut engine_handle,
-                                &task_manager,
-                                config,
-                                &mut web_config_session,
-                                result,
-                            )
-                            .await?
-                            {
-                                return Ok(());
-                            }
-                        }
                         crate::tui::underwater::LaunchAction::CreateWorktree(name) => {
                             app.launch.status =
                                 Some(app.tr(MessageId::LaunchCreatingWorktree).into_owned());
@@ -4921,9 +4851,6 @@ pub(crate) async fn run_event_loop(
                                 app.view_stack
                                     .push(SessionPickerView::new(&app.workspace, app.ui_locale));
                             }
-                        }
-                        crate::tui::underwater::LaunchAction::Theme => {
-                            open_theme_picker(app);
                         }
                         crate::tui::underwater::LaunchAction::Help => {
                             toggle_help_view(app);

@@ -1,10 +1,10 @@
-               codewhale                
-        What are we working on?         
-welcome back · 4 saved sessions in this…
-  ▸ ⌁ New session              Enter ›  
-    ◌ Chat only                    C ›  
-    ↺ Resume last             Ctrl+R ›  
+ ⣠⡾⠛⠷⠄   Codewhale v0.9.12              
+ ⣿⣄⣠⣤⣶⠶⡆ OpenRouter · deepseek-v4       
+ ⠙⠿⣯⣿⡡⠞  Hmbown/CodeWhale · main        
                                         
-⑂ worktree◌ chat    ◐ Theme   ? Help    
-Ctrl+N    C         T         F1        
-  ❯ Type a message…                  ↑  
+ ● 2 MCP servers connected · 1 needs si…
+                                        
+╭──────────────────────────────────────╮
+│ ❯ ▌                                  │
+│ Enter send · Shift+Enter new li… [↑] │
+╰──────────────────────────────────────╯
