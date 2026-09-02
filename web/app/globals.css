@@ -48,7 +48,7 @@
   --jade: var(--whale-working-green);
   --seafoam: var(--whale-accent-secondary);
   --cobalt: var(--whale-action);
-  --cyan: var(--whale-cyan); /* bounded accents only — eyebrow chrome, composer prompt */
+  --cyan: var(--whale-cyan); /* reserved for the composer prompt glyph only */
   --settings-state-active: var(--indigo);
   --settings-state-ready: var(--jade);
   --settings-state-muted: var(--ink-mute);
@@ -240,16 +240,13 @@ html[lang="ko"] h3 {
   margin-inline: auto;
 }
 
-/* The single hero band shared by home, docs, and the community portals: the
-   stage surface lightening out of the deep field, with the one cool glow the
-   body field already carries. */
+/* The single hero band shared by home, docs, and the community portals: a
+   quiet, flat stage surface against the deep field. */
 .hero {
   position: relative;
   overflow: hidden;
   border-bottom: 1px solid var(--hairline);
-  background:
-    radial-gradient(circle at 82% 0%, rgba(72, 215, 255, 0.1), transparent 28rem),
-    linear-gradient(180deg, color-mix(in srgb, var(--paper-deep) 88%, transparent) 0%, transparent 100%);
+  background: var(--paper);
   color: var(--ink);
   padding-block: var(--hero-pad);
 }
@@ -277,27 +274,26 @@ html[lang="ko"] h3 {
   .col-rule > * + * { border-left: 0; border-top: 1px solid var(--hairline); }
 }
 
-/* small-caps eyebrow — mono chrome, cyan: the bounded accent the Tideline
-   topbar spends on labels */
+/* small-caps eyebrow — muted mono chrome for compact labels */
 .eyebrow {
   font-family: var(--font-mono), "JetBrains Mono", monospace;
   font-size: 0.7rem;
   font-weight: 500;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--cyan);
+  color: var(--ink-mute);
 }
 
 /* ---------- compact section marker ---------- */
 /* The seal keeps its Han glyph but speaks as Tideline chrome now: a bordered
-   stage plate with cyan ink, not an ink block on paper. */
+   stage plate with muted ink, not an ink block on paper. */
 .seal {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: var(--paper-deep);
   border: 1px solid var(--stage-line);
-  color: var(--cyan);
+  color: var(--ink-mute);
   font-family: var(--font-cjk), "PingFang SC", serif;
   font-weight: 700;
   width: 2.6rem;
@@ -316,7 +312,7 @@ html[lang="ko"] h3 {
    now, so there is nothing left to invert. */
 .ocean-column .seal {
   background: var(--stage-elevated);
-  color: var(--cyan);
+  color: var(--ink-mute);
 }
 
 /* ---------- pills / status ---------- */
@@ -372,9 +368,8 @@ pre.code-block::before {
   content: "";
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: 2px;
-  border-radius: 6px 6px 0 0;
-  background: linear-gradient(90deg, var(--action-on-dark) 0 70%, var(--seafoam) 70% 100%);
+  height: 1px;
+  background: var(--hairline);
 }
 pre.code-block .prompt { color: var(--action-on-dark); }
 pre.code-block .comment { color: #8b8f9a; }
@@ -2078,7 +2073,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .product-install pre.code-block,
 .paper-install pre.code-block {
   border-color: var(--ocean-mid);
-  background: linear-gradient(180deg, #131d31 0%, #060b16 100%);
+  background: var(--code-bg);
   color: var(--stage-text);
 }
 
@@ -2128,9 +2123,6 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   border: 1px solid rgba(15, 22, 38, 0.88);
   border-radius: 6px;
   background: var(--ocean-deep);
-  box-shadow:
-    0 0 0 1px rgba(79, 209, 197, 0.08),
-    0 18px 48px rgba(3, 7, 13, 0.18);
 }
 
 .product-shot-toolbar,
@@ -3179,7 +3171,7 @@ html[lang="ko"] .ocean-column h2 {
 }
 
 .docs-source-note p {
-  max-width: 42rem;
+  max-width: 70ch;
   color: var(--ink-mute);
   font-size: 0.75rem;
   line-height: 1.6;
@@ -3565,7 +3557,7 @@ html[data-theme="light"] .docs-theme {
 }
 
 .release-truth-label {
-  color: var(--cyan);
+  color: var(--ink-mute);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   font-size: 0.7rem;
@@ -3805,7 +3797,7 @@ html[data-theme="light"] .docs-theme {
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--cyan);
+  color: var(--ink-mute);
 }
 
 .changelog-sections h3 a {
