@@ -9,7 +9,6 @@ import { LocaleSwitcher } from "./locale-switcher";
 import { MobileMenu } from "./mobile-menu";
 import { NavLinks } from "./nav-links";
 import { ThemeToggle } from "./theme-toggle";
-import { Whale } from "./whale";
 
 /**
  * Masthead + primary nav — the Tideline topbar on the web: issue strip, the
@@ -65,9 +64,11 @@ export async function Nav({ locale = "en" }: { locale?: Locale }) {
 
       <div className="site-nav-inner paper-nav-inner">
         <Link href={homeHref} className="site-wordmark paper-wordmark" aria-label={chrome.navHomeAria}>
-          <Whale size={30} className="paper-wordmark-mark" />
           <div className="paper-wordmark-text">
-            <span className="paper-wordmark-name">Codewhale</span>
+            <picture className="paper-wordmark-logo">
+              <source media="(prefers-color-scheme: dark)" srcSet="/brand/wordmark-inverted.svg" />
+              <img src="/brand/wordmark.svg" alt="" />
+            </picture>
             <span className="paper-wordmark-tag">{chrome.wordmarkTag}</span>
           </div>
         </Link>

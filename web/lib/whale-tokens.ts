@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
  * each site variable uses (`--paper: var(--whale-bg)`) instead of repeating the
  * hex. The contract tests still need the literal color to check parity and
  * contrast, so this reads the generated file and flattens the alias chains
- * (`--whale-info` -> `--whale-action` -> `#6aaef2`).
+ * (`--whale-info` -> `--whale-action` -> `#1e8fd8`).
  *
  * Node-only (`node:fs`): imported by the contract tests, never by a component.
  */
