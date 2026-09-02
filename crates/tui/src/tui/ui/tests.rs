@@ -4452,6 +4452,49 @@ fn bottom_placement_draws_the_work_strip_under_the_composer() {
 }
 
 #[test]
+fn bottom_placement_keeps_the_stage_and_queued_preview_at_twelve_rows() {
+    // Regression (#5809 Buildkite 1535): the Bottom layout reordered the
+    // frame slots, so the stage, preview and background chip — addressed by
+    // slot index — drew into zero-height slots: a blank transcript and a
+    // queued message with no `Queued #1:` preview at 40x12.
+    let mut app = create_test_app();
+    app.onboarding_workspace_trust_gate = false;
+    app.onboarding = OnboardingState::None;
+    app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Bottom;
+    app.add_message(HistoryCell::User {
+        content: "stage row survives bottom".to_string(),
+    });
+    app.queue_message(crate::tui::app::QueuedMessage::new(
+        "qa pointer draft 40x12".to_string(),
+        None,
+    ));
+    let config = Config::default();
+    let mut terminal = Terminal::new(TestBackend::new(40, 12)).expect("test terminal");
+    terminal
+        .draw(|frame| {
+            let _ = render(frame, &mut app, &config);
+        })
+        .expect("render frame");
+    let buffer = terminal.backend().buffer();
+    let text = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("Queued #1: qa pointer draft"),
+        "queued preview must render under Bottom at 40x12; got:\n{text}"
+    );
+    assert!(
+        text.contains("stage row survives bottom"),
+        "transcript must render under Bottom at 40x12; got:\n{text}"
+    );
+}
+
+#[test]
 fn wide_underwater_canvas_carries_the_ocean_to_both_terminal_edges() {
     let mut app = create_test_app();
     app.ui_theme = crate::palette::UI_THEME;

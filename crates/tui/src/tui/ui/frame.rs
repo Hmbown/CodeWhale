@@ -1221,49 +1221,38 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     // was reclaimed by the stage (`Min(1)` chat slot).
     // Round 3 (2026-09-01): the work surface lives BELOW the composer by
     // default — scrolling up is intentional history — while `top` placement
-    // keeps the strip above the transcript. The strip slot moves; everything
-    // else keeps its order.
+    // keeps the strip above the transcript. The strip owns a slot at each
+    // end and only one has height, so every other slot keeps its index in
+    // both placements (the stage, preview and indicator are addressed by
+    // position below).
+    // Bottom never falls back (only side rails do), so the configured
+    // placement is the effective one here.
     let strip_below =
         app.work_surface.placement == crate::tui::work_surface::WorkSurfacePlacement::Bottom;
-    let (constraints, strip_slot, composer_slot, footer_slot) = if strip_below {
-        (
-            vec![
-                Constraint::Min(1),                        // Chat area
-                Constraint::Length(workflow_panel_height), // Workflow panel (#4121)
-                Constraint::Length(preview_height),        // Pending input preview (0 if empty)
-                Constraint::Length(indicator_height), // Background-work chip (#5286, 0 if idle)
-                Constraint::Length(plugin_cta_height), // Live plugin CTA (0 unless matched)
-                Constraint::Length(composer_height),  // Composer
-                Constraint::Length(top_work_strip_height), // Tasks + To-do below composer
-                Constraint::Length(footer_height),    // Merged Tideline footer (slots 6+8)
-            ],
-            6usize,
-            5usize,
-            7usize,
-        )
+    let (strip_above_height, strip_below_height) = if strip_below {
+        (0, top_work_strip_height)
     } else {
-        (
-            vec![
-                Constraint::Length(top_work_strip_height), // Tasks + To-do above transcript
-                Constraint::Min(1),                        // Chat area
-                Constraint::Length(workflow_panel_height), // Workflow panel (#4121)
-                Constraint::Length(preview_height),        // Pending input preview (0 if empty)
-                Constraint::Length(indicator_height), // Background-work chip (#5286, 0 if idle)
-                Constraint::Length(plugin_cta_height), // Live plugin CTA (0 unless matched)
-                Constraint::Length(composer_height),  // Composer
-                Constraint::Length(footer_height),    // Merged Tideline footer (slots 6+8)
-            ],
-            0usize,
-            6usize,
-            7usize,
-        )
+        (top_work_strip_height, 0)
     };
     let body_chunks = Layout::default()
         .direction(Direction::Vertical)
         .flex(ratatui::layout::Flex::Start)
-        .constraints(constraints)
+        .constraints([
+            Constraint::Length(strip_above_height), // Tasks + To-do above transcript (`top`)
+            Constraint::Min(1),                     // Chat area
+            Constraint::Length(workflow_panel_height), // Workflow panel (#4121)
+            Constraint::Length(preview_height),     // Pending input preview (0 if empty)
+            Constraint::Length(indicator_height),   // Background-work chip (#5286, 0 if idle)
+            Constraint::Length(plugin_cta_height),  // Live plugin CTA (0 unless matched)
+            Constraint::Length(composer_height),    // Composer
+            Constraint::Length(strip_below_height), // Tasks + To-do under composer (`bottom`)
+            Constraint::Length(footer_height),      // Merged Tideline footer (slots 6+8)
+        ])
         .split(body_area);
-    let plugin_cta_slot = composer_slot.saturating_sub(1);
+    let strip_slot = if strip_below { 7 } else { 0 };
+    let plugin_cta_slot = 5;
+    let composer_slot = 6;
+    let footer_slot = 8;
 
     let (work_chat_area, side_work_area) = if mini && !mini_cfg.keep_sidebar {
         // Mini mode without the side rail: the transcript takes the whole
