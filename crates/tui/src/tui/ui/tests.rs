@@ -5392,8 +5392,8 @@ async fn session_denied_cache_auto_deny_explains_the_cached_rejection() {
     assert_eq!(toast.level, StatusToastLevel::Warning);
     assert_eq!(toast.ttl_ms, Some(12_000));
     assert!(toast.text.contains("matching request was denied earlier"));
-    assert!(toast.text.contains("during this Codewhale run"));
-    assert!(toast.text.contains("Restart Codewhale"));
+    assert!(toast.text.contains("during this codewhale run"));
+    assert!(toast.text.contains("Restart codewhale"));
     assert!(toast.text.contains("exec_shell"));
     let history_notice = app
         .history
@@ -5419,7 +5419,7 @@ async fn session_denied_cache_auto_deny_explains_the_cached_rejection() {
     let rendered = render_underwater_test_app(&mut app, 40, 12);
     assert!(rendered.contains("Auto-denied"), "{rendered:?}");
     assert!(
-        rendered.contains("Restart") && rendered.contains("Codewhale"),
+        rendered.contains("Restart") && rendered.contains("codewhale"),
         "{rendered:?}"
     );
 }
@@ -5670,8 +5670,8 @@ fn session_denied_notice_explains_cached_decision_and_recovery() {
 
     assert!(notice.contains("exec_shell"));
     assert!(notice.contains("matching request was denied earlier"));
-    assert!(notice.contains("during this Codewhale run"));
-    assert!(notice.contains("Restart Codewhale"));
+    assert!(notice.contains("during this codewhale run"));
+    assert!(notice.contains("Restart codewhale"));
 }
 
 #[tokio::test]
@@ -5740,7 +5740,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
                 cell,
                 HistoryCell::System { content }
                     if content.contains("Auto-denied exec_shell")
-                        && content.contains("Restart Codewhale")
+                        && content.contains("Restart codewhale")
             )
         })
         .expect("cached denial must leave a durable recovery receipt");
@@ -5777,7 +5777,7 @@ async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
         "cached-decision explanation disappeared after completion:\n{rendered}"
     );
     assert!(
-        rendered.contains("Restart Codewhale"),
+        rendered.contains("Restart codewhale"),
         "cached-denial recovery path disappeared after completion:\n{rendered}"
     );
     assert_eq!(
@@ -9621,7 +9621,7 @@ fn manual_compaction_queues_once_after_active_turn_without_blocking() {
     );
     assert_eq!(
         app.status_message.as_deref(),
-        Some("Context compaction queued; it will run after the active turn.")
+        Some("Compaction queued — runs after this turn.")
     );
     match engine.rx_op.try_recv().expect("one queued compact op") {
         crate::core::ops::Op::CompactContext { compaction, .. } => {
@@ -9640,7 +9640,7 @@ fn manual_compaction_queues_once_after_active_turn_without_blocking() {
     );
     assert_eq!(
         app.status_message.as_deref(),
-        Some("Context compaction is already in progress.")
+        Some("Compaction is already running.")
     );
 }
 
@@ -9667,14 +9667,14 @@ fn full_engine_mailbox_defers_manual_compaction_and_flushes_once_drained() {
     assert!(app.deferred_manual_compaction.is_some());
     assert_eq!(
         app.status_message.as_deref(),
-        Some("Context compaction queued; it will run after the active turn.")
+        Some("Compaction queued — runs after this turn.")
     );
 
     // A repeat during deferral is the single queued pass, not a second one.
     try_queue_manual_compaction(&mut app, &config, &engine.handle, None);
     assert_eq!(
         app.status_message.as_deref(),
-        Some("Context compaction is already in progress.")
+        Some("Compaction is already running.")
     );
 
     // The mailbox is still full: the flush waits without dropping the request.
@@ -9749,7 +9749,7 @@ fn closed_engine_mailbox_reports_manual_compaction_unavailable() {
 
     assert!(!app.manual_compaction_queued);
     assert!(app.sticky_status.as_ref().is_some_and(|toast| {
-        toast.level == StatusToastLevel::Error && toast.text.contains("engine is no longer running")
+        toast.level == StatusToastLevel::Error && toast.text.contains("the engine stopped")
     }));
 }
 
@@ -9761,7 +9761,7 @@ fn compaction_lifecycle_keeps_truthful_auto_label_until_matching_completion() {
     assert!(app.is_compacting);
     assert_eq!(
         app.status_message.as_deref(),
-        Some("Context automatically compacting…")
+        Some("Auto-compacting context…")
     );
     assert_eq!(
         app.active_compaction
@@ -9782,7 +9782,7 @@ fn compaction_lifecycle_keeps_truthful_auto_label_until_matching_completion() {
     assert!(app.is_compacting, "stale id must not clear newer activity");
     assert_eq!(
         app.status_message.as_deref(),
-        Some("Context automatically compacting…")
+        Some("Auto-compacting context…")
     );
 
     apply_compaction_completed(
@@ -15075,7 +15075,7 @@ async fn steer_failure_queues_message_and_surfaces_toast() {
     assert_eq!(app.queued_message_count(), 1);
     let toast = app.status_toasts.back().expect("steer failure toast");
     assert_eq!(toast.level, StatusToastLevel::Warning);
-    assert!(toast.text.contains("Could not send into this turn"));
+    assert!(toast.text.contains("Couldn't send into this turn"));
 }
 
 #[tokio::test]
@@ -15100,7 +15100,7 @@ async fn streaming_enter_queue_pushes_visible_toast() {
     assert_eq!(app.queued_message_count(), 1);
     let toast = app.status_toasts.back().expect("queue toast");
     assert_eq!(toast.level, StatusToastLevel::Info);
-    assert!(toast.text.contains("Queued. Sends after this turn."));
+    assert!(toast.text.contains("Queued — sends after this turn."));
 }
 
 #[test]
@@ -15201,7 +15201,7 @@ async fn operate_streaming_enter_queues_another_parallel_task() {
     assert_eq!(app.queued_message_count(), 1);
     let toast = app.status_toasts.back().expect("Operate queue toast");
     assert_eq!(toast.level, StatusToastLevel::Info);
-    assert_eq!(toast.text, "Queued. Sends after this turn.");
+    assert_eq!(toast.text, "Queued — sends after this turn.");
     assert_eq!(app.status_message.as_deref(), Some(toast.text.as_str()));
 }
 

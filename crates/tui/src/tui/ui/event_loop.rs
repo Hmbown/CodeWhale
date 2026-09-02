@@ -1281,7 +1281,7 @@ pub(crate) async fn run_event_loop(
             if let Err(err) = completion {
                 tracing::warn!(error = %err, "background terminal clipboard write failed");
                 app.push_status_toast(
-                    format!("Clipboard copy failed: {err}"),
+                    format!("Couldn't copy: {err}"),
                     StatusToastLevel::Error,
                     None,
                 );
@@ -4099,7 +4099,7 @@ pub(crate) async fn run_event_loop(
                     Err(err) => {
                         tracing::warn!(error = %err, "failed to restart terminal input pump");
                         app.push_status_toast(
-                            "Terminal input stalled; recovery failed. Restart Codewhale if keys stop responding.",
+                            "Terminal input stalled; recovery failed. Restart codewhale if keys stop responding.",
                             StatusToastLevel::Error,
                             None,
                         );
@@ -6546,7 +6546,7 @@ mod pod_workers_status_tests {
     fn current_session_pod_worker_status_keeps_the_english_session_boundary() {
         assert_eq!(
             current_session_pod_workers_status(Locale::En, 3),
-            "Current-session fleet workers: 3 total"
+            "Fleet workers this session: 3"
         );
     }
 }

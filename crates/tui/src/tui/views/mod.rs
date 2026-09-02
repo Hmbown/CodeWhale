@@ -6189,11 +6189,11 @@ mod tests {
         empty.render(area, &mut empty_buf);
         let empty_text = buffer_text(&empty_buf, area);
         assert!(
-            empty_text.contains("No current-session fleet workers."),
+            empty_text.contains("No fleet workers this session."),
             "{empty_text}"
         );
         assert!(
-            empty_text.contains("Configure roles and launch posture with /fleet."),
+            empty_text.contains("Set up roles with /fleet."),
             "{empty_text}"
         );
 
@@ -6209,7 +6209,7 @@ mod tests {
             "{english_text}"
         );
         assert!(
-            english_text.contains("Sub-agent roles are current-session fleet worker roles."),
+            english_text.contains("Roles for this session's fleet workers."),
             "{english_text}"
         );
 

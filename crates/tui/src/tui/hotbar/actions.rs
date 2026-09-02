@@ -564,14 +564,14 @@ impl HotbarActionSource for BuiltinHotbarActionSource {
             "voice.toggle",
             "voice",
             "Voice input",
-            "Toggle voice capture from the terminal microphone.",
+            "Talk instead of type — uses your microphone.",
             AppHotbarKind::VoiceToggle,
         ));
         registry.register(AppHotbarAction::new(
             "session.compact",
             "compact",
             "Compact session",
-            "Compact the current conversation context.",
+            "Shrink this conversation to free context.",
             AppHotbarKind::SessionCompact,
         ));
         registry.register(AppHotbarAction::new(
@@ -599,7 +599,7 @@ impl HotbarActionSource for BuiltinHotbarActionSource {
             "reasoning.cycle",
             "reason",
             "Cycle reasoning",
-            "Cycle the configured reasoning effort for the active provider.",
+            "Step through reasoning levels for the active provider.",
             AppHotbarKind::ReasoningCycle,
         ));
         registry.register(AppHotbarAction::new(
@@ -627,7 +627,7 @@ impl HotbarActionSource for BuiltinHotbarActionSource {
             "trust.toggle",
             "trust",
             "Toggle trust",
-            "Enable or disable workspace trust mode.",
+            "Turn workspace trust on or off.",
             AppHotbarKind::TrustToggle,
         ));
     }

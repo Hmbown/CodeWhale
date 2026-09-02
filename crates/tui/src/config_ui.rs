@@ -87,7 +87,7 @@ pub struct SettingsSection {
     pub theme: UiThemeValue,
     #[schemars(
         title = "Custom theme name",
-        description = "Theme slug from the fixed Codewhale themes directory; used only when theme is custom."
+        description = "Theme slug from the fixed codewhale themes directory; used only when theme is custom."
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_theme_name: Option<String>,

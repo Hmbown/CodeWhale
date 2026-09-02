@@ -8073,7 +8073,7 @@ mod tests {
         assert!(confirm.contains("no refresh, identity-provider or discovery requests"));
         assert!(confirm.contains("normal requests to the selected provider"));
         assert!(
-            confirm.contains("clears only Codewhale's consent record"),
+            confirm.contains("clears only codewhale's consent record"),
             "{confirm}"
         );
         assert!(confirm.contains("external-revoke --provider openai-codex"));
@@ -8136,7 +8136,7 @@ mod tests {
         let rendered = render_text(&picker, 96, 20);
         assert!(rendered.contains("xAI API key"));
         assert!(rendered.contains("Native device OAuth"));
-        assert!(rendered.contains("Codewhale-owned storage"));
+        assert!(rendered.contains("codewhale-owned storage"));
         picker.handle_key(key(KeyCode::Char('2')));
         assert!(matches!(
             picker.handle_key(key(KeyCode::Enter)),
@@ -8346,7 +8346,7 @@ mod tests {
         assert_eq!(picker.stage, Stage::ExternalConsentRevokeConfirm);
         let revoke_render = render_text(&picker, 120, 16);
         assert!(
-            revoke_render.contains("clears only Codewhale's consent record"),
+            revoke_render.contains("clears only codewhale's consent record"),
             "{revoke_render}"
         );
         assert!(

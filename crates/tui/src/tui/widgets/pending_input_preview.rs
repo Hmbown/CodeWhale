@@ -592,7 +592,7 @@ mod tests {
             "pending-input copy leaked internal vocabulary: {joined}"
         );
         assert!(joined.contains("sending into this turn"));
-        assert!(joined.contains("could not send into this turn"));
+        assert!(joined.contains("held for next turn"));
     }
 
     #[test]
@@ -612,7 +612,7 @@ mod tests {
         );
         assert!(
             rows.iter()
-                .any(|row| row.contains("Could not send into this turn: rejected")),
+                .any(|row| row.contains("Held for next turn: rejected")),
             "missing rejected send-now label: {rows:?}"
         );
         assert!(

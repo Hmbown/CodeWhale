@@ -1084,8 +1084,8 @@ mod tests {
         let app = test_app();
         let text = build_context_inspector_text(&app, Locale::En);
         assert!(text.contains("Session Context"));
-        assert!(text.contains("No file, directory, or media references recorded yet."));
-        assert!(text.contains("No tool activity recorded yet."));
+        assert!(text.contains("No file, folder, or media references yet."));
+        assert!(text.contains("No tool activity yet."));
     }
 
     fn schema_tool(name: &str, property_count: usize) -> Tool {

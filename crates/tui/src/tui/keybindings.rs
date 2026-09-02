@@ -596,7 +596,7 @@ mod tests {
             .expect("external-editor keybinding should be documented");
         assert_eq!(
             crate::localization::tr(crate::localization::Locale::En, editor.description_id,),
-            "Open composer draft in external editor"
+            "Edit the draft externally"
         );
     }
 
@@ -613,7 +613,7 @@ mod tests {
         assert_eq!(entry.section, KeybindingSection::Sessions);
         assert_eq!(
             crate::localization::tr(crate::localization::Locale::En, entry.description_id),
-            "Check for and install the latest Codewhale update (`/update install`)"
+            "Check for and install the latest codewhale update (`/update install`)"
         );
     }
 

@@ -139,7 +139,7 @@ fn list_show_validate_are_read_only_and_label_legacy_tools() {
     let list = plugins(&mut app, Some("list")).message.unwrap();
     assert!(list.contains("Plugin bundles (1)"));
     assert!(list.contains("disabled"));
-    assert!(list.contains("Legacy executable plugin tools (1)"));
+    assert!(list.contains("Legacy plugin tools (1)"));
 }
 
 #[test]

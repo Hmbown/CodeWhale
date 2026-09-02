@@ -347,7 +347,7 @@ pub(crate) async fn execute_read_media(
     };
     if crate::tools::file::is_codewhale_credential_path(&file_path) {
         return Err(ToolError::permission_denied(
-            "read_media cannot read Codewhale configuration or credential-store files; use `codewhale config list` or `codewhale auth status` for safe inspection",
+            "read_media cannot read codewhale configuration or credential-store files; use `codewhale config list` or `codewhale auth status` for safe inspection",
         ));
     }
     crate::tools::file::enforce_read_denylist(&file_path, "read_media")?;
@@ -1359,7 +1359,7 @@ mod tests {
         let err = tool.execute_rich(input, &ctx).await.unwrap_err();
         assert!(
             err.to_string()
-                .contains("cannot read Codewhale configuration or credential-store"),
+                .contains("cannot read codewhale configuration or credential-store"),
             "{}",
             err
         );
@@ -1406,7 +1406,7 @@ mod tests {
             assert!(
                 err_follow
                     .to_string()
-                    .contains("cannot read Codewhale configuration or credential-store"),
+                    .contains("cannot read codewhale configuration or credential-store"),
                 "follow_symlinks policy must catch canonical credential path: {}",
                 err_follow
             );

@@ -257,7 +257,7 @@ fn load_state(path: &Path) -> Result<HarnessState> {
     }
     if state.schema_version > SCHEMA_VERSION {
         bail!(
-            "continual harness state {} uses newer schema {}; this Codewhale supports schema {}",
+            "continual harness state {} uses newer schema {}; this codewhale supports schema {}",
             path.display(),
             state.schema_version,
             SCHEMA_VERSION

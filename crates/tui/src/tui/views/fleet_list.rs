@@ -156,7 +156,7 @@ impl FleetListView {
                 ),
             }),
             Err(err) => Some(FleetListOutcome::Done {
-                message: format!("Delete failed: {err}"),
+                message: format!("Could not delete: {err}"),
             }),
         }
     }

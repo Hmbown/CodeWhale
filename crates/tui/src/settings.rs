@@ -1855,7 +1855,7 @@ impl Settings {
             ),
             (
                 "theme",
-                "UI theme: a compiled name or custom:<name> from the Codewhale themes directory",
+                "UI theme: a compiled name or custom:<name> from the codewhale themes directory",
             ),
             (
                 "background_color",

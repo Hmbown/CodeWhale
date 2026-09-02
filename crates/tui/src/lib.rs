@@ -205,7 +205,7 @@ fn install_rustls_crypto_provider() {
     bin_name = "codewhale-tui",
     author,
     version = env!("CODEWHALE_BUILD_VERSION"),
-    about = "Codewhale terminal coding agent",
+    about = "codewhale terminal coding agent",
     long_about = "Terminal-native TUI and CLI for open-source and open-weight coding models.\n\nRun 'codewhale' to start.\n\nProvider routes include DeepSeek, Arcee, Hugging Face, OpenRouter, Xiaomi MiMo, local vLLM/SGLang/Ollama, and more."
 )]
 struct Cli {
@@ -971,7 +971,7 @@ fn resolve_exec_resume_route(
             .map_err(anyhow::Error::msg)
             .with_context(|| {
                 format!(
-                    "saved session provider '{}' is unavailable; Codewhale will not fall back",
+                    "saved session provider '{}' is unavailable; codewhale will not fall back",
                     saved_provider_identity
                 )
             })?;
@@ -1459,13 +1459,13 @@ enum McpCommand {
     },
     /// Validate MCP config and required servers
     Validate,
-    /// Register this Codewhale binary as a local MCP stdio server.
+    /// Register this codewhale binary as a local MCP stdio server.
     ///
     /// This adds a config entry that runs `codewhale serve --mcp` (stdio protocol).
     /// For the HTTP/SSE runtime API, use `codewhale serve --http` directly instead.
     #[command(
         name = "add-self",
-        long_about = "Register this Codewhale binary as a local MCP stdio server.\n\nAdds a config entry to ~/.codewhale/mcp.json that launches `codewhale serve --mcp`\nvia the stdio transport. Other Codewhale sessions (or any MCP client) can then\ndiscover and call tools exposed by this server.\n\nUse `codewhale serve --http` instead if you need the HTTP/SSE runtime API."
+        long_about = "Register this codewhale binary as a local MCP stdio server.\n\nAdds a config entry to ~/.codewhale/mcp.json that launches `codewhale serve --mcp`\nvia the stdio transport. Other codewhale sessions (or any MCP client) can then\ndiscover and call tools exposed by this server.\n\nUse `codewhale serve --http` instead if you need the HTTP/SSE runtime API."
     )]
     AddSelf {
         /// Server name in mcp.json (default: "codewhale")
@@ -1806,7 +1806,7 @@ fn run_with_args(args: Vec<String>) -> Result<()> {
         .name("codewhale-main".to_string())
         .stack_size(CODEWHALE_MAIN_STACK_BYTES)
         .spawn(move || run_async_main(cli, command, plugin_discovery, plugin_registry))
-        .context("Failed to start the Codewhale runtime thread")?;
+        .context("Failed to start the codewhale runtime thread")?;
     match runtime_thread.join() {
         Ok(result) => result,
         Err(payload) => {
@@ -1815,7 +1815,7 @@ fn run_with_args(args: Vec<String>) -> Result<()> {
                 .map(|value| (*value).to_string())
                 .or_else(|| payload.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "unknown panic payload".to_string());
-            Err(anyhow!("Codewhale runtime thread panicked: {message}"))
+            Err(anyhow!("codewhale runtime thread panicked: {message}"))
         }
     }
 }
@@ -1880,7 +1880,7 @@ pub(crate) fn build_runtime(command: Option<&Commands>) -> Result<tokio::runtime
     }
     builder
         .build()
-        .context("Failed to build the Codewhale Tokio runtime")
+        .context("Failed to build the codewhale Tokio runtime")
 }
 
 /// Number of async workers to request from tokio.
@@ -2483,7 +2483,7 @@ async fn run_async_main_dispatch(
                     let cors_origins = resolve_cors_origins(&config, &args.cors_origin);
                     let bind_host = resolve_serve_bind_host(args.mobile, args.host);
                     if args.web && bind_host.host != "127.0.0.1" {
-                        bail!("Codewhale web is loopback-only and must bind to 127.0.0.1");
+                        bail!("codewhale web is loopback-only and must bind to 127.0.0.1");
                     }
                     if bind_host.mobile_rebound_to_lan {
                         println!(
@@ -2666,7 +2666,7 @@ fn warn_on_workspace_dotenv_result() {
     match load_workspace_dotenv_credentials() {
         Ok(Some(report)) if !report.ignored.is_empty() => {
             eprintln!(
-                "Codewhale ignored non-credential settings in {}: {}. Use config.toml, CLI flags, or the launching shell for control settings.",
+                "codewhale ignored non-credential settings in {}: {}. Use config.toml, CLI flags, or the launching shell for control settings.",
                 report.path.display(),
                 display_env_key_set(&report.ignored)
             );

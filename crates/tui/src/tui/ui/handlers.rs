@@ -1275,7 +1275,7 @@ pub(crate) async fn handle_view_events(
             }
             ViewEvent::SessionDeleted { session_id, title } => {
                 app.status_message = Some(format!(
-                    "Deleted session {} ({})",
+                    "Deleted {} ({})",
                     crate::session_manager::truncate_id(&session_id),
                     title
                 ));

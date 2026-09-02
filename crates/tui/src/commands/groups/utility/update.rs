@@ -208,7 +208,7 @@ fn run_updater(updater: &Path, mode: UpdateMode) -> CommandResult {
             CommandResult::message(format!("{}\n\n{transcript}", install_preamble(updater)))
         }
         UpdateMode::Install => CommandResult::message(format!(
-            "{transcript}\n\nRestart Codewhale to run the updated binary."
+            "{transcript}\n\nRestart codewhale to run the updated binary."
         )),
     }
 }
