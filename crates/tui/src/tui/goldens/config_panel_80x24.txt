@@ -1,7 +1,7 @@
                                                                                 
    Config  ──────────────────────────────────────────────────────────────────── 
                                                                                 
-   Appearance   Models & providers   Pod   Work   Tools & MCP   Trust        ›  
+   Appearance   Models & providers   Fleet   Work   Tools & MCP   Trust      ›  
    Search: type to filter  (17/55)                                              
     Display                                                                  █  
   ❯Theme                                         terminal       ‹ ›  SAVED   █  
@@ -17,7 +17,7 @@
   system | terminal | dark | light | grayscale | catppuccin-mocha |…            
   Enter or click again: Enter opens choices · Theme: current terminal · saved   
   terminal · applies on save                                                    
-  Preview: <·> idle │ $0.00 · agent · ask                                       
+  Preview: ▶▶ ask · agent                                                       
   type=filter, Up/Down=select, Enter/e=edit, PgUp/PgDn=scroll, Esc/q=close      
                                                                                 
  ────────────────────────────────────────────────────────────────────────────── 

@@ -5,9 +5,11 @@
 //! - [`rows`] answers *what one row says* — the sub-agent column layout, its
 //!   degradation tiers, and row styling.
 //!
-//! What stays here is the paint itself: the Top strip, the side-rail panel,
-//! the divider and scrollbar chrome, and the strip header content (goal title,
-//! to-do receipt) that height and paint must both agree on.
+//! What stays here is the paint itself: the strip, the side rail, the dock
+//! tab row, the divider and scrollbar chrome, and the strip header content
+//! (goal title, to-do receipt) that height and paint must both agree on.
+//! Every view — work rows and fact rows alike — goes through the one row
+//! loop below; there is no second line-list renderer.
 
 use std::collections::HashMap;
 
@@ -22,11 +24,13 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::localization::MessageId;
+use crate::palette::{ChromeInk, chrome_style};
 use crate::tui::app::{App, SidebarHoverRow, SidebarHoverSection};
 use crate::tui::ui_text::truncate_line_to_width;
 
 use super::model::{
-    RailPanel, WorkHitbox, WorkRow, WorkSurfacePlacement, WorkTone, visible_rows_for_panel,
+    DockTabHitbox, DockTabTarget, RailPanel, WorkHitbox, WorkRow, WorkSurfacePlacement, WorkTone,
+    visible_rows_for, visible_rows_for_panel,
 };
 
 mod layout;
@@ -62,12 +66,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         // Bottom mirrors Top's body/divider split; only the divider edge
         // differs (below-content for Top, above-content for Bottom).
         WorkSurfacePlacement::Top => Rect {
-            height: area.height.saturating_sub(1),
+            y: area.y.saturating_add(1),
+            height: area.height.saturating_sub(2),
             ..area
         },
         WorkSurfacePlacement::Bottom => Rect {
-            y: area.y.saturating_add(1),
-            height: area.height.saturating_sub(1),
+            y: area.y.saturating_add(2),
+            height: area.height.saturating_sub(2),
             ..area
         },
         WorkSurfacePlacement::Left => Rect {
@@ -82,23 +87,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         WorkSurfacePlacement::Off => unreachable!("off placement returned above"),
     };
 
-    // Context is the one panel that is not a work-row surface: session facts
-    // render as a titled line list with nothing to click. Every other panel
-    // (Tasks, Agents, Pinned) routes through the row machinery below, so its
-    // rows keep hitboxes, selection, and primary actions — a work row is a
-    // door in every panel, not only in Tasks.
-    if app.work_surface.panel == RailPanel::Context {
-        render_panel(frame, area, body_area, app);
-        return;
+    if !placement.is_strip() {
+        app.work_surface.dock_tabs.clear();
+        app.work_surface.pressed_tab = None;
+        app.work_surface.hovered_tab = None;
     }
 
-    let mut rows = visible_rows_for_panel(app);
-    if placement.is_strip() {
-        // Literal work list only: selectable to-dos/agents plus the
-        // GrokBuild-style `▾ Subagents N` group header. Generic graph chrome
-        // from the side/inspector projection stays out.
-        rows.retain(|row| row.selectable || row.id.0.starts_with("section:"));
-    }
+    super::model::resolve_view(app);
+    let rows = visible_rows_for_panel(app);
     let todo_ordinals = if placement.is_strip() {
         todo_ordinals(&rows)
     } else {
@@ -156,6 +152,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
     Block::default()
         .style(Style::default().bg(app.ui_theme.surface_bg))
         .render(area, frame.buffer_mut());
+    render_dock_tabs(frame, area, app);
+    register_dock_targets(app);
 
     if let Some((goal_text, goal_style)) = goal_title.filter(|_| goal_height > 0) {
         let full_width = usize::from(content_area.width);
@@ -394,6 +392,20 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         }
     }
 
+    if visible.is_empty() && app.work_surface.explicit_view && content_area.height > 0 {
+        // An explicitly opened view with nothing in it says so, once, so
+        // cycling never lands on a blank band.
+        lines.push(Line::from(Span::styled(
+            truncate_line_to_width(
+                empty_view_hint(app.work_surface.panel),
+                usize::from(content_area.width),
+            ),
+            Style::default()
+                .fg(app.ui_theme.text_muted)
+                .bg(app.ui_theme.surface_bg),
+        )));
+    }
+
     if more_row {
         // Right-aligned under the receipt column, muted like every other
         // secondary figure. Scrolled to the bottom there is nothing below, so
@@ -443,114 +455,23 @@ pub fn render(frame: &mut Frame, area: Rect, app: &mut App) {
         lines: visible.iter().map(|row| row.label.clone()).collect(),
         rows: hover_rows,
     });
+    // The tab badges projected the other views on the way here; the rows
+    // a click resolves against are the ones this frame painted.
+    app.work_surface.latest_rows = rows;
 }
 
-/// Render the Context panel as a titled line list in the same body area and
-/// with the same divider and scrollbar the row surface would use. Context is
-/// the only panel that renders here: its lines are session facts, not work
-/// rows, so there is nothing to click and no hitboxes to record. Every panel
-/// that shows work rows (Tasks, Agents, Pinned) goes through the row/hitbox
-/// machinery in [`render`] instead.
-fn render_panel(frame: &mut Frame, area: Rect, body_area: Rect, app: &mut App) {
-    let panel = app.work_surface.panel;
-    let placement = app.work_surface.effective_placement;
-
-    Block::default()
-        .style(Style::default().bg(app.ui_theme.surface_bg))
-        .render(area, frame.buffer_mut());
-
-    // Title row policy:
-    // - Top/Bottom: only an active goal (`Goal: …`). Never panel chrome ("Pinned").
-    // - Left/Right: muted panel name — a full-height column needs naming.
-    let goal = placement.is_strip().then(|| top_goal_title(app)).flatten();
-    let side_panel_title = matches!(
-        placement,
-        WorkSurfacePlacement::Left | WorkSurfacePlacement::Right
-    );
-
-    let title_rows = if let Some((goal_text, goal_style)) = goal.as_ref() {
-        let goal_text = truncate_line_to_width(goal_text, usize::from(body_area.width).max(1));
-        Paragraph::new(Line::from(Span::styled(
-            goal_text,
-            goal_style.bg(app.ui_theme.surface_bg),
-        )))
-        .render(
-            Rect {
-                height: 1,
-                ..body_area
-            },
-            frame.buffer_mut(),
-        );
-        1_u16
-    } else if side_panel_title {
-        Paragraph::new(Line::from(Span::styled(
-            truncate_line_to_width(panel.title(), usize::from(body_area.width).max(1)),
-            Style::default()
-                .fg(app.ui_theme.text_muted)
-                .bg(app.ui_theme.surface_bg),
-        )))
-        .render(
-            Rect {
-                height: 1,
-                ..body_area
-            },
-            frame.buffer_mut(),
-        );
-        1_u16
-    } else {
-        0
-    };
-
-    let content_area = Rect {
-        y: body_area.y.saturating_add(title_rows),
-        height: body_area.height.saturating_sub(title_rows),
-        ..body_area
-    };
-    let body_height = usize::from(content_area.height);
-    let lines = super::panels::panel_lines(
-        app,
-        panel,
-        usize::from(content_area.width),
-        body_height.max(1),
-        goal.is_some(),
-    )
-    .unwrap_or_default();
-
-    let max_offset = lines.len().saturating_sub(body_height.max(1));
-    app.work_surface.scroll_offset = app.work_surface.scroll_offset.min(max_offset);
-    let overflow = lines.len() > body_height;
-    let visible: Vec<Line> = lines
-        .iter()
-        .skip(app.work_surface.scroll_offset)
-        .take(body_height)
-        .cloned()
-        .collect();
-    Paragraph::new(visible).render(content_area, frame.buffer_mut());
-
-    render_divider(frame, area, placement, app);
-    if overflow {
-        render_scrollbar(
-            frame,
-            Rect {
-                x: body_area.right().saturating_sub(1),
-                y: content_area.y,
-                width: 1,
-                height: content_area.height,
-            },
-            app.work_surface.scroll_offset,
-            body_height,
-            lines.len(),
-            app,
-        );
+/// What an explicitly opened, empty view says on its one row.
+fn empty_view_hint(panel: RailPanel) -> &'static str {
+    match panel {
+        RailPanel::Agents => "no agents have run this session",
+        RailPanel::Tasks => "no to-dos yet",
+        RailPanel::Background => "nothing running in the background",
+        RailPanel::Files => "no files touched this session",
+        RailPanel::Notepad => "Enter to write a note",
+        RailPanel::Context => "context budget unknown",
+        RailPanel::Git => "not a git repository",
+        RailPanel::Price => "no priced turns yet",
     }
-
-    app.work_surface.last_area = Some(area);
-    app.work_surface.visible_rows = body_height;
-    app.work_surface.total_rows = lines.len();
-    app.work_surface.hitboxes.clear();
-    app.work_surface.selected = None;
-    app.work_surface.opened = None;
-    app.work_surface.hovered = None;
 }
 
 /// Active goal as the Top strip's only title. Uses the same
@@ -666,6 +587,205 @@ fn render_divider(frame: &mut Frame, area: Rect, placement: WorkSurfacePlacement
                     .set_bg(app.ui_theme.surface_bg);
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DockTab {
+    target: DockTabTarget,
+    label: &'static str,
+    count: usize,
+}
+
+fn render_dock_tabs(frame: &mut Frame, area: Rect, app: &mut App) {
+    let width = usize::from(area.width);
+    let mut entries = Vec::new();
+    for panel in RailPanel::ORDER {
+        let count = dock_tab_count(app, panel);
+        let useful =
+            count.is_some_and(|count| count > 0) || super::views::view_always_has_content(panel);
+        if useful || panel == app.work_surface.panel {
+            entries.push(DockTab {
+                target: DockTabTarget::Panel(panel),
+                label: panel.title(),
+                count: count.unwrap_or(0),
+            });
+        }
+    }
+
+    let close = if crate::tui::color_compat::ascii_safe_enabled() {
+        "x"
+    } else {
+        "×"
+    };
+    let mut show_counts = true;
+    let fits = |tabs: &[DockTab], counts: bool| {
+        tabs.iter()
+            .map(|tab| {
+                UnicodeWidthStr::width(tab.label)
+                    + if counts && tab.count > 0 {
+                        1 + tab.count.to_string().len()
+                    } else {
+                        0
+                    }
+                    + 2
+            })
+            .sum::<usize>()
+            .saturating_add(tabs.len().saturating_sub(1).saturating_mul(2))
+            .saturating_add(1)
+            <= width
+    };
+    if !fits(&entries, true) {
+        show_counts = false;
+    }
+    // Shed from the right (price, git, context, notepad, files… in reverse
+    // cycle order), never the active tab: a narrow dock keeps the work views.
+    while !fits(&entries, show_counts) && entries.len() > 1 {
+        let remove = entries
+            .iter()
+            .rposition(|tab| tab.target != DockTabTarget::Panel(app.work_surface.panel));
+        let Some(index) = remove else { break };
+        entries.remove(index);
+    }
+
+    let tab_y = if app.work_surface.effective_placement == WorkSurfacePlacement::Bottom {
+        area.y.saturating_add(1)
+    } else {
+        area.y
+    };
+    let tab_area = Rect {
+        x: area.x,
+        y: tab_y,
+        width: area.width,
+        height: 1,
+    };
+    let close_area = Rect {
+        x: tab_area.right().saturating_sub(1),
+        y: tab_y,
+        width: 1,
+        height: 1,
+    };
+    app.work_surface.dock_tabs.clear();
+    for tab in &entries {
+        let label = if show_counts && tab.count > 0 {
+            format!("{} {}", tab.label, tab.count)
+        } else {
+            tab.label.to_string()
+        };
+        let tab_width = u16::try_from(UnicodeWidthStr::width(label.as_str()).saturating_add(2))
+            .unwrap_or(u16::MAX)
+            .min(tab_area.width);
+        let x = tab_area.x.saturating_add(
+            app.work_surface
+                .dock_tabs
+                .last()
+                .map(|hitbox| hitbox.area.right().saturating_sub(tab_area.x) + 2)
+                .unwrap_or(0),
+        );
+        if x.saturating_add(tab_width) > close_area.x {
+            break;
+        }
+        let hitbox = Rect {
+            x,
+            y: tab_y,
+            width: tab_width,
+            height: 1,
+        };
+        let active = tab.target == DockTabTarget::Panel(app.work_surface.panel);
+        let pressed = app.work_surface.pressed_tab == Some(tab.target);
+        let hovered = app.work_surface.hovered_tab == Some(tab.target);
+        let style = if active || pressed {
+            chrome_style(&app.ui_theme, ChromeInk::MetadataValue)
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        } else if hovered {
+            chrome_style(&app.ui_theme, ChromeInk::MetadataValue).add_modifier(Modifier::UNDERLINED)
+        } else {
+            chrome_style(&app.ui_theme, ChromeInk::Metadata)
+        };
+        Paragraph::new(Line::from(Span::styled(format!(" {label} "), style)))
+            .render(hitbox, frame.buffer_mut());
+        app.work_surface.dock_tabs.push(DockTabHitbox {
+            target: tab.target,
+            area: hitbox,
+        });
+    }
+    let close_style = if app.work_surface.hovered_tab == Some(DockTabTarget::Close) {
+        chrome_style(&app.ui_theme, ChromeInk::Attention)
+    } else {
+        chrome_style(&app.ui_theme, ChromeInk::Metadata)
+    };
+    Paragraph::new(Line::from(Span::styled(close, close_style)))
+        .render(close_area, frame.buffer_mut());
+    app.work_surface.dock_tabs.push(DockTabHitbox {
+        target: DockTabTarget::Close,
+        area: close_area,
+    });
+}
+
+/// The badge on a view's tab: how many rows of *work* it holds. `None` for
+/// the fact views (context, git, price), which never badge.
+fn dock_tab_count(app: &mut App, panel: RailPanel) -> Option<usize> {
+    match panel {
+        RailPanel::Agents => Some(
+            visible_rows_for(app, panel)
+                .iter()
+                .filter(|row| row.id.0.starts_with("worker:"))
+                .count(),
+        ),
+        RailPanel::Tasks => Some(
+            visible_rows_for(app, panel)
+                .iter()
+                .filter(|row| row.id.0.starts_with("graph:"))
+                .count(),
+        ),
+        RailPanel::Background => Some(
+            visible_rows_for(app, panel)
+                .iter()
+                .filter(|row| row.selectable)
+                .count(),
+        ),
+        RailPanel::Files => Some(super::views::files_touched_count(app)),
+        RailPanel::Notepad => Some(usize::from(super::views::notepad_has_text(app))),
+        RailPanel::Context | RailPanel::Git | RailPanel::Price => None,
+    }
+}
+
+fn register_dock_targets(app: &mut App) {
+    let targets = app.work_surface.dock_tabs.clone();
+    for hitbox in targets {
+        let (id, action) = match hitbox.target {
+            DockTabTarget::Panel(panel) => {
+                use crate::tui::tideline::InteractionTargetId as Id;
+                let id = match panel {
+                    RailPanel::Agents => Id::DOCK_TAB_AGENTS,
+                    RailPanel::Tasks => Id::DOCK_TAB_TASKS,
+                    RailPanel::Background => Id::DOCK_TAB_BACKGROUND,
+                    RailPanel::Files => Id::DOCK_TAB_FILES,
+                    RailPanel::Notepad => Id::DOCK_TAB_NOTEPAD,
+                    RailPanel::Context => Id::DOCK_TAB_CONTEXT,
+                    RailPanel::Git => Id::DOCK_TAB_GIT,
+                    RailPanel::Price => Id::DOCK_TAB_PRICE,
+                };
+                (
+                    id,
+                    crate::tui::tideline::InteractionAction::ShowDockPanel(panel),
+                )
+            }
+            DockTabTarget::Close => (
+                crate::tui::tideline::InteractionTargetId::DOCK_CLOSE,
+                crate::tui::tideline::InteractionAction::DismissDock,
+            ),
+        };
+        app.viewport
+            .interaction_targets
+            .register(crate::tui::tideline::InteractionTarget {
+                id,
+                area: hitbox.area,
+                focus: crate::tui::tideline::InteractionFocus::Direct,
+                keyboard_action: Some(action),
+                mouse_action: Some(action),
+                inspect_detail: crate::tui::tideline::InspectDetail::Route,
+            });
     }
 }
 

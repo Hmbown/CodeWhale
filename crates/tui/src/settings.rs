@@ -649,7 +649,7 @@ pub const CALM_PRESET_FIELDS: &[(&str, &str)] = &[
 
 fn normalize_ocean_treatment(value: &str) -> &'static str {
     match value.trim().to_ascii_lowercase().as_str() {
-        "deepsea" | "ombre" | "gradient" | "classic" => "deepsea",
+        "deepsea" | "underwater" | "ombre" | "gradient" | "classic" => "deepsea",
         _ => "flat",
     }
 }
@@ -670,8 +670,13 @@ fn normalize_work_surface_placement(value: &str) -> &'static str {
 fn normalize_rail_panel(value: &str) -> &'static str {
     match value.trim().to_ascii_lowercase().as_str() {
         "agents" => "agents",
+        "background" => "background",
+        "files" => "files",
+        "notepad" => "notepad",
         "context" => "context",
-        "pinned" => "pinned",
+        "git" => "git",
+        "price" => "price",
+        // `pinned` folded into the tasks view (2026-09-02 dock views).
         _ => "tasks",
     }
 }
@@ -1332,7 +1337,9 @@ impl Settings {
             "ocean_treatment" | "treatment" | "background_treatment" => {
                 let normalized = value.trim().to_ascii_lowercase();
                 self.ocean_treatment = match normalized.as_str() {
-                    "deepsea" | "ombre" | "gradient" | "classic" => "deepsea".to_string(),
+                    "deepsea" | "underwater" | "ombre" | "gradient" | "classic" => {
+                        "deepsea".to_string()
+                    }
                     "flat" | "terminal" | "none" => "flat".to_string(),
                     _ => anyhow::bail!(
                         "Failed to update setting: invalid ocean treatment '{value}'. Expected: deepsea or flat."
@@ -3164,6 +3171,9 @@ mod tests {
             settings.ocean_treatment, "deepsea",
             "legacy values migrate one way to the public Deepsea contract"
         );
+        settings.set("ocean_treatment", "underwater").unwrap();
+        assert_eq!(settings.ocean_treatment, "deepsea");
+        assert_eq!(normalize_ocean_treatment("Underwater"), "deepsea");
         assert_eq!(normalize_ocean_treatment("kelp"), "flat");
 
         let err = settings.set("ocean_treatment", "kelp").unwrap_err();
@@ -3245,7 +3255,8 @@ mod tests {
 
         assert_eq!(loaded.work_surface_top_height, WORK_SURFACE_TOP_HEIGHT_MIN);
         assert_eq!(loaded.work_surface_placement, "top");
-        assert_eq!(loaded.rail_panel, "pinned");
+        // `pinned` folded into the tasks view (2026-09-02 dock views).
+        assert_eq!(loaded.rail_panel, "tasks");
         assert_eq!(
             std::fs::read_to_string(settings_path).expect("read unchanged settings"),
             legacy,

@@ -1,21 +1,21 @@
 //! `/pod` roster — the barracks view of the saved agent party.
 //!
 //! The roster view is the primary `/pod` face. The first row is the
-//! **operator** — the Pod leader (your live session model). When a user
+//! **operator** — the Fleet leader (your live session model). When a user
 //! picks a session model they are picking the operator, and every member
-//! below is that leader's team. The header names the selected saved Pod and
+//! below is that leader's team. The header names the selected saved Fleet and
 //! whether it is user-global or folder-scoped, so scope is never ambiguous.
 //! Below the operator sits the merged [`FleetRoster`] (built-in <
 //! `[fleet.profiles]` config < `$CODEWHALE_HOME/agents/*.toml` personal <
 //! `.codewhale/agents/*.toml` project members)
 //! as a scrollable list with a detail pane for the selected row. The view
 //! never writes anything; `s` / Enter on a selected-v2 member opens that
-//! Pod's exact editor, while the legacy profile wizard is used only when no
-//! named Pod is selected (the operator row is display-only). Switch named
-//! saved Pods with `/pod pods` (`/pod fleets` remains compatible).
+//! Fleet's exact editor, while the legacy profile wizard is used only when no
+//! named Fleet is selected (the operator row is display-only). Switch named
+//! saved Fleets with `/pod pods` (`/pod fleets` remains compatible).
 //!
 //! NOTE: like `fleet_setup.rs`, the copy below is intentionally English for
-//! now (#3167 reworks Pod UI localization); the command entry
+//! now (#3167 reworks Fleet UI localization); the command entry
 //! (`CmdFleetDescription`) is already localized.
 
 use std::cell::RefCell;
@@ -35,6 +35,7 @@ use crate::fleet::roster::{FleetRoster, ProfileLayer, ProfileOrigin, layers_from
 use crate::fleet::worker_runtime::roster_member_agent_type;
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette;
+use crate::tools::subagent::public_role_label;
 use crate::tui::app::App;
 use crate::tui::menu_style;
 use crate::tui::views::{
@@ -111,11 +112,11 @@ struct SelectedFleetSummary {
 /// This stays deliberately separate from Tideline's live-worker targets,
 /// which are backed by `SubAgentStatus`, not editable profiles in this roster.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PodRosterRowAction {
+enum FleetRosterRowAction {
     SelectOrActivate { row: usize },
 }
 
-impl PodRosterRowAction {
+impl FleetRosterRowAction {
     const fn row(self) -> usize {
         match self {
             Self::SelectOrActivate { row } => row,
@@ -138,7 +139,7 @@ pub struct FleetRosterView {
     detail_scroll: usize,
     /// Exact visible row geometry from the latest render. This is a
     /// frame-scoped projection, not a second roster or navigation owner.
-    row_hitboxes: RefCell<Vec<(Rect, PodRosterRowAction)>>,
+    row_hitboxes: RefCell<Vec<(Rect, FleetRosterRowAction)>>,
     /// A first click selects/reveals details; a consecutive click on the same
     /// row activates the exact same handoff as Enter.
     last_mouse_selected: Option<usize>,
@@ -262,14 +263,14 @@ impl FleetRosterView {
 
     fn footer_hints(&self) -> Vec<ActionHint> {
         let edit_label = if self.selected_fleet.is_some() {
-            "edit Pod"
+            "edit Fleet"
         } else {
             "setup profile"
         };
         let mut hints = vec![
             ActionHint::new("↑/↓", "move"),
             ActionHint::new("s/Enter", edit_label),
-            ActionHint::new("f", "saved Pods"),
+            ActionHint::new("f", "saved Fleets"),
             ActionHint::new("w", tr(self.locale, MessageId::FleetRosterWorkers)),
             ActionHint::new("PgUp/PgDn", "scroll detail"),
             ActionHint::new("Esc", "close"),
@@ -371,8 +372,8 @@ impl ModalView for FleetRosterView {
         let hints = self.footer_hints();
         let content = render_modal_footer(area, buf, &hints);
 
-        // Hairline shell shared with the HTML route/config/Pod surfaces.
-        // This replaces the centered legacy card: Pod is a product room,
+        // Hairline shell shared with the HTML route/config/Fleet surfaces.
+        // This replaces the centered legacy card: Fleet is a product room,
         // not a popup floating over an unrelated transcript.
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -390,7 +391,7 @@ impl ModalView for FleetRosterView {
                 ),
                 Span::styled(
                     tr(self.locale, MessageId::FleetRosterTabRoster),
-                    Style::default().fg(palette::WHALE_INFO).bold(),
+                    Style::default().fg(palette::WHALE_ACTION).bold(),
                 ),
                 Span::styled(
                     format!(
@@ -434,14 +435,14 @@ impl ModalView for FleetRosterView {
 }
 
 impl FleetRosterView {
-    /// Scope-explicit selected Pod line. Paths stay out — receipts name them.
+    /// Scope-explicit selected Fleet line. Paths stay out — receipts name them.
     fn selected_fleet_line(&self) -> String {
         if let Some(error) = &self.load_error {
-            return format!("Pod selection error — {error}");
+            return format!("Fleet selection error — {error}");
         }
         match &self.selected_fleet {
-            Some(sel) => format!("Pod `{}` · {}", sel.name, sel.scope.long_label()),
-            None => "No Pod selected — built-in team".to_string(),
+            Some(sel) => format!("Fleet `{}` · {}", sel.name, sel.scope.long_label()),
+            None => "No Fleet selected — built-in team".to_string(),
         }
     }
 
@@ -498,7 +499,7 @@ impl FleetRosterView {
                     list_area.width,
                     1,
                 ),
-                PodRosterRowAction::SelectOrActivate { row: idx },
+                FleetRosterRowAction::SelectOrActivate { row: idx },
             ));
             let is_selected = idx == self.selected;
             let pointer = format!("{} ", crate::tui::glyphs::selection_marker(is_selected));
@@ -661,17 +662,18 @@ fn whale_identity_lines(member: &AgentProfile, locale: Locale) -> Vec<Line<'stat
 }
 
 fn member_role_mark(member: &AgentProfile) -> &'static str {
-    match member.id.as_str() {
-        "manager" | "scout" => crate::tui::glyphs::ROLE_MANAGER,
-        "builder" => crate::tui::glyphs::ROLE_BUILDER,
+    let role = public_role_label(&member.id);
+    match role.as_str() {
+        "manager" | "explore" => crate::tui::glyphs::ROLE_MANAGER,
+        "implement" => crate::tui::glyphs::ROLE_BUILDER,
         "reviewer" => crate::tui::glyphs::ROLE_REVIEWER,
-        "verifier" => crate::tui::glyphs::ROLE_VERIFIER,
+        "test" => crate::tui::glyphs::ROLE_VERIFIER,
         "synthesizer" => crate::tui::glyphs::ROLE_SYNTHESIZER,
         _ => match roster_member_agent_type(member).as_str() {
-            "scout" | "manager" => crate::tui::glyphs::ROLE_MANAGER,
-            "builder" => crate::tui::glyphs::ROLE_BUILDER,
+            "explore" | "manager" => crate::tui::glyphs::ROLE_MANAGER,
+            "implement" => crate::tui::glyphs::ROLE_BUILDER,
             "reviewer" => crate::tui::glyphs::ROLE_REVIEWER,
-            "verifier" => crate::tui::glyphs::ROLE_VERIFIER,
+            "test" => crate::tui::glyphs::ROLE_VERIFIER,
             "synthesizer" => crate::tui::glyphs::ROLE_SYNTHESIZER,
             _ => crate::tui::glyphs::NEUTRAL,
         },
@@ -682,7 +684,7 @@ fn member_role_mark(member: &AgentProfile) -> &'static str {
 fn detail_field(lines: &mut Vec<Line<'static>>, label: &str, body: String) {
     lines.push(Line::from(Span::styled(
         label.to_string(),
-        Style::default().fg(palette::WHALE_INFO).bold(),
+        Style::default().fg(palette::WHALE_ACTION).bold(),
     )));
     lines.push(Line::from(Span::styled(
         body,
@@ -692,13 +694,13 @@ fn detail_field(lines: &mut Vec<Line<'static>>, label: &str, body: String) {
 }
 
 /// Detail pane for the pinned operator row: the live session route, plus the
-/// product truth that the operator is this Pod's leader.
+/// product truth that the operator is this Fleet's leader.
 fn operator_detail_lines(operator: &OperatorInfo) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
     detail_field(
         &mut lines,
         "Role",
-        "Coordinator — this session's model leads the Pod".to_string(),
+        "Coordinator — this session's model leads the Fleet".to_string(),
     );
     detail_field(&mut lines, "Saved for", "this session only".to_string());
     detail_field(&mut lines, "Access", "full session access".to_string());
@@ -717,7 +719,7 @@ fn operator_detail_lines(operator: &OperatorInfo) -> Vec<Line<'static>> {
     detail_field(
         &mut lines,
         "Description",
-        "The Coordinator is this Pod's leader — your main session model. Every \
+        "The Coordinator is this Fleet's leader — your main session model. Every \
          member below works for it. Change the model with /model or /provider; \
          persist with /pod save."
             .to_string(),

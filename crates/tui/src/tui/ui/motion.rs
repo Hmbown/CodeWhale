@@ -9,7 +9,7 @@ use super::*;
 /// When the rail is off the panel change is real but invisible, so the
 /// status names that instead of implying something rendered.
 pub(crate) fn rail_panel_shortcut(app: &mut App, panel: crate::tui::work_surface::RailPanel) {
-    app.work_surface.panel = panel;
+    crate::tui::work_surface::select_dock_panel(app, panel);
     app.needs_redraw = true;
     let mut message = format!("Rail panel: {}", panel.as_setting());
     if app.work_surface.placement == crate::tui::work_surface::WorkSurfacePlacement::Off {

@@ -1784,7 +1784,16 @@ mod tests {
 
     #[test]
     fn slash_source_matches_command_palette_command_entries() {
+        // Hermetic: the palette builder also reads `~/.claude/skills`, so a
+        // host with imported Claude skills would leak entries into one side
+        // and fail the comparison. Isolate HOME the way the other
+        // environment-reading tests in this file do.
+        let _lock = crate::test_support::lock_test_env();
         let tmp = tempfile::TempDir::new().expect("tempdir");
+        let _home = crate::test_support::EnvVarGuard::set("HOME", tmp.path());
+        let _user_profile = crate::test_support::EnvVarGuard::set("USERPROFILE", tmp.path());
+        let _codewhale_home =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", tmp.path().join(".codewhale"));
         let palette_slash_ids = build_command_palette_entries(
             Locale::En,
             tmp.path(),
@@ -2169,19 +2178,19 @@ mod tests {
         }
 
         // Both control domains are bound.
-        for id in ["slash.lane", "slash.pod"] {
+        for id in ["slash.lane", "slash.fleet"] {
             assert!(registry.get(id).is_some(), "{id} must be bindable");
         }
     }
 
     #[test]
-    fn persisted_slash_fleet_binding_dispatches_the_canonical_pod_action() {
+    fn persisted_slash_pod_binding_dispatches_the_canonical_fleet_action() {
         let registry = HotbarActionRegistry::with_builtins();
         let legacy = registry
-            .get("slash.fleet")
+            .get("slash.pod")
             .expect("legacy persisted id resolves through the compatibility boundary");
-        assert_eq!(legacy.id(), "slash.pod");
-        assert_eq!(legacy.metadata(Locale::En).display_name, "/pod");
+        assert_eq!(legacy.id(), "slash.fleet");
+        assert_eq!(legacy.metadata(Locale::En).display_name, "/fleet");
 
         let mut app = test_app();
         assert_eq!(

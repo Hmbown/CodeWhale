@@ -7,7 +7,7 @@ import type { HomeDict } from "../types";
  * model, wszystko dzieje się na twojej maszynie. Słownictwo produktu
  * pozostaje dosłowne jak w pakiecie TUI: Plan / Work / Operate,
  * Ask / Auto-Review / Full Access, Codewhale, TUI, `codewhale exec`,
- * Runtime API + MCP, Pod, Node 18+, Rust, MIT.
+ * Runtime API + MCP, fleet, Node 18+, Rust, MIT.
  *
  * Pieczęcie sekcji (法, 行, …) to glify współdzielone z wydaniem
  * angielskim — znaki, nie proza.
@@ -91,7 +91,7 @@ export const home: HomeDict = {
     ["codewhale exec", "Skrypty i CI"],
     ["Klient web", "Klient przeglądarkowy, tylko loopback"],
     ["Runtime API + MCP", "Lokalne integracje"],
-    ["Pod", "Trwała praca wielu agentów"],
+    ["fleet", "Trwała praca wielu agentów"],
   ],
   runtimeLink: "Zobacz powierzchnie runtime'u i notatki o stabilności →",
 

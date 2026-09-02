@@ -368,13 +368,8 @@ pub(crate) fn sha256_label(bytes: &[u8]) -> String {
 }
 
 /// Required roles for the stopship dogfood fleet (#4178).
-pub const STOPSHIP_REQUIRED_ROLES: &[&str] = &[
-    "scout",
-    "implementer",
-    "reviewer",
-    "verifier",
-    "release_lead",
-];
+pub const STOPSHIP_REQUIRED_ROLES: &[&str] =
+    &["explore", "implement", "reviewer", "test", "release_lead"];
 
 /// Parse a fleet TOML document.
 pub fn parse_named_fleet(toml_text: &str) -> Result<NamedFleet, NamedFleetError> {
@@ -548,10 +543,10 @@ name = "stopship"
 description = "Stopship dogfood fleet"
 
 [roles]
-scout = "scout"
-implementer = "builder"
+explore = "scout"
+implement = "builder"
 reviewer = "reviewer"
-verifier = "verifier"
+test = "verifier"
 release_lead = "manager"
 "#;
 
@@ -560,10 +555,10 @@ release_lead = "manager"
         let fleet = parse_named_fleet(STOPSHIP_TOML).expect("parse");
         assert_eq!(fleet.name, "stopship");
         fleet.validate_stopship_roles().expect("all roles");
-        assert_eq!(fleet.resolve("scout").unwrap(), "scout");
-        assert_eq!(fleet.resolve("implementer").unwrap(), "builder");
+        assert_eq!(fleet.resolve("explore").unwrap(), "scout");
+        assert_eq!(fleet.resolve("implement").unwrap(), "builder");
         assert_eq!(fleet.resolve("reviewer").unwrap(), "reviewer");
-        assert_eq!(fleet.resolve("verifier").unwrap(), "verifier");
+        assert_eq!(fleet.resolve("test").unwrap(), "verifier");
         assert_eq!(fleet.resolve("release_lead").unwrap(), "manager");
     }
 
@@ -619,7 +614,7 @@ scout = "scout#stable"
 
         let legacy = document.legacy().expect("legacy body");
         legacy.validate_stopship_roles().expect("all roles");
-        assert_eq!(legacy.resolve("implementer").unwrap(), "builder");
+        assert_eq!(legacy.resolve("implement").unwrap(), "builder");
         assert_eq!(document.name(), "stopship");
         assert!(document.source_hash().starts_with("sha256:"));
     }

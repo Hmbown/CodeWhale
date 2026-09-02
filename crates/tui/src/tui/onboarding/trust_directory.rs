@@ -53,7 +53,7 @@ pub fn lines(app: &App, content_width: usize) -> Vec<Line<'static>> {
     lines.push(Line::from(Span::styled(
         app.tr(MessageId::OnboardTrustTitle).to_string(),
         Style::default()
-            .fg(palette::WHALE_INFO)
+            .fg(palette::WHALE_ACTION)
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));

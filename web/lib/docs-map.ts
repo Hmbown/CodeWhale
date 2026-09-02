@@ -70,8 +70,8 @@ export const DOC_TOPICS: DocTopic[] = [
     slug: "vocabulary",
     label: { en: "Vocabulary", zh: "产品名词" },
     description: {
-      en: "The exact product nouns — Pod, Workflow, Lane, Runtime; Plan / Work / Operate; Consultant; and explicit route provenance — plus measurement principles.",
-      zh: "确切的产品名词——Pod、Workflow、Lane、Runtime；Plan / Work / Operate；Consultant；明确的路由来源——以及测量原则。",
+      en: "The exact product nouns — Fleet, Workflow, Lane, Runtime; Plan / Work / Operate; Advisor; and explicit route provenance — plus measurement principles.",
+      zh: "确切的产品名词——Fleet、Workflow、Lane、Runtime；Plan / Work / Operate；Advisor；明确的路由来源——以及测量原则。",
     },
     repoSource: ["docs/FLEET.md", "docs/MODES.md", "docs/public-surface-facts.json"],
     hasPage: true,
@@ -270,8 +270,8 @@ export const DOC_TOPICS: DocTopic[] = [
     hasPage: true,
     category: "extending",
   },
-  // Pod is the canonical customer noun; `/docs/fleet` is kept as a
-  // permanent compatibility redirect in app/[locale]/docs/fleet/page.tsx.
+  // Fleet is the canonical customer noun; `/docs/pod` remains a
+  // permanent compatibility redirect in app/[locale]/docs/pod/page.tsx.
   {
     id: "computers",
     slug: "computers",
@@ -285,12 +285,12 @@ export const DOC_TOPICS: DocTopic[] = [
     category: "operations",
   },
   {
-    id: "pod",
-    slug: "pod",
-    label: { en: "Pod / Workflow", zh: "Pod / Workflow" },
+    id: "fleet",
+    slug: "fleet",
+    label: { en: "Fleet / Workflow", zh: "Fleet / Workflow" },
     description: {
-      en: "Durable task execution, Pod roster management, and Workflow authoring.",
-      zh: "持久任务执行、Pod 花名册管理和 Workflow 编写。",
+      en: "Durable task execution, fleet roster management, and Workflow authoring.",
+      zh: "持久任务执行、fleet 花名册管理和 Workflow 编写。",
     },
     repoSource: ["docs/FLEET.md", "docs/WORKFLOW_AUTHORING.md"],
     hasPage: true,

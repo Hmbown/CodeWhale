@@ -1066,7 +1066,7 @@ impl ModalView for HelpView {
             Span::styled(
                 query_label,
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" ".repeat(gap)),

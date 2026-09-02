@@ -401,7 +401,19 @@ fn find_first_start_marker(text: &str) -> Option<(usize, usize, &'static str)> {
         .min_by_key(|(idx, _, _)| *idx)
 }
 
+/// Cheap rejection: every marker prefix ends with the marker's own first
+/// byte, so a text without any marker's first byte cannot end with one.
+/// Every tool-call marker starts with `<` or `[`, so this is one scan of a
+/// usually short delta and keeps per-token `ends_with` probing off the hot
+/// path for plain prose deltas.
+fn fast_reject_marker_text(text: &str) -> bool {
+    !text.bytes().any(|b| b == b'<' || b == b'[')
+}
+
 fn trailing_marker_prefix_len(text: &str, markers: &[&str]) -> usize {
+    if fast_reject_marker_text(text) {
+        return 0;
+    }
     markers
         .iter()
         .flat_map(|marker| {
@@ -421,6 +433,9 @@ fn trailing_marker_prefix_len(text: &str, markers: &[&str]) -> usize {
 }
 
 fn trailing_start_marker_prefix_len(text: &str) -> usize {
+    if fast_reject_marker_text(text) {
+        return 0;
+    }
     TOOL_CALL_MARKER_PAIRS
         .iter()
         .flat_map(|(marker, _)| {

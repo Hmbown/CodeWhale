@@ -303,7 +303,7 @@ fn disable_mcp_server(config_path: &Path, server_name: &str) -> Result<()> {
 pub(crate) fn print_fix_plan(plan: &DoctorFixPlan) {
     use colored::Colorize;
 
-    let (sky_r, sky_g, sky_b) = crate::palette::WHALE_INFO_RGB;
+    let (sky_r, sky_g, sky_b) = crate::palette::WHALE_ACTION_RGB;
     println!("{}", "Repair plan (--fix):".bold());
     if plan.is_empty() {
         println!("  {} nothing to repair", "✓".truecolor(sky_r, sky_g, sky_b));
@@ -336,7 +336,7 @@ pub(crate) fn confirm_fix(plan: &DoctorFixPlan) -> bool {
 pub(crate) fn print_apply_results(results: &[(DoctorFixAction, DoctorFixOutcome)]) -> bool {
     use colored::Colorize;
 
-    let (aqua_r, aqua_g, aqua_b) = crate::palette::WHALE_INFO_RGB;
+    let (aqua_r, aqua_g, aqua_b) = crate::palette::WHALE_ACTION_RGB;
     let (red_r, red_g, red_b) = crate::palette::WHALE_ERROR_RGB;
     println!("{}", "Repair results:".bold());
     let mut all_applied = true;

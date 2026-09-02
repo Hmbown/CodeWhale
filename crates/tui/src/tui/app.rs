@@ -46,7 +46,6 @@ use crate::tui::paste_burst::{FlushResult, PasteBurst};
 use crate::tui::scrolling::{MouseScrollState, TranscriptLineMeta, TranscriptScroll};
 use crate::tui::selection::{SelectionAutoscroll, TranscriptSelection};
 use crate::tui::shell_key_routing::Focus;
-use crate::tui::sidebar::SidebarWorkSummary;
 use crate::tui::streaming::StreamingState;
 use crate::tui::transcript::TranscriptViewCache;
 use crate::tui::views::ViewStack;
@@ -539,21 +538,15 @@ impl Default for LspRepairState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchState {
     pub visible: bool,
-    pub selected: usize,
     pub worktree_input: Option<String>,
     pub status: Option<String>,
     pub workspace_session_count: usize,
     pub worktree_available: bool,
-    /// Row hitboxes from the most recent launch render. Index order is
-    /// focus order: the three quick-action rows (`index == launch.selected`
-    /// for 0–2), so the mouse click path and the keyboard share dispatch.
-    pub row_areas: Vec<Rect>,
-    /// Option-strip tile hitboxes from the most recent launch render
-    /// (Tideline startup stage), with their dispatch intent.
-    pub option_areas: Vec<(crate::tui::underwater::LaunchOptionAction, Rect)>,
-    /// Whether launch keys type into the pre-session composer instead of
-    /// driving the menu. The composer itself is the session `App`'s own
-    /// `ComposerState` — this flag only decides where keystrokes go.
+    /// Whether launch keys type into the pre-session composer. The composer
+    /// is the launch screen's one focus owner, so this is `true` from first
+    /// paint; only the worktree-name prompt takes the keyboard while open.
+    /// The composer itself is the session `App`'s own `ComposerState` — this
+    /// flag only decides where keystrokes go.
     pub composer_focus: bool,
     /// Composer input-row hitbox from the most recent launch render (the
     /// docked strip below the option strip). A click here focuses the
@@ -562,7 +555,21 @@ pub struct LaunchState {
     /// Send-glyph hitbox inside the composer row. A click here submits the
     /// composed message through the normal dispatch path.
     pub send_area: Option<Rect>,
+    /// The launch card's highlighted menu entry (index into the four entries
+    /// the card paints, all of whose chords exist).
+    pub menu_selected: usize,
+    /// Ambient-clock millisecond reading when the card began dissolving, if
+    /// it has. The first keystroke or a launched command dissolves the card
+    /// (founder decision, 2026-09-02).
+    pub dissolve_started_ms: Option<u128>,
+    /// Claude Code config was detected on this host (probed once at
+    /// construction); drives the launch card's migration notice line.
+    pub claude_code_detected: bool,
 }
+
+/// The launch card's dissolve motion budget. One bounded motion; reduced
+/// motion dissolves instantly (same drawing at its endpoint).
+pub(crate) const LAUNCH_CARD_DISSOLVE_MS: u128 = 240;
 
 impl LaunchState {
     #[must_use]
@@ -588,18 +595,52 @@ impl LaunchState {
             .stderr(std::process::Stdio::null())
             .status()
             .is_ok_and(|status| status.success());
+        // The launch card's migration notice is only painted when it is true:
+        // Claude Code leaves its sessions under `~/.claude/projects`. One
+        // stat at construction, never on the render path.
+        let claude_code_detected = std::env::var_os("HOME")
+            .as_ref()
+            .map(|home| {
+                std::path::Path::new(home)
+                    .join(".claude")
+                    .join("projects")
+                    .is_dir()
+            })
+            .unwrap_or(false);
         Self {
             visible,
-            selected: 0,
             worktree_input: None,
             status: None,
             workspace_session_count,
             worktree_available,
-            row_areas: Vec::new(),
-            option_areas: Vec::new(),
-            composer_focus: false,
+            composer_focus: true,
             composer_area: None,
             send_area: None,
+            menu_selected: 0,
+            dissolve_started_ms: None,
+            claude_code_detected,
+        }
+    }
+
+    /// Begin the card dissolve once (idempotent). The first keystroke or a
+    /// launched command dissolves the launch card.
+    pub fn dissolve_card(&mut self, now_ms: u128) {
+        if self.dissolve_started_ms.is_none() {
+            self.dissolve_started_ms = Some(now_ms);
+        }
+    }
+
+    /// How far the card has dissolved, `[0.0 intact ..= 1.0 gone]`. Reduced
+    /// motion dissolves instantly: the same drawing at its endpoint.
+    #[must_use]
+    pub fn card_dissolve_progress(&self, now_ms: u128, motion_allowed: bool) -> f32 {
+        match self.dissolve_started_ms {
+            None => 0.0,
+            Some(_) if !motion_allowed => 1.0,
+            Some(started) => {
+                let elapsed = now_ms.saturating_sub(started);
+                (elapsed as f32 / LAUNCH_CARD_DISSOLVE_MS as f32).clamp(0.0, 1.0)
+            }
         }
     }
 }
@@ -945,9 +986,6 @@ pub enum SidebarRowAction {
     /// The user confirms with Enter or cancels by editing/clearing the draft.
     #[allow(dead_code)] // destructive confirm path; mouse_ui already matches it (TUI-DOG-008)
     PrefillCommand(String),
-    ToggleAgentDetails {
-        agent_id: String,
-    },
     /// Select the persistent Agents panel. This is deliberately a navigation
     /// action rather than a modal: the Subagents summary is a group door, so
     /// it should reveal the standing register instead of fabricating a detail
@@ -981,7 +1019,6 @@ impl SidebarRowAction {
         match self {
             Self::Command(command) => Some(command.as_str()),
             Self::PrefillCommand(_)
-            | Self::ToggleAgentDetails { .. }
             | Self::ShowSubagentsPanel
             | Self::OpenAgentDetail { .. }
             | Self::OpenAgentTranscript { .. }
@@ -1312,9 +1349,8 @@ pub struct App {
     /// instead of spawning a second dispatch that could reorder ops.
     pub dispatch_in_flight: bool,
     /// Timestamp of the most recent Enter while the engine was busy.
-    /// Retained for session layout compatibility; bare-Enter double-tap
-    /// steering was removed (use Ctrl+Enter instead).
-    #[allow(dead_code)]
+    /// Used by `enter_with_double_tap()` / `double_tap_window_open()` to
+    /// detect a second Enter inside [`Self::DOUBLE_TAP_WINDOW`].
     pub last_enter_instant: Option<Instant>,
     /// Whether the once-per-turn provider-wait incident (#3095) has already
     /// been logged for the current turn.
@@ -1638,8 +1674,6 @@ pub struct App {
     /// Current hover tooltip text, if any.
     pub sidebar_hover_tooltip: Option<String>,
     /// Last successfully rendered Work panel summary. Transient mutex misses
-    /// should not wipe settled To-do state from the sidebar.
-    pub(crate) cached_work_summary: Option<SidebarWorkSummary>,
     /// Browsing context from the last dismissed `/model` picker, so reopening
     /// restores the view mode and highlighted row instead of resetting to the
     /// top (#4109 picker memory). Session-scoped, never persisted.
@@ -1681,8 +1715,6 @@ pub struct App {
     pub subagent_terminal_seen_at: HashMap<String, Instant>,
     /// Last known per-agent progress text for running sub-agents.
     pub agent_progress: HashMap<String, String>,
-    /// Agent rows expanded by direct sidebar interaction.
-    pub expanded_sidebar_agents: HashSet<String>,
     /// Parent/depth metadata for live progress-only sub-agent rows.
     pub agent_progress_meta: HashMap<String, AgentProgressMeta>,
     /// In-transcript sub-agent card index by `agent_id` (issue #128).
@@ -2132,6 +2164,10 @@ pub struct App {
     pub session_started_at: chrono::DateTime<chrono::Utc>,
     /// Whether the UI needs to be redrawn.
     pub needs_redraw: bool,
+    /// A fleet mutation (`/fleet add|remove`, ⇧F, auto-enroll) landed on
+    /// disk since the engine last received its roster. The event loop
+    /// flushes it through `Op::SetFleetRoster` (`sync_fleet_roster`).
+    pub fleet_roster_stale: bool,
     /// When true, the next draw will be a full repaint (terminal clear +
     /// all cells redrawn) instead of a ratatui incremental diff. Used by
     /// theme switches where the diff engine may miss color-only changes
@@ -3876,6 +3912,29 @@ impl App {
         crate::pricing::format_cost_amount(amount, self.cost_display_currency(self.cost_currency))
     }
 
+    /// A [`CostEstimate`] in the session's display currency — the same rule
+    /// `format_cost_amount` applies, so a turn receipt and the session total
+    /// never disagree on `$` versus `¥`.
+    pub fn format_cost_estimate(&self, estimate: CostEstimate) -> String {
+        crate::pricing::format_cost_estimate(
+            estimate,
+            self.cost_display_currency(self.cost_currency),
+        )
+    }
+
+    /// Price is one number, everywhere (design §2.11 item 5): the session
+    /// cost as the footer chip, the price view, and the roster print it.
+    /// Money routes print the amount; subscription, local, and unknown
+    /// routes print the same words the chip uses; a metered route that has
+    /// not spent yet prints `$0.00` rather than vanishing between turns.
+    #[must_use]
+    pub fn session_cost_label(&self) -> String {
+        let chip = self.cumulative_usage_chip();
+        crate::route_billing::format_usage_chip(&chip).unwrap_or_else(|| {
+            self.format_cost_amount(self.displayed_session_cost_for_currency(self.cost_currency))
+        })
+    }
+
     pub fn format_cost_amount_precise(&self, amount: f64) -> String {
         crate::pricing::format_cost_amount_precise(
             amount,
@@ -4085,6 +4144,7 @@ impl App {
                 let role = agent.agent_type.as_str().trim();
                 (!role.is_empty()).then(|| role.to_string())
             })
+            .map(|role| crate::tools::subagent::public_role_label(&role))
     }
 
     /// `true` for the `Agent N` counter placeholder assigned before a child's
@@ -5298,14 +5358,66 @@ impl App {
         ComposerSubmitAction::Submit(disposition)
     }
 
-    /// Resolve what bare Enter should do right now.
+    /// How long after a queued Enter a second, empty Enter still means
+    /// "send that now" (the grokbuild double-tap, restored 2026-09-02).
+    pub const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(500);
+
+    /// Resolve what bare Enter should do right now, with double-tap
+    /// detection.
     ///
-    /// Kept for compatibility with older call sites and tests.
+    /// While the engine is busy the first Enter queues and opens the window;
+    /// a second Enter inside it resolves to `Steer` — the same disposition
+    /// Ctrl+Enter takes, so there is one steering path. The event loop pairs
+    /// this with [`Self::take_queued_for_double_tap_steer`] on an empty
+    /// composer, because the first tap already emptied it. Idle Enter
+    /// submits immediately and closes any window.
     #[must_use]
-    #[allow(dead_code)]
     pub fn enter_with_double_tap(&mut self) -> Option<SubmitDisposition> {
-        // Name kept for call-site stability; the double-tap window is gone.
-        Some(self.decide_submit_disposition())
+        let disposition = self.decide_submit_disposition();
+        match disposition {
+            SubmitDisposition::Queue if !self.offline_mode && !self.dispatch_in_flight => {
+                if self.double_tap_window_open() {
+                    self.last_enter_instant = None;
+                    return Some(SubmitDisposition::Steer);
+                }
+                self.last_enter_instant = Some(Instant::now());
+                Some(SubmitDisposition::Queue)
+            }
+            other => {
+                self.last_enter_instant = None;
+                Some(other)
+            }
+        }
+    }
+
+    /// Open the double-tap window: a queued Enter happened while the engine
+    /// was busy. The typed-submit path calls this when it queues.
+    pub fn arm_double_tap_window(&mut self) {
+        self.last_enter_instant = Some(Instant::now());
+    }
+
+    /// True while a second, empty Enter would send the just-queued message
+    /// now — the posture bar advertises the gesture exactly this long.
+    #[must_use]
+    pub fn double_tap_window_open(&self) -> bool {
+        self.is_loading
+            && !self.offline_mode
+            && !self.dispatch_in_flight
+            && self
+                .last_enter_instant
+                .is_some_and(|instant| instant.elapsed() < Self::DOUBLE_TAP_WINDOW)
+    }
+
+    /// Pop the most recently queued message when the double-tap window is
+    /// still open. Clears the window so a third Enter does not re-steer.
+    pub fn take_queued_for_double_tap_steer(&mut self) -> Option<QueuedMessage> {
+        if !self.double_tap_window_open() || self.queued_messages.is_empty() {
+            return None;
+        }
+        match self.enter_with_double_tap() {
+            Some(SubmitDisposition::Steer) => self.queued_messages.pop_back(),
+            _ => None,
+        }
     }
 
     /// Mark the in-flight streaming Assistant cell as interrupted: prepend
@@ -5439,7 +5551,6 @@ impl App {
                     .as_ref()
                     .and_then(|state| state.graph.as_ref()),
             );
-            self.cached_work_summary = None;
             self.last_known_work_state = Some(normalized_state);
             return Ok(());
         }
@@ -5465,7 +5576,6 @@ impl App {
         drop(plan);
         drop(todos);
         self.work_surface.record_restored_session(session_id, None);
-        self.cached_work_summary = None;
         self.last_known_work_state =
             Some((!normalized_state.is_empty()).then_some(normalized_state));
         Ok(())
@@ -5476,7 +5586,6 @@ impl App {
             if !work.clear(self.current_session_id.as_deref()) {
                 return false;
             }
-            self.cached_work_summary = None;
             self.last_known_work_state = Some(None);
             return true;
         }
@@ -5492,7 +5601,6 @@ impl App {
         *plan = PlanState::default();
         drop(plan);
         drop(todos);
-        self.cached_work_summary = None;
         self.last_known_work_state = Some(None);
         true
     }
@@ -5505,9 +5613,6 @@ impl App {
             .work
             .as_ref()
             .map_or(Ok(false), |work| work.publish_pending_sync())?;
-        if published {
-            self.cached_work_summary = None;
-        }
         Ok(published)
     }
 

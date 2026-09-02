@@ -83,6 +83,10 @@ pub fn ascii_fallback(symbol: &str) -> Option<&'static str> {
         "⏸" => Some("="),
         // Schedule/timer (the activity band's automation slot) — cron's `@`.
         "⏱" => Some("@"),
+        // The launch warning line's gate glyph ("no model connected").
+        "⚠" => Some("!"),
+        // The working screen's MCP chip marker (`⋮ MCP n/m`).
+        "⋮" => Some("|"),
         "≈≈>" => Some("~>"),
         "≈" | "～" => Some("~"),
         "🐳" | "🐋" => Some("w"),

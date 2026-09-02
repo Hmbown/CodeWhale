@@ -583,9 +583,27 @@ pub(super) fn is_context_length_error_message(message: &str) -> bool {
         || (lower.contains("requested") && lower.contains("tokens") && lower.contains("maximum"))
 }
 
+pub(super) fn is_image_input_rejection_message(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    let image_signal = lower.contains("image_url")
+        || lower.contains("content.type")
+        || lower.contains("content type")
+        || lower.contains("does not support image")
+        || lower.contains("image input")
+        || lower.contains("unsupported modality")
+        || lower
+            .split(|character: char| !character.is_alphanumeric())
+            .any(|term| term == "vision");
+    let rejection_signal = lower.contains("400")
+        || lower.contains("invalid")
+        || lower.contains("unsupported")
+        || lower.contains("not support");
+    image_signal && rejection_signal
+}
+
 #[cfg(test)]
 mod tests {
-    use super::emergency_trim_budget;
+    use super::{emergency_trim_budget, is_image_input_rejection_message};
 
     #[test]
     fn emergency_trim_budget_leaves_a_hysteresis_margin() {
@@ -595,5 +613,20 @@ mod tests {
         assert_eq!(emergency_trim_budget(10), 8);
         assert_eq!(emergency_trim_budget(4), 4);
         assert_eq!(emergency_trim_budget(0), 0);
+    }
+
+    #[test]
+    fn image_rejection_classifier_matches_provider_400s() {
+        assert!(is_image_input_rejection_message(
+            r#"request (400): {"error":{"code":"1214","message":"messages.content.type 参数非法, 取值范围 ['text']"}}"#
+        ));
+        assert!(is_image_input_rejection_message(
+            "Invalid content type. image_url is only supported by certain models."
+        ));
+        assert!(!is_image_input_rejection_message("Model not exist."));
+        assert!(!is_image_input_rejection_message("invalid revision id"));
+        assert!(!is_image_input_rejection_message(
+            "This model's maximum context length is 131072 tokens."
+        ));
     }
 }

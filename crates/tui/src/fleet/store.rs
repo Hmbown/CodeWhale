@@ -179,17 +179,19 @@ pub struct FleetFile {
 /// Why a Fleet file could not be used.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum FleetStoreError {
-    #[error("invalid Pod: {0}")]
+    #[error("invalid fleet: {0}")]
     Invalid(String),
-    #[error("Pod `{0}` is defined in both {1} and {2}; name one explicitly as {1}/{0} or {2}/{0}")]
+    #[error(
+        "fleet `{0}` is defined in both {1} and {2}; name one explicitly as {1}/{0} or {2}/{0}"
+    )]
     Ambiguous(String, String, String),
-    #[error("Pod file not found: {0}")]
+    #[error("fleet file not found: {0}")]
     NotFound(String),
     #[error("failed to read {path}: {message}")]
     Io { path: String, message: String },
     #[error("failed to parse {path}: {message}")]
     Parse { path: String, message: String },
-    #[error("a Pod named `{name}` already exists at {path}; rename it or choose another name")]
+    #[error("a fleet named `{name}` already exists at {path}; rename it or choose another name")]
     NameTaken { name: String, path: String },
 }
 
@@ -227,7 +229,7 @@ impl FleetFile {
         let name = self.name.trim();
         if name.is_empty() {
             return Err(FleetStoreError::Invalid(
-                "Pod name must not be empty".to_string(),
+                "fleet name must not be empty".to_string(),
             ));
         }
         let mut seen: BTreeMap<String, String> = BTreeMap::new();
@@ -294,14 +296,14 @@ impl FleetFile {
     pub fn render_toml(&self) -> Result<String, FleetStoreError> {
         self.validate()?;
         let rendered = toml::to_string_pretty(self)
-            .map_err(|e| FleetStoreError::Invalid(format!("failed to serialize Pod: {e}")))?;
+            .map_err(|e| FleetStoreError::Invalid(format!("failed to serialize fleet: {e}")))?;
         Ok(rendered)
     }
 
     /// Parse a v2 fleet document from TOML text.
     pub fn parse(text: &str) -> Result<Self, FleetStoreError> {
         let fleet: Self = toml::from_str(text)
-            .map_err(|e| FleetStoreError::Invalid(format!("invalid Pod TOML: {e}")))?;
+            .map_err(|e| FleetStoreError::Invalid(format!("invalid fleet TOML: {e}")))?;
         fleet.validate()?;
         Ok(fleet)
     }
@@ -330,7 +332,7 @@ impl FleetFile {
 }
 
 /// Sanitize a display name into a safe file slug.
-fn slugify(name: &str) -> String {
+pub(crate) fn slugify(name: &str) -> String {
     let mut slug = String::with_capacity(name.len());
     for ch in name.trim().chars() {
         if ch.is_ascii_alphanumeric() {
@@ -441,9 +443,9 @@ fn collect_entries(dir: &Path, scope: FleetScope, out: &mut Vec<FleetEntry>) {
             .as_deref()
             .and_then(|text| FleetFile::parse(text).err())
             .map(|e| e.to_string());
-        let legacy = parse_error
-            .as_deref()
-            .is_some_and(|err| err.contains("unknown schema") || err.contains("invalid Pod TOML"));
+        let legacy = parse_error.as_deref().is_some_and(|err| {
+            err.contains("unknown schema") || err.contains("invalid fleet TOML")
+        });
         // The row shows the Fleet's own display name, never the file slug —
         // a file saved as `Temp Fleet` must not appear as `temp-fleet`.
         let name = text
@@ -644,7 +646,7 @@ pub fn resolve_selected_fleet(workspace: &Path) -> Result<Option<SelectedFleet>,
             }
         }
         return Err(FleetStoreError::NotFound(format!(
-            "selected Pod `{name}` (folder selection at {})",
+            "selected fleet `{name}` (folder selection at {})",
             ws_dir.join(SELECTED_FILE).display()
         )));
     }
@@ -660,7 +662,7 @@ pub fn resolve_selected_fleet(workspace: &Path) -> Result<Option<SelectedFleet>,
             }));
         }
         return Err(FleetStoreError::NotFound(format!(
-            "selected Pod `{name}` (user selection at {})",
+            "selected fleet `{name}` (user selection at {})",
             dir.join(SELECTED_FILE).display()
         )));
     }
@@ -1165,7 +1167,7 @@ role = "scout"
 
         let error = resolve_selected_fleet(ws.path()).expect_err("stale selection must fail");
         assert!(
-            error.to_string().contains("selected Pod `Missing Fleet`"),
+            error.to_string().contains("selected fleet `Missing Fleet`"),
             "{error}"
         );
         assert!(error.to_string().contains("folder selection"), "{error}");

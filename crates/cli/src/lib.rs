@@ -202,23 +202,23 @@ non-interactive filesystem/shell tool use, matching the supported automation
 path used by stream-json wrappers.
 ")]
     Exec(TuiPassthroughArgs),
-    /// Manage durable Agent Pod runs.
+    /// Manage durable Agent fleet runs.
     ///
-    /// `pod` is the canonical spelling. `codewhale fleet` remains accepted as
+    /// `fleet` is the canonical spelling. `codewhale pod` remains accepted as
     /// a compatibility alias for the identical command: the durable ledger,
     /// receipts, config tables, and `--fleet` workflow flag keep the Fleet
     /// serialization name.
     #[command(
-        name = "pod",
-        alias = "fleet",
+        name = "fleet",
+        alias = "pod",
         after_help = "\
 Examples:
-  codewhale pod init
-  codewhale pod run tasks.json --max-workers 4
-  codewhale pod status
+  codewhale fleet init
+  codewhale fleet run tasks.json --max-workers 4
+  codewhale fleet status
 
-`codewhale fleet` is a compatibility alias for this command and dispatches
-identically, as `/fleet` does for the `/pod` slash command. What keeps the
+`codewhale pod` is a compatibility alias for this command and dispatches
+identically, as `/pod` does for the `/fleet` slash command. What keeps the
 Fleet name is everything that has to stay readable across versions: the
 durable ledger `.codewhale/fleet.jsonl`, saved rosters `fleets/<name>.toml`,
 the `[fleet]` and `[fleets.*]` config tables, and `workflow run --fleet`."
@@ -6491,12 +6491,12 @@ verbosity = "project-imported"
         ));
     }
 
-    /// Pod is the canonical customer-facing top-level command; `fleet` is a
+    /// Fleet is the canonical customer-facing top-level command; `pod` is a
     /// compatibility alias that must keep dispatching to the same code path.
-    /// The Fleet spelling survives on purpose in the durable ledger, saved
+    /// The Fleet spelling was always the one in the durable ledger, saved
     /// roster files, config tables, and the `workflow --fleet` flag.
     #[test]
-    fn pod_is_the_canonical_top_level_command_and_fleet_stays_a_compatibility_alias() {
+    fn fleet_is_the_canonical_top_level_command_and_pod_stays_a_compatibility_alias() {
         for tail in [
             vec!["init"],
             vec!["status"],
@@ -6524,8 +6524,8 @@ verbosity = "project-imported"
             assert!(pod.prompt.is_empty() && fleet.prompt.is_empty(), "{tail:?}");
         }
 
-        // Help advertises Pod. The alias still resolves, but discovery has one
-        // canonical answer, so `fleet` must not be listed as its own command.
+        // Help advertises fleet. The alias still resolves, but discovery has one
+        // canonical answer, so `pod` must not be listed as its own command.
         let help = help_for(&["codewhale", "--help"]);
         let commands = help
             .lines()
@@ -6537,20 +6537,20 @@ verbosity = "project-imported"
             1,
             "expected exactly one entry: {commands:?}"
         );
-        assert!(commands[0].starts_with("pod"), "{commands:?}");
+        assert!(commands[0].starts_with("fleet"), "{commands:?}");
         assert!(
-            commands[0].contains("Pod"),
-            "help summary should name Pod: {commands:?}"
+            commands[0].contains("fleet"),
+            "help summary should name fleet: {commands:?}"
         );
         assert!(
-            !help.contains("Manage durable Agent Fleet runs"),
-            "the old Fleet-led summary must be gone from top-level help"
+            !help.contains("Manage durable Agent Pod runs"),
+            "the retired Pod-led summary must be gone from top-level help"
         );
 
-        let pod_help = help_for(&["codewhale", "pod", "--help"]);
-        assert!(pod_help.contains("Manage durable Agent Pod runs"));
-        assert!(pod_help.contains("codewhale pod run tasks.json --max-workers 4"));
-        assert!(pod_help.contains("codewhale fleet` is a compatibility alias"));
+        let fleet_help = help_for(&["codewhale", "fleet", "--help"]);
+        assert!(fleet_help.contains("Manage durable Agent fleet runs"));
+        assert!(fleet_help.contains("codewhale fleet run tasks.json --max-workers 4"));
+        assert!(fleet_help.contains("codewhale pod` is a compatibility alias"));
 
         // Both spellings normalize to the canonical inner command so receipts
         // and any echoed invocation never regress to the compatibility name.

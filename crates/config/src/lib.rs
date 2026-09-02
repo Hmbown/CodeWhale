@@ -1348,13 +1348,13 @@ pub const DEFAULT_HOTBAR_ACTIONS: [&str; HOTBAR_SLOT_COUNT as usize] = [
 /// Normalize persisted action ids at the compatibility boundary.
 ///
 /// `/pod` is the canonical public command, but existing settings may still
-/// contain the former `slash.fleet` hotbar id. Resolution and direct registry
+/// contain the former `slash.pod` hotbar id. Resolution and direct registry
 /// lookup both use this helper so those slots continue to dispatch while any
 /// subsequent save naturally writes the canonical id.
 #[must_use]
 pub fn normalize_hotbar_action_id(action_id: &str) -> &str {
     match action_id {
-        "slash.fleet" => "slash.pod",
+        "slash.pod" => "slash.fleet",
         other => other,
     }
 }

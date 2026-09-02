@@ -704,7 +704,7 @@ impl ModalView for PagerView {
             visible_lines.push(Line::from(Span::styled(
                 prompt,
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )));
         } else if !self.search_matches.is_empty() {

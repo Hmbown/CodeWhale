@@ -509,8 +509,9 @@ pub fn strip_images_when_unsupported(
                     *block = ContentBlock::Text {
                         text: format!(
                             "[image content omitted: the active model ({model}) does \
-                             not accept image input. Switch to a vision-capable \
-                             model with /model to see it.]"
+                             not accept image input. Use the image_ocr tool to read \
+                             text from it, or switch to a vision-capable model with \
+                             /model.]"
                         ),
                         cache_control: None,
                     };
@@ -525,7 +526,7 @@ pub fn strip_images_when_unsupported(
                     if count > 0 {
                         *content_blocks = None;
                         *content = format!(
-                            "{content}\n[{count} image block(s) omitted: the active model ({model}) does not accept image input.]"
+                            "{content}\n[{count} image block(s) omitted: the active model ({model}) does not accept image input. Use the image_ocr tool to read text from it, or switch to a vision-capable model with /model.]"
                         );
                         stripped += count;
                     }

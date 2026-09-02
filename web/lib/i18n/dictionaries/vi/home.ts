@@ -7,7 +7,7 @@ import type { HomeDict } from "../types";
  * locale pack: nhà cung cấp (provider), phiên (session), kho mã
  * (repository), mức quyền (permission posture), biên nhận (receipt), nhiệm
  * vụ (task). Modes (Plan / Work / Operate), permission postures (Ask /
- * Auto-Review / Full Access), commands (`codewhale exec`), Pod, Workflow,
+ * Auto-Review / Full Access), commands (`codewhale exec`), fleet, Workflow,
  * Runtime and the product name stay literal, exactly as the TUI renders
  * them.
  *
@@ -71,7 +71,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "Mới dùng Codewhale? Bốn bước từ đầu đến cuối.",
   startLede:
-    "Cài đặt → phiên đầu không cần khóa → kết nối nhà cung cấp → Workflow Pod đầu tiên. Thuật ngữ được định nghĩa ở trang thuật ngữ.",
+    "Cài đặt → phiên đầu không cần khóa → kết nối nhà cung cấp → Workflow fleet đầu tiên. Thuật ngữ được định nghĩa ở trang thuật ngữ.",
   startGuideLink: "Đọc hướng dẫn bắt đầu →",
   startVocabularyLink: "Xem thuật ngữ sản phẩm →",
 
@@ -92,7 +92,7 @@ export const home: HomeDict = {
     ["codewhale exec", "Script và CI"],
     ["Ứng dụng web", "Chạy trong trình duyệt, chỉ qua loopback"],
     ["Runtime API + MCP", "Tích hợp cục bộ"],
-    ["Pod", "Công việc nhiều tác tử, bền vững"],
+    ["fleet", "Công việc nhiều tác tử, bền vững"],
   ],
   runtimeLink: "Xem các giao diện runtime và ghi chú về độ ổn định →",
 

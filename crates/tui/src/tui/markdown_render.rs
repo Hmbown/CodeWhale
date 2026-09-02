@@ -694,7 +694,7 @@ pub(crate) fn render_parsed_tagged_with_palette(
         match &parsed.blocks[i] {
             Block::Heading { text, .. } => {
                 let style = Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD);
                 out.extend(render_wrapped_line_tagged(text, width, style, false, false));
             }
@@ -723,7 +723,7 @@ pub(crate) fn render_parsed_tagged_with_palette(
                 });
             }
             Block::ListItem { bullet, text } => {
-                let bullet_style = Style::default().fg(palette::WHALE_INFO);
+                let bullet_style = Style::default().fg(palette::WHALE_ACTION);
                 out.extend(render_list_line_tagged(
                     bullet,
                     text,
@@ -734,7 +734,7 @@ pub(crate) fn render_parsed_tagged_with_palette(
             }
             Block::Code { .. } => unreachable!(),
             Block::Quote { depth, text } => {
-                let rail_style = Style::default().fg(palette::WHALE_INFO);
+                let rail_style = Style::default().fg(palette::WHALE_ACTION);
                 let text_style = Style::default().fg(palette::TEXT_DIM);
                 out.extend(render_quote_line_tagged(
                     text, *depth, width, rail_style, text_style,

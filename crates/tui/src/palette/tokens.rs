@@ -3,24 +3,28 @@
 use ratatui::style::Color;
 
 // Codewhale Whale palette. Semantic colors own state, never decoration alone.
-pub const WHALE_BG_RGB: (u8, u8, u8) = (3, 7, 13); // #03070D Deep field
-pub const WHALE_CHROME_RGB: (u8, u8, u8) = (8, 17, 28); // #08111C Ink / chrome
-pub const WHALE_PANEL_RGB: (u8, u8, u8) = (14, 23, 41); // #0E1729 Panel surface
-pub const WHALE_COMPOSER_RGB: (u8, u8, u8) = (22, 34, 56); // #162238 Plate
-pub const WHALE_ELEVATED_RGB: (u8, u8, u8) = (24, 39, 66); // #182742 Raised
-pub const WHALE_SELECTION_RGB: (u8, u8, u8) = (31, 50, 77); // #1F324D Action-blue tint
+pub const WHALE_BG_RGB: (u8, u8, u8) = (7, 12, 29); // #070C1D Ink field
+pub const WHALE_CHROME_RGB: (u8, u8, u8) = (12, 21, 49); // #0C1531 Navy chrome
+pub const WHALE_PANEL_RGB: (u8, u8, u8) = (16, 28, 64); // #101C40 Panel surface
+pub const WHALE_COMPOSER_RGB: (u8, u8, u8) = (20, 35, 82); // #142352 Stage plate (brand navy)
+pub const WHALE_ELEVATED_RGB: (u8, u8, u8) = (26, 44, 99); // #1A2C63 Raised
+pub const WHALE_SELECTION_RGB: (u8, u8, u8) = (30, 60, 143); // #1E3C8F Cobalt tint
 pub const WHALE_TEXT_BODY_RGB: (u8, u8, u8) = (246, 242, 232); // #F6F2E8 Whale Ivory
 pub const WHALE_TEXT_SOFT_RGB: (u8, u8, u8) = (182, 192, 212); // #B6C0D4
 pub const WHALE_TEXT_MUTED_RGB: (u8, u8, u8) = (147, 160, 184); // #93A0B8
-pub const WHALE_TEXT_HINT_RGB: (u8, u8, u8) = (138, 153, 179); // #8A99B3 — nudged +0.4 contrast for AA hint on #03070D
+pub const WHALE_TEXT_HINT_RGB: (u8, u8, u8) = (138, 153, 179); // #8A99B3 — AA hint on the ink field
+/// Blue Stage grammar: the interaction blue is the primary accent and the
+/// Info ink; it has exactly one name. Signal Gold is reserved for the whale
+/// mark and human-attention roles ([`WHALE_HUMAN_RGB`]), never for general
+/// interaction.
+pub const WHALE_ACTION_RGB: (u8, u8, u8) = (106, 166, 220); // #6AA6DC Ombre sky — owns interaction on dark
+// No TUI consumer yet; the web reads these through scripts/export-design-tokens.py
+// (`--whale-cobalt`, `--whale-ice`), so they are not dead.
 #[expect(dead_code)]
-pub const WHALE_TEXT_DIM_RGB: (u8, u8, u8) = (105, 119, 145); // #697791
-pub const WHALE_ACTION_RGB: (u8, u8, u8) = (106, 174, 242); // #6AAEF2 Blue — owns interaction on dark
+pub const WHALE_COBALT_RGB: (u8, u8, u8) = (21, 53, 178); // #1535B2 Ombre cobalt — light-mode action
 #[expect(dead_code)]
-pub const WHALE_COBALT_RGB: (u8, u8, u8) = (49, 95, 216); // #315FD8 Cobalt — light-mode action
-#[expect(dead_code)]
-pub const WHALE_ICE_RGB: (u8, u8, u8) = (209, 235, 244); // #D1EBF4 Ice — structure on dark
-pub const WHALE_CYAN_RGB: (u8, u8, u8) = (72, 215, 255); // #48D7FF Cyan — bounded accents only
+pub const WHALE_ICE_RGB: (u8, u8, u8) = (221, 238, 249); // #DDEEF9 Ice — structure on dark
+pub const WHALE_CYAN_RGB: (u8, u8, u8) = (120, 188, 232); // #78BCE8 Cyan — bounded accents only
 pub const WHALE_ACCENT_SECONDARY_RGB: (u8, u8, u8) = (79, 209, 197); // #4FD1C5 Seafoam
 // Whale Teams (Signal Cut, CWC 2026-08-15) identity accents. These two brand
 // palette entries have no semantic role in the TUI; they exist only so the
@@ -29,13 +33,7 @@ pub const WHALE_ACCENT_SECONDARY_RGB: (u8, u8, u8) = (79, 209, 197); // #4FD1C5 
 pub const WHALE_BRAND_ORANGE_RGB: (u8, u8, u8) = (255, 138, 61); // #FF8A3D Harbor mooring loop
 pub const WHALE_BRAND_MAGENTA_RGB: (u8, u8, u8) = (240, 78, 184); // #F04EB8 Echo sonar ticks
 pub const WHALE_HUMAN_RGB: (u8, u8, u8) = (246, 196, 83); // #F6C453 Signal Gold
-/// Blue Stage grammar: the primary accent is the interaction blue. Signal Gold
-/// is reserved for the whale mark and human-attention roles
-/// ([`WHALE_HUMAN_RGB`]), never for general interaction.
-pub const WHALE_ACCENT_PRIMARY_RGB: (u8, u8, u8) = WHALE_ACTION_RGB;
 pub const WHALE_WORKING_GREEN_RGB: (u8, u8, u8) = (155, 214, 111); // #9BD66F Working Green
-#[expect(dead_code)]
-pub const WHALE_ACCENT_ACTION_RGB: (u8, u8, u8) = WHALE_ACTION_RGB;
 pub const WHALE_ERROR_RGB: (u8, u8, u8) = (255, 134, 178); // #FF86B2 Rose danger
 pub const WHALE_ERROR_HOVER_RGB: (u8, u8, u8) = (255, 156, 194); // #FF9CC2
 pub const WHALE_ERROR_SURFACE_RGB: (u8, u8, u8) = (43, 21, 34); // #2B1522
@@ -43,11 +41,10 @@ pub const WHALE_ERROR_BORDER_RGB: (u8, u8, u8) = WHALE_ERROR_RGB;
 pub const WHALE_ERROR_TEXT_RGB: (u8, u8, u8) = (255, 219, 232); // #FFDBE8
 pub const WHALE_WARNING_RGB: (u8, u8, u8) = (255, 122, 89); // #FF7A59 Coral warning
 pub const WHALE_SUCCESS_RGB: (u8, u8, u8) = WHALE_WORKING_GREEN_RGB; // completed / verified
-pub const WHALE_INFO_RGB: (u8, u8, u8) = WHALE_ACTION_RGB;
-pub const WHALE_BORDER_RGB: (u8, u8, u8) = (38, 62, 92); // #263E5C, blue at 25% on stage
+pub const WHALE_BORDER_RGB: (u8, u8, u8) = (42, 63, 114); // #2A3F72, sky at 25% on stage
 pub const WHALE_REASONING_TEXT_RGB: (u8, u8, u8) = (224, 153, 72); // #E09948
 pub const WHALE_REASONING_SURFACE_RGB: (u8, u8, u8) = (42, 34, 24); // #2A2218
-pub const WHALE_REASONING_TINT_RGB: (u8, u8, u8) = (24, 36, 52); // #182434
+pub const WHALE_REASONING_TINT_RGB: (u8, u8, u8) = (22, 36, 74); // #16244A
 
 // Solarized Light palette RGB tuples
 pub const SOLARIZED_BASE03_RGB: (u8, u8, u8) = (0x00, 0x2B, 0x36);
@@ -70,22 +67,20 @@ pub const SOLARIZED_ELEVATED_RGB: (u8, u8, u8) = (0xE4, 0xDF, 0xCF);
 pub const SOLARIZED_SELECT_RGB: (u8, u8, u8) = (0xD6, 0xD2, 0xC9);
 
 pub const WHALE_DIFF_ADDED_RGB: (u8, u8, u8) = (87, 199, 133); // #57C785
-#[expect(dead_code)]
-pub const WHALE_DIFF_DELETED_RGB: (u8, u8, u8) = WHALE_ERROR_RGB;
 pub const WHALE_DIFF_ADDED_BG_RGB: (u8, u8, u8) = (18, 42, 34); // #122A22
 // Raw colors that are remapped by equality must remain distinct across roles.
 // These stay in the same perceptual families as action, danger, and human asks
 // while preserving mode identity for Terminal and community themes.
 pub const WHALE_DIFF_DELETED_BG_RGB: (u8, u8, u8) = (52, 24, 39); // #341827
-pub const WHALE_MODE_AGENT_RGB: (u8, u8, u8) = (118, 181, 245); // #76B5F5
+pub const WHALE_MODE_AGENT_RGB: (u8, u8, u8) = (126, 180, 232); // #7EB4E8
 pub const WHALE_MODE_YOLO_RGB: (u8, u8, u8) = (255, 112, 160); // #FF70A0
 pub const WHALE_MODE_PLAN_RGB: (u8, u8, u8) = (185, 220, 236); // #B9DCEC Structural Ice
 pub const WHALE_MODE_OPERATE_RGB: (u8, u8, u8) = (173, 136, 255); // #AD88FF
 pub const WHALE_TOOL_LIVE_RGB: (u8, u8, u8) = WHALE_ACCENT_SECONDARY_RGB;
 pub const WHALE_TOOL_ISSUE_RGB: (u8, u8, u8) = WHALE_ERROR_RGB;
 pub const WHALE_TOOL_OUTPUT_RGB: (u8, u8, u8) = WHALE_TEXT_SOFT_RGB;
-pub const WHALE_TOOL_SURFACE_RGB: (u8, u8, u8) = (18, 29, 50); // #121D32
-pub const WHALE_TOOL_ACTIVE_RGB: (u8, u8, u8) = (27, 44, 68); // #1B2C44
+pub const WHALE_TOOL_SURFACE_RGB: (u8, u8, u8) = (15, 26, 58); // #0F1A3A
+pub const WHALE_TOOL_ACTIVE_RGB: (u8, u8, u8) = (24, 44, 94); // #182C5E
 
 pub const LIGHT_SURFACE_RGB: (u8, u8, u8) = (244, 247, 251); // #F4F7FB
 pub const LIGHT_PANEL_RGB: (u8, u8, u8) = (255, 253, 248); // #FFFDF8
@@ -98,7 +93,7 @@ pub const LIGHT_TEXT_BODY_RGB: (u8, u8, u8) = (20, 33, 58); // #14213A
 pub const LIGHT_TEXT_MUTED_RGB: (u8, u8, u8) = (91, 103, 128); // #5B6780
 pub const LIGHT_TEXT_HINT_RGB: (u8, u8, u8) = (95, 107, 129); // #5F6B81
 pub const LIGHT_TEXT_SOFT_RGB: (u8, u8, u8) = (69, 81, 104); // #455168
-pub const LIGHT_ACTION_RGB: (u8, u8, u8) = (49, 95, 216); // #315FD8 Cobalt
+pub const LIGHT_ACTION_RGB: (u8, u8, u8) = (21, 53, 178); // #1535B2 Ombre cobalt
 pub const LIGHT_LIVE_RGB: (u8, u8, u8) = (8, 118, 109); // #08766D
 pub const LIGHT_HUMAN_RGB: (u8, u8, u8) = (122, 85, 0); // #7A5500
 pub const LIGHT_WARNING_RGB: (u8, u8, u8) = (169, 71, 36); // #A94724
@@ -107,7 +102,7 @@ pub const LIGHT_DANGER_RGB: (u8, u8, u8) = (180, 35, 90); // #B4235A
 // inputs to the render backend. A `Cell` carries only a `Color`, so reusing the
 // exact action/human/danger value here would erase the mode role before ANSI
 // adaptation can preserve it.
-pub const LIGHT_MODE_AGENT_RGB: (u8, u8, u8) = (50, 95, 216); // #325FD8
+pub const LIGHT_MODE_AGENT_RGB: (u8, u8, u8) = (22, 54, 178); // #1636B2
 pub const LIGHT_MODE_YOLO_RGB: (u8, u8, u8) = (181, 35, 90); // #B5235A
 pub const LIGHT_MODE_PLAN_RGB: (u8, u8, u8) = (52, 92, 128); // #345C80 Structural steel-blue
 pub const LIGHT_OPERATE_RGB: (u8, u8, u8) = (112, 71, 184); // #7047B8
@@ -233,11 +228,6 @@ pub const MATRIX_BORDER_RGB: (u8, u8, u8) = (0, 204, 0); // #00CC00
 // Semantic colors
 pub const BORDER_COLOR_RGB: (u8, u8, u8) = WHALE_BORDER_RGB;
 
-pub const WHALE_ACCENT_PRIMARY: Color = Color::Rgb(
-    WHALE_ACCENT_PRIMARY_RGB.0,
-    WHALE_ACCENT_PRIMARY_RGB.1,
-    WHALE_ACCENT_PRIMARY_RGB.2,
-);
 pub const WHALE_ACTION: Color =
     Color::Rgb(WHALE_ACTION_RGB.0, WHALE_ACTION_RGB.1, WHALE_ACTION_RGB.2);
 pub const WHALE_LIVE: Color = Color::Rgb(
@@ -246,7 +236,6 @@ pub const WHALE_LIVE: Color = Color::Rgb(
     WHALE_ACCENT_SECONDARY_RGB.2,
 );
 pub const WHALE_HUMAN: Color = Color::Rgb(WHALE_HUMAN_RGB.0, WHALE_HUMAN_RGB.1, WHALE_HUMAN_RGB.2);
-pub const WHALE_INFO: Color = Color::Rgb(WHALE_INFO_RGB.0, WHALE_INFO_RGB.1, WHALE_INFO_RGB.2);
 pub const WHALE_BG: Color = Color::Rgb(WHALE_BG_RGB.0, WHALE_BG_RGB.1, WHALE_BG_RGB.2);
 pub const WHALE_CHROME: Color =
     Color::Rgb(WHALE_CHROME_RGB.0, WHALE_CHROME_RGB.1, WHALE_CHROME_RGB.2);
@@ -450,21 +439,7 @@ pub const LIGHT_USER_BODY: Color = LIGHT_SUCCESS_FG;
 // Compatibility semantic colors for UI theming
 pub const BORDER_COLOR: Color =
     Color::Rgb(BORDER_COLOR_RGB.0, BORDER_COLOR_RGB.1, BORDER_COLOR_RGB.2);
-#[expect(dead_code)]
-pub const ACCENT_PRIMARY: Color = Color::Rgb(
-    WHALE_ACCENT_PRIMARY_RGB.0,
-    WHALE_ACCENT_PRIMARY_RGB.1,
-    WHALE_ACCENT_PRIMARY_RGB.2,
-);
-#[expect(dead_code)]
-pub const ACCENT_SECONDARY: Color = Color::Rgb(
-    WHALE_ACCENT_SECONDARY_RGB.0,
-    WHALE_ACCENT_SECONDARY_RGB.1,
-    WHALE_ACCENT_SECONDARY_RGB.2,
-);
 pub const BACKGROUND_DARK: Color = Color::Rgb(WHALE_BG_RGB.0, WHALE_BG_RGB.1, WHALE_BG_RGB.2);
-#[expect(dead_code)]
-pub const STATUS_NEUTRAL: Color = TEXT_MUTED;
 pub const SURFACE_PANEL: Color =
     Color::Rgb(WHALE_PANEL_RGB.0, WHALE_PANEL_RGB.1, WHALE_PANEL_RGB.2);
 pub const SURFACE_ELEVATED: Color = Color::Rgb(
@@ -547,7 +522,6 @@ pub const STATUS_WARNING: Color = Color::Rgb(
     WHALE_WARNING_RGB.2,
 );
 pub const STATUS_ERROR: Color = Color::Rgb(WHALE_ERROR_RGB.0, WHALE_ERROR_RGB.1, WHALE_ERROR_RGB.2);
-pub const STATUS_INFO: Color = Color::Rgb(WHALE_INFO_RGB.0, WHALE_INFO_RGB.1, WHALE_INFO_RGB.2);
 
 // Mode-specific accent colors for mode badges
 pub const MODE_AGENT: Color = Color::Rgb(

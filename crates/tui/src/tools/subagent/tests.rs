@@ -1047,7 +1047,7 @@ fn headless_worker_registration_enforces_live_claims_and_projects_context() {
 
     let overlap = manager
         .preflight_worker_coordination(&worker("worker-b", "src/a/nested"))
-        .expect_err("overlapping live Pod writer must remain queued");
+        .expect_err("overlapping live Fleet writer must remain queued");
     assert!(overlap.contains("worker-a"), "{overlap}");
     assert_eq!(manager.coordination.contentions.len(), 1);
     assert!(manager.get_worker_record("worker-b").is_none());
@@ -2536,32 +2536,32 @@ fn test_agent_type_round_trips_via_as_str() {
 
 #[test]
 fn fleet_role_labels_are_canonical_while_legacy_snapshot_wire_stays_readable() {
-    assert_eq!(FleetRole::Scout.as_str(), "scout");
-    assert_eq!(FleetRole::Builder.as_str(), "builder");
+    assert_eq!(FleetRole::Scout.as_str(), "explore");
+    assert_eq!(FleetRole::Builder.as_str(), "implement");
     // Normal serialization writes Fleet role names only.
     assert_eq!(
         serde_json::to_string(&FleetRole::Scout).expect("serialize fleet role"),
-        "\"scout\""
+        "\"explore\""
     );
     assert_eq!(
         serde_json::to_string(&FleetRole::Builder).expect("serialize fleet role"),
-        "\"builder\""
+        "\"implement\""
     );
     // Legacy wire is accepted only at the deserialize boundary.
     assert_eq!(
-        serde_json::from_str::<FleetRole>("\"explore\"").expect("read legacy snapshot"),
+        serde_json::from_str::<FleetRole>("\"scout\"").expect("read legacy snapshot"),
         FleetRole::Scout
     );
     assert_eq!(
-        migrate_legacy_role_token("explore"),
-        Some("scout"),
-        "boundary helper maps explore → scout"
+        migrate_legacy_role_token("scout"),
+        Some("explore"),
+        "boundary helper maps scout → explore"
     );
     // Re-serializing a migrated load never re-emits the legacy token.
     let migrated: FleetRole = serde_json::from_str("\"explore\"").expect("migrate legacy explore");
     assert_eq!(
         serde_json::to_string(&migrated).expect("re-serialize after migration"),
-        "\"scout\""
+        "\"explore\""
     );
 }
 
@@ -2577,13 +2577,13 @@ fn fleet_role_deserialize_rejects_unknown_values_with_canonical_hint() {
         "error should name the rejected token: {message}"
     );
     for canonical in [
-        "worker",
-        "scout",
+        "general",
+        "explore",
         "planner",
         "reviewer",
-        "builder",
-        "verifier",
-        "consultant",
+        "implement",
+        "test",
+        "advisor",
         "custom",
     ] {
         assert!(
@@ -2592,7 +2592,11 @@ fn fleet_role_deserialize_rejects_unknown_values_with_canonical_hint() {
         );
     }
     assert!(
-        !message.contains("implementer") && !message.contains("explore"),
+        !message.contains("worker")
+            && !message.contains("scout")
+            && !message.contains("builder")
+            && !message.contains("verifier")
+            && !message.contains("consultant"),
         "error must not advertise legacy aliases: {message}"
     );
 }
@@ -2662,13 +2666,13 @@ fn test_implementer_and_verifier_have_distinct_prompts() {
 #[test]
 fn test_agent_type_prompts_include_shared_output_contract_once() {
     for (agent_type, marker) in [
-        (FleetRole::Worker, "Pod worker"),
-        (FleetRole::Scout, "Pod scout"),
-        (FleetRole::Planner, "Pod planner"),
-        (FleetRole::Reviewer, "Pod reviewer"),
-        (FleetRole::Builder, "Pod builder"),
-        (FleetRole::Verifier, "Pod verifier"),
-        (FleetRole::Custom, "custom Pod worker"),
+        (FleetRole::Worker, "Fleet worker"),
+        (FleetRole::Scout, "Fleet scout"),
+        (FleetRole::Planner, "Fleet planner"),
+        (FleetRole::Reviewer, "Fleet reviewer"),
+        (FleetRole::Builder, "Fleet builder"),
+        (FleetRole::Verifier, "Fleet verifier"),
+        (FleetRole::Custom, "custom Fleet worker"),
     ] {
         let prompt = agent_type.system_prompt();
         assert!(prompt.contains(marker));
@@ -2792,7 +2796,7 @@ fn agent_description_explains_background_child_and_transcript_handle() {
     assert!(description.contains("multiple starts"));
     assert!(description.contains("action=wait"));
     assert!(description.contains("action=claim"));
-    assert!(description.contains("Pod profile"));
+    assert!(description.contains("Fleet profile"));
     assert!(
         estimate_tool_description_tokens_conservative(description) <= 1024,
         "agent description exceeds the conservative 1024-token budget"
@@ -2961,7 +2965,7 @@ fn builder_plus_read_only_authority_fails_closed() {
         .expect_err("builder + read_only must fail closed");
         let message = err.to_string();
         assert!(
-            message.contains("contradiction") && message.contains("builder"),
+            message.contains("contradiction") && message.contains("implement"),
             "{spelling}: {message}"
         );
     }
@@ -3273,10 +3277,10 @@ fn consultant_round_trips_canonically_and_accepts_compatibility_aliases() {
     );
     assert_eq!(FleetRole::from_str("oracle"), Some(FleetRole::Consultant));
     assert_eq!(FleetRole::from_str("advisor"), Some(FleetRole::Consultant));
-    assert_eq!(FleetRole::Consultant.as_str(), "consultant");
+    assert_eq!(FleetRole::Consultant.as_str(), "advisor");
 
     let json = serde_json::to_string(&FleetRole::Consultant).expect("serialize");
-    assert_eq!(json, "\"consultant\"");
+    assert_eq!(json, "\"advisor\"");
     let back: FleetRole = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(back, FleetRole::Consultant);
 
@@ -3286,14 +3290,14 @@ fn consultant_round_trips_canonically_and_accepts_compatibility_aliases() {
         assert_eq!(migrated, FleetRole::Consultant);
         assert_eq!(
             serde_json::to_string(&migrated).expect("re-serialize canonical role"),
-            "\"consultant\""
+            "\"advisor\""
         );
     }
 
     // Advertised in the tool schema, so the model can actually pick it.
-    assert!(FLEET_ROLE_SCHEMA_VALUES.contains(&"consultant"));
+    assert!(FLEET_ROLE_SCHEMA_VALUES.contains(&"test"));
     assert!(!FLEET_ROLE_SCHEMA_VALUES.contains(&"oracle"));
-    assert!(!FLEET_ROLE_SCHEMA_VALUES.contains(&"advisor"));
+    assert!(FLEET_ROLE_SCHEMA_VALUES.contains(&"advisor"));
 }
 
 #[test]
@@ -3505,7 +3509,7 @@ fn test_parse_spawn_request_accepts_message_and_agent_type_aliases() {
     let parsed = parse_spawn_request(&input).expect("spawn request should parse");
     assert_eq!(parsed.prompt, "Find references to Foo");
     assert_eq!(parsed.agent_type, FleetRole::Scout);
-    assert_eq!(parsed.assignment.role.as_deref(), Some("scout"));
+    assert_eq!(parsed.assignment.role.as_deref(), Some("explore"));
 }
 
 #[test]
@@ -3860,7 +3864,7 @@ async fn agent_roster_action_redacts_selected_fleet_load_details() {
         fleets.join("broken.toml"),
         format!("not valid TOML /Users/operator/private {secret_marker}\n"),
     )
-    .expect("broken Pod");
+    .expect("broken Fleet");
 
     let roster = crate::fleet::identity::load_effective_roster(
         &codewhale_config::FleetConfigToml::default(),
@@ -3877,11 +3881,11 @@ async fn agent_roster_action_redacts_selected_fleet_load_details() {
     let message = tool
         .execute(json!({"action": "roster"}), &ToolContext::new(tmp.path()))
         .await
-        .expect_err("invalid selected Pod must fail visibly")
+        .expect_err("invalid selected Fleet must fail visibly")
         .to_string();
 
     assert!(
-        message.contains("Selected folder Pod `Broken`"),
+        message.contains("Selected folder Fleet `Broken`"),
         "{message}"
     );
     assert!(!message.contains(&tmp.path().display().to_string()));
@@ -3899,7 +3903,7 @@ fn test_apply_spawn_profile_unknown_lists_available_members() {
     let err = apply_spawn_profile(&mut request, &roster).expect_err("unknown profile should fail");
     let message = err.to_string();
     assert!(
-        message.contains("Unknown Pod role/profile 'warlock'"),
+        message.contains("Unknown Fleet role/profile 'warlock'"),
         "{message}"
     );
     for member in [
@@ -3954,7 +3958,7 @@ fn test_apply_spawn_profile_rejects_conflicting_explicit_type() {
         "{message}"
     );
     assert!(
-        message.contains("conflicting explicit type 'builder'"),
+        message.contains("conflicting explicit type 'implement'"),
         "{message}"
     );
 }
@@ -3990,7 +3994,7 @@ fn test_apply_spawn_profile_scout_yields_explore_type_and_inherits_route() {
     assert_eq!(
         selected.model_route,
         ModelRoute::Inherit,
-        "without Pod setup the scout inherits the active session model"
+        "without Fleet setup the scout inherits the active session model"
     );
     assert_eq!(selected.source, SpawnRouteSource::RunModel);
 }
@@ -4423,7 +4427,7 @@ fn named_fleet_profile_rejects_model_override() {
         .expect_err("model override on named profile must fail");
     let message = err.to_string();
     assert!(
-        message.contains("Pod profile 'scout'") && message.contains("'model' may not be set"),
+        message.contains("Fleet profile 'scout'") && message.contains("'model' may not be set"),
         "error should name the profile and the forbidden field: {message}"
     );
     assert!(
@@ -4443,7 +4447,7 @@ fn named_fleet_profile_rejects_model_override() {
         .expect_err("model_strength override on named profile must fail");
     let message = err.to_string();
     assert!(
-        message.contains("Pod profile 'builder'")
+        message.contains("Fleet profile 'builder'")
             && message.contains("'model_strength' may not be set"),
         "error should name the profile and the forbidden field: {message}"
     );
@@ -4457,7 +4461,7 @@ fn named_fleet_profile_rejects_model_override() {
     .expect("parse should succeed before apply");
     let err = apply_spawn_profile(&mut request, &roster)
         .expect_err("model_strength on reviewer must fail");
-    assert!(err.to_string().contains("Pod profile 'reviewer'"));
+    assert!(err.to_string().contains("Fleet profile 'reviewer'"));
 }
 
 /// 'general' is the single escape hatch that accepts model and model_strength.
@@ -4524,7 +4528,7 @@ fn custom_fleet_profile_also_rejects_model_override() {
         .expect_err("model override on custom named profile must fail");
     let message = err.to_string();
     assert!(
-        message.contains("Pod profile 'my-builder'"),
+        message.contains("Fleet profile 'my-builder'"),
         "error must name the custom profile: {message}"
     );
     assert!(
@@ -4657,7 +4661,7 @@ fn test_apply_spawn_profile_appends_instruction_overlay() {
         request.prompt
     );
     assert!(
-        request.prompt.contains("Pod profile: auditor"),
+        request.prompt.contains("Fleet profile: auditor"),
         "{}",
         request.prompt
     );
@@ -4907,7 +4911,7 @@ fn test_parse_spawn_request_accepts_human_role_selector_for_runtime_resolution()
     let roster = isolated_fleet_roster_with("flash-scout", profile);
     let member = apply_spawn_profile(&mut parsed, &roster)
         .expect("human role selector should resolve")
-        .expect("matching Pod member");
+        .expect("matching Fleet member");
     assert_eq!(member.id, "flash-scout");
     assert_eq!(parsed.profile.as_deref(), Some("flash-scout"));
 }
@@ -4948,15 +4952,15 @@ fn test_parse_spawn_request_accepts_full_role_vocabulary() {
     // also pass the second `normalize_role_alias` validation pass instead of
     // being rejected with a stale hint.
     for (role, expected_type, expected_role) in [
-        ("general", FleetRole::Worker, "worker"),
-        ("general-purpose", FleetRole::Worker, "worker"),
-        ("general_purpose", FleetRole::Worker, "worker"),
-        ("worker", FleetRole::Worker, "worker"),
-        ("default", FleetRole::Worker, "default"),
-        ("scout", FleetRole::Scout, "scout"),
-        ("explore", FleetRole::Scout, "scout"),
-        ("exploration", FleetRole::Scout, "scout"),
-        ("explorer", FleetRole::Scout, "scout"),
+        ("general", FleetRole::Worker, "general"),
+        ("general-purpose", FleetRole::Worker, "general"),
+        ("general_purpose", FleetRole::Worker, "general"),
+        ("worker", FleetRole::Worker, "general"),
+        ("default", FleetRole::Worker, "general"),
+        ("scout", FleetRole::Scout, "explore"),
+        ("explore", FleetRole::Scout, "explore"),
+        ("exploration", FleetRole::Scout, "explore"),
+        ("explorer", FleetRole::Scout, "explore"),
         ("plan", FleetRole::Planner, "planner"),
         ("planning", FleetRole::Planner, "planner"),
         ("planner", FleetRole::Planner, "planner"),
@@ -4965,18 +4969,18 @@ fn test_parse_spawn_request_accepts_full_role_vocabulary() {
         ("code-review", FleetRole::Reviewer, "reviewer"),
         ("code_review", FleetRole::Reviewer, "reviewer"),
         ("reviewer", FleetRole::Reviewer, "reviewer"),
-        ("implementer", FleetRole::Builder, "builder"),
-        ("implement", FleetRole::Builder, "builder"),
-        ("implementation", FleetRole::Builder, "builder"),
-        ("builder", FleetRole::Builder, "builder"),
-        ("verifier", FleetRole::Verifier, "verifier"),
-        ("verify", FleetRole::Verifier, "verifier"),
-        ("verification", FleetRole::Verifier, "verifier"),
-        ("validator", FleetRole::Verifier, "verifier"),
-        ("tester", FleetRole::Verifier, "verifier"),
-        ("consultant", FleetRole::Consultant, "consultant"),
-        ("oracle", FleetRole::Consultant, "consultant"),
-        ("advisor", FleetRole::Consultant, "consultant"),
+        ("implementer", FleetRole::Builder, "implement"),
+        ("implement", FleetRole::Builder, "implement"),
+        ("implementation", FleetRole::Builder, "implement"),
+        ("builder", FleetRole::Builder, "implement"),
+        ("verifier", FleetRole::Verifier, "test"),
+        ("verify", FleetRole::Verifier, "test"),
+        ("verification", FleetRole::Verifier, "test"),
+        ("validator", FleetRole::Verifier, "test"),
+        ("tester", FleetRole::Verifier, "test"),
+        ("consultant", FleetRole::Consultant, "advisor"),
+        ("oracle", FleetRole::Consultant, "advisor"),
+        ("advisor", FleetRole::Consultant, "advisor"),
         ("custom", FleetRole::Custom, "custom"),
     ] {
         assert_eq!(
@@ -5032,12 +5036,15 @@ fn test_invalid_role_error_lists_real_aliases() {
     let err = apply_spawn_profile(&mut request, &roster)
         .expect_err("unknown fleet role should fail at runtime resolution")
         .to_string();
-    assert!(err.contains("Unknown Pod role/profile 'nonsense'"), "{err}");
-    assert!(err.contains("scout"), "hint should list scout: {err}");
+    assert!(
+        err.contains("Unknown Fleet role/profile 'nonsense'"),
+        "{err}"
+    );
+    assert!(err.contains("explore"), "hint should list explore: {err}");
     assert!(err.contains("reviewer"), "hint should list reviewer: {err}");
-    assert!(err.contains("verifier"), "hint should list verifier: {err}");
+    assert!(err.contains("test"), "hint should list test: {err}");
     assert!(err.contains("custom"), "hint should list custom: {err}");
-    assert!(err.contains("worker"), "hint should list worker: {err}");
+    assert!(err.contains("general"), "hint should list general: {err}");
     assert!(
         err.contains("legacy aliases remain accepted"),
         "hint should explain compatibility aliases: {err}"
@@ -5113,13 +5120,13 @@ fn subagent_tool_schemas_advertise_real_type_and_role_vocabulary() {
 
     let description = schema_property_description(&agent_schema, "type");
     for alias in [
-        "worker",
-        "scout",
+        "general",
+        "explore",
         "planner",
         "reviewer",
-        "builder",
-        "verifier",
-        "consultant",
+        "implement",
+        "test",
+        "advisor",
         "custom",
     ] {
         assert!(
@@ -5302,39 +5309,41 @@ fn agent_tool_role_schema_is_a_closed_canonical_enum() {
     // Exact canonical values, exact order. New models are told the closed
     // Fleet vocabulary and nothing else.
     let expected = json!([
-        "worker",
-        "scout",
+        "general",
+        "explore",
         "planner",
         "reviewer",
-        "builder",
-        "verifier",
-        "consultant",
+        "implement",
+        "test",
+        "advisor",
         "custom"
     ]);
     assert_eq!(
         agent_schema["properties"]["type"]["enum"], expected,
-        "model-facing role schema must advertise exactly the canonical Pod enum"
+        "model-facing role schema must advertise exactly the canonical Fleet enum"
     );
 
-    // The description teaches each canonical role and never advertises
-    // legacy aliases; those stay at replay/deserialization boundaries.
+    // The description teaches each canonical role; legacy aliases stay at
+    // replay/deserialization boundaries.
     let description = schema_property_description(&agent_schema, "type");
     assert!(
-        description.starts_with("Pod role for this delegated worker."),
-        "type description should lead with the Pod role contract: {description}"
+        description.starts_with("Fleet role for this delegated worker."),
+        "type description should lead with the Fleet role contract: {description}"
     );
     let lowered = description.to_ascii_lowercase();
-    for legacy in [
+    for canonical in [
         "general",
         "explore",
-        "implementer",
-        "awaiter",
-        "legacy",
-        "alias",
+        "planner",
+        "reviewer",
+        "implement",
+        "test",
+        "advisor",
+        "custom",
     ] {
         assert!(
-            !lowered.contains(legacy),
-            "type description must not advertise legacy vocabulary {legacy:?}: {description}"
+            lowered.contains(canonical),
+            "type description must advertise canonical vocabulary {canonical:?}: {description}"
         );
     }
 }
@@ -5347,13 +5356,13 @@ fn provider_schema_sanitizers_preserve_the_closed_fleet_role_enum() {
     let manager = new_shared_subagent_manager(tmp.path().to_path_buf(), 1);
     let agent_schema = AgentTool::new(manager, stub_runtime()).input_schema();
     let expected = json!([
-        "worker",
-        "scout",
+        "general",
+        "explore",
         "planner",
         "reviewer",
-        "builder",
-        "verifier",
-        "consultant",
+        "implement",
+        "test",
+        "advisor",
         "custom"
     ]);
 
@@ -6197,7 +6206,7 @@ fn test_parse_spawn_request_rejects_conflicting_type_and_role() {
     let err = parse_spawn_request(&input).expect_err("conflicting type+role should fail");
     assert!(
         err.to_string()
-            .contains("Pod role conflicts with the explicit legacy agent type")
+            .contains("Fleet role conflicts with the explicit legacy agent type")
     );
 }
 
@@ -6308,8 +6317,8 @@ fn test_build_assignment_prompt_includes_metadata() {
     );
     let prompt = build_assignment_prompt("Inspect parser behavior", &assignment, &FleetRole::Scout);
     assert!(prompt.contains("Assignment metadata"));
-    assert!(prompt.contains("resolved_type: scout"));
-    assert!(prompt.contains("role: scout"));
+    assert!(prompt.contains("resolved_type: explore"));
+    assert!(prompt.contains("role: explore"));
 }
 
 #[test]
@@ -8091,11 +8100,11 @@ fn every_fleet_role_catalog_advertises_one_executable_load_skill() {
             .count();
         assert_eq!(
             load_skills, 1,
-            "Pod role {role:?} must advertise exactly one load_skill"
+            "Fleet role {role:?} must advertise exactly one load_skill"
         );
         assert!(
             registry.is_tool_allowed("load_skill"),
-            "Pod role {role:?} must be able to execute the advertised load_skill"
+            "Fleet role {role:?} must be able to execute the advertised load_skill"
         );
 
         if matches!(
@@ -8971,7 +8980,7 @@ async fn write_scope_contention_covers_regular_agent_and_active_fleet_writer() {
             tmp.path().to_path_buf(),
             "src/shared",
         ))
-        .expect("active Pod writer claim");
+        .expect("active Fleet writer claim");
 
     let regular_id = inner.insert_test_running_agent("regular", tmp.path());
     inner
@@ -8994,7 +9003,7 @@ async fn write_scope_contention_covers_regular_agent_and_active_fleet_writer() {
             Vec::new(),
             Vec::new(),
         )
-        .expect_err("regular-agent scope expansion must see active Pod ownership");
+        .expect_err("regular-agent scope expansion must see active Fleet ownership");
     assert!(
         expansion.contains("fleet-writer") && expansion.contains("contention"),
         "{expansion}"
@@ -9011,7 +9020,7 @@ async fn write_scope_contention_covers_regular_agent_and_active_fleet_writer() {
             Arc::clone(&manager),
             runtime,
             FleetRole::Builder,
-            "edit Pod-owned scope".into(),
+            "edit Fleet-owned scope".into(),
             make_assignment(),
             Some(vec![]),
             SubAgentSpawnOptions {
@@ -9025,7 +9034,7 @@ async fn write_scope_contention_covers_regular_agent_and_active_fleet_writer() {
                 ..Default::default()
             },
         )
-        .expect_err("regular-agent launch must see active Pod ownership");
+        .expect_err("regular-agent launch must see active Fleet ownership");
     let launch = launch.to_string();
     assert!(
         launch.contains("fleet-writer") && launch.contains("contention"),
@@ -10405,7 +10414,7 @@ fn subagent_done_sentinel_format_is_well_formed() {
     let parsed: serde_json::Value = serde_json::from_str(inner).expect("inner JSON parses");
     assert_eq!(parsed["agent_id"], "agent_xyz");
     assert_eq!(parsed["status"], "completed");
-    assert_eq!(parsed["agent_type"], "worker");
+    assert_eq!(parsed["agent_type"], "general");
     assert_eq!(parsed["summary_location"], "previous_line");
     // issue #2652: a complete (non-truncated) summary is tagged as such.
     assert_eq!(parsed["summary_kind"], "complete");
@@ -11965,7 +11974,7 @@ async fn general_delegation_still_blocks_suggest_write_without_parent_auto_appro
         .expect_err("general agent should not silently gain write permission");
     let msg = err.to_string();
     assert!(
-        msg.contains("not delegated to worker sub-agents"),
+        msg.contains("not delegated to general sub-agents"),
         "general writes should be rejected with a role-aware message: {msg}"
     );
 
@@ -12006,7 +12015,7 @@ async fn explore_role_still_blocks_suggest_writes_without_parent_auto_approve() 
         .expect_err("explore agents must not write");
     let msg = err.to_string();
     assert!(
-        msg.contains("scout") && msg.contains("not permitted"),
+        msg.contains("explore") && msg.contains("not permitted"),
         "explore writes should be rejected with a role-aware message: {msg}"
     );
     assert!(
@@ -12970,7 +12979,7 @@ fn persisted_advisory_assignment_roles_replay_and_repersist_as_consultant() {
             .get_result(&format!("agent_{alias}"))
             .expect("loaded consultant is visible");
         assert_eq!(result.agent_type, FleetRole::Consultant);
-        assert_eq!(result.assignment.role.as_deref(), Some("consultant"));
+        assert_eq!(result.assignment.role.as_deref(), Some("advisor"));
 
         manager
             .persist_state()
@@ -12983,9 +12992,9 @@ fn persisted_advisory_assignment_roles_replay_and_repersist_as_consultant() {
         .expect("parse canonical state");
         assert_eq!(
             repersisted["agents"][0]["assignment"]["role"],
-            json!("consultant")
+            json!("advisor")
         );
-        assert_eq!(repersisted["agents"][0]["agent_type"], json!("consultant"));
+        assert_eq!(repersisted["agents"][0]["agent_type"], json!("advisor"));
     }
 }
 
@@ -15596,7 +15605,7 @@ fn role_model_validation_accepts_provider_native_ids() {
 
 #[test]
 fn consultant_reads_released_advisory_role_model_override_keys() {
-    for legacy_key in ["oracle", "advisor"] {
+    for legacy_key in ["oracle", "consultant"] {
         let mut runtime = stub_runtime();
         runtime
             .role_models
@@ -15613,13 +15622,13 @@ fn canonical_consultant_model_override_precedes_compatibility_keys() {
     let mut runtime = stub_runtime();
     runtime
         .role_models
-        .insert("consultant".to_string(), "deepseek-v4-pro".to_string());
+        .insert("advisor".to_string(), "deepseek-v4-pro".to_string());
     runtime
         .role_models
         .insert("oracle".to_string(), "deepseek-v4-flash".to_string());
     runtime
         .role_models
-        .insert("advisor".to_string(), "deepseek-v4-flash".to_string());
+        .insert("consultant".to_string(), "deepseek-v4-flash".to_string());
 
     let model = configured_model_for_role_or_type(&runtime, None, &FleetRole::Consultant)
         .expect("canonical consultant override should resolve");
@@ -15628,11 +15637,11 @@ fn canonical_consultant_model_override_precedes_compatibility_keys() {
 
 #[test]
 fn raw_advisory_role_prefers_canonical_consultant_model_override() {
-    for alias in ["oracle", "advisor"] {
+    for alias in ["oracle", "consultant"] {
         let mut runtime = stub_runtime();
         runtime
             .role_models
-            .insert("consultant".to_string(), "deepseek-v4-pro".to_string());
+            .insert("advisor".to_string(), "deepseek-v4-pro".to_string());
         runtime
             .role_models
             .insert(alias.to_string(), "deepseek-v4-flash".to_string());
@@ -18520,7 +18529,7 @@ async fn a_read_only_inspection_member_gets_only_bounded_web_search() {
         tools: true,
     };
     let authority = crate::fleet::exact::ChildAuthority::from_runtime_role("scout", parent);
-    assert_eq!(authority.posture_role, "scout");
+    assert_eq!(authority.posture_role, "explore");
     assert!(!authority.ceiling.network_tool);
 
     let mut runtime =
@@ -18873,7 +18882,7 @@ async fn a_parent_read_only_session_narrows_a_full_exact_member_in_the_child_reg
     assert!(!authority.ceiling.write);
     assert!(!authority.ceiling.network_tool);
     assert_eq!(authority.write_authority, "read_only");
-    assert_eq!(authority.posture_role, "scout");
+    assert_eq!(authority.posture_role, "explore");
 
     let mut runtime =
         stub_runtime().with_agent_tool_surface_options(enabled_agent_surface_options());
@@ -19448,7 +19457,7 @@ fn the_spawn_boundary_fails_closed_on_a_missing_or_mismatched_authority() {
         let error = verify_fleet_authority_input(&fingerprint, &tampered)
             .expect_err("a tampered envelope must fail closed");
         assert!(
-            error.to_string().contains("Pod authority mismatch"),
+            error.to_string().contains("Fleet authority mismatch"),
             "{label}: {error}"
         );
     }
@@ -19848,11 +19857,11 @@ async fn spawn_receipt_compacts_and_verbose_restores_the_archive() {
 
 fn spawn_route_metadata(provider: &str, model: &str, source: &str) -> WorkflowTaskSpawnMetadata {
     let child_route = ChildRouteReceipt {
-        requested_type: "scout".to_string(),
+        requested_type: "explore".to_string(),
         requested_profile: None,
         resolved_profile_id: None,
         profile_origin: None,
-        canonical_role: "scout".to_string(),
+        canonical_role: "explore".to_string(),
         provider_id: provider.to_string(),
         model_id: model.to_string(),
         route_source: source.to_string(),
@@ -19965,7 +19974,7 @@ async fn spawn_receipt_route_survives_compaction_for_a_type_only_spawn() {
         json!("deepseek-v4-flash")
     );
     assert_eq!(receipt["child_route"]["route_source"], json!("run.model"));
-    assert_eq!(receipt["child_route"]["requested_type"], json!("scout"));
+    assert_eq!(receipt["child_route"]["requested_type"], json!("explore"));
     assert!(
         receipt.get("fleet_profile").is_none(),
         "a type-only spawn resolves no profile: {receipt}"

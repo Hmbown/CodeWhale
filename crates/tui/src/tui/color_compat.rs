@@ -604,13 +604,15 @@ mod tests {
         );
 
         assert_eq!(cell.fg, palette::LIGHT_TEXT_BODY);
-        assert_eq!(cell.bg, palette::LIGHT_SURFACE);
+        // The whale pair's shell is terminal-owned: a direct WHALE_BG paint
+        // follows LIGHT_UI_THEME.surface_bg (Reset), not a painted surface.
+        assert_eq!(cell.bg, Color::Reset);
     }
 
     #[test]
     fn grayscale_palette_maps_hued_cells_before_depth_adaptation() {
         let mut cell = Cell::default();
-        cell.set_fg(palette::WHALE_INFO);
+        cell.set_fg(palette::WHALE_ACTION);
         cell.set_bg(palette::WHALE_BG);
 
         adapt_cell_colors(

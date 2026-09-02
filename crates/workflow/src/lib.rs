@@ -538,15 +538,29 @@ pub struct Task {
 pub type WorkflowTask = Task;
 pub type WorkflowRole = AgentType;
 
+/// The workflow wire's agent type. The serialized spellings are the canonical
+/// Codewhale role vocabulary (founder, 2026-09-02); the pre-rename JS
+/// spellings stay accepted as aliases so checked-in and saved workflows keep
+/// compiling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentType {
     #[default]
     General,
+    #[serde(alias = "scout")]
     Explore,
+    #[serde(rename = "planner", alias = "plan", alias = "awaiter")]
     Plan,
+    #[serde(
+        alias = "review",
+        alias = "reviewer",
+        alias = "consultant",
+        alias = "oracle"
+    )]
     Review,
+    #[serde(rename = "implement", alias = "implementer", alias = "builder")]
     Implementer,
+    #[serde(rename = "test", alias = "verifier", alias = "verify")]
     Verifier,
 }
 
@@ -2576,13 +2590,45 @@ mod tests {
 
         let json = serde_json::to_string(&workflow).expect("serialize workflow");
 
-        assert!(json.contains("\"agent_type\":\"implementer\""));
+        assert!(json.contains("\"agent_type\":\"implement\""));
         assert!(json.contains("\"mode\":\"read_write\""));
         assert!(json.contains("\"isolation\":\"worktree\""));
         assert!(json.contains("\"on_failure\":\"abort\""));
 
         let parsed: WorkflowConfig = serde_json::from_str(&json).expect("parse workflow");
         assert_eq!(parsed, workflow);
+    }
+
+    #[test]
+    fn json_accepts_pre_rename_agent_type_spellings_as_aliases() {
+        for (legacy, expected) in [
+            ("implementer", AgentType::Implementer),
+            ("builder", AgentType::Implementer),
+            ("verifier", AgentType::Verifier),
+            ("verify", AgentType::Verifier),
+            ("scout", AgentType::Explore),
+            ("review", AgentType::Review),
+        ] {
+            let parsed: AgentType =
+                serde_json::from_value(serde_json::json!(legacy)).expect("legacy alias must parse");
+            assert_eq!(parsed, expected, "alias {legacy}");
+        }
+        // Canonical spellings parse and round-trip back as themselves.
+        for (canonical, expected) in [
+            ("implement", AgentType::Implementer),
+            ("test", AgentType::Verifier),
+            ("explore", AgentType::Explore),
+            ("general", AgentType::General),
+        ] {
+            let parsed: AgentType =
+                serde_json::from_value(serde_json::json!(canonical)).expect("canonical parses");
+            assert_eq!(parsed, expected);
+            assert_eq!(
+                serde_json::to_value(parsed).expect("serialize"),
+                serde_json::json!(canonical),
+                "canonical spelling must serialize as itself"
+            );
+        }
     }
 
     #[test]

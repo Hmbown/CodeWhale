@@ -42,6 +42,7 @@ use crate::config::Config;
 use crate::fleet::profile::FleetProfileScope;
 use crate::localization::{MessageId, tr};
 use crate::palette;
+use crate::tools::subagent::public_role_label;
 use crate::tui::app::App;
 use crate::tui::menu_style;
 use crate::tui::views::{
@@ -65,7 +66,7 @@ pub(crate) enum FleetSetupEditTarget {
 }
 
 /// Resolve setup independently of project-profile trust. A broken explicit
-/// selection fails closed instead of being mistaken for "no Pod" and
+/// selection fails closed instead of being mistaken for "no Fleet" and
 /// silently opening the legacy profile writer.
 pub(crate) fn resolve_fleet_setup_edit_target(
     workspace: &Path,
@@ -77,7 +78,7 @@ pub(crate) fn resolve_fleet_setup_edit_target(
         }),
         Ok(None) => Ok(FleetSetupEditTarget::LegacyProfiles),
         Err(_) => Err(
-            "Selected Pod is missing or unreadable; open /pod pods to repair or clear the selection. Legacy profiles were not opened."
+            "Selected Fleet is missing or unreadable; open /pod pods to repair or clear the selection. Legacy profiles were not opened."
                 .to_string(),
         ),
     }
@@ -103,18 +104,18 @@ const ROLES: [Choice; 9] = [
         label: Cow::Borrowed("manager"),
         summary: Cow::Borrowed("Plan & split queued work"),
         description: Cow::Borrowed(
-            "Coordinates the Pod run: plans the work, splits it into bounded tasks, and dispatches workers.",
+            "Coordinates the Fleet run: plans the work, splits it into bounded tasks, and dispatches workers.",
         ),
     },
     Choice {
-        label: Cow::Borrowed("scout"),
+        label: Cow::Borrowed("explore"),
         summary: Cow::Borrowed("Read-first research"),
         description: Cow::Borrowed(
             "Research and evidence gathering. Reads and summarizes before anything is written.",
         ),
     },
     Choice {
-        label: Cow::Borrowed("builder"),
+        label: Cow::Borrowed("implement"),
         summary: Cow::Borrowed("Implements bounded changes"),
         description: Cow::Borrowed(
             "Implements changes strictly inside its assigned task scope; writes only what the slice needs.",
@@ -128,14 +129,14 @@ const ROLES: [Choice; 9] = [
         ),
     },
     Choice {
-        label: Cow::Borrowed("verifier"),
+        label: Cow::Borrowed("test"),
         summary: Cow::Borrowed("Bounded validation"),
         description: Cow::Borrowed(
             "Runs bounded validation (test/check selections) and reports receipts back to the orchestrator. Never writes — patching is denied; unbounded shell forms are refused.",
         ),
     },
     Choice {
-        label: Cow::Borrowed("consultant"),
+        label: Cow::Borrowed("advisor"),
         summary: Cow::Borrowed("Read-only second opinion"),
         description: Cow::Borrowed(
             "Short-lived, high-reasoning counsel for difficult decisions and overlooked risks. Read-only and shell-less.",
@@ -794,9 +795,10 @@ impl FleetSetupView {
 
     fn from_snapshot_for_role(snapshot: FleetSetupSnapshot, role: &str) -> Self {
         let mut view = Self::from_snapshot(snapshot);
+        let role = public_role_label(role);
         view.role_idx = ROLES
             .iter()
-            .position(|choice| choice.label.eq_ignore_ascii_case(role.trim()))
+            .position(|choice| choice.label.eq_ignore_ascii_case(&role))
             .unwrap_or(ROLES.len() - 1);
         view.step = Step::Model;
         // Reopening a SAVED member edits what is on disk: preselect its route,
@@ -807,7 +809,7 @@ impl FleetSetupView {
             .snapshot
             .roster_details
             .iter()
-            .find(|detail| detail.id == role_id)
+            .find(|detail| detail.id == role_id || public_role_label(&detail.id) == role)
             .cloned();
         if let Some(saved) = saved {
             view.profile_scope = saved.scope;
@@ -1486,7 +1488,7 @@ impl FleetSetupView {
             provider: route.map(|(provider, _)| provider),
             reasoning_effort: self.selected_reasoning_effort(),
             instructions: Some(format!(
-                "Role: {}. Work only within the assigned Pod slice. Report concise evidence and stop when the assignment is complete. Do not widen permissions, trust, route configuration, or topology.",
+                "Role: {}. Work only within the assigned Fleet slice. Report concise evidence and stop when the assignment is complete. Do not widen permissions, trust, route configuration, or topology.",
                 role.label
             )),
         })
@@ -1756,7 +1758,7 @@ impl ModalView for FleetSetupView {
         };
         let block = Block::default()
             .title(Line::from(Span::styled(
-                " Pod setup — your agent team ",
+                " Fleet setup — your agent team ",
                 Style::default()
                     .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
@@ -1791,7 +1793,7 @@ impl ModalView for FleetSetupView {
         match self.step {
             Step::Role => {
                 let mut context = vec![
-                    "Pod runs sub-agents that delegate work. Pick the role this team member should play; the saved profile carries it as its role_hint.".to_string(),
+                    "Fleet runs sub-agents that delegate work. Pick the role this team member should play; the saved profile carries it as its role_hint.".to_string(),
                 ];
                 if let Some(note) = self.roster_override_note() {
                     context.push(note);
@@ -1872,7 +1874,7 @@ impl FleetSetupView {
         let (title, subtitle): (Cow<'static, str>, Cow<'static, str>) = match self.step {
             Step::Role => (
                 Cow::Borrowed("Choose a team role"),
-                Cow::Borrowed("Each Pod member plays one role in the delegation."),
+                Cow::Borrowed("Each Fleet member plays one role in the delegation."),
             ),
             Step::Composition => (
                 Cow::Borrowed("Unratified composition suggestion"),
@@ -1902,7 +1904,7 @@ impl FleetSetupView {
         let chip_style = Style::default().fg(palette::TEXT_MUTED);
         let mut lines = vec![Line::from(Span::styled(
             title.into_owned(),
-            Style::default().fg(palette::WHALE_INFO).bold(),
+            Style::default().fg(palette::WHALE_ACTION).bold(),
         ))];
         if area.height >= 3 {
             lines.push(Line::from(Span::styled(
@@ -2086,7 +2088,7 @@ impl FleetSetupView {
         let section = |lines: &mut Vec<Line>, label: &str, body: String| {
             lines.push(Line::from(Span::styled(
                 label.to_string(),
-                Style::default().fg(palette::WHALE_INFO).bold(),
+                Style::default().fg(palette::WHALE_ACTION).bold(),
             )));
             lines.push(Line::from(Span::styled(
                 body,
@@ -2172,7 +2174,7 @@ impl FleetSetupView {
             CompositionDecision::Accepted => section(
                 &mut lines,
                 "Composition",
-                "Accepted the configured-pool suggestion for this role. It remains unsaved until you save this profile; no Pod was launched or changed.".to_string(),
+                "Accepted the configured-pool suggestion for this role. It remains unsaved until you save this profile; no Fleet was launched or changed.".to_string(),
             ),
             CompositionDecision::Edited => section(
                 &mut lines,
@@ -2210,7 +2212,7 @@ impl FleetSetupView {
             &mut lines,
             "Workspace & org",
             format!(
-                "{} · sub-agents {} ({} concurrent, {} launch slots, {} admitted) · recursion agent {} / Pod {} (ceiling {})",
+                "{} · sub-agents {} ({} concurrent, {} launch slots, {} admitted) · recursion agent {} / Fleet {} (ceiling {})",
                 self.snapshot.workspace.display(),
                 if self.snapshot.subagents_enabled {
                     "enabled"
@@ -2288,7 +2290,7 @@ impl FleetSetupView {
 
     fn review_policy_summary(&self) -> String {
         format!(
-            "Workers run without a token cap by default · {}s api, {}s heartbeat. Launch with Pod → exec; /pod workers (or /subagents) shows sub-agents in the current interactive session; /pod status and codewhale pod status both read the persistent .codewhale/fleet.jsonl ledger.",
+            "Workers run without a token cap by default · {}s api, {}s heartbeat. Launch with Fleet → exec; /pod workers (or /subagents) shows sub-agents in the current interactive session; /pod status and codewhale pod status both read the persistent .codewhale/fleet.jsonl ledger.",
             self.snapshot.api_timeout_secs, self.snapshot.heartbeat_timeout_secs
         )
     }
@@ -2584,22 +2586,22 @@ mod tests {
         );
 
         let fleet =
-            crate::fleet::store::FleetFile::new("Launch".to_string(), None).expect("valid Pod");
+            crate::fleet::store::FleetFile::new("Launch".to_string(), None).expect("valid Fleet");
         let fleet_path = crate::fleet::store::save_fleet(
             &fleet,
             crate::fleet::store::FleetScope::Workspace,
             workspace.path(),
         )
-        .expect("save Pod");
+        .expect("save Fleet");
         crate::fleet::store::set_selected(
             "Launch",
             crate::fleet::store::FleetScope::Workspace,
             workspace.path(),
         )
-        .expect("select Pod");
+        .expect("select Fleet");
 
         assert_eq!(
-            resolve_fleet_setup_edit_target(workspace.path()).expect("selected Pod"),
+            resolve_fleet_setup_edit_target(workspace.path()).expect("selected Fleet"),
             FleetSetupEditTarget::SelectedFleet {
                 name: "Launch".to_string(),
                 scope: crate::fleet::store::FleetScope::Workspace,
@@ -2741,7 +2743,7 @@ mod tests {
     fn destination_step_sits_between_model_and_review_and_names_the_exact_file() {
         let temp = tempfile::tempdir().expect("temp workspace");
         let mut view = FleetSetupView::from_snapshot(workspace_snapshot(temp.path()));
-        view.handle_key(key(KeyCode::Down)); // scout
+        view.handle_key(key(KeyCode::Down)); // explore
         view.handle_key(key(KeyCode::Enter)); // -> Model
         view.handle_key(key(KeyCode::Enter)); // inherit -> Destination
         assert_eq!(view.step, Step::Destination);
@@ -2755,7 +2757,7 @@ mod tests {
         assert!(text.contains("Personal"), "{text}");
         assert!(text.contains("Step 3/4"), "{text}");
         // The highlighted (Personal) row shows its resolved file.
-        let personal = test_personal_dir().join("scout.toml");
+        let personal = test_personal_dir().join("explore.toml");
         assert!(
             text.contains("File:") && text.contains("agents"),
             "resolved file must be visible: {text}"
@@ -2764,7 +2766,7 @@ mod tests {
         // Up -> This project shows the workspace file.
         view.handle_key(key(KeyCode::Up));
         let text = rendered_text(&view, 120, 32);
-        let project = temp.path().join(PROFILE_DIR).join("scout.toml");
+        let project = temp.path().join(PROFILE_DIR).join("explore.toml");
         assert!(!text.contains("Will replace"), "{text}");
         assert_eq!(view.destinations.as_ref().unwrap()[0].target, project);
     }
@@ -2917,13 +2919,13 @@ mod tests {
     #[test]
     fn precedence_consequences_are_stated_for_both_destinations() {
         let temp = tempfile::tempdir().expect("temp workspace");
-        let project_source = temp.path().join(PROFILE_DIR).join("scout.toml");
+        let project_source = temp.path().join(PROFILE_DIR).join("explore.toml");
         let mut snap = workspace_snapshot(temp.path());
-        snap.roster_members.retain(|(id, _)| id != "scout");
+        snap.roster_members.retain(|(id, _)| id != "explore");
         snap.roster_members
-            .push(("scout".to_string(), "project".to_string()));
+            .push(("explore".to_string(), "project".to_string()));
         snap.roster_details.push(RosterMemberDetail {
-            id: "scout".to_string(),
+            id: "explore".to_string(),
             scope: FleetProfileScope::Project,
             source: project_source,
             provider: Some("deepseek".to_string()),
@@ -2931,7 +2933,7 @@ mod tests {
             reasoning_effort: None,
         });
         let mut view = FleetSetupView::from_snapshot(snap);
-        view.handle_key(key(KeyCode::Down)); // scout
+        view.handle_key(key(KeyCode::Down)); // explore
         view.handle_key(key(KeyCode::Enter));
         view.handle_key(key(KeyCode::Enter)); // -> Destination (Personal highlighted)
         let text = rendered_text(&view, 120, 32);
@@ -3428,7 +3430,7 @@ mod tests {
         else {
             panic!("expected fresh deterministic starter");
         };
-        assert_eq!(draft.id, "scout");
+        assert_eq!(draft.id, "explore");
     }
 
     #[test]
@@ -3467,13 +3469,13 @@ mod tests {
     fn roster_role_handoff_starts_at_model_and_can_return_to_role() {
         let mut via_left = FleetSetupView::from_snapshot_for_role(snapshot(), "consultant");
         assert_eq!(via_left.step, Step::Model);
-        assert_eq!(via_left.selected_role(), "consultant");
+        assert_eq!(via_left.selected_role(), "advisor");
         assert!(matches!(
             via_left.handle_key(key(KeyCode::Left)),
             ViewAction::None
         ));
         assert_eq!(via_left.step, Step::Role);
-        assert_eq!(via_left.selected_role(), "consultant");
+        assert_eq!(via_left.selected_role(), "advisor");
 
         let mut via_esc = FleetSetupView::from_snapshot_for_role(snapshot(), "reviewer");
         assert_eq!(via_esc.step, Step::Model);
@@ -3678,8 +3680,8 @@ mod tests {
             panic!("expected one-Enter starter save");
         };
         let content = draft.render_toml();
-        assert!(content.contains("id = \"builder\""));
-        assert!(content.contains("role_hint = \"builder\""));
+        assert!(content.contains("id = \"implement\""));
+        assert!(content.contains("role_hint = \"implement\""));
         assert!(content.contains("model = \"deepseek-v4-pro\""));
         assert!(content.contains("reasoning_effort = \"max\""));
         // A concrete cross-provider route pin names its own provider
@@ -3694,8 +3696,8 @@ mod tests {
         }
 
         assert_eq!(scope, FleetProfileScope::Personal);
-        assert_eq!(draft.id, "builder");
-        assert_eq!(draft.role_hint, "builder");
+        assert_eq!(draft.id, "implement");
+        assert_eq!(draft.role_hint, "implement");
         assert_eq!(draft.model.as_deref(), Some("deepseek-v4-pro"));
         assert_eq!(draft.provider.as_deref(), Some("deepseek"));
         assert_eq!(draft.reasoning_effort.as_deref(), Some("max"));
@@ -3827,7 +3829,7 @@ mod tests {
             draft
                 .instructions
                 .as_deref()
-                .is_some_and(|text| text.contains("assigned Pod slice"))
+                .is_some_and(|text| text.contains("assigned Fleet slice"))
         );
     }
 
@@ -4034,7 +4036,7 @@ mod tests {
             .expect("selected role summary should render");
         let description_row = rows
             .iter()
-            .position(|row| row.contains("Coordinates the Pod run"))
+            .position(|row| row.contains("Coordinates the Fleet run"))
             .expect("selected role description should render");
 
         assert!(
@@ -4052,8 +4054,8 @@ mod tests {
         for row in &rows[manager_row..=custom_row] {
             assert!(
                 !row.contains("Plan & split queued work")
-                    && !row.contains("Coordinates the Pod run")
-                    && !row.contains("Pod runs sub-agents"),
+                    && !row.contains("Coordinates the Fleet run")
+                    && !row.contains("Fleet runs sub-agents"),
                 "role list row contains detail copy at 80 columns: {row:?}\n{text}"
             );
         }
@@ -4190,7 +4192,7 @@ mod tests {
             );
             let top = rows
                 .iter()
-                .position(|row| row.contains("Pod setup — your agent team"))
+                .position(|row| row.contains("Fleet setup — your agent team"))
                 .expect("fleet setup title");
             let bottom = rows
                 .iter()

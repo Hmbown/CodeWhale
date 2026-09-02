@@ -4,10 +4,7 @@
 use ratatui::layout::Rect;
 
 use crate::tui::app::App;
-use crate::tui::work_surface::model::{
-    self, RailPanel, WorkSurfacePlacement, visible_rows_for_panel,
-};
-use crate::tui::work_surface::panels;
+use crate::tui::work_surface::model::{self, WorkSurfacePlacement, visible_rows_for_panel};
 
 use super::{progress_shares_goal_row, top_goal_title, top_todo_progress};
 
@@ -38,11 +35,12 @@ fn effective_placement(configured: WorkSurfacePlacement, host_width: u16) -> Wor
 /// transcript's own floor. See [`crate::tui::ui::rail_row_budget`]. The rail
 /// takes spare rows; it never takes rows the transcript needs.
 ///
-/// Every Top panel auto-fits its content the same way: content rows + optional
+/// Every view auto-fits its content the same way: content rows + optional
 /// goal title + the divider, capped by `top_height` and ambient room. A
 /// two-item checklist is two rows; eight agents grow to show eight. The only
-/// Top title is an active goal — never panel chrome ("Pinned"). Side rails
-/// keep a muted panel name because a full-height column needs naming.
+/// Top title is an active goal — never panel chrome. Which view is on screen
+/// is decided first by [`model::resolve_view`]: the user's explicit pick, or
+/// the first work view with content.
 pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16) -> u16 {
     app.work_surface.effective_placement = effective_placement(app.work_surface.placement, width);
     // Off hides the rail outright: no strip, no side reservation, no stale
@@ -51,49 +49,24 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
         collapse_strip(app);
         return 0;
     }
-    // The Context fact list on Top auto-fits like the row surface. Empty
-    // projections collapse to zero — an empty panel is not a panel. (Auto-fit
-    // governs HEIGHT only; membership is the model's business, and a settled
-    // to-do or finished sub-agent still occupies a row.) Side placements
-    // reserve via `split_chat` and take no top strip.
-    if app.work_surface.panel == RailPanel::Context {
-        if !app.work_surface.effective_placement.is_strip() {
-            return 0;
-        }
-        if !panels::panel_has_useful_content(app, app.work_surface.panel) {
+    model::resolve_view(app);
+    if app.work_surface.dismissed {
+        let current_rows = visible_rows_for_panel(app).len();
+        let new_work = app.work_surface.panel != app.work_surface.dismissed_view
+            || current_rows > app.work_surface.dismissed_at_rows;
+        if new_work {
+            app.work_surface.dismissed = false;
+        } else {
             collapse_strip(app);
             return 0;
         }
-        let cap = top_cap(app, terminal_height, rail_budget);
-        if cap < model::TOP_HEIGHT_MIN {
-            collapse_strip(app);
-            return 0;
-        }
-        let goal_rows = u16::from(top_goal_title(app).is_some());
-        let content_width = usize::from(width.saturating_sub(2).max(1));
-        // When the goal is the strip title, omit it from Pinned body rows so
-        // height and paint agree.
-        let content_rows = panels::panel_content_row_count(
-            app,
-            app.work_surface.panel,
-            content_width,
-            goal_rows > 0,
-        );
-        if content_rows == 0 && goal_rows == 0 {
-            collapse_strip(app);
-            return 0;
-        }
-        let desired = u16::try_from(content_rows)
-            .unwrap_or(u16::MAX)
-            .saturating_add(goal_rows)
-            .saturating_add(1); // divider
-        return desired.clamp(model::TOP_HEIGHT_MIN, cap);
     }
 
     let rows = visible_rows_for_panel(app);
-    let goal_rows =
-        u16::from(app.work_surface.effective_placement.is_strip() && top_goal_title(app).is_some());
-    if rows.is_empty() {
+    let strip = app.work_surface.effective_placement.is_strip();
+    let goal_rows = u16::from(strip && top_goal_title(app).is_some());
+    let explicit = app.work_surface.explicit_view;
+    if rows.is_empty() && !explicit {
         // A live goal alone still deserves a strip: title + divider.
         if goal_rows == 0 {
             collapse_strip(app);
@@ -103,7 +76,7 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
             app.work_surface.scroll_offset = 0;
             return 0;
         }
-        if !app.work_surface.effective_placement.is_strip() {
+        if !strip {
             return 0;
         }
         let cap = top_cap(app, terminal_height, rail_budget);
@@ -111,25 +84,21 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
             collapse_strip(app);
             return 0;
         }
-        return (goal_rows.saturating_add(1)).clamp(model::TOP_HEIGHT_MIN, cap);
+        return (goal_rows.saturating_add(2)).clamp(model::TOP_HEIGHT_MIN, cap);
     }
-    if !app.work_surface.effective_placement.is_strip() {
+    if !strip {
         return 0;
     }
-    // The strip auto-fits its content: the literal selectable list plus the
-    // optional goal title, the pinned progress receipt, and the divider row,
-    // bounded by `top_cap`.
+    // The strip auto-fits its content: the view's rows plus the optional
+    // goal title, the pinned progress receipt, and the divider row, bounded
+    // by `top_cap`. An explicitly opened empty view keeps one row for its
+    // "nothing here yet" line so cycling never lands on a blank band.
     let cap = top_cap(app, terminal_height, rail_budget);
     if cap < model::TOP_HEIGHT_MIN {
         collapse_strip(app);
         return 0;
     }
-    // Count every painted row: selectable work + group headers (Subagents N).
-    // Progress receipt and goal title are layered above in render.
-    let list_rows = rows
-        .iter()
-        .filter(|row| row.selectable || row.id.0.starts_with("section:"))
-        .count();
+    let list_rows = rows.len().max(usize::from(explicit));
     let progress = u16::from(
         top_todo_progress(app, &rows).is_some() && !progress_shares_goal_row(width, goal_rows > 0),
     );
@@ -137,7 +106,7 @@ pub fn height(app: &mut App, width: u16, terminal_height: u16, rail_budget: u16)
         .unwrap_or(u16::MAX)
         .saturating_add(progress)
         .saturating_add(goal_rows)
-        .saturating_add(1);
+        .saturating_add(2);
     desired.clamp(model::TOP_HEIGHT_MIN, cap)
 }
 
@@ -183,6 +152,9 @@ pub(crate) fn collapse_strip(app: &mut App) {
     app.work_surface.hovered = None;
     app.work_surface.resizing = false;
     app.work_surface.divider_hovered = false;
+    app.work_surface.dock_tabs.clear();
+    app.work_surface.pressed_tab = None;
+    app.work_surface.hovered_tab = None;
 }
 
 /// Split the transcript slot for a side rail. Top placement consumes its own
@@ -260,8 +232,9 @@ pub fn split_chat(app: &mut App, area: Rect, min_chat_width: u16) -> (Rect, Opti
 
 /// Whether a Left/Right rail should reserve columns this frame.
 fn side_rail_has_content(app: &mut App) -> bool {
-    match app.work_surface.panel {
-        RailPanel::Context => panels::panel_has_useful_content(app, RailPanel::Context),
-        _ => !visible_rows_for_panel(app).is_empty(),
+    if app.work_surface.dismissed {
+        return false;
     }
+    model::resolve_view(app);
+    app.work_surface.explicit_view || !visible_rows_for_panel(app).is_empty()
 }

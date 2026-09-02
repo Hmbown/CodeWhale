@@ -636,10 +636,10 @@ workflow({
             panic!("acceptance fixture should begin with one ordered role chain");
         };
         let expected_children = [
-            ("scout", 6, 480, 96_000),
-            ("implementer", 4, 420, 72_000),
+            ("explore", 6, 480, 96_000),
+            ("implement", 4, 420, 72_000),
             ("reviewer", 4, 420, 72_000),
-            ("verifier", 4, 420, 72_000),
+            ("test", 4, 420, 72_000),
             ("release_lead", 3, 300, 48_000),
         ];
         let mut aggregate_token_cap = 0_u64;
@@ -656,8 +656,8 @@ workflow({
             assert!(leaf.permissions.allowed_tools.is_empty());
             assert_eq!(
                 leaf.permissions.deny_all_tools,
-                expected_role != "scout",
-                "only the source-gathering scout should receive tools"
+                expected_role != "explore",
+                "only the source-gathering explore role should receive tools"
             );
             assert!(
                 leaf.prompt.contains(
@@ -671,7 +671,7 @@ workflow({
                     && leaf.prompt.contains("Here is the verdict"),
                 "{expected_role} must reject verdict preambles that the host cannot parse"
             );
-            if expected_role == "scout" {
+            if expected_role == "explore" {
                 assert!(
                     leaf.prompt.contains("exactly one `File` call")
                         && leaf.prompt.contains("Do not call `File` more than once")
@@ -766,10 +766,10 @@ workflow({
         );
 
         let expected_gates = [
-            ("scout", Some("implementer"), "source_evidence"),
-            ("implementer", Some("reviewer"), "verification_plan"),
-            ("reviewer", Some("verifier"), "review_report"),
-            ("verifier", Some("release_lead"), "verification_report"),
+            ("explore", Some("implement"), "source_evidence"),
+            ("implement", Some("reviewer"), "verification_plan"),
+            ("reviewer", Some("test"), "review_report"),
+            ("test", Some("release_lead"), "verification_report"),
             ("release_lead", None, "final_receipt"),
         ];
         assert_eq!(workflow.gates.len(), expected_gates.len());

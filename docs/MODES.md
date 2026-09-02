@@ -14,8 +14,8 @@ a concrete model and thinking level; they are not TUI modes and are not part of
 the `Tab` cycle.
 
 Workflow is also separate from the mode itself. It is the visible ordered
-orchestration layer for repeatable workflows and Pod workers. High fan-out
-routes through durable Pod-backed workers instead of prompt-only sub-agent
+orchestration layer for repeatable workflows and fleet workers. High fan-out
+routes through durable fleet-backed workers instead of prompt-only sub-agent
 fanout. The active mode
 still controls permissions; Workflow controls whether a large task is planned
 into a resumable workflow with its own progress view.
@@ -32,7 +32,7 @@ Run `/mode` to open the mode picker, or switch directly with `/mode work`,
 
 - **Plan**: design-first prompting. The stable primitive names remain familiar, but the runtime centrally refuses file mutation and shell execution. Read-only inspection and policy-allowed research, including deferred Web search/fetch, remain available.
 - **Work** (internally `agent`): ordinary multi-step execution. The small first-turn toolbox is `read`, `write`, `edit`, `bash`, `agent`, and `todo_write`; approval, sandbox, repository law, and managed policy still decide what may execute.
-- **Operate**: multitask conductor posture. It has the same primitive identities and execution authority as Work. The parent session is the **operator**: dispatching background workers is the default for independent or parallel work. Handle small or tightly coupled tasks in the parent; use background `agent` workers for separable streams, and use Workflow when order, phases, gates, shared budgets, or deterministic fan-in matter. **Dispatch is not completion** — write-capable children must return real verification evidence.
+- **Operate**: multitask conductor posture. Operate turns your prompt into a goal and works it in parallel: background workers for separable streams, verified before it stops. It has the same primitive identities and execution authority as Work. When no unfinished goal exists, a submitted prompt that is real work (not a greeting, acknowledgement, or short question) becomes the session goal automatically, with continuation on; the transcript shows `◆ goal set · Operate keeps working until it is verified · /goal to edit`. An explicit `/goal` declaration still wins, `/goal` still edits it, and an existing goal is never replaced. The parent session is the **operator**: dispatching background workers is the default for independent or parallel work. Handle small or tightly coupled tasks in the parent; use background `agent` workers for separable streams, and use Workflow when order, phases, gates, shared budgets, or deterministic fan-in matter. **Dispatch is not completion** — write-capable children must return real verification evidence. The first Operate turn of a session appends this contract once as a user-role runtime message (append-only history, never the pinned system prompt), so Plan, Work, and Operate keep one shared prompt prefix.
 
 `Act` and `/mode act` remain compatibility aliases for Work. Saved settings
 still normalize to the internal value `agent`.
@@ -47,7 +47,7 @@ still normalize to the internal value `agent`.
 | `agent` | yes, subject to child-depth authority | yes, subject to child-depth authority | yes, subject to child-depth authority |
 | Deferred native, MCP, and plugin tools | discoverable through `tool_search` when policy permits | same | same |
 | Paid or external-service tools | follows permission posture | follows permission posture | follows permission posture |
-| Access outside the workspace root | explicit trusted paths only | only through trusted paths or trust mode | same trusted-path/trust policy as Work; Pod profiles never widen it |
+| Access outside the workspace root | explicit trusted paths only | only through trusted paths or trust mode | same trusted-path/trust policy as Work; fleet profiles never widen it |
 
 Operate changes scheduling emphasis, not authority. It neither adds a
 mode-specific tool denial nor bypasses the active approval, sandbox, shell,
@@ -60,7 +60,7 @@ authority difference does not require a different primitive vocabulary.
 ```text
 User message
   → small / chat / one-file?  → parent does it (Work-equivalent tools)
-  → real / multi-stream work? → goal (if needed) → dispatch background workers
+  → real / multi-stream work? → goal (set from the prompt) → dispatch background workers
        → each write child: implement → VERDICT PASS/FAIL with evidence
        → ordered / gated fan-in? → Workflow (operate_* starters)
        → high-stakes ambiguous? → best-of-n (N worktrees + reviewer; apply on PASS)
@@ -258,7 +258,7 @@ narrowed before metadata is built and cannot invent approval authority. An
 explicit Full Access sub-agent handoff preserves the parent's standing posture
 so ordinary child work does not begin prompting again.
 
-### Children (sub-agents and Pod workers)
+### Children (sub-agents and fleet workers)
 
 Children inherit the session posture faithfully rather than a bare
 auto-approve bit:

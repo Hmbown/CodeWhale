@@ -653,6 +653,7 @@ impl Engine {
         // that owes work never finishes silently.
         let mut final_report_sent = false;
         let mut context_recovery_attempts = 0u8;
+        let mut image_rejection_recovered = false;
         let mut tool_policy = tool_policy;
         let mut mode = tool_policy.mode;
         let mut questions_allowed = tool_policy.allows_questions();
@@ -1406,6 +1407,25 @@ impl Engine {
                             .await
                     {
                         context_recovery_attempts = context_recovery_attempts.saturating_add(1);
+                        continue;
+                    }
+                    if is_image_input_rejection_message(&message)
+                        && self.active_route_capabilities.image_input
+                            != CapabilityState::Unsupported
+                        && !image_rejection_recovered
+                    {
+                        image_rejection_recovered = true;
+                        self.active_route_capabilities.image_input = CapabilityState::Unsupported;
+                        crate::logging::warn(format!(
+                            "model {} rejected image content; resending with images replaced by text",
+                            self.session.model
+                        ));
+                        let status = crate::localization::tr(
+                            crate::localization::resolve_locale(&self.config.locale_tag),
+                            crate::localization::MessageId::ImageInputRejectedResent,
+                        )
+                        .replace("{model}", &self.session.model);
+                        let _ = self.tx_event.send(Event::status(status)).await;
                         continue;
                     }
                     turn_error = Some(message.clone());
@@ -4611,16 +4631,24 @@ impl Engine {
                             && let Some(tool_state) = tool_uses.get_mut(tool_idx)
                         {
                             tool_state.input_buffer.push_str(&partial_json);
-                            crate::logging::info(format!(
-                                "Tool '{}' input delta: {} (buffer now: {})",
-                                tool_state.name, partial_json, tool_state.input_buffer
-                            ));
+                            // Verbose-only: the eager format! here copied the
+                            // whole accumulated buffer on every JSON delta
+                            // (O(n²) per tool call) for a log that is
+                            // usually disabled.
+                            if crate::logging::is_verbose() {
+                                crate::logging::info(format!(
+                                    "Tool '{}' input delta: {} (buffer now: {})",
+                                    tool_state.name, partial_json, tool_state.input_buffer
+                                ));
+                            }
                             if let Some(value) = parse_tool_input(&tool_state.input_buffer) {
                                 tool_state.input = value.clone();
-                                crate::logging::info(format!(
-                                    "Tool '{}' input parsed: {:?}",
-                                    tool_state.name, value
-                                ));
+                                if crate::logging::is_verbose() {
+                                    crate::logging::info(format!(
+                                        "Tool '{}' input parsed: {:?}",
+                                        tool_state.name, value
+                                    ));
+                                }
                             }
                         }
                     }

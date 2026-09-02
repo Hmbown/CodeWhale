@@ -347,7 +347,12 @@ impl ChatWidget {
                 }
             }
             // Build identity mapping: filtered index == original index.
-            app.collapsed_cell_map = (0..app.history.len() + active_entries.len()).collect();
+            // Reused across frames; identity maps are rebuilt only when the
+            // row count changes.
+            let row_count = app.history.len() + active_entries.len();
+            if app.collapsed_cell_map.len() != row_count {
+                app.collapsed_cell_map = (0..row_count).collect();
+            }
 
             let shards: [&[HistoryCell]; 2] = [&app.history, active_entries];
             app.viewport.transcript_cache.ensure_split(
@@ -1760,7 +1765,7 @@ impl Renderable for ComposerWidget<'_> {
 
                 // Name column
                 let name_style = if entry.is_skill && !is_selected {
-                    Style::default().fg(palette::WHALE_INFO)
+                    Style::default().fg(palette::WHALE_ACTION)
                 } else {
                     sel_style
                 };
@@ -1981,7 +1986,7 @@ impl<'a> ApprovalWidget<'a> {
                     self.request.tool_name.clone()
                 },
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
@@ -2515,13 +2520,13 @@ fn approval_palette(stakes: crate::tui::approval::ApprovalStakes) -> ApprovalCol
         ApprovalStakes::Routine => ApprovalColors {
             border: palette::BORDER_COLOR,
             accent: palette::WHALE_HUMAN,
-            shortcut: palette::WHALE_INFO,
+            shortcut: palette::WHALE_ACTION,
         },
         // Ordinary state-touching work: a calm ask, not an alarm.
         ApprovalStakes::Elevated => ApprovalColors {
             border: palette::WHALE_HUMAN,
             accent: palette::WHALE_HUMAN,
-            shortcut: palette::WHALE_INFO,
+            shortcut: palette::WHALE_ACTION,
         },
         ApprovalStakes::Critical => ApprovalColors {
             border: palette::WHALE_ERROR,
@@ -2579,9 +2584,9 @@ fn category_label_for(category: ToolCategory, locale: Locale) -> (Cow<'static, s
         ToolCategory::FileWrite => palette::STATUS_WARNING,
         ToolCategory::Shell => palette::STATUS_ERROR,
         ToolCategory::Network => palette::STATUS_WARNING,
-        ToolCategory::McpRead => palette::WHALE_INFO,
+        ToolCategory::McpRead => palette::WHALE_ACTION,
         ToolCategory::McpAction => palette::STATUS_WARNING,
-        ToolCategory::Agent => palette::WHALE_INFO,
+        ToolCategory::Agent => palette::WHALE_ACTION,
         ToolCategory::Unknown => palette::STATUS_ERROR,
     };
     (label, color)
@@ -2609,7 +2614,7 @@ fn push_detail_line(lines: &mut Vec<Line<'static>>, label: &str, value: &str) {
         Span::styled(
             format!("{label:<7} "),
             Style::default()
-                .fg(palette::WHALE_INFO)
+                .fg(palette::WHALE_ACTION)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(value.to_string(), Style::default().fg(palette::TEXT_BODY)),
@@ -2684,7 +2689,7 @@ fn push_shell_command_lines(
         Span::styled(
             format!("{label}:"),
             Style::default()
-                .fg(palette::WHALE_INFO)
+                .fg(palette::WHALE_ACTION)
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -3071,7 +3076,7 @@ impl Renderable for ElevationWidget<'_> {
                 Span::styled(
                     &self.request.tool_name,
                     Style::default()
-                        .fg(palette::WHALE_INFO)
+                        .fg(palette::WHALE_ACTION)
                         .add_modifier(Modifier::BOLD),
                 ),
             ]),
@@ -3474,7 +3479,7 @@ pub(crate) fn composer_submit_hint(app: &App) -> Option<ComposerSubmitHint> {
             (
                 app.tr(MessageId::ComposerHintSendWithQueue)
                     .replace("{count}", &queue_count.to_string()),
-                palette::WHALE_INFO,
+                palette::WHALE_ACTION,
             )
         }
         ComposerSubmitAction::Submit(SubmitDisposition::Queue)
@@ -3490,22 +3495,22 @@ pub(crate) fn composer_submit_hint(app: &App) -> Option<ComposerSubmitHint> {
                 (
                     app.tr(MessageId::ComposerHintQueueWithCount)
                         .replace("{count}", &queue_count.saturating_add(1).to_string()),
-                    palette::WHALE_INFO,
+                    palette::WHALE_ACTION,
                 )
             } else {
                 (
                     app.tr(MessageId::ComposerHintQueue).into_owned(),
-                    palette::WHALE_INFO,
+                    palette::WHALE_ACTION,
                 )
             }
         }
         ComposerSubmitAction::Submit(SubmitDisposition::Steer) => (
             app.tr(MessageId::ComposerHintSendIntoTurn).into_owned(),
-            palette::WHALE_INFO,
+            palette::WHALE_ACTION,
         ),
         ComposerSubmitAction::SendQueuedNow => (
             app.tr(MessageId::ComposerHintSendNow).into_owned(),
-            palette::WHALE_INFO,
+            palette::WHALE_ACTION,
         ),
         ComposerSubmitAction::Noop => return None,
     };
@@ -5519,16 +5524,16 @@ mod tests {
     }
 
     #[test]
-    fn slash_completion_migrates_legacy_fleet_to_canonical_pod() {
+    fn slash_completion_migrates_legacy_pod_to_canonical_fleet() {
         let hints =
-            slash_completion_hints("/fleet", 128, &[], Locale::En, None, ApiProvider::Deepseek);
+            slash_completion_hints("/pod", 128, &[], Locale::En, None, ApiProvider::Deepseek);
         let entry = hints
             .iter()
-            .find(|hint| hint.name == "/pod")
-            .expect("legacy /fleet should discover canonical /pod");
+            .find(|hint| hint.name == "/fleet")
+            .expect("legacy /pod should discover canonical /fleet");
 
-        assert_eq!(entry.alias_hint.as_deref(), Some("fleet"));
-        assert!(!hints.iter().any(|hint| hint.name == "/fleet"));
+        assert_eq!(entry.alias_hint.as_deref(), Some("pod"));
+        assert!(!hints.iter().any(|hint| hint.name == "/pod"));
     }
 
     #[test]
@@ -7153,15 +7158,8 @@ mod tests {
         {
             let segments = crate::tui::ui::frame::info_segments(&app, info_area.width);
             let help_hint = crate::tui::shell_key_routing::info_help_hint(app.ui_locale);
-            let context_label = app.tr(crate::localization::MessageId::FooterHintContext);
-            let info = crate::tui::infoline::InfoLine::new(
-                &app.ui_theme,
-                &help_hint,
-                context_label.as_ref(),
-                crate::tui::ui::frame::info_context_percent(&app),
-                &segments,
-            )
-            .ascii_safe(true);
+            let info = crate::tui::infoline::InfoLine::new(&app.ui_theme, &help_hint, &segments)
+                .ascii_safe(true);
             use ratatui::widgets::Widget;
             Widget::render(info, info_area, &mut info_buf);
         }

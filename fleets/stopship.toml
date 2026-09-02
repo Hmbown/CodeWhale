@@ -7,25 +7,26 @@
 #   1. $CODEWHALE_HOME/fleets/stopship.toml
 #   2. <workspace>/fleets/stopship.toml  (this file)
 #
-# Built-in roster members used as profile ids: scout, builder, reviewer,
-# verifier, manager. Role aliases match Phase 2 / Phase 3 vocabulary.
+# Profile ids name built-in roster members (scout, builder, reviewer,
+# verifier, manager); role names use the canonical Codewhale role
+# vocabulary (explore, implement, reviewer, test, custom names).
 
 name = "stopship"
 description = "Read-only current release orchestration acceptance fleet"
 
 [roles]
 # role name = AgentProfile id (built-in or workspace profile)
-scout = "scout"
-implementer = "builder"
+explore = "scout"
+implement = "builder"
 reviewer = "reviewer"
-verifier = "verifier"
+test = "verifier"
 release_lead = "manager"
 
-[role_intents.scout]
+[role_intents.explore]
 mode = "read_only"
 summary = "Source-level runtime and receipt reconnaissance"
 
-[role_intents.implementer]
+[role_intents.implement]
 mode = "read_only"
 summary = "No-edit acceptance evidence plan"
 
@@ -33,7 +34,7 @@ summary = "No-edit acceptance evidence plan"
 mode = "read_only"
 summary = "False-green and receipt-contract review"
 
-[role_intents.verifier]
+[role_intents.test]
 mode = "read_only"
 summary = "Static test and receipt serialization verification"
 

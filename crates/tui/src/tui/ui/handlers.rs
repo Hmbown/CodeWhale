@@ -5,6 +5,40 @@
 
 use super::*;
 
+/// How long the picker's ⇧F receipt stays in the footer: long enough to read
+/// a route and its roles, short enough to leave the chrome still.
+const FLEET_TOGGLE_TOAST_TTL_MS: u64 = 6_000;
+
+/// Push the effective roster (saved fleet + config + plugins) to the running
+/// engine through `Op::SetFleetRoster`. The one path every fleet mutation
+/// takes: the saved-fleet views call it directly, and `/fleet add|remove`,
+/// ⇧F, and auto-enroll reach it through `App::fleet_roster_stale`.
+pub(crate) fn sync_fleet_roster(app: &mut App, config: &Config, engine_handle: &EngineHandle) {
+    let roster = crate::fleet::identity::load_effective_roster(
+        &config.fleet_config(),
+        &app.workspace,
+        Some(app.plugin_registry.as_ref()),
+    );
+    if let Some(error) = roster.load_error() {
+        app.set_sticky_status(error.to_string(), StatusToastLevel::Error, None);
+    }
+    let _ = engine_handle.try_send(Op::SetFleetRoster {
+        roster: std::sync::Arc::new(roster),
+    });
+}
+
+/// Once per event-loop iteration: deliver a pending fleet mutation to the
+/// engine and clear the flag.
+pub(crate) fn flush_stale_fleet_roster(
+    app: &mut App,
+    config: &Config,
+    engine_handle: &EngineHandle,
+) {
+    if std::mem::take(&mut app.fleet_roster_stale) {
+        sync_fleet_roster(app, config, engine_handle);
+    }
+}
+
 /// Persist a `# foo` quick-add through the native memory store and surface
 /// a status note to the user. Errors land in the same status channel so a
 /// missing memory directory becomes visible without crashing the composer.
@@ -1386,23 +1420,7 @@ pub(crate) async fn handle_view_events(
             }
             ViewEvent::FleetStoreChanged { message } => {
                 app.status_message = Some(message);
-                // Refresh the dispatch roster from the fleet-aware source so
-                // selection changes take effect for the next spawn.
-                let roster = crate::fleet::identity::load_effective_roster(
-                    &config.fleet_config(),
-                    &app.workspace,
-                    Some(app.plugin_registry.as_ref()),
-                );
-                if let Some(error) = roster.load_error() {
-                    app.set_sticky_status(
-                        error.to_string(),
-                        crate::tui::app::StatusToastLevel::Error,
-                        None,
-                    );
-                }
-                let _ = engine_handle.try_send(Op::SetFleetRoster {
-                    roster: std::sync::Arc::new(roster),
-                });
+                sync_fleet_roster(app, config, engine_handle);
             }
             ViewEvent::FleetRosterOpenFleetsRequested => {
                 if app.view_stack.top_kind() != Some(ModalKind::FleetList) {
@@ -1802,6 +1820,55 @@ pub(crate) async fn handle_view_events(
                 } else {
                     app.status_message =
                         Some("Open /model to refresh readiness and catalog".into());
+                }
+                app.needs_redraw = true;
+            }
+            ViewEvent::ModelPickerToggleFleet {
+                provider,
+                provider_id,
+                model,
+            } => {
+                use crate::fleet::members::{FleetModelChange, change_receipt, toggle_fleet_model};
+                let provider_key = provider_id.unwrap_or_else(|| provider.as_str().to_string());
+                let locale = app.ui_locale;
+                // Same gate as `/fleet add`, against the live config: a
+                // locked or unauthenticated provider row never enters the
+                // fleet from the picker either.
+                if let Some(rejection) =
+                    crate::commands::fleet_provider_rejection(app, config, &provider_key)
+                {
+                    app.set_sticky_status(rejection, StatusToastLevel::Error, None);
+                } else {
+                    match toggle_fleet_model(&app.workspace, &provider_key, &model) {
+                        Ok(change) => {
+                            let level = if matches!(change, FleetModelChange::Unchanged { .. }) {
+                                StatusToastLevel::Info
+                            } else {
+                                app.fleet_roster_stale = true;
+                                StatusToastLevel::Success
+                            };
+                            app.push_status_toast(
+                                change_receipt(locale, &provider_key, &model, &change),
+                                level,
+                                Some(FLEET_TOGGLE_TOAST_TTL_MS),
+                            );
+                        }
+                        Err(error) => app.set_sticky_status(
+                            tr(locale, MessageId::FleetToggleFailed)
+                                .replace("{error}", &error.message(locale)),
+                            StatusToastLevel::Error,
+                            None,
+                        ),
+                    }
+                }
+                if let Some(mut boxed) = app.view_stack.pop() {
+                    if let Some(picker) = boxed
+                        .as_any_mut()
+                        .downcast_mut::<crate::tui::model_picker::ModelPickerView>(
+                    ) {
+                        picker.re_resolve_from_app(app, config);
+                    }
+                    app.view_stack.push_boxed(boxed);
                 }
                 app.needs_redraw = true;
             }

@@ -1,10 +1,10 @@
-        What are we working on?         
-welcome back · 4 saved sessions in this…
-                                        
-  ▸ ⌁ New session              Enter ›  
-    ◌ Chat only                    C ›  
-    ↺ Resume last             Ctrl+R ›  
-                                        
-⑂ worktree◌ chat    ◐ Theme   ? Help    
-Ctrl+N    C         T         F1        
-  ❯ Type a message…                  ↑  
+⑂ Hmbown/CodeWhale · main               
+    ╭──────────────────────────────╮    
+    │ ⢠⡞⠛⢂⣀ Codewhale              │    
+    │ ⠘⢿⣻⣟⠝ ● 2 MCP servers connec…│    
+    │       ▸ New worktree  ctrl+n │    
+    ╰──────────────────────────────╯    
+╭──────────────────────────────────────╮
+│ ❯ ▌                                  │
+│ Enter send · Shift+Enter new li… [↑] │
+╰──────────────────────────────────────╯

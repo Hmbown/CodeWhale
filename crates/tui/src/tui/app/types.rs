@@ -1024,6 +1024,19 @@ pub enum AppAction {
     /// Open the selected v2 Fleet editor, or legacy profile setup when no
     /// named Fleet is selected.
     OpenFleetSetup,
+    /// `/fleet add`: validate the provider against the live config, write
+    /// the member rows, and mark the engine roster stale.
+    FleetAddModel {
+        provider: String,
+        model: String,
+        roles: Vec<String>,
+    },
+    /// `/fleet remove`: drop every member row pinning the route and mark the
+    /// engine roster stale.
+    FleetRemoveModel {
+        provider: String,
+        model: String,
+    },
     /// Open the `/hotbar` setup wizard.
     OpenHotbarSetup,
     /// Open the constitution-first `/setup` wizard shell.

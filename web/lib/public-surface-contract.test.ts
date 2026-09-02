@@ -533,7 +533,7 @@ done
     const footer = text("web/components/footer.tsx");
 
     expect(matrix.product.terminology).toEqual({
-      Pod: "who is in the roster and which member is selected",
+      Fleet: "the user's model inventory: who is in the roster and which member is selected",
       Workflow: "what order the work follows",
       Lane: "one running Workflow instance",
       Runtime: "where, how, and with what authority selected work executes",
@@ -601,15 +601,13 @@ done
     }
   });
 
-  it("keeps the homepage wire strip a record of GitHub, not a summary of it", () => {
+  it("keeps the standalone wire strip a record of GitHub, not a summary of it", () => {
     const ticker = text("web/components/ticker.tsx");
-    const homepage = text("web/app/[locale]/page.tsx");
     const github = text("web/lib/github.ts");
 
     // An empty or unreachable feed removes the strip. No skeleton, no
     // placeholder row, no invented item.
     expect(ticker).toContain("if (!ordered.length) return null;");
-    expect(homepage).toContain("{feed.length > 0 ? (");
 
     // Drafts are the author's own not-ready marker, not an event.
     expect(ticker).toContain("EVENT_STATES.includes(item.state)");
@@ -626,7 +624,6 @@ done
       "tickerBy",
       "tickerAria",
     ] as const) {
-      expect(homepage, `homepage passes chrome.${key}`).toContain(`chrome.${key}`);
       for (const locale of ["en", "zh", "ja", "vi", "ko", "ru", "uk", "es", "pt-BR", "id"]) {
         expect(getChrome(locale)[key].trim().length, `${locale} ${key}`).toBeGreaterThan(0);
       }
@@ -650,18 +647,20 @@ done
 
   it("keeps reduced motion static without hiding the reasoning trace", () => {
     const css = text("web/app/globals.css");
-    const terminalPlayer = text("web/components/terminal-player.tsx");
 
     expect(css).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.tp-caret\s*\{\s*animation:\s*none;\s*\}[\s\S]*?\.ticker-track\s*\{\s*animation:\s*none;\s*\}[\s\S]*?\}/,
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.ticker-track\s*\{\s*animation:\s*none;\s*\}[\s\S]*?\}/,
     );
     // Freezing the track must not also hide the entries it stopped scrolling.
     expect(css).toMatch(/\.ticker-viewport\s*\{\s*overflow-x:\s*auto;\s*\}/);
-    expect(terminalPlayer).toContain(
-      'window.matchMedia("(prefers-reduced-motion: reduce)").matches',
-    );
-    expect(terminalPlayer).toContain("setShown(Number.MAX_SAFE_INTEGER)");
-    expect(terminalPlayer).toContain("Server render shows the full trace");
+  });
+
+  it("keeps the homepage free of fabricated demo panels", () => {
+    const homepage = text("web/app/[locale]/page.tsx");
+
+    expect(homepage).not.toContain("TerminalPlayer");
+    expect(homepage).not.toContain("paper-decides");
+    expect(homepage).not.toContain("product-receipt");
   });
 
   it("keeps every fact-matrix source resolvable in the repository", () => {

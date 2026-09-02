@@ -13,15 +13,17 @@
 //! to whichever card is active in the transcript, so these are the
 //! primary status surface.
 
+use std::time::Instant;
+
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::palette;
 use crate::todo_snapshot::{TodoCardProjection, card_omission_line, card_todo_projection};
-use crate::tools::subagent::MailboxMessage;
+use crate::tools::subagent::{MailboxMessage, public_role_label};
 use crate::tools::todo::TodoListSnapshot;
 use crate::tui::ui_text::truncate_line_to_width;
-use crate::tui::widgets::tool_card::{ToolFamily, family_glyph, family_label};
+use crate::tui::widgets::tool_card::{ToolFamily, family_glyph};
 use unicode_width::UnicodeWidthStr;
 
 /// Maximum number of recent actions kept on a `DelegateCard`. Older entries
@@ -64,24 +66,20 @@ impl AgentLifecycle {
     /// Semantic status color only — never the whole-card identity tint.
     /// cyan/teal = running, amber = waiting/pending, green = done, red = failed.
     #[must_use]
-    pub fn color(self) -> Color {
+    pub fn ink(self) -> crate::palette::grammar::ChromeInk {
         match self {
-            // Waiting / queued: amber attention, not magenta identity.
-            Self::Pending => palette::STATUS_WARNING,
-            // Live work: teal/seafoam (not amber, not magenta).
-            Self::Running => palette::WHALE_LIVE,
-            Self::Completed => palette::STATUS_SUCCESS,
-            Self::Failed => palette::STATUS_ERROR,
-            Self::Cancelled => palette::TEXT_MUTED,
-            // Interrupted is recoverable attention, same family as waiting.
-            Self::Interrupted => palette::STATUS_WARNING,
+            Self::Pending => crate::palette::grammar::ChromeInk::Waiting,
+            Self::Running => crate::palette::grammar::ChromeInk::Active,
+            Self::Completed => crate::palette::grammar::ChromeInk::Outcome,
+            Self::Failed => crate::palette::grammar::ChromeInk::Failure,
+            Self::Cancelled => crate::palette::grammar::ChromeInk::Metadata,
+            Self::Interrupted => crate::palette::grammar::ChromeInk::Attention,
         }
     }
 
-    /// Magenta is reserved for agent identity marks only (glyph / role chip).
     #[must_use]
-    pub fn identity_color() -> Color {
-        palette::MODE_OPERATE
+    pub fn color(self, theme: &palette::UiTheme) -> Color {
+        self.ink().color(theme)
     }
 }
 
@@ -97,6 +95,8 @@ pub struct DelegateCard {
     pub summary: Option<String>,
     actions: Vec<String>,
     truncated: bool,
+    pub started_at: Option<Instant>,
+    pub finished_at: Option<Instant>,
     /// The last To-do snapshot **this** agent published for itself (#4810).
     ///
     /// `None` means the child has never reported Work state — the card says
@@ -116,6 +116,8 @@ impl DelegateCard {
             summary: None,
             actions: Vec::new(),
             truncated: false,
+            started_at: None,
+            finished_at: None,
             todo: None,
         }
     }
@@ -156,7 +158,7 @@ impl DelegateCard {
         };
         WorkflowPanel::from_direct_subagent(
             self.agent_id.clone(),
-            readable_agent_role(&self.agent_type),
+            public_role_label(&self.agent_type),
             lifecycle,
             started_at_ms,
             completed_at_ms,
@@ -180,41 +182,44 @@ impl DelegateCard {
     }
 
     #[must_use]
-    pub fn render_lines(&self, width: u16) -> Vec<Line<'static>> {
+    pub fn render_lines(&self, width: u16, theme: &palette::UiTheme) -> Vec<Line<'static>> {
         let mut lines = Vec::with_capacity(self.actions.len() + 3);
         let content_width = usize::from(width);
-        let role = readable_agent_role(&self.agent_type);
+        let role = public_role_label(&self.agent_type);
         let short_id = crate::session_manager::truncate_id(&self.agent_id).to_string();
-        let detail = if let Some(ref summary) = self.summary {
-            truncate_action(summary, 72)
+        let detail = if self.status.is_terminal() {
+            String::new()
+        } else if let Some(action) = self.actions.last() {
+            truncate_action(action, 72)
         } else {
             short_id
         };
-        lines.push(card_header(
-            ToolFamily::Delegate,
+        lines.push(delegate_header(
             self.status,
             &role,
             &detail,
             content_width,
+            theme,
         ));
         // The child's own Work state sits directly under its header, above the
         // action tail: what it is working on outranks what it just did.
         if let Some(todo) = self.todo_projection() {
-            let prefix = "  \u{22EF} "; // ⋯
+            let prefix = "\u{22EF} "; // ⋯
             lines.push(Line::from(vec![
                 Span::styled(prefix, Style::default().fg(palette::TEXT_DIM)),
                 Span::styled(
                     truncate_action(&todo.header, line_detail_width(content_width, prefix)),
-                    Style::default().fg(palette::TEXT_MUTED),
+                    Style::default().fg(crate::palette::grammar::ChromeInk::Metadata.color(theme)),
                 ),
             ]));
-            let item_prefix = "    ";
+            let item_prefix = "  ";
             for item in &todo.items {
                 lines.push(Line::from(vec![
                     Span::raw(item_prefix),
                     Span::styled(
                         truncate_action(item, line_detail_width(content_width, item_prefix)),
-                        Style::default().fg(palette::TEXT_TOOL_OUTPUT),
+                        Style::default()
+                            .fg(crate::palette::grammar::ChromeInk::Metadata.color(theme)),
                     ),
                 ]));
             }
@@ -226,38 +231,56 @@ impl DelegateCard {
                             &card_omission_line(todo.omitted),
                             line_detail_width(content_width, item_prefix),
                         ),
-                        Style::default().fg(palette::TEXT_DIM),
+                        Style::default()
+                            .fg(crate::palette::grammar::ChromeInk::Metadata.color(theme)),
                     ),
                 ]));
             }
         }
         if self.truncated {
             lines.push(Line::from(Span::styled(
-                "  \u{2026}".to_string(), // …
-                Style::default().fg(palette::TEXT_MUTED),
+                "\u{2026}".to_string(), // …
+                Style::default().fg(crate::palette::grammar::ChromeInk::Metadata.color(theme)),
             )));
         }
-        for action in &self.actions {
-            let prefix = "  \u{2502} ";
+        for action in self
+            .actions
+            .iter()
+            .take(self.actions.len().saturating_sub(1))
+        {
+            let prefix = "\u{2502} ";
             lines.push(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(palette::TEXT_DIM)),
+                Span::styled(
+                    prefix,
+                    Style::default().fg(crate::palette::grammar::ChromeInk::Metadata.color(theme)),
+                ),
                 Span::styled(
                     truncate_action(action, line_detail_width(content_width, prefix).min(200)),
-                    Style::default().fg(palette::TEXT_TOOL_OUTPUT),
+                    Style::default().fg(crate::palette::grammar::ChromeInk::Metadata.color(theme)),
                 ),
             ]));
         }
-        if self.status.is_terminal()
-            && let Some(summary) = self.summary.as_ref()
-        {
-            let prefix = "  \u{2570} ";
-            lines.push(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(palette::TEXT_DIM)),
-                Span::styled(
-                    truncate_action(summary, line_detail_width(content_width, prefix).min(200)),
-                    Style::default().fg(self.status.color()),
-                ),
-            ]));
+        if self.status.is_terminal() {
+            let mut terminal = self.status.label().to_string();
+            if let (Some(started), Some(finished)) = (self.started_at, self.finished_at) {
+                terminal.push_str(" · ");
+                terminal.push_str(&crate::elapsed::format_elapsed_ms(
+                    finished.duration_since(started).as_millis() as u64,
+                ));
+            }
+            if let Some(summary) = self
+                .summary
+                .as_deref()
+                .filter(|summary| !summary.is_empty())
+            {
+                terminal.push_str(" · ");
+                terminal.push_str(summary);
+            }
+            let prefix = "\u{2570} ";
+            lines.push(Line::from(Span::styled(
+                format!("{prefix}{terminal}"),
+                Style::default().fg(self.status.color(theme)),
+            )));
         }
         lines
     }
@@ -417,33 +440,32 @@ impl FanoutCard {
     }
 
     #[must_use]
-    pub fn render_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = Vec::with_capacity(3);
-        let content_width = usize::from(width);
+    pub fn render_lines(&self, _width: u16, theme: &palette::UiTheme) -> Vec<Line<'static>> {
         let header_status = self.aggregate_status();
-        let title = format!("{} ({} workers)", self.kind, self.workers.len());
-        let family = if matches!(self.kind.as_str(), "rlm_open" | "rlm_eval" | "rlm") {
-            ToolFamily::Rlm
-        } else {
-            ToolFamily::Fanout
-        };
-        lines.push(card_header(
-            family,
-            header_status,
-            &self.kind,
-            &title,
-            content_width,
-        ));
-        lines.push(Line::from(vec![
-            Span::styled("  ", Style::default()),
+        let count = self.workers.len();
+        let count_label = if count == 1 { "agent" } else { "agents" };
+        vec![Line::from(vec![
+            Span::styled(
+                family_glyph(ToolFamily::Fanout),
+                Style::default()
+                    .fg(header_status.color(theme))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                format!("{count} {count_label}"),
+                Style::default()
+                    .fg(crate::palette::grammar::ChromeInk::Identity.color(theme))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
             Span::styled(
                 self.dot_grid(),
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(crate::palette::grammar::ChromeInk::Metadata.color(theme))
                     .add_modifier(Modifier::BOLD),
             ),
-        ]));
-        lines
+        ])]
     }
 
     fn aggregate_status(&self) -> AgentLifecycle {
@@ -481,88 +503,48 @@ impl FanoutCard {
     }
 }
 
-fn card_header(
-    family: ToolFamily,
+fn delegate_header(
     status: AgentLifecycle,
     role: &str,
     detail: &str,
     width: usize,
+    theme: &palette::UiTheme,
 ) -> Line<'static> {
-    let glyph = family_glyph(family);
-    let verb = family_label(family);
-    // Magenta only on the identity mark; status color on the lifecycle chip.
-    let identity_color = AgentLifecycle::identity_color();
-    let status_color = status.color();
-    let glyph_text = format!("{glyph} ");
-    let status_text = format!("[{}]", status.label());
-    // #4148: an `agent_type` that already reads as the verb (e.g. "delegate")
-    // would otherwise render a duplicate "delegate delegate". When the role
-    // collapses to the verb, the verb already carries the signal — drop the
-    // echoed role rather than repeat it.
-    let show_role = !role.eq_ignore_ascii_case(verb);
-    let mut fixed_parts: Vec<&str> = vec![glyph_text.as_str(), verb, " "];
-    if show_role {
-        fixed_parts.push(role);
-        fixed_parts.push(" ");
-    }
-    fixed_parts.push(status_text.as_str());
-    fixed_parts.push(" ");
+    let glyph = format!("{} ", family_glyph(ToolFamily::Delegate));
+    let fixed_parts: Vec<&str> = vec![glyph.as_str(), role, "  "];
     let fixed_width = fixed_parts
         .iter()
         .map(|text| UnicodeWidthStr::width(*text))
         .sum::<usize>();
     let detail = truncate_action(detail, width.saturating_sub(fixed_width));
-    let mut spans = vec![
+    let spans = vec![
         Span::styled(
-            glyph_text,
+            glyph,
             Style::default()
-                .fg(identity_color)
+                .fg(status.color(theme))
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            verb.to_string(),
-            Style::default()
-                .fg(identity_color)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" "),
-    ];
-    if show_role {
-        spans.push(Span::styled(
             role.to_string(),
-            Style::default().fg(palette::TEXT_PRIMARY),
-        ));
-        spans.push(Span::raw(" "));
-    }
-    spans.push(Span::styled(status_text, Style::default().fg(status_color)));
-    spans.push(Span::raw(" "));
-    spans.push(Span::styled(
-        detail,
-        Style::default().fg(palette::TEXT_MUTED),
-    ));
+            Style::default()
+                .fg(crate::palette::grammar::ChromeInk::Identity.color(theme))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            detail,
+            Style::default().fg(crate::palette::grammar::ChromeInk::Metadata.color(theme)),
+        ),
+    ];
     Line::from(spans)
-}
-
-/// Map agent types to human-readable role labels (#1981).
-fn readable_agent_role(agent_type: &str) -> String {
-    match agent_type.to_ascii_lowercase().as_str() {
-        "general" => "worker".to_string(),
-        "explore" => "scout".to_string(),
-        "plan" => "planner".to_string(),
-        "review" => "reviewer".to_string(),
-        "implementer" => "builder".to_string(),
-        "verifier" => "verifier".to_string(),
-        "custom" => "specialist".to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn truncate_action(text: &str, max: usize) -> String {
-    truncate_line_to_width(text.trim(), max)
 }
 
 fn line_detail_width(line_width: usize, prefix: &str) -> usize {
     line_width.saturating_sub(UnicodeWidthStr::width(prefix))
+}
+
+fn truncate_action(text: &str, max: usize) -> String {
+    truncate_line_to_width(text.trim(), max)
 }
 
 /// Apply a mailbox envelope to a `DelegateCard`. Returns `true` if the
@@ -571,6 +553,19 @@ fn line_detail_width(line_width: usize, prefix: &str) -> usize {
 pub fn apply_to_delegate(card: &mut DelegateCard, msg: &MailboxMessage) -> bool {
     if msg.agent_id() != card.agent_id {
         return false;
+    }
+    let was_terminal = card.status.is_terminal();
+    if card.started_at.is_none()
+        && matches!(
+            msg,
+            MailboxMessage::Started { .. }
+                | MailboxMessage::Progress { .. }
+                | MailboxMessage::ToolCallStarted { .. }
+                | MailboxMessage::ToolCallCompleted { .. }
+                | MailboxMessage::WorkState { .. }
+        )
+    {
+        card.started_at = Some(Instant::now());
     }
     match msg {
         MailboxMessage::Started { .. } => {
@@ -635,6 +630,9 @@ pub fn apply_to_delegate(card: &mut DelegateCard, msg: &MailboxMessage) -> bool 
             return false;
         }
     }
+    if !was_terminal && card.status.is_terminal() {
+        card.finished_at = Some(Instant::now());
+    }
     true
 }
 
@@ -698,26 +696,18 @@ mod tests {
 
     #[test]
     fn delegate_card_header_does_not_duplicate_verb_as_role() {
-        // #4148: a role that already reads as the "delegate" verb must not
-        // render "delegate delegate" in the default transcript. The verb
-        // stays; the echoed role is dropped.
-        let card = DelegateCard::new("agent_1", "delegate");
-        let rendered = render_to_strings(&card.render_lines(80)).join("\n");
+        let card = DelegateCard::new("agent_1", "explore");
+        let rendered =
+            render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME)).join("\n");
         assert!(
-            !rendered.contains("delegate delegate"),
-            "verb must not be echoed as the role: {rendered:?}"
+            !rendered.contains("delegate"),
+            "delegate must not be visible in the card: {rendered:?}"
         );
-        assert!(
-            rendered.contains("delegate"),
-            "the delegate verb itself must remain: {rendered:?}"
-        );
-        // A real role still renders next to the verb (regression guard).
-        let worker = DelegateCard::new("agent_2", "general");
-        let worker_rendered = render_to_strings(&worker.render_lines(80)).join("\n");
-        assert!(
-            worker_rendered.contains("delegate worker"),
-            "distinct roles are still shown: {worker_rendered:?}"
-        );
+        assert!(!rendered.contains("[running]"), "{rendered:?}");
+        let explore = DelegateCard::new("agent_2", "scout");
+        let explore_rendered =
+            render_to_strings(&explore.render_lines(80, &crate::palette::UI_THEME)).join("\n");
+        assert!(explore_rendered.contains("explore"), "{explore_rendered:?}");
     }
 
     #[test]
@@ -729,12 +719,9 @@ mod tests {
         );
         card.push_action("objective: QUESTION: Add Zhipu GLM as a first-class provider-scoped route for 中文输出".to_string());
 
-        let rendered = render_to_strings(&card.render_lines(40));
+        let rendered = render_to_strings(&card.render_lines(40, &crate::palette::UI_THEME));
 
-        assert!(
-            rendered[0].contains("builder") && rendered[0].contains("[running]"),
-            "header keeps fixed status columns visible: {rendered:?}"
-        );
+        assert!(rendered[0].contains("implement"), "{rendered:?}");
         for line in rendered {
             let width = UnicodeWidthStr::width(line.as_str());
             assert!(width <= 40, "line width {width} exceeds 40: {line:?}");
@@ -760,7 +747,7 @@ mod tests {
             "stable steady-state size"
         );
 
-        let rendered = render_to_strings(&card.render_lines(80));
+        let rendered = render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME));
         assert!(
             rendered.iter().any(|line| line.contains('\u{2026}')),
             "ellipsis indicator must render: got {rendered:?}"
@@ -794,7 +781,11 @@ mod tests {
         };
         assert!(apply_to_delegate(&mut card, &msg));
         assert_eq!(card.status, AgentLifecycle::Completed);
-        let rendered = render_to_strings(&card.render_lines(80));
+        let rendered = render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME));
+        assert!(
+            rendered.iter().any(|line| line.contains("╰ done")),
+            "terminal status row renders done: got {rendered:?}"
+        );
         assert!(
             rendered
                 .iter()
@@ -816,7 +807,8 @@ mod tests {
             "scheduler progress should not become a stale transcript row"
         );
 
-        let rendered = render_to_strings(&card.render_lines(80)).join("\n");
+        let rendered =
+            render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME)).join("\n");
         assert!(!rendered.contains("step 1/100"), "{rendered}");
         assert!(
             !rendered.contains("requesting model response"),
@@ -850,7 +842,8 @@ mod tests {
             }
         ));
 
-        let rendered = render_to_strings(&card.render_lines(80)).join("\n");
+        let rendered =
+            render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME)).join("\n");
         assert!(rendered.contains("read_file"), "{rendered}");
         assert!(
             !rendered.contains("[7]"),
@@ -890,10 +883,15 @@ mod tests {
         card.upsert_worker("w_2", AgentLifecycle::Completed);
         card.upsert_worker("w_3", AgentLifecycle::Completed);
         card.upsert_worker("w_4", AgentLifecycle::Failed);
-        let rendered = render_to_strings(&card.render_lines(80)).join("\n");
+        let rendered =
+            render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME)).join("\n");
         assert!(
-            rendered.contains("[done]") || rendered.contains("[failed]"),
-            "header should surface terminal lifecycle: {rendered}"
+            rendered.contains("4 agents"),
+            "header should show count: {rendered}"
+        );
+        assert!(
+            rendered.starts_with("⋮⋮ 4 agents"),
+            "header should omit the fanout kind: {rendered}"
         );
         assert!(
             rendered.contains("\u{25CF}\u{25CF}\u{25CF}\u{00D7}"),
@@ -999,8 +997,9 @@ mod tests {
         assert!(apply_to_delegate(&mut card, &msg));
         assert_eq!(card.status, AgentLifecycle::Interrupted);
 
-        let rendered = render_to_strings(&card.render_lines(80)).join("\n");
-        assert!(rendered.contains("[interrupted]"), "{rendered}");
+        let rendered =
+            render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME)).join("\n");
+        assert!(rendered.contains("╰ interrupted"), "{rendered}");
         assert!(rendered.contains("API call timed out"), "{rendered}");
     }
 
@@ -1026,11 +1025,9 @@ mod tests {
 
         // Copy dedupe (Wave 5c #4): the counts line is gone — the header and
         // dot grid carry the aggregate state instead.
-        let rendered = render_to_strings(&card.render_lines(80)).join("\n");
-        assert!(
-            !rendered.contains("[interrupted]"),
-            "one interrupted worker must not mark the fanout interrupted while another runs: {rendered}"
-        );
+        let rendered =
+            render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME)).join("\n");
+        assert!(rendered.contains("2 agents"), "{rendered}");
         assert!(
             rendered.contains('\u{25D0}'),
             "dot grid should keep the running worker glyph: {rendered}"
@@ -1045,11 +1042,9 @@ mod tests {
             reason: "API call timed out".into(),
         };
         assert!(apply_to_fanout(&mut card, &msg));
-        let rendered = render_to_strings(&card.render_lines(80)).join("\n");
-        assert!(
-            rendered.contains("[interrupted]"),
-            "aggregate header should surface interrupted once nothing runs: {rendered}"
-        );
+        let rendered =
+            render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME)).join("\n");
+        assert!(rendered.contains("2 agents"), "{rendered}");
     }
 
     #[test]
@@ -1061,7 +1056,7 @@ mod tests {
         }
         card.upsert_worker("w_12", AgentLifecycle::Running);
 
-        let rendered = render_to_strings(&card.render_lines(80));
+        let rendered = render_to_strings(&card.render_lines(80, &crate::palette::UI_THEME));
         assert!(
             rendered.iter().any(|line| line.contains('\u{25CF}')),
             "dot grid should remain: {rendered:?}"
@@ -1126,7 +1121,8 @@ mod tests {
             ),
         ));
 
-        let rendered = render_to_strings(&card.render_lines(100)).join("\n");
+        let rendered =
+            render_to_strings(&card.render_lines(100, &crate::palette::UI_THEME)).join("\n");
         assert!(rendered.contains("To-do 1/2"), "{rendered}");
         assert!(rendered.contains("50% settled"), "{rendered}");
         assert!(
@@ -1139,8 +1135,7 @@ mod tests {
         );
         // Role, model-facing lifecycle label, and identity stay exactly as the
         // row already reported them.
-        assert!(rendered.contains("delegate builder"), "{rendered}");
-        assert!(rendered.contains("[running]"), "{rendered}");
+        assert!(rendered.contains("implement"), "{rendered}");
     }
 
     #[test]
@@ -1154,7 +1149,8 @@ mod tests {
             ),
         ));
         assert!(card.todo_projection().is_none());
-        let rendered = render_to_strings(&card.render_lines(100)).join("\n");
+        let rendered =
+            render_to_strings(&card.render_lines(100, &crate::palette::UI_THEME)).join("\n");
         assert!(!rendered.contains("sibling only work"), "{rendered}");
         assert!(!rendered.contains("To-do"), "{rendered}");
     }
@@ -1197,7 +1193,8 @@ mod tests {
             "a changed list must redraw the card"
         );
 
-        let rendered = render_to_strings(&card.render_lines(100)).join("\n");
+        let rendered =
+            render_to_strings(&card.render_lines(100, &crate::palette::UI_THEME)).join("\n");
         assert_eq!(card.status, AgentLifecycle::Running, "still mid-turn");
         assert!(rendered.contains("[~] #2 add the regression"), "{rendered}");
         assert!(rendered.contains("[x] #1 draft the fix"), "{rendered}");
@@ -1229,7 +1226,8 @@ mod tests {
         );
 
         assert!(card.todo_projection().is_none());
-        let rendered = render_to_strings(&card.render_lines(100)).join("\n");
+        let rendered =
+            render_to_strings(&card.render_lines(100, &crate::palette::UI_THEME)).join("\n");
         assert!(
             !rendered.contains("To-do"),
             "an empty list states nothing: {rendered}"
@@ -1280,7 +1278,7 @@ mod tests {
             "the active item is never the one dropped: {projection:?}"
         );
 
-        let rendered = render_to_strings(&card.render_lines(60));
+        let rendered = render_to_strings(&card.render_lines(60, &crate::palette::UI_THEME));
         assert!(
             rendered.iter().any(|line| line.contains("+6 more")),
             "elision must be stated: {rendered:?}"
@@ -1324,7 +1322,8 @@ mod tests {
             );
             apply_to_delegate(&mut card, &terminal);
 
-            let rendered = render_to_strings(&card.render_lines(100)).join("\n");
+            let rendered =
+                render_to_strings(&card.render_lines(100, &crate::palette::UI_THEME)).join("\n");
             assert!(card.status.is_terminal(), "{:?}", card.status);
             assert!(
                 rendered.contains("[~] #2 run the suite"),
@@ -1345,7 +1344,8 @@ mod tests {
                 todo(&[(1, "worker one work", TodoStatus::InProgress)], Some(1)),
             ),
         ));
-        let rendered = render_to_strings(&card.render_lines(100)).join("\n");
+        let rendered =
+            render_to_strings(&card.render_lines(100, &crate::palette::UI_THEME)).join("\n");
         assert!(!rendered.contains("worker one work"), "{rendered}");
         assert!(!rendered.contains("To-do"), "{rendered}");
     }

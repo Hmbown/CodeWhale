@@ -11,7 +11,7 @@ import type { ChromeDict } from "../types";
  * Terminologie folgt dem TUI-Pack: Modi und Permission-Posturen bleiben
  * literal (Plan / Work / Operate, Ask / Auto-Review / Full Access),
  * „Berechtigungen" ist permissions, „Laufzeitbeleg" ist receipt; `Runtime`,
- * `Pod` und `TUI` bleiben Produktnamen.
+ * `fleet` und `TUI` bleiben Produktnamen.
  *
  * Die sekundären Nav-Labels paaren das deutsche Primary mit einem kurzen
  * englischen Gegenstück — das Han-Paar ist das Editorial der englischen

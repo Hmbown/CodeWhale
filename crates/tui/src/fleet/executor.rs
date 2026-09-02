@@ -1,9 +1,9 @@
-//! Pod executor — runs a Pod worker as a real `codewhale exec` subprocess.
+//! Fleet executor — runs a Fleet worker as a real `codewhale exec` subprocess.
 //!
-//! A Pod worker IS a headless `codewhale exec` run. There is no separate
-//! "Pod worker" execution engine: the sub-agent runtime, full tool surface,
+//! A Fleet worker IS a headless `codewhale exec` run. There is no separate
+//! "Fleet worker" execution engine: the sub-agent runtime, full tool surface,
 //! and recursion depth all come from the one `codewhale exec` runtime, so
-//! Pods and sub-agents are one substrate (not two moving targets).
+//! Fleets and sub-agents are one substrate (not two moving targets).
 //!
 //! This module is the bridge:
 //! - [`build_worker_exec_command`] turns a `FleetTaskSpec` + `FleetExecConfig`
@@ -217,7 +217,7 @@ pub(crate) fn authority_envelope_for_worker(
         if spec.runtime_profile.permissions.write {
             let manifest = spec.launch_manifest.as_ref().ok_or_else(|| {
                 anyhow::anyhow!(
-                    "write-capable Pod worker '{}' has no launch manifest",
+                    "write-capable Fleet worker '{}' has no launch manifest",
                     spec.worker_id
                 )
             })?;
@@ -347,7 +347,7 @@ fn build_worker_exec_command_from_prompt(
         args.push("--tool-authority-json".to_string());
         args.push(
             serde_json::to_string(authority)
-                .expect("validated Pod tool authority envelope must serialize"),
+                .expect("validated Fleet tool authority envelope must serialize"),
         );
     }
 
@@ -695,7 +695,7 @@ impl FleetExecutor {
             FleetHostSpec::Docker { image, .. } => {
                 return Err(super::host::FleetHostError {
                     kind: super::host::FleetHostErrorKind::Configuration,
-                    message: format!("docker Pod workers are not wired yet (image {image})"),
+                    message: format!("docker Fleet workers are not wired yet (image {image})"),
                 });
             }
         };
@@ -753,7 +753,7 @@ impl FleetExecutor {
         };
         if let Some(key) = ssh_key {
             let adapter = self.ssh_adapters.get_mut(&key).ok_or_else(|| {
-                anyhow::anyhow!("tracked SSH Pod worker {worker_id} has no host adapter")
+                anyhow::anyhow!("tracked SSH Fleet worker {worker_id} has no host adapter")
             })?;
             adapter.stop_worker(worker_id)?;
         } else {
@@ -1143,7 +1143,7 @@ mod tests {
         .unwrap();
         let prompt = cmd.args.last().unwrap();
 
-        assert!(prompt.contains("Pod profile: reviewer"));
+        assert!(prompt.contains("Fleet profile: reviewer"));
         assert!(prompt.contains("Focus on defects, regressions, and missing tests."));
     }
 

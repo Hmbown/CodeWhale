@@ -5,7 +5,8 @@
 //! types `v` in every focus state — work surface, transcript selection,
 //! panel, or modal (TUI-DOG-002). Details/output fires only on
 //! Option+V / Alt+V, and macOS renders the label as `⌥V`, never `Alt`/`Cmd`.
-//! Help is `F1` (with `/help`); `Ctrl+/` stays as a secondary fallback.
+//! Help answers to `F1` and `Ctrl+/` (with `/help`); chrome advertises only
+//! `Ctrl+/`, the chord every terminal delivers.
 //! Provider/route is `F3` (with `/provider`); it is non-printable so it can
 //! remain available while the composer owns ordinary text input.
 //! `Alt+?` and `Alt+C` are still accepted where terminals deliver them but
@@ -86,6 +87,10 @@ pub enum ShellBindingId {
     ModeCycle,
     /// Shift+Tab: cycle the permission posture.
     PermissionCycle,
+    /// Ctrl+Tab / Ctrl+]: the next bottom-dock view.
+    ViewCycle,
+    /// Ctrl+Shift+Tab: the previous bottom-dock view.
+    ViewCycleBack,
 }
 
 /// One advertised binding with the portable catalog chord and focus rules.
@@ -114,6 +119,8 @@ impl ShellBinding {
             ShellBindingId::Settings => is_settings_shortcut(key),
             ShellBindingId::ModeCycle => is_mode_cycle_shortcut(key),
             ShellBindingId::PermissionCycle => is_permission_cycle_shortcut(key),
+            ShellBindingId::ViewCycle => is_view_cycle_shortcut(key),
+            ShellBindingId::ViewCycleBack => is_view_cycle_back_shortcut(key),
         }
     }
 }
@@ -160,9 +167,11 @@ pub const SHELL_BINDINGS: &[ShellBinding] = &[
     },
     ShellBinding {
         id: ShellBindingId::Help,
-        // `/help` also opens this; Ctrl+/ is the secondary fallback.
+        // `/help` also opens this. F1 is accepted but never advertised on
+        // chrome: tmux and several emulators eat it (see
+        // [`HELP_CHROME_CHORD`]).
         catalog_chord: "F1 / Ctrl+/",
-        footer_chord: "F1",
+        footer_chord: HELP_CHROME_CHORD,
         focus: FocusScope::Everywhere,
     },
     ShellBinding {
@@ -192,6 +201,22 @@ pub const SHELL_BINDINGS: &[ShellBinding] = &[
         // Config modal that displays the posture it changes.
         focus: FocusScope::AnyShellOrConfig,
     },
+    ShellBinding {
+        id: ShellBindingId::ViewCycle,
+        // Ctrl+Tab only arrives under the kitty keyboard protocol (the loop
+        // pushes DISAMBIGUATE_ESCAPE_CODES); Ctrl+] is the chord every
+        // terminal delivers — unbound here, not eaten by VS Code/Cursor
+        // (Ctrl+F is), tmux, iTerm2, Terminal.app, or Windows Terminal.
+        catalog_chord: "Ctrl+Tab / Ctrl+]",
+        footer_chord: "Ctrl+]",
+        focus: FocusScope::SessionShell,
+    },
+    ShellBinding {
+        id: ShellBindingId::ViewCycleBack,
+        catalog_chord: "Ctrl+Shift+Tab",
+        footer_chord: "Ctrl+Shift+Tab",
+        focus: FocusScope::SessionShell,
+    },
 ];
 
 /// The chord the info line advertises for help.
@@ -210,7 +235,8 @@ pub const HELP_CHROME_CHORD: &str = "Ctrl+/";
 #[must_use]
 pub fn info_help_hint(locale: crate::localization::Locale) -> String {
     format!(
-        "{HELP_CHROME_CHORD} {}",
+        "{} {}",
+        binding(ShellBindingId::Help).footer_chord,
         crate::localization::tr(locale, crate::localization::MessageId::InfoLineHelp)
     )
 }
@@ -262,48 +288,6 @@ fn display_chord_for_platform_and_ascii(
         Cow::Borrowed(chord)
     } else {
         Cow::Owned(rendered)
-    }
-}
-
-/// Footer right-hand action hints. Placeholders (`{output}`, `{context}`,
-/// `{keys}`) are localized by the caller.
-#[must_use]
-pub fn footer_action_hints(include_context: bool) -> String {
-    footer_action_hints_for_platform_and_ascii(
-        include_context,
-        cfg!(target_os = "macos"),
-        crate::tui::color_compat::ascii_safe_enabled(),
-    )
-}
-
-#[cfg(test)]
-#[must_use]
-pub fn footer_action_hints_for_platform(include_context: bool, is_macos: bool) -> String {
-    footer_action_hints_for_platform_and_ascii(include_context, is_macos, false)
-}
-
-fn footer_action_hints_for_platform_and_ascii(
-    include_context: bool,
-    is_macos: bool,
-    ascii_safe: bool,
-) -> String {
-    let details = display_chord_for_platform_and_ascii(
-        binding(ShellBindingId::ToolDetails).footer_chord,
-        is_macos,
-        ascii_safe,
-    );
-    let help = display_chord_for_platform_and_ascii(
-        binding(ShellBindingId::Help).footer_chord,
-        is_macos,
-        ascii_safe,
-    );
-    if include_context {
-        format!(
-            "{details}:{{output}} · {}:{{context}} · {help}:{{keys}}",
-            binding(ShellBindingId::ContextInspector).footer_chord
-        )
-    } else {
-        format!("{details}:{{output}} · {help}:{{keys}}")
     }
 }
 
@@ -389,9 +373,92 @@ pub fn is_permission_cycle_shortcut(key: &KeyEvent) -> bool {
         || (matches!(key.code, KeyCode::Tab) && key.modifiers.contains(KeyModifiers::SHIFT))
 }
 
+/// Ctrl+Tab (kitty protocol: `Tab` + CONTROL) or Ctrl+] cycles the bottom
+/// dock view forward. AltGr chords stay text (#4723).
+#[must_use]
+pub fn is_view_cycle_shortcut(key: &KeyEvent) -> bool {
+    if crate::tui::widgets::key_hint::is_altgr(key.modifiers) {
+        return false;
+    }
+    let ctrl_only = key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key
+            .modifiers
+            .intersects(KeyModifiers::ALT | KeyModifiers::SUPER | KeyModifiers::SHIFT);
+    ctrl_only && matches!(key.code, KeyCode::Tab | KeyCode::Char(']'))
+}
+
+/// Ctrl+Shift+Tab (kitty protocol: `BackTab` or `Tab` with CONTROL|SHIFT)
+/// cycles the bottom dock view backward.
+#[must_use]
+pub fn is_view_cycle_back_shortcut(key: &KeyEvent) -> bool {
+    if key
+        .modifiers
+        .intersects(KeyModifiers::ALT | KeyModifiers::SUPER)
+        || !key.modifiers.contains(KeyModifiers::CONTROL)
+    {
+        return false;
+    }
+    matches!(key.code, KeyCode::BackTab)
+        || (matches!(key.code, KeyCode::Tab) && key.modifiers.contains(KeyModifiers::SHIFT))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn view_cycle_chords_are_ctrl_tab_and_ctrl_bracket() {
+        let ctrl_tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::CONTROL);
+        let ctrl_bracket = KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL);
+        let ctrl_shift_tab = KeyEvent::new(
+            KeyCode::BackTab,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(
+            route(Focus::Composer, &ctrl_tab),
+            Some(ShellBindingId::ViewCycle)
+        );
+        assert_eq!(
+            route(Focus::Panel, &ctrl_bracket),
+            Some(ShellBindingId::ViewCycle)
+        );
+        assert_eq!(
+            route(Focus::Composer, &ctrl_shift_tab),
+            Some(ShellBindingId::ViewCycleBack)
+        );
+        // Plain Tab / Shift+Tab stay the mode and permission cycles.
+        assert_eq!(
+            route(
+                Focus::Composer,
+                &KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)
+            ),
+            Some(ShellBindingId::ModeCycle)
+        );
+        assert_eq!(
+            route(
+                Focus::Composer,
+                &KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)
+            ),
+            Some(ShellBindingId::PermissionCycle)
+        );
+        // Ctrl+T is reasoning effort, not ours; a bare `]` is composer text.
+        assert_eq!(
+            route(
+                Focus::Composer,
+                &KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL)
+            ),
+            None
+        );
+        assert_eq!(
+            route(
+                Focus::Composer,
+                &KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE)
+            ),
+            None
+        );
+        // Modals keep every key.
+        assert_eq!(route(Focus::Modal(ModalKind::Pager), &ctrl_bracket), None);
+    }
 
     #[test]
     fn bare_v_is_never_a_shortcut_in_any_state() {
@@ -415,43 +482,18 @@ mod tests {
     fn details_label_is_option_glyph_on_macos_and_alt_elsewhere() {
         assert_eq!(display_chord_for_platform("Alt+V", true), "⌥V");
         assert_eq!(display_chord_for_platform("Alt+V", false), "Alt+V");
-        let macos = footer_action_hints_for_platform(true, true);
-        assert!(macos.starts_with("⌥V:"), "{macos}");
-        assert!(!macos.contains("Alt"), "{macos}");
-        assert!(!macos.contains("Cmd"), "{macos}");
-        let other = footer_action_hints_for_platform(true, false);
-        assert!(other.starts_with("Alt+V:"), "{other}");
     }
 
     #[test]
-    fn ascii_safe_macos_hints_keep_portable_chords() {
-        assert_eq!(
-            display_chord_for_platform_and_ascii("Alt+V", true, true),
-            "Alt+V"
-        );
-        let hints = footer_action_hints_for_platform_and_ascii(true, true, true);
-        assert!(hints.starts_with("Alt+V:"), "{hints}");
-        assert!(hints.contains("F1:"), "{hints}");
-        assert!(!hints.contains('⌥'), "{hints}");
-    }
-
-    #[test]
-    fn footer_hints_never_advertise_bare_v_alt_question_or_alt_c() {
-        for is_macos in [true, false] {
-            for include_context in [true, false] {
-                let hints = footer_action_hints_for_platform(include_context, is_macos);
-                assert!(!hints.starts_with("v:"), "{hints}");
-                assert!(!hints.contains(" v:"), "{hints}");
-                assert!(!hints.contains("Alt+?"), "{hints}");
-                assert!(!hints.contains("Alt+C"), "{hints}");
-                assert!(hints.contains("F1:"), "{hints}");
-                if is_macos {
-                    assert!(hints.contains("fn+F1:"), "{hints}");
-                }
-                if include_context {
-                    assert!(hints.contains("/context:"), "{hints}");
-                }
-            }
+    fn chrome_never_advertises_a_key_terminals_eat() {
+        // F1 stays in the catalog (it works where delivered) but no chrome
+        // hint may print it; the help hint is derived from the binding.
+        assert_eq!(binding(ShellBindingId::Help).footer_chord, "Ctrl+/");
+        let hint = info_help_hint(crate::localization::Locale::En);
+        assert!(hint.starts_with("Ctrl+/ "), "{hint}");
+        for binding in SHELL_BINDINGS {
+            assert!(!binding.footer_chord.contains("F1"), "{:?}", binding.id);
+            assert!(!binding.footer_chord.contains("Alt+?"), "{:?}", binding.id);
         }
     }
 
@@ -550,23 +592,15 @@ mod tests {
     }
 
     #[test]
-    fn footer_only_advertises_chords_that_are_live_where_it_is_shown() {
-        // The footer hint row is built from this table, so it must not be
-        // able to name a chord the same table refuses at the focus the
-        // footer is rendered in.
-        let hints = footer_action_hints_for_platform(true, false);
-        for id in [
-            ShellBindingId::ToolDetails,
-            ShellBindingId::ContextInspector,
-            ShellBindingId::Help,
-        ] {
-            let binding = binding(id);
-            assert!(hints.contains(binding.footer_chord), "{hints}");
-            assert!(
-                binding.focus.admits(Focus::Composer),
-                "footer advertises {id:?}, which the table does not admit at the composer"
-            );
-        }
+    fn chrome_only_advertises_chords_that_are_live_where_it_is_shown() {
+        // The metrics line's help hint is built from this table, so it must
+        // not be able to name a chord the same table refuses at any focus
+        // the chrome is rendered in (the hint paints on every screen).
+        let hint = info_help_hint(crate::localization::Locale::En);
+        let help = binding(ShellBindingId::Help);
+        assert!(hint.starts_with(help.footer_chord), "{hint}");
+        assert_eq!(help.focus, FocusScope::Everywhere);
+        assert!(help.matches(&KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL)));
     }
 
     #[test]

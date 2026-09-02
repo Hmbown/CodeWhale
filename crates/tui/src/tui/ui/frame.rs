@@ -7,151 +7,66 @@ use super::*;
 use crate::models::Role;
 use crate::tui::infoline::{InfoLine, InfoSegment, InfoSegmentId, infoline_hitboxes};
 
-/// Context window percentage for the info line's meter — the same snapshot the
-/// merged footer's context reading, so the two can never disagree.
+/// Context window percentage for the metrics line's reading — the same
+/// snapshot the posture bar's ≥80% microcopy reads, so the two can never
+/// disagree.
 pub(crate) fn info_context_percent(app: &App) -> u8 {
     crate::tui::phase_strip::context_percent_from_app(app)
 }
 
-/// What the workspace segment says, and what it falls back to when the row
-/// is tight: the forge slug `owner/name` when `origin` resolves to one, else
-/// the workspace folder name, which is what the user calls the project when
-/// there is no remote to name it.
-///
-/// `file_name()` is `None` for `.`, `..`, and `/`; a segment reading `.`
-/// names nothing, so an empty first element means the segment stands down.
-fn workspace_segment_forms(slug: Option<&str>, workspace: &std::path::Path) -> (String, String) {
-    let basename = workspace
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    match slug {
-        Some(slug) if !slug.is_empty() => (slug.to_string(), basename),
-        _ => (basename, String::new()),
+/// The session cost as the one price string every surface prints
+/// (SHELL-DESIGN-20260901 §2.11 item 5): the metrics line, the roster's
+/// right column, the price widget and the turn summary all read this. Empty
+/// until the session has a priced or counted turn.
+pub(crate) fn session_cost_label(app: &App) -> String {
+    let usage_chip = app.cumulative_usage_chip();
+    match &usage_chip {
+        crate::route_billing::UsageChip::Money(amount) => Some(amount.clone()),
+        crate::route_billing::UsageChip::PricedSubtotal { .. }
+        | crate::route_billing::UsageChip::Unknown => {
+            crate::route_billing::format_usage_chip(&usage_chip)
+        }
+        _ => None,
     }
+    .unwrap_or_default()
 }
 
-/// Build the info line's contextual segments from live `App` state (spec §5a
-/// data sources). Shedding is the widget's job; this only states
-/// the facts, in reference order: folder, branch, run, pod, whales,
-/// automation, model.
+/// Output tokens and output rate for the metrics line: the live stream's
+/// running estimate while a turn is producing text, else the last turn's
+/// provider-reported figures. `None` before any turn has produced output.
+fn output_figures(app: &App) -> Option<(u64, Option<f64>)> {
+    if app.is_loading && app.streaming_output_token_estimate > 0 {
+        let rate = app
+            .turn_started_at
+            .map(|started| started.elapsed().as_secs_f64())
+            .filter(|secs| *secs > 0.0)
+            .map(|secs| app.streaming_output_token_estimate as f64 / secs);
+        return Some((app.streaming_output_token_estimate, rate));
+    }
+    if let Some(throughput) = app.session.last_output_throughput {
+        return Some((
+            throughput.output_tokens,
+            Some(throughput.tokens_per_second()),
+        ));
+    }
+    app.session
+        .last_completion_tokens
+        .filter(|tokens| *tokens > 0)
+        .map(|tokens| (u64::from(tokens), None))
+}
+
+/// Build the metrics line's segments from live `App` state. Shedding is the
+/// widget's job; this only states the facts, in display order: model,
+/// context, cost, time to first token, output rate, output tokens.
 ///
-/// The theme name is no longer among them. It was a first-run nicety that
-/// outlived first run, and the accepted screens spend that space on the
-/// workspace the session is actually editing.
+/// Repository and branch left this row (2026-09-02): the launch header and
+/// the git bottom view own them. Pod, whale and automation counts left too —
+/// the posture bar's live counts own activity.
 pub(crate) fn info_segments(app: &App, width: u16) -> Vec<InfoSegment> {
+    use crate::localization::MessageId;
     use crate::palette::ChromeInk;
     let mut segments = Vec::new();
     let tier = crate::tui::underwater::ShellTier::for_chrome_width(width);
-
-    // Repository, then branch. Both come from the one cached `git_status`
-    // snapshot — the render path never probes; the background refresh owns
-    // that, and the forge slug rides the same probe.
-    let git = crate::tui::git_status::cached_status();
-    let git_matches_workspace = git.probed_workspace.as_deref() == Some(app.workspace.as_path());
-    let folder_budget = match tier {
-        crate::tui::underwater::ShellTier::Compact => 16,
-        crate::tui::underwater::ShellTier::Normal => 24,
-        crate::tui::underwater::ShellTier::Wide => 36,
-    };
-    let (repo, basename) = workspace_segment_forms(
-        git_matches_workspace
-            .then_some(git.remote_slug.as_deref())
-            .flatten(),
-        &app.workspace,
-    );
-    if !repo.is_empty() {
-        let mut segment = InfoSegment::new(
-            InfoSegmentId::Workspace,
-            "",
-            crate::localization::truncate_to_width(&repo, folder_budget),
-            ChromeInk::Metadata,
-        );
-        if !basename.is_empty() {
-            segment = segment.short(crate::localization::truncate_to_width(
-                &basename,
-                folder_budget,
-            ));
-        }
-        segments.push(segment);
-    }
-
-    // Branch, when git knows one. Unknown stays absent: the header must not
-    // invent a ref to fill the slot (`git_status::chrome_label`'s own rule).
-    if git_matches_workspace && let Some(branch) = git.branch.as_deref() {
-        segments.push(InfoSegment::new(
-            InfoSegmentId::Branch,
-            "⑂",
-            crate::localization::truncate_to_width(branch, folder_budget),
-            ChromeInk::Metadata,
-        ));
-    }
-
-    // Run/breadcrumb while a workflow run is active — the collapsed
-    // workflow chip's new home (the classic header's `top_bar_chip`, with
-    // its redundant `wf ` prefix dropped now that the `run` label says it).
-    if let Some(panel) = app.workflow_panel.as_ref() {
-        let ink = if matches!(
-            panel.lifecycle,
-            crate::tui::widgets::workflow_panel::WorkflowPanelLifecycle::Degraded
-        ) {
-            ChromeInk::Attention
-        } else {
-            ChromeInk::Info
-        };
-        let chip = panel.top_bar_chip();
-        let value = chip.strip_prefix("wf ").unwrap_or(&chip).to_string();
-        segments.push(InfoSegment::new(
-            InfoSegmentId::Run,
-            app.tr(crate::localization::MessageId::ToolFamilyRun)
-                .as_ref(),
-            value,
-            ink,
-        ));
-    }
-
-    // Pod membership and whale capacity from the sub-agent state: `pod n/m`
-    // of known members, `whales n/capacity` while any whale is in the water.
-    let running = running_agent_count(app);
-    let pod_total = app.subagent_cache.len();
-    if pod_total > 0 {
-        segments.push(InfoSegment::new(
-            InfoSegmentId::Pod,
-            app.tr(crate::localization::MessageId::FleetRosterHeaderLabel)
-                .as_ref(),
-            format!("{running}/{pod_total}"),
-            ChromeInk::Active,
-        ));
-        if running > 0 {
-            segments.push(InfoSegment::new(
-                InfoSegmentId::Whales,
-                app.tr(crate::localization::MessageId::InfoLineWhales)
-                    .as_ref(),
-                format!("{}/{}", running, app.max_subagents.max(1)),
-                ChromeInk::Info,
-            ));
-        }
-    }
-
-    // Scheduled automation work — the top strip's work fact (the merged
-    // footer owns phase/cost/detail only, per the TUI band contract). The
-    // projection (`AutomationPanelState`) stays the single owner; the
-    // info line reads it. Compact keeps the abbreviated live count — chrome
-    // sheds before content.
-    let automation_value = if tier == crate::tui::underwater::ShellTier::Compact {
-        app.automation_panel.activity_slot_compact()
-    } else {
-        app.automation_panel.activity_slot(app.ui_locale)
-    };
-    if let Some(value) = automation_value {
-        segments.push(InfoSegment::new(
-            InfoSegmentId::Automation,
-            app.tr(crate::localization::MessageId::InfoLineAutomation)
-                .as_ref(),
-            value,
-            app.automation_panel.activity_ink(),
-        ));
-    }
 
     // Route identity — the old identity band's fact, same shed discipline:
     // provider first, then effort, whole names or none. When no model is
@@ -160,16 +75,13 @@ pub(crate) fn info_segments(app: &App, width: u16) -> Vec<InfoSegment> {
     if model.is_empty() {
         segments.push(InfoSegment::new(
             InfoSegmentId::Model,
-            app.tr(crate::localization::MessageId::StartupDefaultSubjectModel)
-                .as_ref(),
-            app.tr(crate::localization::MessageId::InfoLineNotConnected)
-                .as_ref(),
+            app.tr(MessageId::StartupDefaultSubjectModel).as_ref(),
+            app.tr(MessageId::InfoLineNotConnected).as_ref(),
             ChromeInk::Waiting,
         ));
     } else {
-        // The brand lockup, the folder/branch pair, and the pinned context
-        // reading claim the rest of the row; the route sheds its own
-        // qualifiers first.
+        // The context reading and the metrics claim the rest of the row;
+        // the route sheds its own qualifiers first.
         let budget = (usize::from(width)).saturating_sub(60).max(24);
         let fields = crate::tui::phase_strip::route_identity_fields(app, tier, budget)
             .unwrap_or_else(|| vec![model]);
@@ -178,6 +90,63 @@ pub(crate) fn info_segments(app: &App, width: u16) -> Vec<InfoSegment> {
             "",
             fields.join(" · "),
             ChromeInk::Identity,
+        ));
+    }
+
+    // The context reading: painted here and nowhere else. At the 80% cap
+    // the whole reading turns to the error token — it is the one fact on
+    // this row that becomes a problem rather than a status.
+    let pct = info_context_percent(app);
+    segments.push(InfoSegment::new(
+        InfoSegmentId::Context,
+        app.tr(MessageId::InfoLineContext).as_ref(),
+        format!("{pct}%"),
+        if pct >= 80 {
+            ChromeInk::Failure
+        } else {
+            ChromeInk::Info
+        },
+    ));
+
+    let cost = session_cost_label(app);
+    if !cost.is_empty() {
+        segments.push(InfoSegment::new(
+            InfoSegmentId::Cost,
+            "",
+            cost,
+            ChromeInk::MetadataValue,
+        ));
+    }
+
+    // The DeepSeek-harness session metrics, from the same accumulators
+    // `/cost` prints: nothing here is estimated except the live stream's
+    // running token count, which the provider's receipt replaces.
+    if let Some(ttft) = app.session_metrics.ttft_average() {
+        segments.push(InfoSegment::new(
+            InfoSegmentId::Ttft,
+            app.tr(MessageId::InfoLineTtft).as_ref(),
+            crate::tui::session_metrics::format_duration(ttft),
+            ChromeInk::MetadataValue,
+        ));
+    }
+    if let Some((tokens, rate)) = output_figures(app) {
+        if let Some(rate) = rate {
+            segments.push(InfoSegment::new(
+                InfoSegmentId::Rate,
+                "",
+                format!(
+                    "{} {}",
+                    crate::tui::session_metrics::format_rate(rate),
+                    app.tr(MessageId::SessionMetricsTokensPerSecond)
+                ),
+                ChromeInk::MetadataValue,
+            ));
+        }
+        segments.push(InfoSegment::new(
+            InfoSegmentId::OutputTokens,
+            "↓",
+            crate::tui::session_metrics::format_tokens(tokens),
+            ChromeInk::MetadataValue,
         ));
     }
 
@@ -222,16 +191,9 @@ fn render_info_row(f: &mut Frame, app: &mut App, area: Rect) -> InfoLineInteract
             .map(|hb| hb.id)
     });
     let help_hint = crate::tui::shell_key_routing::info_help_hint(app.ui_locale);
-    let context_label = app.tr(crate::localization::MessageId::FooterHintContext);
-    let info = InfoLine::new(
-        &app.ui_theme,
-        &help_hint,
-        context_label.as_ref(),
-        info_context_percent(app),
-        &segments,
-    )
-    .ascii_safe(crate::tui::color_compat::ascii_safe_enabled())
-    .hovered(hovered);
+    let info = InfoLine::new(&app.ui_theme, &help_hint, &segments)
+        .ascii_safe(crate::tui::color_compat::ascii_safe_enabled())
+        .hovered(hovered);
     let hitboxes = infoline_hitboxes(&info, area);
     let interaction_hitboxes = InfoLineInteractionHitboxes {
         context: crate::tui::infoline::context_meter_hitbox(&info, area),
@@ -307,6 +269,13 @@ fn register_info_interaction_targets(app: &mut App, hitboxes: InfoLineInteractio
                     crate::localization::MessageId::CmdProviderDescription,
                 ),
             ),
+            Some(crate::tui::tideline::InteractionAction::ShowDockPanel(panel)) => {
+                panel.title().to_string()
+            }
+            Some(crate::tui::tideline::InteractionAction::DismissDock) => {
+                crate::localization::tr(app.ui_locale, crate::localization::MessageId::KbCloseMenu)
+                    .into_owned()
+            }
             None => continue,
         };
         crate::tui::hover_layer::register_rect(
@@ -1043,15 +1012,34 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         let launch_slash_menu_entries = visible_slash_menu_entries(app, SLASH_MENU_LIMIT);
         let launch_mention_menu_entries =
             crate::tui::file_mention::visible_mention_menu_entries(app, app.mention_menu_limit);
-        let [stage_area, footer_area, info_area] = Layout::default()
-            .direction(Direction::Vertical)
-            .flex(ratatui::layout::Flex::Start)
-            .constraints([
-                Constraint::Min(1),    // stage: Tideline startup
-                Constraint::Length(1), // posture row (merged footer, slots 6+8)
-                Constraint::Length(1), // info line
-            ])
-            .areas(size);
+        // The posture bar and the metrics line appear only once a session
+        // exists: while the launch card is up the stage owns every row.
+        let card_up = {
+            let motion = app.motion_policy().allows_decorative() && !app.low_motion;
+            app.launch
+                .card_dissolve_progress(app.ambient_clock_ms, motion)
+                < 1.0
+        };
+        let areas = if card_up {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .flex(ratatui::layout::Flex::Start)
+                .constraints([Constraint::Min(1)])
+                .split(size)
+        } else {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .flex(ratatui::layout::Flex::Start)
+                .constraints([
+                    Constraint::Min(1),    // stage: Tideline startup
+                    Constraint::Length(1), // posture row (merged footer, slots 6+8)
+                    Constraint::Length(1), // info line
+                ])
+                .split(size)
+        };
+        let stage_area = areas[0];
+        let footer_area = areas.get(1).copied().unwrap_or_default();
+        let info_area = areas.get(2).copied().unwrap_or_default();
         let startup = crate::tui::underwater::tideline_startup_from_app(app);
         let hitboxes = if startup.composer.enclosed {
             crate::tui::underwater::tideline_startup_hitboxes(stage_area)
@@ -1199,26 +1187,10 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         pending_preview.desired_height(shell_area.width)
     };
 
-    // Persistent background-work indicator (#5286): one pinned row above the
-    // composer while shells / durable tasks / sub-agents are in flight. The
-    // chip mirrors the Work strip and `/jobs` state — no separate registry —
-    // and collapses to zero rows when nothing is pending. It is carved from
-    // the auxiliary budget so compact terminals shed the chip before they
-    // shed chat/composer space. Mini mode hides it with the rest of the
-    // chrome.
-    let pending_work = crate::tui::background_indicator::pending_work_from_app(app);
-    let composer_floor = MIN_COMPOSER_HEIGHT.saturating_add(u16::from(
-        crate::tui::widgets::composer_enclosure_enabled(app),
-    ));
-    let indicator_height = if mini {
-        0
-    } else {
-        u16::from(!pending_work.is_empty()).min(
-            rail_budget
-                .saturating_sub(top_work_strip_height)
-                .saturating_sub(composer_height.saturating_sub(composer_floor)),
-        )
-    };
+    // The background-work chip (#5286) that used to pin a row above the
+    // composer is gone: the posture bar's live counts own "what is in
+    // flight" (one owner per fact), and nothing sits between the transcript
+    // and the composer that is not a queued draft or an expanded panel.
 
     // WorkflowPanel unified activity surface (#4121). Expanded while running
     // (interactive drill-in above the composer); when collapsed the panel
@@ -1238,16 +1210,14 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     } else {
         app.plugin_cta_row_height()
     };
-    let auxiliary_budget = body_height
-        .saturating_sub(
-            top_work_strip_height
-                .saturating_add(MIN_CHAT_HEIGHT)
-                .saturating_add(composer_height)
-                .saturating_add(footer_height)
-                .saturating_add(info_height)
-                .saturating_add(plugin_cta_height),
-        )
-        .saturating_sub(indicator_height);
+    let auxiliary_budget = body_height.saturating_sub(
+        top_work_strip_height
+            .saturating_add(MIN_CHAT_HEIGHT)
+            .saturating_add(composer_height)
+            .saturating_add(footer_height)
+            .saturating_add(info_height)
+            .saturating_add(plugin_cta_height),
+    );
     // Queued-only previews author the direct controls in row two (and fall
     // back to controls-only when just one row remains). Mixed previews retain
     // up to three compact rows at the release floor.
@@ -1256,20 +1226,20 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
     let workflow_panel_height =
         desired_workflow_panel_height.min(auxiliary_budget.saturating_sub(preview_height));
 
-    // One pinned footer row brackets the composer from below (spec §3: the
-    // activity band and identity band merged into it): phase · live detail ·
-    // cost · posture chips on the left, context reading · keys — or a live
-    // notice — on the right. The row is reserved in every phase, so a turn
-    // moving between idle, thinking, tool use, approval, completion,
-    // failure, and cancellation rewrites text inside a fixed row — the
-    // composer is never displaced. The freed activity row above the composer
-    // was reclaimed by the stage (`Min(1)` chat slot).
-    // Round 3 (2026-09-01): the work surface lives BELOW the composer by
-    // default — scrolling up is intentional history — while `top` placement
-    // keeps the strip above the transcript. The strip owns a slot at each
-    // end and only one has height, so every other slot keeps its index in
-    // both placements (the stage, preview and indicator are addressed by
-    // position below).
+    // Two pinned rows bracket the composer from below (SHELL-DESIGN-20260901
+    // §2.0 item 3, §2.3b): the posture bar — permission · mode · live counts
+    // · the one hint that applies now, with the remote-control state or a
+    // live notice pinned right — then the metrics line — model · ctx · cost
+    // · ttft · tok/s · ↓ tokens, with the help hint pinned right. Both rows
+    // are reserved in every phase, so a turn moving between idle, thinking,
+    // tool use, approval, completion, failure, and cancellation rewrites
+    // text inside fixed rows — the composer is never displaced.
+    // The work surface (roster, to-do) lives BELOW those two rows by default
+    // and only when it has content — scrolling up is intentional history —
+    // while `top` placement keeps the strip above the transcript. The strip
+    // owns a slot at each end and only one has height, so every other slot
+    // keeps its index in both placements (the stage and preview are
+    // addressed by position below).
     // Bottom never falls back (only side rails do), so the configured
     // placement is the effective one here.
     let strip_below =
@@ -1287,19 +1257,18 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
             Constraint::Min(1),                     // Chat area
             Constraint::Length(workflow_panel_height), // Workflow panel (#4121)
             Constraint::Length(preview_height),     // Pending input preview (0 if empty)
-            Constraint::Length(indicator_height),   // Background-work chip (#5286, 0 if idle)
             Constraint::Length(plugin_cta_height),  // Live plugin CTA (0 unless matched)
             Constraint::Length(composer_height),    // Composer
-            Constraint::Length(strip_below_height), // Tasks + To-do under composer (`bottom`)
-            Constraint::Length(footer_height),      // Posture row (slots 6+8)
-            Constraint::Length(info_height),        // Info line (the very last row)
+            Constraint::Length(footer_height),      // Posture bar
+            Constraint::Length(info_height),        // Metrics line
+            Constraint::Length(strip_below_height), // Roster + To-do under the chrome (`bottom`)
         ])
         .split(body_area);
-    let strip_slot = if strip_below { 7 } else { 0 };
-    let plugin_cta_slot = 5;
-    let composer_slot = 6;
-    let footer_slot = 8;
-    let info_slot = 9;
+    let strip_slot = if strip_below { 8 } else { 0 };
+    let plugin_cta_slot = 4;
+    let composer_slot = 5;
+    let footer_slot = 6;
+    let info_slot = 7;
 
     let (work_chat_area, side_work_area) = if mini && !mini_cfg.keep_sidebar {
         // Mini mode without the side rail: the transcript takes the whole
@@ -1409,13 +1378,6 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         pending_preview.render(body_chunks[3], buf);
     }
 
-    // Render the pinned background-work chip (0-height when idle, so this is
-    // a no-op unless shells / tasks / sub-agents are in flight; #5286).
-    if indicator_height > 0 {
-        let buf = f.buffer_mut();
-        crate::tui::background_indicator::render(body_chunks[4], buf, app, &pending_work);
-    }
-
     if plugin_cta_height > 0 {
         let buf = f.buffer_mut();
         crate::tui::plugin_suggestions::draw_plugin_cta(app, body_chunks[plugin_cta_slot], buf);
@@ -1490,11 +1452,9 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         app.viewport.last_composer_scroll_offset = scroll_offset;
         app.viewport.last_composer_top_padding = top_padding;
     }
-    // The merged Tideline footer is the screen's last row: phase verb,
-    // live detail, cost, and the posture chips the old header carried, with
-    // the context reading and key legend (or a live notice) pinned right. Every
-    // fact the two classic bands stated survives here except the session
-    // metrics strip, which spec §3 moves behind `/cost`.
+    // The posture bar is the first row under the composer: permission chip
+    // (never sheds), mode, live counts, the one hint that applies now, with
+    // the remote-control state or a live notice pinned right.
     if footer_height > 0 {
         let area = body_chunks[footer_slot];
         let facts = crate::tui::phase_strip::tideline_footer_from_app(app, area.width);
@@ -1509,8 +1469,8 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         crate::tui::phase_strip::render_tideline_footer(area, buf, &footer);
     }
 
-    // The info line is the shell's last row, directly under the posture row:
-    // repository · branch · model · context, with the help hint pinned right.
+    // The metrics line sits directly under the posture bar: model · ctx ·
+    // cost · ttft · tok/s · ↓ tokens, with the help hint pinned right.
     let mut info_interactions = InfoLineInteractionHitboxes::default();
     if info_height > 0 {
         info_interactions = render_info_row(f, app, body_chunks[info_slot]);
@@ -1842,50 +1802,8 @@ pub(crate) fn workflow_tool_is_running(app: &App) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        info_segments, register_info_interaction_targets, render_info_row, short_title_truncate,
-        workspace_segment_forms,
-    };
+    use super::{register_info_interaction_targets, render_info_row, short_title_truncate};
     use ratatui::{Terminal, backend::TestBackend};
-
-    /// AUTOMATION-VISIBILITY §2.1 lands in the TOP strip (TUI band
-    /// contract: work in the top strip; the merged footer owns phase/cost/
-    /// detail). The `AutomationPanelState` projection stays the single
-    /// owner; `info_segments` reads it: full text at Normal/Wide, the
-    /// abbreviated `⏱ N·M` at Compact (chrome sheds before content), never
-    /// at zero.
-    #[test]
-    fn infoline_automation_segment_reads_the_projection() {
-        let mut app =
-            crate::test_support::test_app_with_options(crate::test_support::test_tui_options("."));
-        app.ui_locale = crate::localization::Locale::En;
-        app.automation_panel.active_automations = 2;
-        app.automation_panel.live_runs = 1;
-
-        let wide = info_segments(&app, 120);
-        let segment = wide
-            .iter()
-            .find(|segment| segment.id == crate::tui::infoline::InfoSegmentId::Automation)
-            .expect("automation work rides the top strip");
-        assert_eq!(segment.value, "⏱ 2 scheduled · 1 running");
-        assert_eq!(segment.ink, crate::palette::ChromeInk::Active);
-
-        let compact = info_segments(&app, 48);
-        let segment = compact
-            .iter()
-            .find(|segment| segment.id == crate::tui::infoline::InfoSegmentId::Automation)
-            .expect("Compact keeps the abbreviated live-work indicator");
-        assert_eq!(segment.value, "⏱ 2·1");
-
-        app.automation_panel.active_automations = 0;
-        app.automation_panel.live_runs = 0;
-        let none = info_segments(&app, 120);
-        assert!(
-            none.iter()
-                .all(|segment| segment.id != crate::tui::infoline::InfoSegmentId::Automation),
-            "zero counts suppress the segment"
-        );
-    }
 
     #[test]
     fn infoline_route_segment_registers_interaction_target() {
@@ -1933,33 +1851,6 @@ mod tests {
     /// the segment's shorter form so a long slug never costs the row a whole
     /// fact.
     #[test]
-    fn workspace_segment_prefers_the_forge_slug_over_the_folder_name() {
-        let workspace = std::path::Path::new("/Volumes/VIXinSSD/CW/codewhale");
-        assert_eq!(
-            workspace_segment_forms(Some("Hmbown/CodeWhale"), workspace),
-            ("Hmbown/CodeWhale".to_string(), "codewhale".to_string()),
-            "a known slug names the repository, with the basename in reserve"
-        );
-        // No remote, an unrecognised host, or a path-shaped remote: the
-        // normalizer returns None and the basename is the whole answer.
-        assert_eq!(
-            workspace_segment_forms(None, workspace),
-            ("codewhale".to_string(), String::new())
-        );
-        // `.` and `/` name nothing; an empty first form stands the segment
-        // down rather than painting a dot.
-        assert_eq!(
-            workspace_segment_forms(None, std::path::Path::new(".")),
-            (String::new(), String::new())
-        );
-        // The slug still wins when the workspace itself is unnameable.
-        assert_eq!(
-            workspace_segment_forms(Some("Hmbown/CodeWhale"), std::path::Path::new(".")),
-            ("Hmbown/CodeWhale".to_string(), String::new())
-        );
-    }
-
-    #[test]
     fn truncates_at_ascii_word_boundary() {
         assert_eq!(short_title_truncate("hello world foo", 10), "hello…");
     }
@@ -1989,3 +1880,6 @@ mod tests {
         assert_eq!(short_title_truncate("short", 10), "short");
     }
 }
+
+#[cfg(test)]
+mod one_owner_tests;

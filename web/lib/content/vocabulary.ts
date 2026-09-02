@@ -2,9 +2,9 @@
  * vocabulary.ts — shared, locale-aware product vocabulary for codewhale.net.
  *
  * This module is the single source of truth for the exact product nouns a new
- * user meets on the site: the Pod/Workflow/Lane/Runtime execution nouns,
+ * user meets on the site: the Fleet/Workflow/Lane/Runtime execution nouns,
  * the Plan/Work/Operate + Ask/Auto-Review/Full Access control vocabulary, the
- * public Consultant role, and the fields that make route provenance legible.
+ * public Advisor role, and the fields that make route provenance legible.
  *
  * TRUTH CONTRACT:
  *   - `short.en` for every product term MUST equal the verbatim definition in
@@ -28,7 +28,7 @@ export interface LocalizedText {
 
 export interface ProductTerm {
   /** The exact product noun. Never translate the noun itself. */
-  term: "Pod" | "Workflow" | "Lane" | "Runtime";
+  term: "Fleet" | "Workflow" | "Lane" | "Runtime";
   /** One-line definition; `en` is verbatim from docs/public-surface-facts.json. */
   short: LocalizedText;
   /** One-sentence elaboration used on docs pages. */
@@ -37,17 +37,14 @@ export interface ProductTerm {
 
 export const PRODUCT_TERMS: ProductTerm[] = [
   {
-    // Pod is the customer-facing noun. Fleet is the retained serialization
-    // spelling (ledger file, saved rosters, config tables, `--fleet` flag)
-    // and stays accepted as a command alias; see docs/FLEET.md.
-    term: "Pod",
+    term: "Fleet",
     short: {
-      en: "who is in the roster and which member is selected",
-      zh: "花名册中有哪些成员，以及选中了哪一位",
+      en: "the user's model inventory: who is in the roster and which member is selected",
+      zh: "用户的模型清单：花名册中有哪些成员，以及选中了哪一位",
     },
     long: {
-      en: "Pod records member IDs and names, semantic roles, provider/model identities, and roster state. Fleet remains the stored name and a command alias.",
-      zh: "Pod 记录成员 ID 和名称、语义角色、提供商/模型身份以及花名册状态。Fleet 仍是存储名称和命令别名。",
+      en: "Fleet records member IDs and names, semantic roles, provider/model identities, and roster state. `/pod` and `codewhale pod` remain accepted command aliases.",
+      zh: "Fleet 记录成员 ID 和名称、语义角色、提供商/模型身份以及花名册状态。`/pod` 和 `codewhale pod` 仍是可接受的命令别名。",
     },
   },
   {
@@ -189,10 +186,10 @@ export const ROUTE_IDENTITY: { term: string; description: LocalizedText }[] = [
 
 /** Public advisory role vocabulary; legacy spellings are input compatibility. */
 export const ADVISORY_ROLE = {
-  term: "Consultant",
+  term: "Advisor",
   description: {
-    en: "The public read-only advisory Pod role. The historical oracle and advisor spellings remain compatibility aliases for saved configuration and replay only; new product surfaces say Consultant.",
-    zh: "面向用户的只读 Pod 咨询角色。历史拼写 oracle 与 advisor 仅作为已保存配置和回放的兼容别名保留；新的产品界面统一使用 Consultant。",
+    en: "The public read-only advisory fleet role. The historical consultant and oracle spellings remain compatibility aliases for saved configuration and replay only; new product surfaces say Advisor.",
+    zh: "面向用户的只读 fleet 咨询角色。历史拼写 consultant 与 oracle 仅作为已保存配置和回放的兼容别名保留；新的产品界面统一使用 Advisor。",
   },
 } as const;
 

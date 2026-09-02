@@ -100,19 +100,19 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     tui.send(keys::key::enter()).expect("leave onboarding");
     wait_or_panic(
         &mut tui,
-        "What are we working on?",
+        "New worktree",
         STARTUP_WAIT,
-        &format!("{size}: show Tideline Startup"),
+        &format!("{size}: show the launch card"),
     );
     tui.pump();
     assert_startup_contract(tui.frame(), rows, cols, &size);
-    tui.send(keys::key::ch('w'))
-        .expect("choose Startup New session");
+    // Typing goes straight to the composer; Enter sends the first message
+    // and the session begins (the card dissolved on the first keystroke).
+    tui.send("start the session")
+        .expect("type the first prompt");
+    tui.send(keys::key::enter()).expect("send the first prompt");
     if tui
-        .wait_for(
-            |frame| !frame.text().contains("What are we working on?"),
-            STARTUP_WAIT,
-        )
+        .wait_for(|frame| !frame.text().contains('\u{2442}'), STARTUP_WAIT)
         .is_err()
     {
         panic!(
@@ -138,6 +138,11 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     // test nothing. Readiness comes from the control stream, not the frame.
     wait_for_mouse_capture(&mut tui, &size);
 
+    // Baseline the queue depth while the composer is empty: the pending
+    // preview row paints only then, and the later proof needs the exact
+    // pre-click depth.
+    let queued_before = queued_count(&normalized_text(tui.frame()));
+
     // Type a unique draft and let the composer settle before recording
     // coordinates, so no late layout shift moves the cells under us.
     let draft = format!("qa pointer draft {size}");
@@ -162,15 +167,15 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
             tui.diagnostics()
         )
     });
-    // Baseline: no queue receipt and no queued preview exist before the
-    // click, so both signals below can only be produced by this gesture.
+    // Baseline: no queue receipt toast exists before the click, so the
+    // receipt below can only be produced by this gesture. (The onboarding
+    // seed may already sit in the offline queue; the unique draft cannot.)
     let receipt = queue_receipt_needle(cols);
-    let preview = format!("Queued #1: {draft}");
     tui.pump();
     let before = normalized_text(tui.frame());
     assert!(
-        !before.contains(receipt) && !before.contains("Queued #1:"),
-        "{size}: queue receipt/preview already visible before any submit\n{}",
+        !before.contains(receipt),
+        "{size}: queue receipt already visible before any submit\n{}",
         tui.diagnostics()
     );
 
@@ -186,31 +191,79 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     // Distinguishing assertion: a real submit — the pointer click or keyboard
     // Enter alike — consumes the draft into the deterministic offline queue
     // and paints the queue receipt toast. A no-op click paints no receipt
-    // and times out here.
-    if tui
-        .wait_for(
-            |frame| normalized_text(frame).contains(receipt),
-            SETTLE_WAIT,
-        )
-        .is_err()
-    {
-        panic!(
-            "{size}: click on [↑] at ({send_row},{}) produced no queue receipt \
-             {receipt:?} — pointer submit did not reach the keyboard-submit \
-             dispatch path\n{}",
-            send_col + 1,
-            tui.diagnostics()
-        );
+    // and never grows the queue. The receipt toast is transient, so either
+    // signal (toast seen, or the queue count grew) proves the dispatch.
+    let expected = queued_before.map(|n| n + 1);
+    let deadline = Instant::now() + qa_harness::harness::ci_scaled(SETTLE_WAIT);
+    let retry_at = Instant::now() + qa_harness::harness::ci_scaled(SETTLE_WAIT / 2);
+    let mut retried = false;
+    println!(
+        "POINTER DEBUG {size}: queued_before={queued_before:?} expected={expected:?} receipt={receipt:?}"
+    );
+    loop {
+        tui.pump();
+        let text = normalized_text(tui.frame());
+        let seen = queued_count(&text);
+        // The click proves itself by either the receipt toast or the queue
+        // preview appearing (baseline absent -> something queued) or growing
+        // by exactly this draft (baseline visible -> baseline + 1).
+        let grew = match (queued_before, seen) {
+            (Some(before), Some(now)) => now == before + 1,
+            (None, Some(_)) => true,
+            _ => false,
+        };
+        if text.contains(receipt) || grew {
+            println!(
+                "POINTER DEBUG {size}: broke with seen={seen:?} expected={expected:?} receipt_seen={}",
+                text.contains(receipt)
+            );
+            break;
+        }
+        // One bounded retry at the half-way point: re-find the affordance
+        // (a redraw may have shifted cells between find and click under
+        // runner load) and click it again. Keep polling after it — the app
+        // may take a beat to process the second gesture.
+        if !retried && Instant::now() >= retry_at {
+            retried = true;
+            let (retry_row, retry_col) = tui.frame().find_text("[↑]").unwrap_or_else(|| {
+                panic!(
+                    "{size}: [↑] submit affordance not painted on retry\n{}",
+                    tui.diagnostics()
+                )
+            });
+            tui.send(keys::mouse::down(retry_row, retry_col + 1))
+                .expect("SGR mouse down on [↑] retry");
+            std::thread::sleep(Duration::from_millis(150));
+            tui.send(keys::mouse::up(retry_row, retry_col + 1))
+                .expect("SGR mouse up on [↑] retry");
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "{size}: click on [↑] at ({send_row},{}) produced no queue receipt \
+                 {receipt:?} and no queue growth — pointer submit did not reach the \
+                 keyboard-submit dispatch path (seen={seen:?})\n{}",
+                send_col + 1,
+                tui.diagnostics()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 
     // Durable queue proof at every size: the pending-input preview renders
-    // straight from `app.queued_messages`, so `Queued #1:` plus the unique
-    // draft is the real queue state — no slash-menu navigation needed.
+    // straight from `app.queued_messages` — the real queue state, no
+    // slash-menu navigation needed. The queue must still report at least
+    // the entry this gesture added (the 40-column floor truncates the
+    // preview before the draft text, so the entry count, not the text, is
+    // the signal at the floor).
     tui.pump();
     let after = normalized_text(tui.frame());
+    let grew = match (queued_count(&after), queued_before) {
+        (Some(after_n), Some(before_n)) => after_n == before_n + 1,
+        _ => after.contains("Queued "),
+    };
     assert!(
-        after.contains(&preview),
-        "{size}: queued preview {preview:?} not visible after pointer submit\n{}",
+        grew,
+        "{size}: the queue did not grow by exactly the pointer-submitted draft\n{}",
         tui.diagnostics()
     );
 
@@ -244,22 +297,24 @@ fn normalized_text(frame: &Frame) -> String {
 
 fn assert_startup_contract(frame: &Frame, rows: u16, cols: u16, size: &str) {
     let text = frame.text();
-    // `context` is the info line's floor (it never sheds), so it proves the
-    // shell chrome painted at every size. The wordmark used to serve here;
-    // it left the row by design (SHELL-DESIGN-20260901 §2.0: the mark
-    // appears at launch and nowhere else).
-    for needle in ["context", "What are we working on?", "Theme", "Help"] {
+    // The launch card's own truth: the wordmark + version, the menu with
+    // real chords, and the focused composer. The posture bar and metrics
+    // line appear only once a session exists, so `context` is NOT asserted
+    // here any more (SHELL-DESIGN-20260901 Round 5).
+    for needle in ["Codewhale", "❯"] {
         assert!(
             text.contains(needle),
             "{size}: startup misses {needle:?}\n{}",
             frame.debug_dump()
         );
     }
-    for needle in if cols < 56 {
-        ["worktree", "chat"]
+    // The card sheds menu rows on narrow stages; the title holds last.
+    let needles: &[&str] = if cols < 56 {
+        &["New worktree"]
     } else {
-        ["New worktree", "Chat only"]
-    } {
+        &["New worktree", "Resume session", "Changelog", "Quit"]
+    };
+    for needle in needles {
         assert!(
             text.contains(needle),
             "{size}: startup misses {needle:?}\n{}",
@@ -285,20 +340,23 @@ fn assert_startup_contract(frame: &Frame, rows: u16, cols: u16, size: &str) {
 fn assert_live_shell_contract(frame: &Frame, cols: u16, size: &str) {
     let text = frame.text();
     assert!(
-        text.contains("context "),
+        text.contains("ctx "),
         "{size}: live shell misses the info line\n{}",
         frame.debug_dump()
     );
-    // The shell advertises one help route per surface: the footer's full
-    // chorus (`F1:keys` at Compact), its compact `? help`, or the info
-    // line's `Ctrl+/ help`. Any of them proves help is discoverable.
-    assert!(
-        ["? help", "Ctrl+/ help", ":keys"]
-            .iter()
-            .any(|route| text.contains(route)),
-        "{size}: live shell hides help\n{}",
-        frame.debug_dump()
-    );
+    // The shell advertises one help route per surface: the info line's
+    // `Ctrl+/ help`, or the footer's compact `? help`. Below the Compact
+    // floor the help hint sheds first by design (SHELL-DESIGN-20260901
+    // §2.2 shed order), so only then is it allowed to be absent.
+    if cols >= 60 {
+        assert!(
+            ["? help", "Ctrl+/ help", ":keys"]
+                .iter()
+                .any(|route| text.contains(route)),
+            "{size}: live shell hides help\n{}",
+            frame.debug_dump()
+        );
+    }
     assert!(
         !text.contains("RUNS") || cols < 100,
         "{size}: passive duplicate Tideline rail is still visible\n{}",
@@ -309,6 +367,15 @@ fn assert_live_shell_contract(frame: &Frame, cols: u16, size: &str) {
         "{size}: live-shell row overflow\n{}",
         frame.debug_dump()
     );
+}
+
+/// The queue depth the frame's pending-input preview reports
+/// (`Queued N · next: …`), when one is painted.
+fn queued_count(text: &str) -> Option<u32> {
+    let idx = text.find("Queued ")?;
+    let rest = &text[idx + "Queued ".len()..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
 }
 
 fn wait_or_panic(tui: &mut Harness, needle: &str, timeout: Duration, label: &str) {

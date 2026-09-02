@@ -9,7 +9,6 @@ import {
   REPO_URL,
 } from "@/lib/i18n/links";
 import { SITE_CONTACT_EMAIL, SITE_SECURITY_EMAIL } from "@/lib/page-meta";
-import { Whale } from "./whale";
 
 /**
  * Site footer. One dictionary path for every routed locale — the previous
@@ -29,8 +28,7 @@ export function Footer({ locale = "en" }: { locale?: Locale }) {
       <div className="site-footer-main">
         <div className="site-footer-brand">
           <Link href={homeHref} className="site-wordmark site-wordmark-footer">
-            <Whale size={31} caustic />
-            <span>Codewhale</span>
+            <img src="/brand/wordmark-inverted.svg" alt="Codewhale" height={18} />
           </Link>
           <p>{chrome.footerTagline}</p>
         </div>

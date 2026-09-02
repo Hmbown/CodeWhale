@@ -1,4 +1,4 @@
- Appearance   Models & providers   Pod   Work   Tools & MCP   Trust   Motion   ›
+ Appearance   Models & providers   Fleet   Work   Tools & MCP   Trust          ›
   System
   Terminal
   Blue Stage

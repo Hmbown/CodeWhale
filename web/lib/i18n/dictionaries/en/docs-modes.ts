@@ -10,7 +10,7 @@ export const docsModes: DocsModesDict = {
   modes: [
     ["Plan", "Read-only investigation and planning. Codewhale can inspect the workspace, but it cannot run shell commands or edit files."],
     ["Act", "Normal interactive coding. Codewhale can inspect, edit, and use tools; shell availability and approval prompts follow the active configuration and permission posture."],
-    ["Operate", "Multitask coordination from the same composer. The parent can inspect, edit, and use shell or MCP tools under the same permission posture, sandbox, and safety rules as Act. Pod workers are preferred for independent, parallel, background, or long-running work, but delegation is not required for every executable step. Workflow is optional unless the work needs ordered phases, gates, or deterministic fan-in."],
+    ["Operate", "Multitask coordination from the same composer. The parent can inspect, edit, and use shell or MCP tools under the same permission posture, sandbox, and safety rules as Act. Fleet workers are preferred for independent, parallel, background, or long-running work, but delegation is not required for every executable step. Workflow is optional unless the work needs ordered phases, gates, or deterministic fan-in."],
   ],
   switchingTitle: "Switch modes",
   switchingLead:

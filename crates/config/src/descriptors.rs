@@ -98,8 +98,8 @@ mod tests {
     fn descriptors_parse_and_command_code_is_a_row_not_a_kind() {
         let rows = bundled_provider_descriptors();
         assert!(
-            rows.len() >= 5,
-            "expected compatible hosts plus command-code"
+            rows.len() >= 6,
+            "expected compatible hosts plus command-code and dashscope"
         );
         for row in rows {
             assert!(row.base_url.starts_with("https://"), "{}", row.id);
@@ -114,6 +114,19 @@ mod tests {
         assert_eq!(
             provider_descriptor("cmd-code").map(|row| row.id.as_str()),
             Some("command-code")
+        );
+        // Alibaba Model Studio is a data-driven row: live /v1/models is the
+        // Qwen model authority, never a compiled roster.
+        let dashscope = provider_descriptor("dashscope").expect("dashscope");
+        assert_eq!(
+            dashscope.base_url,
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+        );
+        assert_eq!(dashscope.api_key_env, "DASHSCOPE_API_KEY");
+        assert_eq!(
+            provider_descriptor("qwen").map(|row| row.id.as_str()),
+            Some("dashscope"),
+            "the founder's `qwen` name resolves to the DashScope row"
         );
     }
 

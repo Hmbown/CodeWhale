@@ -119,11 +119,18 @@ fn scale_hex_channel(digits: &str) -> Option<u8> {
 /// is sub-millisecond on any terminal that answers at all.
 #[must_use]
 pub fn query_terminal_background(timeout: std::time::Duration) -> Option<(u8, u8, u8)> {
-    query_impl(timeout)
+    let reply = query_terminal(OSC11_QUERY, timeout)?;
+    parse_osc11_reply(&String::from_utf8_lossy(&reply))
 }
 
+/// Write `query` to the terminal and read back one reply, giving up after
+/// `timeout`. The reply is the bytes up to (not including) its BEL or `ESC \`
+/// terminator; an `ESC` that opens the reply is kept. Shared by the OSC 11
+/// background query and the kitty graphics probe (`tui::mark`), under the
+/// same caveat as [`query_terminal_background`]: raw mode on, event loop not
+/// yet reading stdin.
 #[cfg(unix)]
-fn query_impl(timeout: std::time::Duration) -> Option<(u8, u8, u8)> {
+pub(crate) fn query_terminal(query: &[u8], timeout: std::time::Duration) -> Option<Vec<u8>> {
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
     use std::time::Instant;
@@ -142,7 +149,7 @@ fn query_impl(timeout: std::time::Duration) -> Option<(u8, u8, u8)> {
 
     {
         let mut out = stdout.lock();
-        out.write_all(OSC11_QUERY).ok()?;
+        out.write_all(query).ok()?;
         out.flush().ok()?;
     }
 
@@ -164,6 +171,15 @@ fn query_impl(timeout: std::time::Duration) -> Option<(u8, u8, u8)> {
         }
         // BEL, or the ESC of a `ESC \` string terminator, ends the reply.
         if byte[0] == 0x07 || (byte[0] == 0x1b && !reply.is_empty()) {
+            // Consume the `\` of an `ESC \` terminator so it cannot surface
+            // later as a keypress once the event loop owns stdin.
+            if byte[0] == 0x1b
+                && wait_readable(in_fd, std::time::Duration::from_millis(5))
+                && stdin.read(&mut byte).is_ok_and(|n| n == 1)
+                && byte[0] != b'\\'
+            {
+                reply.push(byte[0]);
+            }
             break;
         }
         reply.push(byte[0]);
@@ -172,7 +188,7 @@ fn query_impl(timeout: std::time::Duration) -> Option<(u8, u8, u8)> {
         }
     }
 
-    parse_osc11_reply(&String::from_utf8_lossy(&reply))
+    Some(reply)
 }
 
 /// Block until `fd` has data or `timeout` elapses. `true` means readable.
@@ -196,6 +212,6 @@ fn wait_readable(fd: std::os::fd::RawFd, timeout: std::time::Duration) -> bool {
 /// the console handle, so detection falls through to the environment-based
 /// sources. Callers treat `None` as "no evidence", never as "dark".
 #[cfg(not(unix))]
-fn query_impl(_timeout: std::time::Duration) -> Option<(u8, u8, u8)> {
+pub(crate) fn query_terminal(_query: &[u8], _timeout: std::time::Duration) -> Option<Vec<u8>> {
     None
 }

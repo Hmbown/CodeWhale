@@ -309,11 +309,8 @@ impl ModelPickerView {
         // `visible_model_rows`; using the unsorted construction order here
         // made the cursor land on a different row (or look unselected) after
         // a pin reordered the list.
-        sort_model_rows_for_view(
-            &mut default_visible_rows,
-            ModelListView::Configured,
-            &app.pinned_models,
-        );
+        let pins = picker_pins_for_app(app);
+        sort_model_rows_for_view(&mut default_visible_rows, ModelListView::Configured, &pins);
         let mut selected_model_idx = default_visible_rows.iter().position(|row| {
             row.id == initial_model
                 && (row.provider.is_none() || row.provider == Some(app.api_provider))
@@ -375,7 +372,7 @@ impl ModelPickerView {
             row_hitboxes: RefCell::new(Vec::new()),
             last_mouse_selected: None,
             locale: app.ui_locale,
-            pinned_models: app.pinned_models.clone(),
+            pinned_models: pins,
         };
         view.restore_memory(app.model_picker_memory.as_ref());
         view
@@ -775,13 +772,13 @@ impl ModelPickerView {
         Paragraph::new(Line::from(vec![
             Span::styled(
                 if state.focused { "▸ " } else { "  " },
-                Style::default().fg(palette::WHALE_INFO),
+                Style::default().fg(palette::WHALE_ACTION),
             ),
             Span::styled(
                 title,
                 Style::default()
                     .fg(if state.focused {
-                        palette::WHALE_INFO
+                        palette::WHALE_ACTION
                     } else {
                         palette::TEXT_PRIMARY
                     })
@@ -1269,6 +1266,24 @@ pub(crate) fn provider_scoped_model_completion_ids(app: &App) -> Vec<String> {
     provider_scoped_model_ids_for_app(app, true)
 }
 
+/// The pins the picker sorts and labels by: the fleet's models first (the
+/// selected Pod's operator and every pinned member, labelled with the roles
+/// each fills — design §10 F1), then the person's own pins.
+fn picker_pins_for_app(app: &App) -> Vec<PinnedModel> {
+    // A selected fleet that cannot be read contributes no pins; ⇧F on any
+    // row then surfaces that store error instead of writing past it.
+    crate::fleet::members::fleet_models(&app.workspace)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|member| PinnedModel {
+            provider: member.provider.clone(),
+            model: member.model.clone(),
+            label: Some(format!("fleet · {}", member.roles_label())),
+        })
+        .chain(app.pinned_models.iter().cloned())
+        .collect()
+}
+
 fn picker_model_rows_for_app(app: &App, config: &Config) -> Vec<ModelPickerRow> {
     let mut rows = Vec::new();
     let auto_hint = auto_picker_hint(app, config);
@@ -1353,9 +1368,14 @@ fn picker_model_rows_for_app(app: &App, config: &Config) -> Vec<ModelPickerRow> 
         }
     }
 
+    // The fleet comes first (design §10 F1): every model the person added
+    // to the selected Pod rides the pin machinery ahead of their own pins,
+    // labelled with the roles it fills, so the list leads with what they
+    // chose rather than with a provider's alphabet.
+    let pins = picker_pins_for_app(app);
     for row in &mut rows {
         row.enabled = model_row_enabled_for_app(app, config, row);
-        if let Some(pin) = app.pinned_models.iter().find(|pin| {
+        if let Some(pin) = pins.iter().find(|pin| {
             row_provider_identity(row)
                 .is_some_and(|provider| provider.eq_ignore_ascii_case(&pin.provider))
                 && row.id.eq_ignore_ascii_case(&pin.model)
@@ -1368,7 +1388,7 @@ fn picker_model_rows_for_app(app: &App, config: &Config) -> Vec<ModelPickerRow> 
         }
     }
 
-    for pin in &app.pinned_models {
+    for pin in &pins {
         let provider = ApiProvider::parse(&pin.provider).unwrap_or(ApiProvider::Custom);
         if rows.iter().any(|row| {
             row_provider_identity(row)
@@ -2377,7 +2397,7 @@ impl ModelPickerView {
             });
         self.provider_health = app.provider_health.clone();
         self.route_config = config.clone();
-        self.pinned_models = app.pinned_models.clone();
+        self.pinned_models = picker_pins_for_app(app);
         self.model_rows = picker_model_rows_for_app(app, config);
         self.configured_providers = configured_providers(config, app.api_provider)
             .into_iter()
@@ -2475,6 +2495,21 @@ impl ModalView for ModelPickerView {
                     return ViewAction::None;
                 };
                 ViewAction::Emit(ViewEvent::ModelPickerTogglePin {
+                    provider,
+                    provider_id: row.provider_identity.clone(),
+                    model: row.id.clone(),
+                })
+            }
+            // Same rule as pinning: a shifted key, never a search character.
+            KeyCode::Char('F') if key.modifiers == KeyModifiers::SHIFT && self.query.is_empty() => {
+                let rows = self.visible_model_rows();
+                let Some(row) = rows.get(self.selected_model_idx) else {
+                    return ViewAction::None;
+                };
+                let Some(provider) = row.provider else {
+                    return ViewAction::None;
+                };
+                ViewAction::Emit(ViewEvent::ModelPickerToggleFleet {
                     provider,
                     provider_id: row.provider_identity.clone(),
                     model: row.id.clone(),
@@ -2664,6 +2699,10 @@ impl ModelPickerView {
         // wider shells have room to disclose the pin action too.
         if inner.width >= 72 {
             footer_hints.push(ActionHint::new(
+                "⇧F",
+                tr(self.locale, MessageId::PickerActionFleet),
+            ));
+            footer_hints.push(ActionHint::new(
                 "⇧P",
                 tr(self.locale, MessageId::PickerActionPin),
             ));
@@ -2708,7 +2747,7 @@ impl ModelPickerView {
             Line::from(vec![
                 Span::styled(
                     format!("  {} ", tr(self.locale, MessageId::RouteProviderLabel)),
-                    Style::default().fg(palette::WHALE_INFO),
+                    Style::default().fg(palette::WHALE_ACTION),
                 ),
                 Span::styled(
                     self.resolved_provider()
@@ -3093,9 +3132,54 @@ mod tests {
         assert!(picker.query.is_empty());
 
         assert!(matches!(
+            picker.handle_key(KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT)),
+            ViewAction::Emit(ViewEvent::ModelPickerToggleFleet {
+                provider: ApiProvider::Openai,
+                provider_id: None,
+                model,
+            }) if model == "model"
+        ));
+        assert!(picker.query.is_empty());
+
+        assert!(matches!(
             picker.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)),
             ViewAction::Emit(ViewEvent::ModelPickerRefresh)
         ));
+    }
+
+    #[test]
+    fn fleet_models_lead_the_pins_the_picker_sorts_by() {
+        let _lock = crate::test_support::lock_test_env();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.as_os_str());
+        let workspace = temp.path().join("repo");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        crate::fleet::members::add_fleet_model(
+            &workspace,
+            "openrouter",
+            "z-ai/glm-5.3-flash",
+            &["scout".to_string()],
+        )
+        .expect("fleet add");
+
+        let options = crate::tui::app::TuiOptions {
+            ..crate::test_support::test_tui_options(workspace.clone())
+        };
+        let mut app = crate::tui::app::App::new(options, &Config::default());
+        app.workspace = workspace;
+        app.pinned_models = vec![PinnedModel {
+            provider: "anthropic".to_string(),
+            model: "claude-haiku-4-5".to_string(),
+            label: None,
+        }];
+
+        let pins = picker_pins_for_app(&app);
+        assert_eq!(pins.len(), 2, "fleet model then the person's pin: {pins:?}");
+        assert_eq!(pins[0].provider, "openrouter");
+        assert_eq!(pins[0].model, "z-ai/glm-5.3-flash");
+        assert_eq!(pins[0].label.as_deref(), Some("fleet · explore"));
+        assert_eq!(pins[1].model, "claude-haiku-4-5");
     }
 
     #[test]
@@ -3105,5 +3189,6 @@ mod tests {
 
         assert!(text.contains("⇧A"), "missing shifted view hint: {text}");
         assert!(text.contains("⇧P"), "missing shifted pin hint: {text}");
+        assert!(text.contains("⇧F"), "missing shifted fleet hint: {text}");
     }
 }

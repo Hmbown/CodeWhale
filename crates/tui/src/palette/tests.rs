@@ -22,9 +22,9 @@ use super::tokens::{
     LIGHT_TEXT_HINT, LIGHT_WARNING, MODE_AGENT, MODE_PLAN, MODE_YOLO, SELECTION_BG,
     SOLARIZED_PANEL, SOLARIZED_SURFACE, SOLARIZED_TEXT_BODY, SOLARIZED_TEXT_HINT, STATUS_ERROR,
     STATUS_WARNING, SURFACE_ERROR, SURFACE_REASONING, SURFACE_REASONING_TINT, SURFACE_TOOL_ACTIVE,
-    TEXT_BODY, TEXT_HINT, TEXT_REASONING, TEXT_TOOL_OUTPUT, WHALE_ACCENT_PRIMARY, WHALE_ACTION,
-    WHALE_BG, WHALE_ERROR, WHALE_HUMAN, WHALE_INFO, WHALE_LIVE, WHALE_PANEL,
-    WHALE_REASONING_TEXT_RGB, WHALE_REASONING_TINT_RGB, WHALE_TEXT_BODY_RGB,
+    TEXT_BODY, TEXT_HINT, TEXT_REASONING, TEXT_TOOL_OUTPUT, WHALE_ACTION, WHALE_BG, WHALE_ERROR,
+    WHALE_HUMAN, WHALE_LIVE, WHALE_PANEL, WHALE_REASONING_TEXT_RGB, WHALE_REASONING_TINT_RGB,
+    WHALE_TEXT_BODY_RGB,
 };
 use ratatui::style::Color;
 
@@ -378,7 +378,7 @@ fn grayscale_palette_maps_brand_hues_to_neutral_roles() {
         GRAYSCALE_REASONING
     );
     assert_eq!(
-        adapt_fg_for_palette_mode(WHALE_INFO, GRAYSCALE_SURFACE, PaletteMode::Grayscale),
+        adapt_fg_for_palette_mode(WHALE_ACTION, GRAYSCALE_SURFACE, PaletteMode::Grayscale),
         GRAYSCALE_TEXT_SOFT
     );
     assert_eq!(
@@ -443,7 +443,7 @@ fn adapt_bg_maps_rgb_to_indexed_on_ansi256() {
 fn adapt_color_drops_to_named_on_ansi16() {
     // Sky: blue-dominant and bright → LightBlue, not terminal cyan.
     assert_eq!(
-        adapt_color(WHALE_INFO, ColorDepth::Ansi16),
+        adapt_color(WHALE_ACTION, ColorDepth::Ansi16),
         Color::LightBlue
     );
     // Rose Red is intentionally bright enough to use the terminal's
@@ -455,9 +455,7 @@ fn adapt_color_drops_to_named_on_ansi16() {
 }
 
 #[test]
-fn semantic_tokens_align_primary_accent_with_action_not_human_gold() {
-    assert_eq!(WHALE_ACCENT_PRIMARY, WHALE_ACTION);
-    assert_eq!(WHALE_ACTION, WHALE_INFO);
+fn action_blue_is_not_human_gold() {
     assert_ne!(WHALE_ACTION, WHALE_HUMAN);
 }
 
@@ -691,11 +689,9 @@ const DARK_TEXT_TOKENS: &[Color] = &[
     TEXT_TOOL_OUTPUT,
     USER_BODY,
     WHALE_ACTION,
-    WHALE_INFO,
     WHALE_LIVE,
     WHALE_HUMAN,
     WHALE_ERROR,
-    WHALE_ACCENT_PRIMARY,
     MODE_AGENT,
     MODE_PLAN,
     MODE_OPERATE,
@@ -1092,4 +1088,29 @@ fn violation_report_names_pair_and_ratio() {
     assert!(violation.ratio < 1.1);
     assert!(violation.ratio < violation.floor);
     assert_eq!(violation.floor, AA_BODY_CONTRAST);
+}
+
+#[test]
+fn direct_field_paint_follows_the_terminal_owned_shell() {
+    // Widgets that paint `bg(WHALE_BG)` directly follow the theme's shell
+    // instead of laying a navy patch over the terminal's own ground.
+    assert_eq!(
+        adapt_bg_for_theme(WHALE_BG, ThemeId::Whale, &UI_THEME),
+        Color::Reset
+    );
+    assert_eq!(
+        adapt_bg_for_theme(WHALE_BG, ThemeId::WhaleLight, &LIGHT_UI_THEME),
+        Color::Reset
+    );
+    // A user `background_color` override is the field for direct paints too.
+    let custom = UI_THEME.with_background_color(Color::Rgb(1, 2, 3));
+    assert_eq!(
+        adapt_bg_for_theme(WHALE_BG, ThemeId::Whale, &custom),
+        Color::Rgb(1, 2, 3)
+    );
+    // Semantic surfaces keep their paint on the whale pair.
+    assert_eq!(
+        adapt_bg_for_theme(SELECTION_BG, ThemeId::Whale, &UI_THEME),
+        SELECTION_BG
+    );
 }

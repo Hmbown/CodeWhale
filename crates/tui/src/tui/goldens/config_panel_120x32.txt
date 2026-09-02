@@ -1,7 +1,7 @@
                                                                                                                         
    Config  ──────────────────────────────────────────────────────────────────────────────────────────────────────────── 
                                                                                                                         
-   Appearance   Models & providers   Pod   Work   Tools & MCP   Trust   Motion   Advanced                               
+   Appearance   Models & providers   Fleet   Work   Tools & MCP   Trust   Motion   Advanced                             
    Search: type to filter  (17/55)                                                                                      
   ❯ Display         │  Display                                                │Theme                                    
                     │❯Theme                                 terminal    ‹ ›   │theme                                    
@@ -25,7 +25,7 @@
                     │                                                         │                                         
                     │                                                         │                                         
   system | terminal | dark | light | grayscale | catppuccin-mocha | tokyo-night | dracula | gruvbox-dark | claude |…    
-  Preview: <·> idle │ $0.00 · agent · ask                                                                               
+  Preview: ▶▶ ask · agent                                                                                               
   type=filter, Up/Down=select, Enter/e=edit, Esc/q=close                                                                
                                                                                                                         
  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 

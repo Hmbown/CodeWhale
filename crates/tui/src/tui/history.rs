@@ -182,8 +182,8 @@ pub enum SubAgentCell {
 impl SubAgentCell {
     pub fn lines(&self, width: u16) -> Vec<Line<'static>> {
         match self {
-            SubAgentCell::Delegate(card) => card.render_lines(width),
-            SubAgentCell::Fanout(card) => card.render_lines(width),
+            SubAgentCell::Delegate(card) => card.render_lines(width, &crate::palette::UI_THEME),
+            SubAgentCell::Fanout(card) => card.render_lines(width, &crate::palette::UI_THEME),
         }
     }
 }
@@ -649,6 +649,10 @@ impl HistoryCell {
 /// Convert a message into history cells for rendering.
 #[must_use]
 pub fn history_cells_from_message(msg: &Message) -> Vec<HistoryCell> {
+    // Model-facing Operate contract; the live receipt is the goal line.
+    if crate::runtime_handoff::is_operate_contract_message(msg) {
+        return Vec::new();
+    }
     if let Some(display) = crate::runtime_handoff::restored_subagent_checkpoint_display(msg) {
         return vec![HistoryCell::System {
             content: display.to_string(),
@@ -2336,7 +2340,7 @@ fn review_severity_color(severity: &str) -> Color {
     match severity {
         "error" => palette::STATUS_ERROR,
         "warning" => palette::STATUS_WARNING,
-        _ => palette::STATUS_INFO,
+        _ => palette::WHALE_ACTION,
     }
 }
 

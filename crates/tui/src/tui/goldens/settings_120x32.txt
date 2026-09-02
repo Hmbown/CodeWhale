@@ -1,6 +1,6 @@
 ▸ Appearance          System                                              PREVIEW · Blue Stage
   Models & providers  Terminal                                            ▎ restyle the work stage
-  Pod                 Blue Stage                                           ├── whale-1 · footer band
+  Fleet               Blue Stage                                           ├── whale-1 · footer band
   Work              [ ✓ Blue Stage Light ]                                 └── whale-2 · goldens
   Tools & MCP         Grayscale                                           ● working whale-1 editing · 14:41:02 ×12
   Trust               Catppuccin Mocha                                    ✓ done whale-2 surfaced ✓ · 14:39:02 ×34
@@ -29,4 +29,4 @@
                                                                           │ the preview is the product▌                │
 ? help                                                                    │                                        [↑] │
 / file issue                                                              ╰────────────────────────────────────────────╯
-f feedback                                                                <·> thinking 1↑↓ nav · Enter apply · Esc back
+f feedback                                                                ▶▶ ask (Shift+Tab) · work (Tab) · 2 agents

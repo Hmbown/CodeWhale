@@ -7,14 +7,20 @@ export const alt = OG_ALT;
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
-// The social card is the new brand mark on its own water: the deep-blue tile
-// gradient from the logo master, the white whale, and the wordmark. The tile
-// is the shipped 512px icon itself, read at build time so the card can never
-// drift from the favicon set.
-export default async function OpengraphImage() {
-  const icon = await readFile(join(process.cwd(), "public/icon-512.png"));
-  const iconDataUrl = `data:image/png;base64,${icon.toString("base64")}`;
+const mark = readFile(join(process.cwd(), "public/brand/mark.svg")).then((svg) =>
+  svg.toString().replace("currentColor", "#ffffff"),
+);
+const wordmark = readFile(join(process.cwd(), "public/brand/wordmark-inverted.svg")).then(
+  (svg) => svg.toString(),
+);
 
+export default async function OpengraphImage() {
+  const [markSvg, wordmarkSvg] = await Promise.all([mark, wordmark]);
+  const markDataUrl = `data:image/svg+xml;base64,${Buffer.from(markSvg).toString("base64")}`;
+  const wordmarkDataUrl = `data:image/svg+xml;base64,${Buffer.from(wordmarkSvg).toString("base64")}`;
+
+  // Brand navy ground, the white mark and inverted wordmark, and the identity
+  // phrase once — the wordmark is the name, so no second "Codewhale" heading.
   return new ImageResponse(
     (
       <div
@@ -23,55 +29,18 @@ export default async function OpengraphImage() {
           height: "100%",
           display: "flex",
           flexDirection: "column",
-          justifyContent: "space-between",
-          background: "linear-gradient(115deg, #1D408A 0%, #062C7F 48%, #052366 100%)",
-          padding: "72px 84px",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 34,
+          background: "#142352",
           fontFamily: "sans-serif",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 28 }}>
-          <img
-            src={iconDataUrl}
-            width={124}
-            height={124}
-            style={{ borderRadius: 26 }}
-            alt=""
-          />
-          <div
-            style={{
-              display: "flex",
-              fontSize: 34,
-              fontWeight: 700,
-              letterSpacing: 10,
-              textTransform: "uppercase",
-              color: "#FFFFFF",
-            }}
-          >
-            Codewhale
-          </div>
-        </div>
-        <div
-          style={{
-            display: "flex",
-            fontSize: 58,
-            fontWeight: 650,
-            lineHeight: 1.22,
-            letterSpacing: -1,
-            color: "#F6F2E8",
-            maxWidth: 960,
-          }}
-        >
+        <img src={markDataUrl} width={200} height={200} alt="" />
+        {/* The traced wordmark is 1874x264 (~7.1:1). */}
+        <img src={wordmarkDataUrl} width={532} height={75} alt="Codewhale" />
+        <div style={{ display: "flex", fontSize: 30, color: "#F6F2E8", marginTop: 14 }}>
           {IDENTITY_PHRASE}
-        </div>
-        <div
-          style={{
-            display: "flex",
-            fontSize: 24,
-            color: "#48D7FF",
-            letterSpacing: 2,
-          }}
-        >
-          codewhale.net
         </div>
       </div>
     ),

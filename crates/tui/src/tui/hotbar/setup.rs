@@ -534,7 +534,7 @@ impl HotbarSetupView {
             Span::styled(
                 value,
                 Style::default().fg(if self.filter_focused {
-                    palette::WHALE_INFO
+                    palette::WHALE_ACTION
                 } else {
                     palette::TEXT_PRIMARY
                 }),
@@ -607,7 +607,7 @@ impl HotbarSetupView {
             text,
             Style::default()
                 .fg(if selected {
-                    palette::WHALE_INFO
+                    palette::WHALE_ACTION
                 } else {
                     palette::TEXT_PRIMARY
                 })
@@ -878,7 +878,7 @@ impl ModalView for HotbarSetupView {
             .title(Line::from(Span::styled(
                 tr(self.locale, MessageId::HotbarSetupTitle),
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)

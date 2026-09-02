@@ -324,8 +324,8 @@ enum Commands {
     Speech(SpeechArgs),
     /// Run a non-interactive prompt. Use --auto for agent-with-tools mode.
     Exec(ExecArgs),
-    /// Manage local Agent Pod runs and workers (`fleet` is a compatibility alias)
-    #[command(name = "pod", alias = "fleet")]
+    /// Manage local Agent fleet runs and workers (`pod` is a compatibility alias)
+    #[command(name = "fleet", alias = "pod")]
     Fleet(FleetArgs),
     /// Internal model-free Workflow tool dispatcher used by Lane Runtime.
     #[command(name = "workflow-tool", hide = true)]
@@ -581,13 +581,13 @@ struct FleetArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 enum FleetCommand {
-    /// Initialize the local Pod ledger for this workspace
+    /// Initialize the local fleet ledger for this workspace
     Init,
     /// Create a run from a task spec and start the foreground manager loop
     Run(FleetRunArgs),
-    /// List durable Pod runs from this workspace's ledger
+    /// List durable fleet runs from this workspace's ledger
     List,
-    /// Show queued/running/completed/failed/stale Pod counts
+    /// Show queued/running/completed/failed/stale fleet counts
     Status,
     /// Inspect one worker's status, heartbeat, latest event, and artifacts
     Inspect {
@@ -622,13 +622,13 @@ enum FleetCommand {
         #[arg(long, default_value_t = 300)]
         stale_after_seconds: u64,
     },
-    /// Stop all queued and running Pod work
+    /// Stop all queued and running fleet work
     Stop {
-        /// Confirm stopping all queued and running Pod tasks
+        /// Confirm stopping all queued and running fleet tasks
         #[arg(long, required = true)]
         all: bool,
     },
-    /// Render a redacted Pod alert payload without sending it
+    /// Render a redacted fleet alert payload without sending it
     AlertDryRun(FleetAlertDryRunArgs),
 }
 
@@ -653,7 +653,7 @@ struct FleetAlertDryRunArgs {
     /// Alert event class to render
     #[arg(long, value_enum)]
     event: FleetAlertEventArg,
-    /// Pod run id
+    /// fleet run id
     #[arg(long)]
     run_id: String,
     /// Worker id, when the event belongs to one worker
@@ -663,7 +663,7 @@ struct FleetAlertDryRunArgs {
     #[arg(long)]
     task_id: Option<String>,
     /// Short human-readable reason for the alert
-    #[arg(long, default_value = "manual Pod alert dry-run")]
+    #[arg(long, default_value = "manual fleet alert dry-run")]
     reason: String,
     /// Status label to include in the payload
     #[arg(long)]
@@ -3763,8 +3763,8 @@ fn run_setup(
     use crate::palette;
     use colored::Colorize;
 
-    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_INFO_RGB;
-    let (sky_r, sky_g, sky_b) = palette::WHALE_INFO_RGB;
+    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_ACTION_RGB;
+    let (sky_r, sky_g, sky_b) = palette::WHALE_ACTION_RGB;
 
     let any_explicit = args.mcp || args.skills || args.tools || args.plugins;
     let run_mcp = args.mcp || args.all || !any_explicit;
@@ -4110,8 +4110,8 @@ fn run_setup_status(
     use crate::palette;
     use colored::Colorize;
 
-    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_INFO_RGB;
-    let (sky_r, sky_g, sky_b) = palette::WHALE_INFO_RGB;
+    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_ACTION_RGB;
+    let (sky_r, sky_g, sky_b) = palette::WHALE_ACTION_RGB;
 
     println!(
         "{}",
@@ -4380,8 +4380,8 @@ async fn run_doctor(
     use colored::Colorize;
 
     let (accent_r, accent_g, accent_b) = palette::WHALE_HUMAN_RGB;
-    let (sky_r, sky_g, sky_b) = palette::WHALE_INFO_RGB;
-    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_INFO_RGB;
+    let (sky_r, sky_g, sky_b) = palette::WHALE_ACTION_RGB;
+    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_ACTION_RGB;
     let (red_r, red_g, red_b) = palette::WHALE_ERROR_RGB;
 
     println!(
@@ -7829,8 +7829,8 @@ fn list_sessions(limit: usize, search: Option<String>) -> Result<()> {
 
     let (action_r, action_g, action_b) = palette::WHALE_ACTION_RGB;
     let (human_r, human_g, human_b) = palette::WHALE_HUMAN_RGB;
-    let (sky_r, sky_g, sky_b) = palette::WHALE_INFO_RGB;
-    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_INFO_RGB;
+    let (sky_r, sky_g, sky_b) = palette::WHALE_ACTION_RGB;
+    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_ACTION_RGB;
 
     let manager = SessionManager::default_location()?;
 
@@ -7896,8 +7896,8 @@ fn init_project() -> Result<()> {
     use colored::Colorize;
     use project_context::create_default_agents_md;
 
-    let (sky_r, sky_g, sky_b) = palette::WHALE_INFO_RGB;
-    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_INFO_RGB;
+    let (sky_r, sky_g, sky_b) = palette::WHALE_ACTION_RGB;
+    let (aqua_r, aqua_g, aqua_b) = palette::WHALE_ACTION_RGB;
     let (red_r, red_g, red_b) = palette::WHALE_ERROR_RGB;
 
     let workspace = std::env::current_dir()?;

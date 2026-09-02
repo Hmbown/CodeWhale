@@ -2,10 +2,10 @@
 
 > 阅读简体中文版：[zh_hans/AGENT_RUNTIME.md](zh_hans/AGENT_RUNTIME.md)
 
-This document explains how sub-agents, the headless `exec` path, Agent Pod,
+This document explains how sub-agents, the headless `exec` path, Agent Fleet,
 and Runtime relate. These concepts had drifted into *two* parallel "worker"
 systems. The fix is to make the **Runtime worker run** the durable execution
-primitive: Pod owns Agent identity, membership, and selection; Runtime owns
+primitive: fleet owns Agent identity, membership, and selection; Runtime owns
 execution, authority, and lifecycle. "Sub-agent" remains useful product
 vocabulary for a nested role, but it must not imply a separate execution
 substrate with weaker lifecycle semantics. It also answers the open direction
@@ -31,7 +31,7 @@ observe that one Runtime.
                  └───────┬───────────────┬──────────────┘
                          │ launches      │ launches
           ┌──────────────┴──────┐  ┌─────┴────────────────┐  ┌──────────────────────┐
-          │       TUI turn       │  │   `codewhale exec`  │  │      Agent Pod        │
+          │       TUI turn       │  │   `codewhale exec`  │  │      Agent fleet        │
           │ interactive, in-proc │  │    headless CLI     │  │ identity · membership │
           │                      │  │ full tools · stream │  │     · selection       │
           └─────────────────────┘  └──────────────────────┘  └──────────┬───────────┘
@@ -41,17 +41,17 @@ observe that one Runtime.
 
 - A **sub-agent** is the user-facing name for a *nested assignment* with a role
   (`explore`, `review`, `implementer`, `verifier`, ...). It should be backed by
-  the same Runtime worker lifecycle used for a Pod-selected Agent. `agent` is
+  the same Runtime worker lifecycle used for a fleet-selected Agent. `agent` is
   the model-facing launcher, not a second runtime.
 - **`codewhale exec`** is the headless front door: usable by anyone at any time
   (CI, scripts, another agent), full tools, emits a `stream-json` event stream,
   and can spawn sub-agents. It is *the* runtime with a CLI on it.
-- A **Pod-selected Agent** executes as a Runtime `codewhale exec` run. Pod
+- A **fleet-selected Agent** executes as a Runtime `codewhale exec` run. fleet
   supplies identity, membership, and selection; it does not re-implement
   execution. Runtime owns the durable ledger, scheduling/leasing/retry,
   authority, local or SSH transport, and terminal lifecycle.
 
-So "Pod vs sub-agent" is not a choice between execution substrates. Pod
+So "fleet vs sub-agent" is not a choice between execution substrates. fleet
 answers **who** is eligible and selected, Runtime answers **how and where** the
 authorized work executes, and sub-agent remains the role/UX vocabulary for a
 nested assignment.
@@ -81,7 +81,7 @@ The target rule is:
 
 In product language it is fine to say "open a sub-agent". In architecture
 language that means "start a nested Runtime worker with this role", optionally
-using a member selected from Pod.
+using a member selected from fleet.
 
 ## Why this shape (and why it fixes the lag)
 
@@ -106,7 +106,7 @@ spawn sub-agents.
 
 When the work also needs to be **durable** (survive the TUI closing, a laptop
 sleeping) or **remote** (SSH), Runtime runs the worker out-of-process as
-`codewhale exec`. Pod may supply the selected Agent identity, but Runtime
+`codewhale exec`. fleet may supply the selected Agent identity, but Runtime
 retains execution authority and lifecycle ownership. The heavy construction
 then lives in another process entirely, so the orchestrator stays smooth
 regardless of fanout, and the run survives restarts — the day-scale autonomy
@@ -116,14 +116,14 @@ goal of #3154.
 
 A worker runs at `spawn_depth = 0` and may spawn children while
 `spawn_depth + 1 ≤ max_spawn_depth`, so a budget of `N` affords `N` nested
-delegation levels. Sub-agents and Pod-selected Runtime workers share **one**
+delegation levels. Sub-agents and fleet-selected Runtime workers share **one**
 axis, sourced from `codewhale_config`:
 
 - `DEFAULT_SPAWN_DEPTH = 3` — the default budget for both standalone sub-agents
-  and Pod-selected Runtime workers (so they cannot drift into "two moving
+  and fleet-selected Runtime workers (so they cannot drift into "two moving
   targets");
 - `MAX_SPAWN_DEPTH_CEILING = 8` — the opt-in cap that every configured Runtime
-  value, including Pod execution `max_spawn_depth`, clamps to.
+  value, including fleet execution `max_spawn_depth`, clamps to.
 
 The model-facing `agent` schema intentionally omits `max_depth`. The parser
 still accepts `max_depth`, `maxDepth`, and `max_spawn_depth` for saved
@@ -190,12 +190,12 @@ Codewhale should converge with Claude Code on **shape**, not on branding:
   fanout projection; capability/role tool profiles; the skills ecosystem
   (#2743); structured run receipts.
 - **Keep distinct**: Codewhale branding and first-class DeepSeek/GLM/MiniMax/
-  multi-provider support; the local-first **Agent Pod** as the identity,
+  multi-provider support; the local-first **Agent fleet** as the identity,
   membership, and selection layer; durable local/SSH execution and authority in
   Runtime; Workflow as the ordering overlay.
 - **Do not** fork execution semantics per surface. The TUI, `agent`,
   `exec`, and the Runtime API must all drive the *same* Runtime and observe the
-  *same* event stream. Pod selections are passed to that Runtime rather than
+  *same* event stream. fleet selections are passed to that Runtime rather than
   creating a second execution path — divergence there is what produced the
   "two moving targets" this document exists to prevent.
 
@@ -220,8 +220,8 @@ remaining work belongs to later releases:
    receipt reconciliation.
 3. **Flow control** — real WIP limits and visible queues (#4015, #4016),
    reconciled with the shipped 16-concurrent/1k-run access model (#4292).
-4. **Pod identity and Runtime/Workflow convergence residuals** — live
-   tmux/verifier-gate dogfood closing #4175/#4177/#4178/#4179; Pod consuming
+4. **fleet identity and Runtime/Workflow convergence residuals** — live
+   tmux/verifier-gate dogfood closing #4175/#4177/#4178/#4179; fleet consuming
    canonical AgentProfiles and selecting members while Runtime owns execution;
    Conductor/topology (#4010, #4012) as stretch.
 5. **TTC design implementation** (design doc in `codewhale-ops`) — approved and now unblocked after v0.9.0.

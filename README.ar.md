@@ -1,4 +1,4 @@
-<!-- source: README.md sha256:a56bca473dbd -->
+<!-- source: README.md sha256:e421b94e9f7e -->
 # Codewhale
 
 Codewhale وكيل مفتوح المصدر للبرمجة عبر الطرفية، مبني بلغة Rust ويتطور علنًا بالتعاون مع الأشخاص الذين يستخدمونه.

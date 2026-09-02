@@ -2,11 +2,11 @@ import type { MetadataRoute } from "next";
 import { SITE_NAME } from "@/lib/page-meta";
 
 /**
- * Web app manifest. Icons are the new Tideline whale mark: the white
- * silhouette on the deep-blue tile, rendered from the same master as
- * app/icon.svg. Static rasters live in public/ next to the other shipped
- * assets; the field naming follows the Next.js metadata-file convention
- * already used by app/icon.svg and app/opengraph-image.tsx.
+ * Web app manifest. Icons are the founder's whale mark in white on the
+ * #142352 navy tile, rasterised from app/icon.svg by
+ * scripts/brand/trace-brand.py. Static rasters live in public/ next to the
+ * other shipped assets; the field naming follows the Next.js metadata-file
+ * convention already used by app/icon.svg and app/opengraph-image.tsx.
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
@@ -24,10 +24,10 @@ export default function manifest(): MetadataRoute.Manifest {
         type: "image/png",
       },
     ],
-    // The deep field and chrome of the site itself, so an installed shell
-    // opens onto the same water as the page.
-    theme_color: "#0e1729",
-    background_color: "#03070d",
+    // Brand navy: the icon tile, so the installed shell's splash and chrome
+    // are one surface with the mark.
+    theme_color: "#142352",
+    background_color: "#142352",
     display: "standalone",
   };
 }

@@ -10,9 +10,6 @@ pub(crate) async fn publish_pending_work_projection(app: &mut App) -> Result<boo
         return Ok(false);
     };
     let published = work.publish_pending().await?;
-    if published {
-        app.cached_work_summary = None;
-    }
     Ok(published)
 }
 
@@ -992,11 +989,19 @@ pub(crate) fn resolve_loaded_session_route(app: &mut App, config: &Config) {
         context_override,
         None,
     ) {
-        Ok(resolution) => app.set_active_route_resolution(
-            resolution.candidate.endpoint().base_url.clone(),
-            resolution.candidate.limits(),
-            resolution.context_window.source,
-        ),
+        Ok(resolution) => {
+            let resolved_model = resolution.candidate.wire_model_id().as_str().to_string();
+            app.set_active_route_resolution(
+                resolution.candidate.endpoint().base_url.clone(),
+                resolution.candidate.limits(),
+                resolution.context_window.source,
+            );
+            app.fleet_roster_stale |= crate::fleet::members::auto_enroll_fleet_model(
+                &app.workspace,
+                app.provider_identity_for_persistence(),
+                &resolved_model,
+            );
+        }
         Err(_) => {
             app.active_route_limits = app.context_window_override_limits();
             app.active_route_base_url = config.deepseek_base_url();

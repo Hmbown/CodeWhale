@@ -1,6 +1,8 @@
-//! Golden-buffer contract for the Tideline startup stage — hero, quick
-//! actions, option strip (spec §5a/§5c). Goldens: `startup_{w}x{h}` at the
-//! four blocker sizes plus the 40x12 floor. Re-bless with
+//! Golden-buffer contract for the Tideline startup stage — the launch
+//! header (mark, wordmark + version, route, workspace, state line) over the
+//! docked composer. Goldens: `startup_{w}x{h}` at the four blocker sizes
+//! plus the 40x12 floor, `startup_ink_{w}x{h}` for the colour plane, and
+//! `startup_surfacing_80x24` for the motion's midpoint. Re-bless with
 //! `CODEWHALE_BLESS_GOLDENS=1`.
 
 use ratatui::buffer::Buffer;
@@ -8,14 +10,12 @@ use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
 use super::{
-    LaunchAction, TidelineStartup, handle_launch_key, render_tideline_startup,
-    tideline_startup_hitboxes,
+    MarkTier, McpFacts, TidelineStartup, render_tideline_startup, tideline_startup_hitboxes,
 };
 use crate::palette::UI_THEME;
 use crate::tui::golden_harness::{
     BLOCKER_SIZES, assert_matches_golden, render_golden_ink, render_golden_text, render_ink_entries,
 };
-use crossterm::event::{KeyCode, KeyModifiers};
 
 fn draw(width: u16, height: u16, startup: &TidelineStartup<'_>) -> String {
     render_golden_text(width, height, |buf| {
@@ -24,278 +24,194 @@ fn draw(width: u16, height: u16, startup: &TidelineStartup<'_>) -> String {
 }
 
 /// The docked composer's display as the real launch screen projects it:
-/// blurred, empty, the shared placeholder and refocus hint (Locale::En —
-/// the goldens are the English design contract).
+/// focused, empty, the shared placeholder and hint (Locale::En — the
+/// goldens are the English design contract).
 fn docked_composer() -> super::LaunchComposerDisplay<'static> {
     let placeholder = crate::localization::tr(
         crate::localization::Locale::En,
         crate::localization::MessageId::ComposerPlaceholder,
     )
     .into_owned();
-    let hint_blurred = crate::localization::tr(
+    let hint_focused = crate::localization::tr(
         crate::localization::Locale::En,
-        crate::localization::MessageId::LaunchComposerFocusHint,
+        crate::localization::MessageId::LaunchComposerHint,
     )
     .into_owned();
     super::LaunchComposerDisplay {
+        focused: true,
         placeholder: std::borrow::Cow::Owned(placeholder),
-        hint_blurred: std::borrow::Cow::Owned(hint_blurred),
+        hint: std::borrow::Cow::Owned(hint_focused),
         ..super::LaunchComposerDisplay::default()
     }
 }
 
-/// The approved startup screen as a deterministic fixture: a returning
-/// workspace with a configured provider, the New session quick action
-/// focused (the state `tideline_startup_from_app` projects for
-/// `launch.selected == 2` — the quick action's launch-table row), and a
-/// blurred empty composer docked below the option strip.
-fn returning() -> TlineFixture {
-    TlineFixture {
-        session_count: 4,
-        provider_ready: true,
-        selected_action: Some(0),
-        selected_option: None,
-    }
+/// The connected launch screen as a deterministic fixture: a route, a
+/// forge slug with its branch, two MCP servers up and one waiting on a
+/// sign-in, the braille mark settled, the composer focused and empty. The
+/// version is pinned so the golden does not churn with every release.
+fn connected(theme: &crate::palette::UiTheme) -> TidelineStartup<'_> {
+    let mut startup = TidelineStartup::new(
+        theme,
+        Some("OpenRouter · deepseek-v4".to_string()),
+        "Hmbown/CodeWhale · main".to_string(),
+    )
+    .mcp(Some(McpFacts {
+        connected: 2,
+        needs_sign_in: 1,
+        enabled: 3,
+    }))
+    .composer(docked_composer());
+    startup.version = "0.9.12";
+    startup
 }
 
-struct TlineFixture {
-    session_count: usize,
-    provider_ready: bool,
-    selected_action: Option<usize>,
-    selected_option: Option<usize>,
-}
-
-impl TlineFixture {
-    fn widget<'a>(&self, theme: &'a crate::palette::UiTheme) -> TidelineStartup<'a> {
-        let mut startup = TidelineStartup::new(theme, self.session_count, self.provider_ready);
-        startup.selected_action = self.selected_action;
-        startup.selected_option = self.selected_option;
-        startup.composer = docked_composer();
-        startup
-    }
+/// First run: no model, no forge remote — the workspace path stands in.
+fn first_run(theme: &crate::palette::UiTheme) -> TidelineStartup<'_> {
+    let mut startup = TidelineStartup::new(theme, None, "/Users/hunter/src/codewhale".to_string())
+        .composer(docked_composer())
+        .composer_rule(Some("no model connected · ask".to_string()));
+    startup.version = "0.9.12";
+    startup
 }
 
 #[test]
 fn startup_matches_goldens_at_blocker_sizes() {
-    let fixture = returning();
     for (w, h) in BLOCKER_SIZES {
-        let startup = fixture.widget(&UI_THEME);
-        assert_matches_golden(&format!("startup_{w}x{h}"), &draw(w, h, &startup));
+        assert_matches_golden(
+            &format!("startup_{w}x{h}"),
+            &draw(w, h, &connected(&UI_THEME)),
+        );
     }
+}
+
+#[test]
+fn startup_first_run_matches_its_golden() {
+    // The founder's own first paint: no model connected, so the card's
+    // announcement says so in the gate colour and names the command that
+    // fixes it.
+    let text = draw(80, 24, &first_run(&UI_THEME));
+    assert_matches_golden("startup_first_run_80x24", &text);
+    assert!(
+        text.contains('⑂'),
+        "the top line paints the branch glyph: {text}"
+    );
+    assert!(
+        text.contains("⚠ no model connected · run /provider"),
+        "{text}"
+    );
+    assert!(!text.contains("MCP"), "no MCP news on first run: {text}");
 }
 
 #[test]
 fn startup_matches_golden_at_the_40x12_terminal_floor() {
-    // §5b shed order proven at the floor. A 40x12 terminal leaves the stage
-    // 10 rows after the topbar and merged footer: the QUICK ACTIONS label
-    // row and the wave rules collapse, the hero keeps heading + subtitle, and
-    // all four routes keep compact labels.
-    let fixture = returning();
-    let startup = fixture.widget(&UI_THEME);
-    let text = draw(40, 10, &startup);
+    // A 40x12 terminal leaves the stage 10 rows after the topbar and merged
+    // footer: the tiny mark, the three header lines, the state line, and a
+    // four-row dock all still fit.
+    let text = draw(40, 10, &connected(&UI_THEME));
     assert_matches_golden("startup_40x10", &text);
-    assert!(text.contains("What are we working on?"), "{text}");
-    assert!(
-        text.lines()
-            .any(|line| line.contains("welcome back") && line.contains('…')),
-        "compact subtitle must end deliberately: {text}"
-    );
-    assert!(
-        text.contains("worktree"),
-        "compact strip keeps worktree: {text}"
-    );
-    assert!(text.contains("chat"), "compact strip keeps chat: {text}");
-    assert!(text.contains("Theme"), "compact strip keeps theme: {text}");
-    assert!(text.contains("Help"), "compact strip keeps help: {text}");
+    assert!(text.contains("Codewhale"), "{text}");
+    assert!(text.contains("New worktree"), "{text}");
+    assert!(text.contains("❯"), "the floor keeps the composer: {text}");
 }
 
 #[test]
-fn startup_hero_states_first_run_vs_returning() {
-    let first_run = TidelineStartup::new(&UI_THEME, 0, false);
-    let text = draw(100, 30, &first_run);
-    assert!(text.contains("What are we working on?"), "{text}");
-    assert!(
-        text.contains("type below, or pick a first move"),
-        "first-run subtitle: {text}"
+fn startup_surfacing_midpoint_matches_its_golden() {
+    // Half way through the surfacing motion: the mark's lower dot rows are
+    // up, its upper rows still under the field, the wordmark half faded in.
+    // Reviewable as a golden because progress is injected, not clocked.
+    let startup = connected(&UI_THEME).surface_progress(0.5);
+    let text = draw(80, 24, &startup);
+    assert_matches_golden("startup_surfacing_80x24", &text);
+    let settled = draw(80, 24, &connected(&UI_THEME));
+    assert_ne!(
+        text, settled,
+        "the midpoint frame differs from the still frame"
     );
-    let returning = TidelineStartup::new(&UI_THEME, 4, true);
-    let text = draw(100, 30, &returning);
-    assert!(
-        text.contains("welcome back · 4 saved sessions"),
-        "returning subtitle: {text}"
-    );
+    // The header copy is already in place; only the mark is mid-surface.
+    assert!(text.contains("Codewhale v0.9.12"), "{text}");
 }
 
 #[test]
-fn medium_startup_keeps_the_compact_composer_hint() {
-    // A 60x16 terminal gives the startup stage 14 rows after the one-row
-    // topbar and footer. The option strip yields only decorative padding so
-    // the compact composer can preserve both its input and focus hint.
-    let fixture = returning();
-    let text = draw(60, 14, &fixture.widget(&UI_THEME));
-    assert!(text.contains("Tab to type"), "{text}");
-}
-
-#[test]
-fn startup_quick_actions_carry_icon_description_command_and_chevron() {
-    let startup = TidelineStartup::new(&UI_THEME, 4, true);
-    let text = draw(100, 30, &startup);
+fn the_card_states_the_workspace_menu_and_mcp_news() {
+    let text = draw(100, 30, &connected(&UI_THEME));
     for fact in [
-        "QUICK ACTIONS",
-        "New session",
-        "start a fresh agent run",
-        "Enter ›",
-        "Chat only",
-        "Resume last",
-        "Ctrl+R ›",
+        "Codewhale v0.9.12",
+        // The top line owns the workspace truth now.
+        "Hmbown/CodeWhale · main",
+        // The card's announcement: only when true.
+        "● 2 MCP servers connected · 1 needs sign-in · run /mcp",
+        // The menu with its real chords.
+        "New worktree",
+        "ctrl+n",
+        "Resume session",
+        "ctrl+r",
+        "Changelog",
+        "ctrl+l",
+        "Quit",
+        "ctrl+q",
     ] {
         assert!(text.contains(fact), "missing {fact:?} in:\n{text}");
     }
-}
-
-#[test]
-fn startup_printed_keys_are_the_keys_the_launch_menu_dispatches() {
-    // The stage prints keys on its rows and tiles; those keys must be the
-    // ones `handle_launch_key` (main's #5698 input model) actually
-    // dispatches — the printed key column cannot drift from the handler.
-    // The stage's rows are launch-table rows [2, 4, 1]; its tiles are
-    // [3, 4, 5, 6] (worktree, chat, theme, help).
-    let mut launch = crate::tui::app::LaunchState {
-        visible: false,
-        selected: 0,
-        worktree_input: None,
-        status: None,
-        workspace_session_count: 0,
-        worktree_available: true,
-        row_areas: Vec::new(),
-        option_areas: Vec::new(),
-        composer_focus: false,
-        composer_area: None,
-        send_area: None,
-    };
-    let key = |code: KeyCode, mods: KeyModifiers| crossterm::event::KeyEvent::new(code, mods);
-    let none = KeyModifiers::NONE;
-    let ctrl = KeyModifiers::CONTROL;
-    let locale = crate::localization::Locale::En;
-
-    // Enter on the focused first quick action (New session, table row 2)
-    // starts a session.
-    launch.selected = 2;
-    assert_eq!(
-        handle_launch_key(&mut launch, key(KeyCode::Enter, none), locale),
-        LaunchAction::NewSession
+    // Row 0 is the thin top line; the wordmark lives in the card.
+    let first = text.lines().next().unwrap_or_default();
+    assert!(
+        first.contains('⑂'),
+        "top line opens with the branch glyph: {first:?}"
     );
-    // C dispatches chat (the Chat only row and tile share table row 4).
-    assert_eq!(
-        handle_launch_key(&mut launch, key(KeyCode::Char('c'), none), locale),
-        LaunchAction::NewChat
+    assert!(
+        !first.contains("Codewhale"),
+        "the wordmark left row 0: {first:?}"
     );
-    // Ctrl+R dispatches resume (table row 1 — the third quick action).
-    assert_eq!(
-        handle_launch_key(&mut launch, key(KeyCode::Char('r'), ctrl), locale),
-        LaunchAction::Resume
-    );
-    // T dispatches the theme picker (the Theme tile's printed key).
-    assert_eq!(
-        handle_launch_key(&mut launch, key(KeyCode::Char('t'), none), locale),
-        LaunchAction::Theme
-    );
-    // F1 dispatches help (the Help tile's printed key).
-    assert_eq!(
-        handle_launch_key(&mut launch, key(KeyCode::F(1), none), locale),
-        LaunchAction::Help
-    );
-    // Ctrl+N opens the worktree name prompt (the worktree tile's path).
-    launch.selected = 2;
-    let action = handle_launch_key(&mut launch, key(KeyCode::Char('n'), ctrl), locale);
-    assert!(matches!(action, LaunchAction::None));
-    assert!(launch.worktree_input.is_some(), "Ctrl+N opens the prompt");
-    launch.worktree_input = None;
-    // ↑/↓ navigation spans the launch table: the quick actions (rows 2, 4,
-    // 1), the worktree tile (3), and the theme/help tiles (5, 6) are all
-    // visible focus targets; only the direct-key chords move beyond.
-    launch.selected = 6;
-    handle_launch_key(&mut launch, key(KeyCode::Down, none), locale);
-    assert_eq!(
-        launch.selected, 6,
-        "navigation clamps at the last launch-table row (Help)"
-    );
-    handle_launch_key(&mut launch, key(KeyCode::Up, none), locale);
-    assert_eq!(launch.selected, 5, "Up reaches the Theme tile");
-    // The stage projection maps every visible row to its table slot and
-    // rests nowhere for Connect (row 0 — its P key and the topbar's Model
-    // segment are its routes).
-    let project = |selected: usize| {
-        let quick = super::QUICK_ACTION_ROWS
-            .iter()
-            .position(|row| *row == selected);
-        let tile = if quick.is_some() {
-            None
-        } else {
-            super::OPTION_TILE_ROWS
-                .iter()
-                .position(|row| *row == selected)
-        };
-        (quick, tile)
-    };
-    assert_eq!(project(2), (Some(0), None), "New session");
-    assert_eq!(project(4), (Some(1), None), "Chat only — the row wins");
-    assert_eq!(project(1), (Some(2), None), "Resume last");
-    assert_eq!(project(3), (None, Some(0)), "worktree tile");
-    assert_eq!(project(5), (None, Some(2)), "theme tile");
-    assert_eq!(project(6), (None, Some(3)), "help tile");
-    assert_eq!(project(0), (None, None), "Connect rests nowhere visible");
-}
-
-#[test]
-fn startup_disabled_rows_render_dimmer_set_not_hidden() {
-    // No provider and no saved sessions: chat-only and resume are disabled
-    // but still readable — availability is state, not absence.
-    let startup = TidelineStartup::new(&UI_THEME, 0, false);
-    let text = draw(100, 30, &startup);
-    assert!(text.contains("Chat only"), "{text}");
-    assert!(text.contains("Resume last"), "{text}");
-}
-
-#[test]
-fn startup_option_strip_keeps_all_four_routes_when_narrow() {
-    let mut startup =
-        TidelineStartup::new(&UI_THEME, 4, true).locale(crate::localization::Locale::En);
-    startup.selected_option = Some(1);
-    let wide = draw(80, 24, &startup);
-    for tile in ["New worktree", "Chat only", "Theme", "Help"] {
-        assert!(wide.contains(tile), "80 cols shows all four tiles: {wide}");
-    }
-    let narrow = draw(40, 20, &startup);
-    for tile in ["worktree", "chat", "Theme", "Help"] {
-        assert!(narrow.contains(tile), "narrow keeps {tile}: {narrow}");
+    // Nothing from the old stage survives.
+    for gone in [
+        "QUICK ACTIONS",
+        "What are we working on?",
+        "⋯ ∼∼∼ ⋯",
+        "Tab to type",
+        "F1",
+    ] {
+        assert!(!text.contains(gone), "{gone:?} is back:\n{text}");
     }
 }
 
 #[test]
-fn startup_option_strip_uses_localized_compact_labels_when_narrow() {
-    let mut startup =
-        TidelineStartup::new(&UI_THEME, 4, true).locale(crate::localization::Locale::ZhHans);
-    startup.selected_option = Some(1);
-    let narrow = draw(40, 20, &startup);
-    let compact_cells = narrow.replace(' ', "");
-    assert!(
-        compact_cells.contains("工作树"),
-        "localized worktree: {narrow}"
-    );
-    assert!(compact_cells.contains("聊天"), "localized chat: {narrow}");
-    assert!(
-        !narrow.contains("worktree") && !narrow.contains("chat"),
-        "narrow locale must not fall back to hardcoded English: {narrow}"
-    );
+fn startup_state_line_is_silent_when_there_is_nothing_true_to_say() {
+    let quiet = connected(&UI_THEME).mcp(None);
+    let text = draw(100, 30, &quiet);
+    assert!(!text.contains('●') && !text.contains('⚠'), "{text}");
+    let idle = connected(&UI_THEME).mcp(Some(McpFacts::default()));
+    assert!(!draw(100, 30, &idle).contains("MCP"));
+    let one = connected(&UI_THEME).mcp(Some(McpFacts {
+        connected: 1,
+        needs_sign_in: 0,
+        enabled: 1,
+    }));
+    let text = draw(100, 30, &one);
+    assert!(text.contains("● 1 MCP server connected"), "{text}");
+    assert!(!text.contains("sign-in"), "{text}");
 }
 
 #[test]
-fn startup_ascii_safe_has_no_wide_or_unsupported_glyphs() {
-    let startup = TidelineStartup::new(&UI_THEME, 4, true).ascii_safe(true);
+fn startup_ascii_safe_drops_the_mark_and_every_wide_glyph() {
+    let startup = connected(&UI_THEME).ascii_safe(true);
+    assert_eq!(startup.mark, MarkTier::None);
     let text = draw(100, 30, &startup);
-    assert!(text.contains(". ~~~ ."), "wave rule projects to ASCII");
-    assert!(text.contains("Enter >"), "chevron projects to >");
+    let first = text.lines().next().unwrap_or_default();
+    assert!(
+        first.trim_start().starts_with('y'),
+        "the branch glyph falls back to ASCII on row 0: {first:?}"
+    );
+    assert!(
+        text.contains("Codewhale"),
+        "the card keeps the wordmark: {text}"
+    );
+    assert!(
+        text.lines().any(|line| {
+            let trimmed = line.trim_end();
+            trimmed.starts_with('+') && trimmed.ends_with('+') && trimmed.contains('-')
+        }),
+        "the card border draws in ASCII: {text}"
+    );
     for ch in text.chars() {
         if ch != '\n' {
             assert_eq!(
@@ -303,52 +219,78 @@ fn startup_ascii_safe_has_no_wide_or_unsupported_glyphs() {
                 Some(1),
                 "ascii-safe must be single-width: {ch:?}"
             );
+            assert!(
+                !('\u{2800}'..='\u{28FF}').contains(&ch),
+                "no braille in the ASCII lane"
+            );
         }
     }
 }
 
 #[test]
+fn startup_image_tier_places_the_kitty_mark_through_placeholder_cells() {
+    let startup = connected(&UI_THEME).mark(MarkTier::Image);
+    let area = Rect::new(0, 0, 80, 22);
+    let mut buf = Buffer::empty(area);
+    render_tideline_startup(area, &mut buf, &startup);
+    // The mark lives in the card's left column now, not on row 0: find the
+    // placeholder block wherever the card centred it.
+    let placeholders = buf
+        .content()
+        .iter()
+        .filter(|cell| cell.symbol().starts_with('\u{10EEEE}'))
+        .count();
+    assert!(
+        placeholders >= 6,
+        "kitty placeholders painted: {placeholders}"
+    );
+    let origin = buf
+        .content()
+        .iter()
+        .find(|cell| cell.symbol().starts_with('\u{10EEEE}'))
+        .expect("a placeholder cell");
+    assert_eq!(
+        origin.fg,
+        ratatui::style::Color::Indexed(crate::tui::mark::KITTY_MARK_IMAGE_ID)
+    );
+}
+
+#[test]
 fn startup_hitboxes_match_painted_cells() {
-    let startup = returning().widget(&UI_THEME);
+    let startup = connected(&UI_THEME);
     let (w, h) = (100, 30);
     let area = Rect::new(0, 0, w, h);
     let hitboxes = tideline_startup_hitboxes(area);
-    assert_eq!(hitboxes.actions.len(), 3, "one rect per quick action row");
-    assert_eq!(hitboxes.options.len(), 4, "one rect per option tile");
     let mut buf = Buffer::empty(area);
     render_tideline_startup(area, &mut buf, &startup);
-    let painted = |rect: Rect| -> String {
-        (rect.x..rect.x + rect.width)
-            .map(|x| buf[(x, rect.y)].symbol().to_string())
-            .collect()
-    };
-    for rect in hitboxes.actions.iter().copied().chain(hitboxes.options) {
-        assert!(
-            !painted(rect).trim().is_empty(),
-            "hitbox {rect:?} covers empty cells"
-        );
-        assert!(rect.x + rect.width <= w);
-        assert!(rect.y + rect.height <= h);
-    }
+    let input = hitboxes.input.expect("input hitbox");
+    let painted: String = (input.x..input.x + input.width)
+        .map(|x| buf[(x, input.y)].symbol().to_string())
+        .collect();
+    assert!(
+        !painted.trim().is_empty(),
+        "input hitbox covers empty cells"
+    );
+    let send = hitboxes.send.expect("send hitbox");
+    assert!(send.x + send.width <= w && send.y + send.height <= h);
 }
 
 #[test]
 fn startup_degenerate_sizes_do_not_panic() {
-    for (w, h) in [(0u16, 0), (1, 1), (4, 3), (7, 5), (200, 50)] {
-        let startup = TidelineStartup::new(&UI_THEME, 1, true);
-        let _ = draw(w, h, &startup);
+    for (w, h) in [(0u16, 0), (1, 1), (4, 3), (7, 5), (9, 5), (200, 50)] {
+        let _ = draw(w, h, &connected(&UI_THEME));
+        let _ = draw(w, h, &first_run(&UI_THEME).mark(MarkTier::Image));
         let _ = tideline_startup_hitboxes(Rect::new(0, 0, w, h));
     }
 }
 
 #[test]
 fn startup_ink_plane_matches_goldens_at_blocker_sizes() {
-    // The symbol goldens cannot see colour: a screen can go from a gold mark
-    // over a blue field to uniform grey without moving a glyph. This golden
-    // is the colour half of that contract.
-    let fixture = returning();
+    // The symbol goldens cannot see colour: a screen can go from an accent
+    // mark over the field to uniform grey without moving a glyph. This
+    // golden is the colour half of that contract.
     for (w, h) in BLOCKER_SIZES {
-        let startup = fixture.widget(&UI_THEME);
+        let startup = connected(&UI_THEME);
         let rendered = render_golden_ink(w, h, |buf| {
             render_tideline_startup(Rect::new(0, 0, w, h), buf, &startup);
         });
@@ -357,54 +299,54 @@ fn startup_ink_plane_matches_goldens_at_blocker_sizes() {
 }
 
 #[test]
-fn startup_hero_paints_the_mark_in_signal_gold() {
-    // Anti-regression guard. The mark has been added to this hero and then
-    // deleted again twice (a2af80480d added it, 9c8814e8cf removed it and
-    // re-blessed all five startup goldens in the same commit). A symbol
-    // golden cannot defend itself against its own bless, so state the
-    // requirement positively: the hero paints the mark, in the gold slot.
-    let fixture = returning();
-    let startup = fixture.widget(&UI_THEME);
-    let (_plane, entries) = render_ink_entries(120, 32, |buf| {
-        render_tideline_startup(Rect::new(0, 0, 120, 32), buf, &startup);
-    });
-    let gold = match UI_THEME.accent_action {
+fn startup_paints_the_mark_in_the_accent_and_the_gate_line_in_the_gate_colour() {
+    // Anti-regression guard. The mark has been added to this screen and
+    // then deleted again twice; a symbol golden cannot defend itself
+    // against its own bless, so state the requirement positively.
+    let hex = |color: ratatui::style::Color| match color {
         ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02X}{g:02X}{b:02X}"),
-        other => panic!("gold slot is not RGB: {other:?}"),
+        other => panic!("theme slot is not RGB: {other:?}"),
     };
-    let mark = entries
+    let accent = hex(UI_THEME.accent_action);
+    let (_plane, entries) = render_ink_entries(120, 32, |buf| {
+        render_tideline_startup(Rect::new(0, 0, 120, 32), buf, &connected(&UI_THEME));
+    });
+    let mark_cells: usize = entries
         .iter()
-        .find(|entry| entry.description.starts_with(&gold) && entry.glyph_cells > 0);
+        .filter(|entry| {
+            entry.description.starts_with(&accent) && !entry.description.contains("BOLD")
+        })
+        .map(|entry| entry.glyph_cells)
+        .sum();
     assert!(
-        mark.is_some(),
-        "startup hero paints no {gold} cells; the mark is gone again. Inks: {:#?}",
+        mark_cells >= 15,
+        "only {mark_cells} accent cells: the mark is gone or degenerate. Inks: {:#?}",
         entries
             .iter()
             .filter(|e| e.glyph_cells > 0)
             .collect::<Vec<_>>()
     );
-    let cells = mark.map_or(0, |entry| entry.glyph_cells);
-    assert!(
-        cells >= 20,
-        "only {cells} gold cells: the mark is present but degenerate"
+    // First run: the warning line and `not connected` carry the gate ink,
+    // which is distinct from the metadata inks around them.
+    let gate = hex(
+        crate::palette::chrome_style(&UI_THEME, crate::palette::ChromeInk::Attention)
+            .fg
+            .expect("attention ink has a foreground"),
     );
-}
-
-#[test]
-fn startup_does_not_leave_the_hero_band_empty() {
-    // The complaint this screen was rebuilt for was literal: at 120x32 the
-    // top twelve rows painted nothing at all. Hold the floor.
-    let fixture = returning();
-    let startup = fixture.widget(&UI_THEME);
-    let text = draw(120, 32, &startup);
-    let hero_rows: Vec<&str> = text.lines().take(12).collect();
-    let painted = hero_rows
+    let (_plane, entries) = render_ink_entries(120, 32, |buf| {
+        render_tideline_startup(Rect::new(0, 0, 120, 32), buf, &first_run(&UI_THEME));
+    });
+    let gate_cells: usize = entries
         .iter()
-        .filter(|row| !row.trim().is_empty())
-        .count();
+        .filter(|entry| entry.description.starts_with(&gate))
+        .map(|entry| entry.glyph_cells)
+        .sum();
     assert!(
-        painted >= 4,
-        "only {painted}/12 hero rows carry ink; that is the empty void:\n{}",
-        hero_rows.join("\n")
+        gate_cells >= "no model connected".len(),
+        "the gate line is not in the gate colour. Inks: {:#?}",
+        entries
+            .iter()
+            .filter(|e| e.glyph_cells > 0)
+            .collect::<Vec<_>>()
     );
 }

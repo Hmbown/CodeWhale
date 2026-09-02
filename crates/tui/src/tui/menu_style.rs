@@ -124,7 +124,7 @@ pub const fn status_mark(kind: StatusKind) -> StatusMark {
         StatusKind::Working => StatusMark {
             glyph: glyphs::NEUTRAL,
             word: "working",
-            tone: palette::STATUS_INFO,
+            tone: palette::WHALE_ACTION,
         },
         StatusKind::Paused => StatusMark {
             glyph: glyphs::PAUSED,
@@ -171,9 +171,9 @@ mod tests {
             Style::default().bg(palette::SELECTION_BG)
         );
         assert_eq!(
-            selected_row_style_with_fg(palette::WHALE_INFO),
+            selected_row_style_with_fg(palette::WHALE_ACTION),
             Style::default()
-                .fg(palette::WHALE_INFO)
+                .fg(palette::WHALE_ACTION)
                 .bg(palette::SELECTION_BG)
                 .add_modifier(Modifier::BOLD)
         );
@@ -219,7 +219,7 @@ mod tests {
             palette::STATUS_SUCCESS,
             palette::STATUS_WARNING,
             palette::STATUS_ERROR,
-            palette::STATUS_INFO,
+            palette::WHALE_ACTION,
         ];
         for kind in StatusKind::ALL {
             let tone = status_mark(kind).tone;
@@ -229,7 +229,7 @@ mod tests {
             );
         }
         assert_eq!(status_mark(StatusKind::Ready).tone, palette::STATUS_SUCCESS);
-        assert_eq!(status_mark(StatusKind::Working).tone, palette::STATUS_INFO);
+        assert_eq!(status_mark(StatusKind::Working).tone, palette::WHALE_ACTION);
         assert_eq!(
             status_mark(StatusKind::Paused).tone,
             palette::STATUS_WARNING

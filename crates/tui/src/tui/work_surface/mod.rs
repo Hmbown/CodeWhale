@@ -66,9 +66,10 @@ pub(crate) mod panels;
 mod render;
 #[allow(dead_code)] // Tideline rail rendering (spec §5a); wired by the landing slice
 pub mod tideline;
+mod views;
 
-pub use input::{enter_agents, handle_key, handle_mouse};
-pub(crate) use interaction::{agent_details_closed, release_focus};
+pub use input::{cycle_view, enter_agents, handle_key, handle_mouse};
+pub(crate) use interaction::{agent_details_closed, release_focus, select_dock_panel};
 pub use model::{RailPanel, WorkSurfacePlacement, WorkSurfaceState};
 pub(crate) use render::collapse_strip;
 pub use render::{height, render, split_chat};
@@ -93,6 +94,7 @@ mod tests {
         AgentCurrentActivity, AgentCurrentActivityStatus, App, SidebarRowAction, ToolDetailRecord,
         TuiOptions,
     };
+    use crate::tui::golden_harness::assert_matches_golden;
     use crate::tui::history::{
         FileMutationReceipt, GenericToolCell, HistoryCell, PatchSummaryCell, ToolCell, ToolStatus,
     };
@@ -117,6 +119,9 @@ mod tests {
         // panel. These tests exercise the Tasks panel's row machinery, so
         // pin it rather than depend on the host file.
         app.work_surface.panel = super::RailPanel::Tasks;
+        // Not an explicit pick: the auto rule opens the agents view when a
+        // fixture caches a running worker, exactly as the product does.
+        app.work_surface.explicit_view = false;
         // Most tests in this module predate the fresh left-rail default and
         // exercise the Top strip's height, divider, overflow, and row layout.
         // Pin both requested and effective placement; dedicated placement
@@ -279,6 +284,15 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    fn render_golden_text(app: &mut App, width: u16, height: u16) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|frame| super::render(frame, frame.area(), app))
+            .expect("draw");
+        format!("{}\n", terminal_text(&terminal))
     }
 
     #[test]
@@ -562,7 +576,7 @@ mod tests {
             todos.add("next".to_string(), TodoStatus::Pending);
         }
 
-        let text = render_text(&mut app, 80, 6);
+        let text = render_text(&mut app, 80, 7);
         let done = format!("1 · {} finished", crate::tui::glyphs::DONE);
         let current = format!("2 · {} current", crate::tui::glyphs::SELECTION);
         let next = format!("3 · {} next", crate::tui::glyphs::READY);
@@ -577,7 +591,7 @@ mod tests {
             "canonical order drifted: {text:?}"
         );
         assert_eq!(app.work_surface.hitboxes.len(), 3);
-        assert_eq!(app.work_surface.hitboxes[0].row_y, 1);
+        assert_eq!(app.work_surface.hitboxes[0].row_y, 2);
     }
 
     #[test]
@@ -633,7 +647,7 @@ mod tests {
         let cases: [(&str, Starve); 3] = [
             ("budget starves the Tasks strip", |_app| (100, 40, 0)),
             ("budget starves a switched-to panel", |app| {
-                app.work_surface.panel = super::RailPanel::Pinned;
+                app.work_surface.panel = super::RailPanel::Tasks;
                 (100, 40, 0)
             }),
             ("placement off", |app| {
@@ -693,7 +707,7 @@ mod tests {
     fn a_short_top_height_caps_content_rather_than_collapsing() {
         let mut capped = app();
         capped.work_surface.placement = WorkSurfacePlacement::Top;
-        capped.work_surface.panel = super::RailPanel::Pinned;
+        capped.work_surface.panel = super::RailPanel::Tasks;
         capped.work_surface.top_height = super::model::TOP_HEIGHT_MIN;
         capped.composer_border = true;
         // Goal + several checklist rows: content wants more than the readable
@@ -711,7 +725,7 @@ mod tests {
         // than padding all the way out to the saved 8-row cap.
         let mut short = app();
         short.work_surface.placement = WorkSurfacePlacement::Top;
-        short.work_surface.panel = super::RailPanel::Pinned;
+        short.work_surface.panel = super::RailPanel::Tasks;
         short.work_surface.top_height = 8;
         short.goal.objective = Some("one goal only".to_string());
         let budget = working_budget(&short, 40);
@@ -726,7 +740,7 @@ mod tests {
     fn top_panel_auto_fits_content_like_tasks() {
         let mut pinned = app();
         pinned.work_surface.placement = WorkSurfacePlacement::Top;
-        pinned.work_surface.panel = super::RailPanel::Pinned;
+        pinned.work_surface.panel = super::RailPanel::Tasks;
         pinned.work_surface.top_height = 12;
         pinned.goal.objective = Some("goal".to_string());
         add_todos(&mut pinned, 3);
@@ -742,7 +756,7 @@ mod tests {
         // Empty Pinned collapses entirely.
         let mut empty = app();
         empty.work_surface.placement = WorkSurfacePlacement::Top;
-        empty.work_surface.panel = super::RailPanel::Pinned;
+        empty.work_surface.panel = super::RailPanel::Tasks;
         empty.work_surface.top_height = 12;
         assert_eq!(
             super::height(&mut empty, 100, 40, AMPLE_BUDGET),
@@ -768,7 +782,7 @@ mod tests {
         // With a goal: title is "Goal: …".
         let mut with_goal = app();
         with_goal.work_surface.placement = WorkSurfacePlacement::Top;
-        with_goal.work_surface.panel = super::RailPanel::Pinned;
+        with_goal.work_surface.panel = super::RailPanel::Tasks;
         with_goal.work_surface.top_height = 8;
         with_goal.goal.objective = Some("ship 0.9.4".to_string());
         let text = render_text(&mut with_goal, 80, 8);
@@ -777,14 +791,17 @@ mod tests {
             "active goal must be the Top title: {text:?}"
         );
         assert!(
-            !text.contains("Pinned"),
+            !render_rows(&mut with_goal, 80, 8)
+                .iter()
+                .skip(1)
+                .any(|row| row.contains("Pinned")),
             "panel name is not a Top title: {text:?}"
         );
 
         // Without a goal, only checklist: no Goal title, no Pinned chrome.
         let mut no_goal = app();
         no_goal.work_surface.placement = WorkSurfacePlacement::Top;
-        no_goal.work_surface.panel = super::RailPanel::Pinned;
+        no_goal.work_surface.panel = super::RailPanel::Tasks;
         no_goal.work_surface.top_height = 8;
         add_todos(&mut no_goal, 2);
         let text = render_text(&mut no_goal, 80, 6);
@@ -793,7 +810,10 @@ mod tests {
             "no live goal → no Goal title: {text:?}"
         );
         assert!(
-            !text.contains("Pinned"),
+            !render_rows(&mut no_goal, 80, 6)
+                .iter()
+                .skip(1)
+                .any(|row| row.contains("Pinned")),
             "panel name is never a Top title: {text:?}"
         );
     }
@@ -825,7 +845,7 @@ mod tests {
         // Empty Pinned: no side column.
         let mut empty = app();
         empty.work_surface.placement = WorkSurfacePlacement::Right;
-        empty.work_surface.panel = super::RailPanel::Pinned;
+        empty.work_surface.panel = super::RailPanel::Tasks;
         empty.work_surface.side_width = 30;
         assert_eq!(
             super::split_chat(&mut empty, area, 0),
@@ -836,7 +856,7 @@ mod tests {
         // Contentful Pinned: full-height column at configured width.
         let mut full = app();
         full.work_surface.placement = WorkSurfacePlacement::Right;
-        full.work_surface.panel = super::RailPanel::Pinned;
+        full.work_surface.panel = super::RailPanel::Tasks;
         full.work_surface.side_width = 30;
         full.goal.objective = Some("ship it".to_string());
         let (chat, rail) = super::split_chat(&mut full, area, 0);
@@ -851,12 +871,11 @@ mod tests {
         let mut app = app();
         add_todos(&mut app, 2);
 
-        let text = render_text(&mut app, 40, 2);
+        let text = render_text(&mut app, 40, 5);
 
         assert!(text.contains("1 ·"), "{text:?}");
-        assert!(!text.contains("To-do · 0/"), "{text:?}");
-        assert_eq!(app.work_surface.hitboxes.len(), 1);
-        assert_eq!(app.work_surface.hitboxes[0].row_y, 0);
+        assert!(!app.work_surface.hitboxes.is_empty());
+        assert_eq!(app.work_surface.hitboxes[0].row_y, 2);
     }
 
     #[test]
@@ -869,18 +888,16 @@ mod tests {
             todos.add("next".to_string(), TodoStatus::Pending);
         }
 
-        // Three rows means one pinned progress receipt, one selectable row,
-        // and the divider. The current item must win that compact window while
-        // retaining its canonical ordinal.
-        let text = render_text(&mut app, 80, 3);
+        // The current item must win the compact window while retaining its
+        // canonical ordinal.
+        let text = render_text(&mut app, 80, 6);
 
         assert!(text.contains("To-do · 1/3 · 2 left"), "{text:?}");
         assert!(
             text.contains(&format!("2 · {} current", crate::tui::glyphs::SELECTION)),
             "{text:?}"
         );
-        assert_eq!(app.work_surface.scroll_offset, 1);
-        assert_eq!(app.work_surface.hitboxes[0].row_y, 1);
+        assert_eq!(app.work_surface.hitboxes[0].row_y, 2);
     }
 
     #[test]
@@ -966,7 +983,7 @@ mod tests {
             agent_type: FleetRole::Builder,
             assignment: SubAgentAssignment {
                 objective: "Wire settled file activity".to_string(),
-                role: Some("worker".to_string()),
+                role: Some("general".to_string()),
             },
             model: "test-model".to_string(),
             nickname: Some("Blue Whale".to_string()),
@@ -1009,7 +1026,7 @@ mod tests {
         // (#36), and carries no `(+N)` while the agent is childless.
         assert_eq!(row.label, "Blue Whale");
         let facts = row.agent.as_ref().expect("agent row facts");
-        assert_eq!(facts.role_label, "worker");
+        assert_eq!(facts.role_label, "general");
         assert_eq!(facts.objective, "Wire settled file activity");
         assert_eq!(facts.elapsed_secs, Some(0));
         // No usage envelope has been seen, so there is no token figure at all.
@@ -1662,8 +1679,8 @@ mod tests {
             .iter()
             .find(|line| line.contains("more"))
             .unwrap_or_else(|| panic!("no overflow line in {rows:?}"));
-        // Nine projected rows (header + eight workers); three fit, six do not.
-        assert!(more.contains("↓ 6 more"), "{more}");
+        // Nine projected rows (header + eight workers); two fit, seven do not.
+        assert!(more.contains("↓ 7 more"), "{more}");
         // Right-aligned against the content column, not the left margin.
         assert!(more.starts_with("        "), "{more}");
     }
@@ -1860,13 +1877,14 @@ mod tests {
 
     fn terminal_text(terminal: &Terminal<TestBackend>) -> String {
         let buf = terminal.backend().buffer();
-        let mut text = String::new();
-        for y in 0..buf.area.height {
-            for x in 0..buf.area.width {
-                text.push_str(buf[(x, y)].symbol());
-            }
-        }
-        text
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Render-level smoke coverage for the ported rail panels — reinstates
@@ -1880,7 +1898,7 @@ mod tests {
         for panel in [
             super::RailPanel::Agents,
             super::RailPanel::Context,
-            super::RailPanel::Pinned,
+            super::RailPanel::Tasks,
         ] {
             for placement in [
                 super::WorkSurfacePlacement::Bottom,
@@ -1890,10 +1908,11 @@ mod tests {
             ] {
                 let mut app = app();
                 app.work_surface.placement = placement;
-                app.work_surface.panel = panel;
+                super::interaction::select_dock_panel(&mut app, panel);
+                app.work_surface.focused = false;
                 // Content so empty-collapse does not hide the panel. Agents
-                // needs a cached worker; Pinned needs a goal; Context always
-                // has session facts.
+                // needs a cached worker; Tasks needs a goal; Context always
+                // has a budget.
                 app.goal.objective = Some("ship the release".to_string());
                 if panel == super::RailPanel::Agents {
                     app.subagent_cache.push(cached_worker(
@@ -1943,17 +1962,14 @@ mod tests {
                         );
                         // Panel chrome ("Pinned"/"Agents") never on Top.
                         // An active goal *is* a title — and this fixture sets one.
+                        // A chrome title would be a row saying only the
+                        // view's name; the tab row and `▾ Subagents N` both
+                        // legitimately contain the lowercase word.
+                        let strip_body = text.lines().skip(1).collect::<Vec<_>>().join("\n");
                         assert!(
-                            !text.contains(panel.title())
-                                || panel.title() == "Context" && text.contains("Context"),
+                            !strip_body.lines().any(|line| line.trim() == panel.title()),
                             "{panel:?} on Top must not spend a row on panel chrome; got: {text}"
                         );
-                        if panel != super::RailPanel::Context {
-                            assert!(
-                                !text.split_whitespace().any(|tok| tok == panel.title()),
-                                "{panel:?} on Top must not print the panel name as chrome; got: {text}"
-                            );
-                        }
                         // Goal title when a live goal is set.
                         assert!(
                             text.contains("Goal:") && text.contains("ship the release"),
@@ -1980,7 +1996,7 @@ mod tests {
                                      every work row is a door"
                                 );
                             }
-                            super::RailPanel::Pinned => {
+                            super::RailPanel::Tasks => {
                                 assert!(
                                     text.contains("Goal: ship the release"),
                                     "{panel:?} in {placement:?} should render the goal \
@@ -1989,9 +2005,9 @@ mod tests {
                             }
                             _ => {
                                 assert!(
-                                    text.contains(panel.title()),
-                                    "{panel:?} in {placement:?} should render its muted \
-                                     title; got: {text}"
+                                    text.contains("compact now"),
+                                    "{panel:?} in {placement:?} should render the budget \
+                                     rows; got: {text}"
                                 );
                             }
                         }
@@ -2008,7 +2024,7 @@ mod tests {
             super::RailPanel::Tasks,
             super::RailPanel::Agents,
             super::RailPanel::Context,
-            super::RailPanel::Pinned,
+            super::RailPanel::Tasks,
         ] {
             let mut app = app();
             add_todos(&mut app, 2);
@@ -2026,10 +2042,10 @@ mod tests {
     }
 
     #[test]
-    fn context_panel_renders_session_facts_in_side_rail() {
+    fn context_view_renders_the_budget_in_a_side_rail() {
         let mut app = app();
         app.work_surface.placement = super::WorkSurfacePlacement::Right;
-        app.work_surface.panel = super::RailPanel::Context;
+        super::interaction::select_dock_panel(&mut app, super::RailPanel::Context);
         let area = ratatui::layout::Rect::new(0, 0, 100, 24);
 
         let budget = working_budget(&app, area.height);
@@ -2044,8 +2060,15 @@ mod tests {
             .draw(|frame| super::render(frame, rail, &mut app))
             .expect("draw");
         let text = terminal_text(&terminal);
-        assert!(text.contains("Context"), "panel title; got: {text}");
-        assert!(text.contains("lsp:"), "session facts; got: {text}");
+        assert!(text.contains(" of "), "budget row; got: {text}");
+        assert!(text.contains("compact now"), "compact door; got: {text}");
+        assert!(
+            app.work_surface
+                .hitboxes
+                .iter()
+                .any(|hit| hit.id.0 == "context:compact"),
+            "the compact row is a hit target"
+        );
     }
 
     #[test]
@@ -2584,6 +2607,150 @@ mod tests {
     }
 
     #[test]
+    fn clicking_tasks_tab_switches_active_panel() {
+        let mut app = app();
+        add_todos(&mut app, 1);
+        app.subagent_cache.push(cached_worker(
+            "agent-tab",
+            "explore",
+            Some("scout"),
+            None,
+            SubAgentStatus::Running,
+        ));
+        let _ = render_text(&mut app, 80, 8);
+        // A running worker opened the agents view on its own.
+        assert_eq!(app.work_surface.panel, super::RailPanel::Agents);
+        let tab_area = app
+            .work_surface
+            .dock_tabs
+            .iter()
+            .find(|hitbox| {
+                hitbox.target == super::model::DockTabTarget::Panel(super::RailPanel::Tasks)
+            })
+            .map(|hitbox| hitbox.area)
+            .expect("Tasks tab");
+
+        let down = super::handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: tab_area.x,
+                row: tab_area.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert!(down.consumed);
+        let up = super::handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: tab_area.x,
+                row: tab_area.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert!(up.consumed);
+        assert_eq!(app.work_surface.panel, super::RailPanel::Tasks);
+        assert!(app.work_surface.explicit_view);
+        assert!(!app.work_surface.dismissed);
+    }
+
+    #[test]
+    fn clicking_active_tab_dismisses_the_dock_until_new_work_arrives() {
+        let mut app = app();
+        app.work_surface.top_height = 8;
+        add_todos(&mut app, 2);
+        let _ = render_text(&mut app, 80, 8);
+        let tab_area = app
+            .work_surface
+            .dock_tabs
+            .iter()
+            .find(|hitbox| {
+                hitbox.target == super::model::DockTabTarget::Panel(super::RailPanel::Tasks)
+            })
+            .map(|hitbox| hitbox.area)
+            .expect("Tasks tab");
+
+        super::handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: tab_area.x,
+                row: tab_area.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        super::handle_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: tab_area.x,
+                row: tab_area.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        assert!(app.work_surface.dismissed);
+        assert_eq!(
+            super::height(&mut app, 80, 24, AMPLE_BUDGET),
+            0,
+            "dismissed dock remains collapsed"
+        );
+
+        app.subagent_cache.push(cached_worker(
+            "new-work",
+            "explore",
+            Some("new work"),
+            None,
+            SubAgentStatus::Running,
+        ));
+        assert!(
+            super::height(&mut app, 80, 24, AMPLE_BUDGET) > 0,
+            "new work re-shows dismissed dock"
+        );
+        assert!(!app.work_surface.dismissed);
+    }
+
+    #[test]
+    fn dock_tabs_match_80x24_golden() {
+        let mut app = app();
+        add_todos(&mut app, 3);
+        app.subagent_cache.push(cached_worker(
+            "dock-golden-agent",
+            "explore",
+            Some("scout"),
+            None,
+            SubAgentStatus::Running,
+        ));
+
+        assert_matches_golden("dock_80x24", &render_golden_text(&mut app, 80, 24));
+    }
+
+    #[test]
+    fn narrow_dock_drops_counts_before_optional_tabs() {
+        let mut app = app();
+        add_todos(&mut app, 3);
+        app.subagent_cache.push(cached_worker(
+            "agent-count",
+            "explore",
+            Some("scout"),
+            None,
+            SubAgentStatus::Running,
+        ));
+        let first_row = render_rows(&mut app, 40, 8)
+            .into_iter()
+            .next()
+            .expect("dock tab row");
+
+        assert!(first_row.contains("tasks"), "{first_row:?}");
+        assert!(first_row.contains("agents"), "{first_row:?}");
+        assert!(!first_row.contains("tasks 3"), "{first_row:?}");
+        assert!(!first_row.contains("agents 1"), "{first_row:?}");
+        assert!(first_row.contains("context"), "{first_row:?}");
+        // Shed from the right: price goes before any work view.
+        assert!(!first_row.contains("price"), "{first_row:?}");
+    }
+
+    #[test]
     fn printable_keys_release_panel_focus_for_composer() {
         let mut app = app();
         add_todos(&mut app, 1);
@@ -2834,14 +3001,13 @@ mod tests {
             "settled to-dos must be listed: {first:?}"
         );
         assert!(
-            first
-                .iter()
-                .any(|row| { row.id.0 == "section:agents" && row.label.contains("Archived 1") }),
-            "finished workers collapse into the header count: {first:?}"
-        );
-        assert!(
             !first.iter().any(|row| row.id.0.starts_with("worker:")),
-            "finished workers must leave strip rows: {first:?}"
+            "workers are the agents view's rows, never the tasks view's: {first:?}"
+        );
+        let roster = super::model::visible_rows_for(&mut app, super::RailPanel::Agents);
+        assert!(
+            roster.iter().any(|row| row.id.0 == "worker:agent-settled"),
+            "the roster retains a finished worker: {roster:?}"
         );
 
         app.work_surface
@@ -2851,12 +3017,6 @@ mod tests {
         assert!(
             later.iter().any(|row| row.id.0.starts_with("graph:")),
             "a settled to-do must survive the TTL and the next user turn: {later:?}"
-        );
-        assert!(
-            later
-                .iter()
-                .any(|row| { row.id.0 == "section:agents" && row.label.contains("Archived 1") }),
-            "header still accounts for settled workers after TTL: {later:?}"
         );
         assert!(
             super::height(&mut app, 100, 40, AMPLE_BUDGET) > 0,
@@ -2896,7 +3056,7 @@ mod tests {
     /// while keeping live (and failed) workers as rows. Agents panel still
     /// lists every worker — see the click test below.
     #[test]
-    fn top_strip_collapses_settled_subagents_into_header() {
+    fn the_roster_keeps_live_failed_and_finished_workers() {
         let mut app = app();
         app.work_surface.placement = super::WorkSurfacePlacement::Top;
         app.work_surface.effective_placement = super::WorkSurfacePlacement::Top;
@@ -2923,30 +3083,24 @@ mod tests {
             SubAgentStatus::Failed("boom".to_string()),
         ));
 
-        let rows = super::model::project_visible(&mut app);
-        let labels: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
+        // The roster is a history: every worker keeps its row, in every
+        // state, and the tasks view never lists one.
+        let rows = super::model::visible_rows_for(&mut app, super::RailPanel::Agents);
         let ids: Vec<&str> = rows.iter().map(|row| row.id.0.as_str()).collect();
-
+        assert!(ids.contains(&"section:agents"), "{ids:?}");
+        for id in [
+            "worker:agent-live",
+            "worker:agent-failed",
+            "worker:agent-done",
+        ] {
+            assert!(ids.contains(&id), "{id} in the roster: {ids:?}");
+        }
+        let tasks = super::model::project_visible(&mut app);
         assert!(
-            labels.iter().any(|label| {
-                label.contains("1 running")
-                    && label.contains("1 needs input")
-                    && label.contains("Archived 1")
-            }),
-            "header splits running / needs-input / settled: {labels:?}"
+            !tasks.iter().any(|row| row.id.0.starts_with("worker:")),
+            "{tasks:?}"
         );
-        assert!(
-            ids.contains(&"worker:agent-live"),
-            "running worker stays in the strip: {ids:?}"
-        );
-        assert!(
-            ids.contains(&"worker:agent-failed"),
-            "failed worker stays (needs attention): {ids:?}"
-        );
-        assert!(
-            !ids.contains(&"worker:agent-done"),
-            "completed worker must leave the strip: {ids:?}"
-        );
+        assert_eq!(super::model::live_agent_row_count(&mut app), 2);
     }
 
     #[test]
@@ -2963,8 +3117,11 @@ mod tests {
             SubAgentStatus::Completed,
         ));
 
+        // Nothing live: the dock stays down until the user opens agents.
+        assert_eq!(super::height(&mut app, 100, 24, AMPLE_BUDGET), 0);
+        super::interaction::select_dock_panel(&mut app, super::RailPanel::Agents);
         let top = render_text(&mut app, 100, 4);
-        assert!(top.contains("Archived 1"), "{top}");
+        assert!(top.contains("Subagents 1"), "{top}");
         let header_y = app
             .work_surface
             .hitboxes
@@ -2984,8 +3141,7 @@ mod tests {
         .action
         .expect("subagent header must dispatch its primary action");
         assert_eq!(action, SidebarRowAction::ShowSubagentsPanel);
-        assert!(crate::tui::mouse_ui::apply_sidebar_row_action(&mut app, action).is_empty());
-        assert_eq!(app.work_surface.panel, super::RailPanel::Agents);
+        super::interaction::select_dock_panel(&mut app, super::RailPanel::Agents);
 
         let agents = render_text(&mut app, 100, 6);
         assert!(
@@ -3058,7 +3214,7 @@ mod tests {
         for (width, terminal_height) in [(160, 48), (120, 32), (80, 24)] {
             let mut app = app();
             app.work_surface.placement = super::WorkSurfacePlacement::Top;
-            app.work_surface.panel = super::RailPanel::Pinned;
+            app.work_surface.panel = super::RailPanel::Tasks;
             app.work_surface.top_height = super::model::TOP_HEIGHT_MIN;
             app.goal.objective = Some("ship the release".to_string());
             add_todos(&mut app, 3);
@@ -3078,19 +3234,27 @@ mod tests {
                 super::model::TOP_HEIGHT_MIN,
                 "{width}x{terminal_height} must seat the readable compact surface"
             );
+            // A running worker opens the agents view: goal title + the
+            // named agent. The to-do receipt lives one view over.
             let rendered = render_text(&mut app, width, height);
             assert!(
                 rendered.contains("ship the release"),
                 "{width}x{terminal_height}: {rendered}"
             );
             assert!(
-                rendered.contains("3 left"),
-                "{width}x{terminal_height}: {rendered}"
-            );
-            assert!(
                 rendered.contains("Harbor"),
                 "{width}x{terminal_height}: {rendered}"
             );
+            super::interaction::select_dock_panel(&mut app, super::RailPanel::Tasks);
+            let height = super::height(&mut app, width, terminal_height, budget);
+            let tasks = render_text(&mut app, width, height);
+            assert!(
+                tasks.contains("3 left"),
+                "{width}x{terminal_height}: {tasks}"
+            );
+            app.work_surface.explicit_view = false;
+            let height = super::height(&mut app, width, terminal_height, budget);
+            let _ = render_text(&mut app, width, height);
 
             assert!(super::enter_agents(&mut app));
             assert_eq!(
@@ -3184,9 +3348,9 @@ mod tests {
     /// Acceptance for owner regression A1: to-do rows are doors in the
     /// Pinned panel too — clicking one opens the work inspector.
     #[test]
-    fn pinned_panel_todo_rows_stay_clickable() {
+    fn tasks_view_todo_rows_stay_clickable() {
         let mut app = app();
-        app.work_surface.panel = super::RailPanel::Pinned;
+        app.work_surface.panel = super::RailPanel::Tasks;
         add_todos(&mut app, 2);
 
         let _ = render_text(&mut app, 100, 6);
@@ -3195,7 +3359,7 @@ mod tests {
             .hitboxes
             .iter()
             .find(|hit| hit.id.0.starts_with("graph:"))
-            .expect("Pinned panel to-do rows must keep hitboxes")
+            .expect("tasks view to-do rows must keep hitboxes")
             .clone();
         let action = super::handle_mouse(
             &mut app,
@@ -3207,7 +3371,7 @@ mod tests {
             },
         )
         .action
-        .expect("click on a Pinned to-do row must dispatch its primary action");
+        .expect("click on a to-do row must dispatch its primary action");
         assert!(
             matches!(action, SidebarRowAction::InspectWork { .. }),
             "a to-do row opens the work inspector: {action:?}"
@@ -3217,10 +3381,9 @@ mod tests {
     /// Opening the sub-agent register must not hide the to-do list — both
     /// durable surfaces stay visible together (owner report, 0.9.6).
     #[test]
-    fn agents_panel_keeps_todos_visible_alongside_subagents() {
+    fn agents_and_tasks_are_separate_views_and_the_dock_opens_on_agents() {
         let mut app = app();
         app.current_session_id = Some(SESSION.to_string());
-        app.work_surface.panel = super::RailPanel::Agents;
         app.subagent_cache.push(cached_worker(
             "agent-live",
             "scout",
@@ -3230,23 +3393,69 @@ mod tests {
         ));
         add_todos(&mut app, 2);
 
-        let rows = super::model::visible_rows_for_panel(&mut app);
-        let ids: Vec<String> = rows.iter().map(|row| row.id.0.clone()).collect();
+        // The auto rule: agents while a worker runs.
+        super::model::resolve_view(&mut app);
+        assert_eq!(app.work_surface.panel, super::RailPanel::Agents);
+        let ids: Vec<String> = super::model::visible_rows_for_panel(&mut app)
+            .iter()
+            .map(|row| row.id.0.clone())
+            .collect();
+        assert!(ids.iter().any(|id| id.starts_with("worker:")), "{ids:?}");
+        assert!(
+            !ids.iter().any(|id| id.starts_with("graph:")),
+            "the agents view is the roster, not the to-do list: {ids:?}"
+        );
 
-        assert!(
-            ids.iter().any(|id| id.starts_with("worker:")),
-            "the sub-agent register stays in the Agents panel: {ids:?}"
-        );
-        assert!(
-            ids.iter().any(|id| id.starts_with("graph:")),
-            "opening the register must not hide the to-do list: {ids:?}"
-        );
+        // One key forward: the tasks view, and only to-dos in it.
+        super::cycle_view(&mut app, true);
+        assert_eq!(app.work_surface.panel, super::RailPanel::Tasks);
+        assert!(app.work_surface.explicit_view);
+        let ids: Vec<String> = super::model::visible_rows_for_panel(&mut app)
+            .iter()
+            .map(|row| row.id.0.clone())
+            .collect();
+        assert!(ids.iter().any(|id| id.starts_with("graph:")), "{ids:?}");
+        assert!(!ids.iter().any(|id| id.starts_with("worker:")), "{ids:?}");
+
+        // Back, and Esc hands the choice back to the auto rule.
+        super::cycle_view(&mut app, false);
+        assert_eq!(app.work_surface.panel, super::RailPanel::Agents);
+        let _ = render_text(&mut app, 80, 8);
+        assert!(app.work_surface.focused);
+        let handled = super::handle_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(handled.is_some());
+        assert!(!app.work_surface.explicit_view);
+        assert!(app.work_surface.dismissed);
+    }
+
+    #[test]
+    fn cycling_visits_every_view_in_order_and_an_empty_view_still_paints() {
+        let mut app = app();
+        add_todos(&mut app, 1);
+        let mut seen = vec![];
+        for _ in 0..super::RailPanel::ORDER.len() {
+            super::cycle_view(&mut app, true);
+            seen.push(app.work_surface.panel);
+            let height = super::height(&mut app, 80, 24, AMPLE_BUDGET);
+            assert!(
+                height > 0,
+                "{:?} must keep a strip while explicitly open",
+                app.work_surface.panel
+            );
+        }
+        let mut expected = super::RailPanel::ORDER.to_vec();
+        expected.rotate_left(2); // the fixture starts on tasks
+        assert_eq!(seen, expected);
+        // An empty explicit view names itself instead of going blank.
+        super::interaction::select_dock_panel(&mut app, super::RailPanel::Files);
+        let text = render_text(&mut app, 80, 5);
+        assert!(text.contains("no files touched this session"), "{text}");
     }
 
     /// The register header is a two-way door: open the Agents panel, then the
     /// same click returns to Tasks, so the to-do list is never stranded.
     #[test]
-    fn subagent_header_is_a_two_way_door() {
+    fn subagent_header_returns_to_tasks_from_the_agents_view() {
         let mut app = app();
         app.work_surface.placement = super::WorkSurfacePlacement::Top;
         app.work_surface.effective_placement = super::WorkSurfacePlacement::Top;
@@ -3258,6 +3467,9 @@ mod tests {
             None,
             SubAgentStatus::Completed,
         ));
+        // A finished worker alone opens nothing; the user cycles to agents.
+        assert_eq!(super::height(&mut app, 100, 24, AMPLE_BUDGET), 0);
+        super::interaction::select_dock_panel(&mut app, super::RailPanel::Agents);
 
         let click_header = |app: &mut App| -> SidebarRowAction {
             let header_y = app
@@ -3280,14 +3492,9 @@ mod tests {
             .expect("subagent header dispatches its primary action")
         };
 
-        let _ = render_text(&mut app, 100, 4);
-        let action = click_header(&mut app);
-        assert_eq!(action, SidebarRowAction::ShowSubagentsPanel);
-        crate::tui::mouse_ui::apply_sidebar_row_action(&mut app, action);
-        assert_eq!(app.work_surface.panel, super::RailPanel::Agents);
-
         let _ = render_text(&mut app, 100, 6);
         let action = click_header(&mut app);
+        assert_eq!(action, SidebarRowAction::ShowSubagentsPanel);
         crate::tui::mouse_ui::apply_sidebar_row_action(&mut app, action);
         assert_eq!(
             app.work_surface.panel,

@@ -41,7 +41,7 @@ fn adapt_fg_for_light_palette(color: Color) -> Color {
         LIGHT_BORDER
     } else if color == TEXT_ACCENT || color == ACCENT_TOOL_LIVE {
         LIGHT_LIVE
-    } else if color == WHALE_INFO || color == WHALE_ACTION || color == WHALE_ACCENT_PRIMARY {
+    } else if color == WHALE_ACTION {
         LIGHT_ACTION
     } else if color == MODE_AGENT {
         LIGHT_UI_THEME.mode_agent
@@ -114,7 +114,7 @@ fn adapt_fg_for_solarized_light_palette(color: Color) -> Color {
         SOLARIZED_BORDER
     } else if color == TEXT_ACCENT || color == ACCENT_TOOL_LIVE {
         SOLARIZED_CYAN
-    } else if color == WHALE_INFO || color == WHALE_ACTION || color == WHALE_ACCENT_PRIMARY {
+    } else if color == WHALE_ACTION {
         SOLARIZED_BLUE
     } else if color == MODE_AGENT {
         SOLARIZED_LIGHT_UI_THEME.mode_agent
@@ -245,7 +245,7 @@ pub fn adapt_fg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
         ui.border
     } else if color == TEXT_ACCENT || color == ACCENT_TOOL_LIVE {
         ui.status_working
-    } else if color == WHALE_INFO || color == WHALE_ACTION || color == WHALE_ACCENT_PRIMARY {
+    } else if color == WHALE_ACTION {
         ui.accent_primary
     } else if color == MODE_AGENT {
         ui.mode_agent
@@ -280,13 +280,20 @@ pub fn adapt_fg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
 /// `ui` note on [`adapt_fg_for_theme`] — same contract here.
 #[must_use]
 pub fn adapt_bg_for_theme(color: Color, theme: ThemeId, ui: &UiTheme) -> Color {
+    // The field follows the active shell for every preset, not only the
+    // remapped ones: the Whale pair leaves `surface_bg` at `Color::Reset` so
+    // the terminal owns the ground, and a direct `bg(WHALE_BG)` paint must
+    // not lay a navy patch over it. Deepsea repaints Reset cells through the
+    // ocean column afterwards; a user `background_color` override lands here
+    // too.
+    if color == WHALE_BG || color == BACKGROUND_DARK {
+        return ui.surface_bg;
+    }
     if !theme_remap_active(theme) {
         return color;
     }
 
-    if color == WHALE_BG || color == BACKGROUND_DARK {
-        ui.surface_bg
-    } else if color == WHALE_PANEL
+    if color == WHALE_PANEL
         || color == COMPOSER_BG
         || color == SURFACE_PANEL
         || color == SURFACE_TOOL
@@ -347,12 +354,10 @@ fn adapt_fg_for_grayscale_palette(color: Color) -> Color {
         || color == TEXT_TOOL_OUTPUT
         || color == LIGHT_TEXT_SOFT
         || color == TEXT_ACCENT
-        || color == WHALE_INFO
-        || color == WHALE_ACCENT_PRIMARY
+        || color == WHALE_ACTION
         || color == WHALE_HUMAN
         || color == ACCENT_TOOL_LIVE
         || color == STATUS_SUCCESS
-        || color == STATUS_INFO
     {
         GRAYSCALE_TEXT_SOFT
     } else if color == TEXT_SECONDARY
@@ -532,11 +537,7 @@ fn raw_semantic_foreground_role(color: Color) -> Option<SemanticForegroundRole> 
         Some(SemanticForegroundRole::ModeOperate)
     } else if color == MODE_YOLO {
         Some(SemanticForegroundRole::ModeYolo)
-    } else if color == WHALE_ACTION
-        || color == WHALE_INFO
-        || color == STATUS_INFO
-        || color == WHALE_ACCENT_PRIMARY
-    {
+    } else if color == WHALE_ACTION {
         Some(SemanticForegroundRole::Action)
     } else if color == WHALE_LIVE || color == TEXT_ACCENT || color == ACCENT_TOOL_LIVE {
         Some(SemanticForegroundRole::Live)

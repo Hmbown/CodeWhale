@@ -47,29 +47,88 @@ impl WorkSurfacePlacement {
     }
 }
 
-/// Which panel the rail shows. Orthogonal to placement: the user picks
-/// *where* the rail sits and *what* it shows (rail unification, 0.9.4).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Which view the bottom dock shows. Orthogonal to placement: the user picks
+/// *where* the dock sits and *what* it shows.
+///
+/// One bottom view, cycled in this order (founder redirect, 2026-09-02):
+/// agents → tasks → background → files → notepad → context → git → price.
+/// `Pinned` folded into `Tasks` (the goal heading rides the tasks view on
+/// side placements); `pinned` stays accepted as a setting word.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum RailPanel {
-    /// Tasks / to-do / workers — the live work projection rendered through
-    /// the row/hitbox machinery in `render.rs`.
+    /// The agent roster: one row per sub-agent, retained after completion.
+    Agents,
+    /// The to-do list: plan-step rows from the work graph.
     #[default]
     Tasks,
-    /// Sub-agents, ported from the legacy sidebar's Agents panel.
-    Agents,
-    /// Workspace / token / cost context, ported from the Context panel.
+    /// Background shells, durable tasks, and scheduled automations.
+    Background,
+    /// Files edited this session (`+/−`) and files read into context.
+    Files,
+    /// Per-workspace plain-text notes (`.codewhale/notes.md`).
+    Notepad,
+    /// The context budget: used/limit, compaction threshold, breakdown.
     Context,
-    /// Pinned work summary (goal + checklist), ported from the Pinned panel.
-    Pinned,
+    /// Branch, ahead/behind, dirty count, last commits.
+    Git,
+    /// Session cost, per-agent cost, cache hit %, model rate.
+    Price,
+}
+
+impl RailPanel {
+    /// Cycle order — also the tab order in the dock strip.
+    pub const ORDER: [RailPanel; 8] = [
+        Self::Agents,
+        Self::Tasks,
+        Self::Background,
+        Self::Files,
+        Self::Notepad,
+        Self::Context,
+        Self::Git,
+        Self::Price,
+    ];
+
+    /// Views the dock opens on its own when they have content and the user
+    /// has not picked one: live agents first, then the to-do list, then
+    /// background work. The others open only when cycled to.
+    pub const AUTO_ORDER: [RailPanel; 3] = [Self::Agents, Self::Tasks, Self::Background];
+
+    #[must_use]
+    pub fn next(self) -> Self {
+        let index = Self::ORDER.iter().position(|p| *p == self).unwrap_or(0);
+        Self::ORDER[(index + 1) % Self::ORDER.len()]
+    }
+
+    #[must_use]
+    pub fn prev(self) -> Self {
+        let index = Self::ORDER.iter().position(|p| *p == self).unwrap_or(0);
+        Self::ORDER[(index + Self::ORDER.len() - 1) % Self::ORDER.len()]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DockTabTarget {
+    Panel(RailPanel),
+    Close,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct DockTabHitbox {
+    pub(super) target: DockTabTarget,
+    pub(super) area: Rect,
 }
 
 impl RailPanel {
     #[must_use]
     pub fn parse(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
-            "agents" => Self::Agents,
-            "context" => Self::Context,
-            "pinned" => Self::Pinned,
+            "agents" | "subagents" | "sub-agents" => Self::Agents,
+            "background" | "shells" | "jobs" => Self::Background,
+            "files" | "changes" => Self::Files,
+            "notepad" | "notes" => Self::Notepad,
+            "context" | "session" => Self::Context,
+            "git" | "branch" => Self::Git,
+            "price" | "cost" => Self::Price,
             _ => Self::Tasks,
         }
     }
@@ -77,21 +136,22 @@ impl RailPanel {
     #[must_use]
     pub const fn as_setting(self) -> &'static str {
         match self {
-            Self::Tasks => "tasks",
             Self::Agents => "agents",
+            Self::Tasks => "tasks",
+            Self::Background => "background",
+            Self::Files => "files",
+            Self::Notepad => "notepad",
             Self::Context => "context",
-            Self::Pinned => "pinned",
+            Self::Git => "git",
+            Self::Price => "price",
         }
     }
 
+    /// Tab label. Lowercase on purpose: the dock's grammar is lowercase
+    /// nouns, like the tool rows' lowercase verbs (design §2.11).
     #[must_use]
     pub const fn title(self) -> &'static str {
-        match self {
-            Self::Tasks => "Tasks",
-            Self::Agents => "Agents",
-            Self::Context => "Context",
-            Self::Pinned => "Pinned",
-        }
+        self.as_setting()
     }
 }
 
@@ -239,6 +299,11 @@ pub struct WorkSurfaceState {
     pub(super) effective_placement: WorkSurfacePlacement,
     /// Panel selection — orthogonal to placement.
     pub panel: RailPanel,
+    /// The user picked `panel` (cycle key, tab click, `/rail <view>`), so
+    /// the auto rule leaves it alone and an empty view still paints. Esc
+    /// clears it and the dock goes back to showing whichever work view has
+    /// content.
+    pub explicit_view: bool,
     pub top_height: u16,
     pub side_width: u16,
     pub(super) resizing: bool,
@@ -256,6 +321,15 @@ pub struct WorkSurfaceState {
     pub last_area: Option<Rect>,
     pub visible_rows: usize,
     pub total_rows: usize,
+    pub(super) dock_tabs: Vec<DockTabHitbox>,
+    pub(super) pressed_tab: Option<DockTabTarget>,
+    pub(super) hovered_tab: Option<DockTabTarget>,
+    pub dismissed: bool,
+    pub dismissed_at_rows: usize,
+    /// The auto view measured at dismissal: the dock re-opens when that
+    /// view grows or when the auto rule picks a different one (a worker
+    /// starting while the to-do list was closed is new work).
+    pub(super) dismissed_view: RailPanel,
     pub(super) hovered: Option<WorkRowId>,
     pub(super) hitboxes: Vec<WorkHitbox>,
     pub(super) cached_graph: Option<WorkGraphSnapshot>,
@@ -322,6 +396,7 @@ impl WorkSurfaceState {
             placement,
             effective_placement: placement,
             panel: RailPanel::default(),
+            explicit_view: false,
             top_height: top_height.clamp(TOP_HEIGHT_MIN, TOP_HEIGHT_MAX),
             side_width: side_width.clamp(SIDE_WIDTH_MIN, SIDE_WIDTH_MAX),
             resizing: false,
@@ -336,6 +411,12 @@ impl WorkSurfaceState {
             last_area: None,
             visible_rows: 0,
             total_rows: 0,
+            dock_tabs: Vec::new(),
+            pressed_tab: None,
+            hovered_tab: None,
+            dismissed: false,
+            dismissed_at_rows: 0,
+            dismissed_view: RailPanel::default(),
             hovered: None,
             hitboxes: Vec::new(),
             cached_graph: None,
@@ -556,87 +637,173 @@ pub(super) fn project(app: &mut App) -> Vec<WorkRow> {
     rows
 }
 
-/// Projection used by the live surface. The full Work catalog remains intact
-/// for explicit inspectors, while persistent chrome stays literal: current
-/// sub-agents, live shells, then plan-step to-dos. Tool operations, coordination
-/// receipts, file activity, and generic graph headings never enter this list.
-///
-/// On Top, the strip is actionable work only: running / queued / needs-input
-/// agents, plus plan-step to-dos. Quietly completed or cancelled workers
-/// collapse out of the strip into the group header count (e.g.
-/// `▾ Subagents 2 running · Archived 6`) so fan-outs do not permanently eat
-/// the transcript. Settled agents stay reachable through the Agents panel and
-/// the work catalog — never deleted. Failed / interrupted workers stay in the
-/// strip because they still need attention.
-///
-/// **The sub-agent group outranks the to-do list for strip rows.** The strip
-/// is a fixed-height viewport over this list (`top_height`, 5..=16 rows) and
-/// paints from the top, so whatever is ordered last is what falls off the
-/// bottom behind `↓ N more`. Putting the to-dos first meant a session that
-/// already had a checklist spent every row it had on to-dos and a running
-/// sub-agent never appeared in the top bar at all — the 2026-08-04 owner
-/// report, pinned by `tests/work_bar_subagents_pty.rs`. The workers are the
-/// side that must not fall off: the to-do list keeps a pinned receipt
-/// (`To-do · 3/8 · 5 left`) that survives its rows scrolling away, and a
-/// sub-agent row has no such summary — it is the only place a running worker
-/// is inspectable from the bar. Sub-agent rows are also the bounded set
-/// (`max_concurrent` plus a capped terminal-card retention) while a to-do
-/// list is unbounded, so seating the bounded set first is what keeps both
-/// visible in the common case.
+/// The tasks view: plan-step to-dos. On strips the list is literal to-dos
+/// only; side rails keep the rest of the graph projection (operations,
+/// blockers, receipts) under them. Sub-agents and shells have their own
+/// views now, so nothing here competes with a running worker for rows — the
+/// dock opens on the agents view while one runs.
 pub(super) fn project_visible(app: &mut App) -> Vec<WorkRow> {
     let rows = project(app);
-    if !app.work_surface.effective_placement.is_strip() {
-        return rows;
-    }
-
     let todo_ids = plan_step_row_ids(app);
-    let mut todos = Vec::new();
-    let mut live_agents = Vec::new();
-    let mut settled_agents = 0usize;
-    let mut shells = Vec::new();
-    for row in rows {
-        if todo_ids.contains(&row.id.0) {
-            todos.push(row);
-        } else if row.id.0.starts_with("worker:") {
-            if agent_row_is_strip_settled(&row) {
-                settled_agents += 1;
-            } else {
-                live_agents.push(row);
-            }
-        } else if row.id.0.starts_with("shell:") {
-            shells.push(row);
-        }
+    let strip = app.work_surface.effective_placement.is_strip();
+    let mut out: Vec<WorkRow> = rows
+        .into_iter()
+        .filter(|row| {
+            !row.id.0.starts_with("worker:")
+                && !row.id.0.starts_with("shell:")
+                && row.id.0 != "section:shells"
+                && row.id.0 != "section:agents"
+                && (!strip || todo_ids.contains(&row.id.0))
+        })
+        .collect();
+    // On Top the goal is already the strip title; a side column repeats it
+    // as its first row so the durable goal home survives in every placement.
+    if !strip && let Some(label) = goal_row_label(app) {
+        out.insert(0, section_heading("goal", &label, ""));
     }
-
-    let mut out = Vec::with_capacity(todos.len() + live_agents.len() + shells.len() + 2);
-    if !live_agents.is_empty() || settled_agents > 0 {
-        // Honest live/settled split — failed/interrupted stay as strip rows
-        // (needs attention) and are never counted as "running".
-        let attention = live_agents
-            .iter()
-            .filter(|row| agent_row_needs_attention(row))
-            .count();
-        let running = live_agents.len().saturating_sub(attention);
-        let header = match (running, attention, settled_agents) {
-            (0, 0, settled) => format!("Subagents · Archived {settled}"),
-            (live, 0, 0) => format!("Subagents {live}"),
-            (live, 0, settled) => format!("Subagents {live} running · Archived {settled}"),
-            (0, blocked, 0) => format!("Subagents {blocked} needs input"),
-            (0, blocked, settled) => {
-                format!("Subagents {blocked} needs input · Archived {settled}")
-            }
-            (live, blocked, 0) => format!("Subagents {live} running · {blocked} needs input"),
-            (live, blocked, settled) => {
-                format!("Subagents {live} running · {blocked} needs input · Archived {settled}")
-            }
-        };
-        out.push(agents_section_heading(&header));
-        out.extend(live_agents);
-    }
-    push_shell_group(&mut out, shells);
-    out.extend(todos);
     app.work_surface.latest_rows = out.clone();
     out
+}
+
+fn goal_row_label(app: &App) -> Option<String> {
+    let (objective, paused) = crate::tui::footer_ui::active_goal_chip_state(app)?;
+    let flat = objective.trim().replace(['\n', '\r'], " ");
+    if flat.is_empty() {
+        return None;
+    }
+    Some(if paused {
+        format!("Goal (paused): {flat}")
+    } else {
+        format!("Goal: {flat}")
+    })
+}
+
+/// The agents view: the roster. Every worker row, live or settled, under the
+/// `▾ Subagents N` group door, oldest-first as the runtime reports them.
+fn agents_view_rows(app: &mut App) -> Vec<WorkRow> {
+    let rows = project(app);
+    let agents: Vec<WorkRow> = rows
+        .into_iter()
+        .filter(|row| row.id.0.starts_with("worker:"))
+        .collect();
+    let mut out = Vec::with_capacity(agents.len() + 1);
+    if !agents.is_empty() {
+        out.push(agents_section_heading(&format!(
+            "Subagents {}",
+            agents.len()
+        )));
+        out.extend(agents);
+    }
+    app.work_surface.latest_rows = out.clone();
+    out
+}
+
+/// Pick the view for this frame when the user has not picked one.
+///
+/// The dock is one bottom view. Cycling, a tab click, or `/rail <view>`
+/// makes the choice explicit and it sticks until Esc; otherwise the first of
+/// [`RailPanel::AUTO_ORDER`] with content wins — agents while a sub-agent
+/// runs, then the to-do list, then background work — and the persisted
+/// `rail_panel` preference is what shows when none of them has anything.
+pub(crate) fn resolve_view(app: &mut App) {
+    if app.work_surface.explicit_view {
+        return;
+    }
+    for panel in RailPanel::AUTO_ORDER {
+        if !view_has_work(app, panel) {
+            continue;
+        }
+        if app.work_surface.panel != panel {
+            app.work_surface.panel = panel;
+            app.work_surface.scroll_offset = 0;
+            app.work_surface.selected = None;
+        }
+        return;
+    }
+}
+
+fn view_has_work(app: &mut App, panel: RailPanel) -> bool {
+    match panel {
+        RailPanel::Agents => live_agent_row_count(app) > 0,
+        RailPanel::Tasks | RailPanel::Background => !visible_rows_for(app, panel).is_empty(),
+        RailPanel::Files
+        | RailPanel::Notepad
+        | RailPanel::Context
+        | RailPanel::Git
+        | RailPanel::Price => false,
+    }
+}
+
+/// Live worker rows: the ones that make the agents view open on its own.
+pub(super) fn live_agent_row_count(app: &mut App) -> usize {
+    project(app)
+        .iter()
+        .filter(|row| row.id.0.starts_with("worker:") && !agent_row_is_strip_settled(row))
+        .count()
+}
+
+/// The background view: live shells, other durable background tasks, and
+/// scheduled automations — whatever the shell already tracks off the turn.
+fn background_view_rows(app: &mut App) -> Vec<WorkRow> {
+    let mut out = Vec::new();
+    push_shell_group(&mut out, shell_work_rows(app));
+    out.extend(durable_task_rows(app));
+    if let Some(row) = automation_row(app) {
+        out.push(row);
+    }
+    app.work_surface.latest_rows = out.clone();
+    out
+}
+
+fn durable_task_rows(app: &App) -> Vec<WorkRow> {
+    app.task_panel
+        .iter()
+        .filter(|entry| !is_live_shell_entry(entry))
+        .map(|entry| {
+            let status = if entry.stale {
+                "stale"
+            } else {
+                entry.status.as_str()
+            };
+            WorkRow {
+                id: WorkRowId(format!("task:{}", entry.id)),
+                mark: agent_mark(WorkBucket::Active),
+                label: entry.prompt_summary.clone(),
+                detail: format!("{status} · {}", entry.id),
+                tone: WorkTone::Live,
+                selectable: true,
+                primary_action: Some(SidebarRowAction::Command(format!(
+                    "/jobs show {}",
+                    entry.id
+                ))),
+                agent: None,
+            }
+        })
+        .collect()
+}
+
+fn automation_row(app: &App) -> Option<WorkRow> {
+    let state = &app.automation_panel;
+    if state.active_automations == 0 && state.live_runs == 0 {
+        return None;
+    }
+    Some(WorkRow {
+        id: WorkRowId("automations".to_string()),
+        mark: if state.live_runs > 0 { "●" } else { "○" },
+        label: format!(
+            "automations · {} active · {} running",
+            state.active_automations, state.live_runs
+        ),
+        detail: "Scheduled work the host runs off the turn".to_string(),
+        tone: if state.live_runs > 0 {
+            WorkTone::Live
+        } else {
+            WorkTone::Muted
+        },
+        selectable: true,
+        primary_action: Some(SidebarRowAction::Command("/automation".to_string())),
+        agent: None,
+    })
 }
 
 /// Completed/cancelled workers leave the Top strip; failed/interrupted stay
@@ -645,15 +812,6 @@ fn agent_row_is_strip_settled(row: &WorkRow) -> bool {
     row.agent
         .as_ref()
         .is_some_and(|facts| matches!(facts.status.as_str(), "completed" | "cancelled"))
-}
-
-fn agent_row_needs_attention(row: &WorkRow) -> bool {
-    row.agent.as_ref().is_some_and(|facts| {
-        matches!(
-            facts.status.as_str(),
-            "failed" | "interrupted" | "needs_input" | "blocked"
-        )
-    })
 }
 
 /// Row ids of the plan-step (to-do) nodes in the cached graph.
@@ -698,88 +856,20 @@ fn plan_step_row_ids(app: &App) -> HashSet<String> {
 /// same sense the panel's name means (they survive completion — see the row
 /// lifetime rule in the module docs), so they belong here on their own terms.
 pub(super) fn visible_rows_for_panel(app: &mut App) -> Vec<WorkRow> {
-    match app.work_surface.panel {
+    let panel = app.work_surface.panel;
+    visible_rows_for(app, panel)
+}
+
+pub(super) fn visible_rows_for(app: &mut App, panel: RailPanel) -> Vec<WorkRow> {
+    match panel {
+        RailPanel::Agents => agents_view_rows(app),
         RailPanel::Tasks => project_visible(app),
-        RailPanel::Agents => {
-            let rows = project(app);
-            let todo_ids = plan_step_row_ids(app);
-            let mut agents = Vec::new();
-            let mut todos = Vec::new();
-            let mut shells = Vec::new();
-            for row in rows {
-                if row.id.0.starts_with("worker:") {
-                    agents.push(row);
-                } else if row.id.0.starts_with("shell:") {
-                    shells.push(row);
-                } else if todo_ids.contains(&row.id.0) {
-                    todos.push(row);
-                }
-            }
-            let mut out = Vec::with_capacity(agents.len() + todos.len() + shells.len() + 3);
-            if !agents.is_empty() {
-                out.push(agents_section_heading(&format!(
-                    "Subagents {}",
-                    agents.len()
-                )));
-                out.extend(agents);
-            }
-            push_shell_group(&mut out, shells);
-            if !todos.is_empty() {
-                out.push(section_heading("tasks", "Tasks", "Durable to-do checklist"));
-                out.extend(todos);
-            }
-            app.work_surface.latest_rows = out.clone();
-            out
-        }
-        RailPanel::Pinned => {
-            let rows = project(app);
-            let todo_ids = plan_step_row_ids(app);
-            let mut todos = Vec::new();
-            let mut agents = Vec::new();
-            let mut shells = Vec::new();
-            for row in rows {
-                if todo_ids.contains(&row.id.0) {
-                    todos.push(row);
-                } else if row.id.0.starts_with("worker:") {
-                    agents.push(row);
-                } else if row.id.0.starts_with("shell:") {
-                    shells.push(row);
-                }
-            }
-            let mut out = Vec::with_capacity(todos.len() + agents.len() + shells.len() + 3);
-            // On Top the goal is already the strip title; a side column
-            // repeats it as its first row so the durable goal home survives
-            // in every placement.
-            if !app.work_surface.effective_placement.is_strip()
-                && let Some((objective, paused)) =
-                    crate::tui::footer_ui::active_goal_chip_state(app)
-            {
-                let flat = objective.trim().replace(['\n', '\r'], " ");
-                if !flat.is_empty() {
-                    let label = if paused {
-                        format!("Goal (paused): {flat}")
-                    } else {
-                        format!("Goal: {flat}")
-                    };
-                    out.push(section_heading("goal", &label, ""));
-                }
-            }
-            // Same priority rule as Tasks: the bounded, summary-less set is
-            // seated before the unbounded to-do list that keeps a pinned
-            // receipt. See [`project_visible`].
-            if !agents.is_empty() {
-                out.push(agents_section_heading(&format!(
-                    "Subagents {}",
-                    agents.len()
-                )));
-                out.extend(agents);
-            }
-            push_shell_group(&mut out, shells);
-            out.extend(todos);
-            app.work_surface.latest_rows = out.clone();
-            out
-        }
-        RailPanel::Context => Vec::new(),
+        RailPanel::Background => background_view_rows(app),
+        RailPanel::Files => super::views::files_rows(app),
+        RailPanel::Notepad => super::views::notepad_rows(app),
+        RailPanel::Context => super::views::context_rows(app),
+        RailPanel::Git => super::views::git_rows(app),
+        RailPanel::Price => super::views::price_rows(app),
     }
 }
 
@@ -867,13 +957,13 @@ struct RankedWorkRow {
 }
 
 #[derive(Default, Clone)]
-struct SettledFileActivity {
-    summary: FileActivitySummary,
-    read: Vec<String>,
+pub(super) struct SettledFileActivity {
+    pub(super) summary: FileActivitySummary,
+    pub(super) read: Vec<String>,
     list: Vec<String>,
     search: Vec<String>,
-    write: Vec<String>,
-    mutations: Vec<FileMutationReceipt>,
+    pub(super) write: Vec<String>,
+    pub(super) mutations: Vec<FileMutationReceipt>,
     inline_diff_mode: InlineDiffMode,
 }
 
@@ -1772,7 +1862,7 @@ const fn agent_mark(bucket: WorkBucket) -> &'static str {
     }
 }
 
-fn settled_file_activity(app: &App) -> SettledFileActivity {
+pub(super) fn settled_file_activity(app: &App) -> SettledFileActivity {
     let mut activity = SettledFileActivity {
         inline_diff_mode: app.inline_diff_mode,
         ..SettledFileActivity::default()
@@ -3356,7 +3446,7 @@ mod tests {
     }
 
     #[test]
-    fn live_shells_are_first_class_work_strip_rows() {
+    fn live_shells_are_first_class_background_rows() {
         let mut app = test_app();
         app.work_surface.placement = WorkSurfacePlacement::Top;
         app.work_surface.effective_placement = WorkSurfacePlacement::Top;
@@ -3367,12 +3457,17 @@ mod tests {
         app.subagent_cache
             .push(running_agent("doc-scout-spec-arch"));
 
-        let rows = project_visible(&mut app);
+        // Shells never crowd the agents or tasks views; they are the
+        // background view, and the dock badges them there.
+        let agents = visible_rows_for(&mut app, RailPanel::Agents);
         assert!(
-            rows.iter()
+            agents
+                .iter()
                 .any(|row| row.id.0 == "section:agents" && row.label.contains("Subagents")),
-            "subagent visibility must not regress: {rows:?}"
+            "subagent visibility must not regress: {agents:?}"
         );
+        assert!(!agents.iter().any(|row| row.id.0.starts_with("shell:")));
+        let rows = visible_rows_for(&mut app, RailPanel::Background);
         let heading = rows
             .iter()
             .find(|row| row.id.0 == "section:shells")

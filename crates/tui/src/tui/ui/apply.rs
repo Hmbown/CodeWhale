@@ -115,7 +115,7 @@ pub(crate) fn apply_coordination_detail_projection(
 }
 
 pub(crate) fn apply_alt_4_shortcut(app: &mut App, _modifiers: KeyModifiers) {
-    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Pinned);
+    rail_panel_shortcut(app, crate::tui::work_surface::RailPanel::Files);
 }
 
 pub(crate) fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {
@@ -548,9 +548,16 @@ pub(crate) fn apply_goal_snapshot_to_app(app: &mut App, snapshot: &GoalSnapshot)
     // to stop it. `/goal <objective>` sets the objective before this snapshot lands,
     // so a user-declared goal does not repeat its own receipt.
     if objective_changed && verdict == GoalStatus::Active {
-        let content = app
-            .tr(crate::localization::MessageId::GoalReceiptSet)
-            .replace("{objective}", objective);
+        // Operate set it from the prompt (or the model did while operating);
+        // the objective is the prompt the user just typed, so the receipt
+        // says what Operate will do with it instead of echoing it.
+        let content = if app.mode == crate::tui::app::AppMode::Operate {
+            app.tr(crate::localization::MessageId::GoalReceiptSetOperate)
+                .into_owned()
+        } else {
+            app.tr(crate::localization::MessageId::GoalReceiptSet)
+                .replace("{objective}", objective)
+        };
         app.add_message(crate::tui::history::HistoryCell::System { content });
     }
     app.goal.objective = Some(objective.to_string());
@@ -754,6 +761,11 @@ pub(crate) async fn apply_model_picker_choice(
         }
         if !model_is_auto {
             apply_picker_effort_choice(app, engine_handle, effort, previous_effort).await;
+            app.fleet_roster_stale |= crate::fleet::members::auto_enroll_fleet_model(
+                &app.workspace,
+                app.provider_identity_for_persistence(),
+                &app.model,
+            );
             if save_as_startup_default {
                 app.status_message = Some(app.save_live_route_as_startup_default());
             }
@@ -849,6 +861,13 @@ pub(crate) async fn apply_model_picker_choice(
     // writes a startup default.
     let route_provider = app.provider_identity_for_persistence().to_string();
     app.note_session_route_change(&route_provider, &resolved_model);
+    if !model_is_auto {
+        app.fleet_roster_stale |= crate::fleet::members::auto_enroll_fleet_model(
+            &app.workspace,
+            &route_provider,
+            &resolved_model,
+        );
+    }
 
     if model_changed {
         apply_model_and_compaction_update(
@@ -1491,7 +1510,13 @@ pub(crate) async fn apply_command_result(
                 match fetch_available_models(config).await {
                     Ok(models) => {
                         app.add_message(HistoryCell::System {
-                            content: format_helpers::available_models_message(&app.model, &models),
+                            content: format_helpers::available_models_message(
+                                app.ui_locale,
+                                app.provider_identity_for_persistence(),
+                                &app.model,
+                                &models,
+                                &crate::fleet::members::fleet_models(&app.workspace),
+                            ),
                         });
                         app.status_message = Some(format!("Found {} model(s)", models.len()));
                     }
@@ -2006,6 +2031,58 @@ pub(crate) async fn apply_command_result(
             }
             AppAction::OpenFleetSetup => {
                 open_fleet_setup_target(app, config, None);
+            }
+            AppAction::FleetAddModel {
+                provider,
+                model,
+                roles,
+            } => {
+                use crate::commands::{fleet_catalog_rejection, fleet_provider_rejection};
+                let locale = app.ui_locale;
+                // The live `config` is the provider truth: the startup
+                // snapshot went stale after any in-session provider change.
+                let rejection = fleet_provider_rejection(app, config, &provider)
+                    .or_else(|| fleet_catalog_rejection(locale, &provider, &model));
+                let content = match rejection {
+                    Some(rejection) => rejection,
+                    None => match crate::fleet::members::add_fleet_model(
+                        &app.workspace,
+                        &provider,
+                        &model,
+                        &roles,
+                    ) {
+                        Ok(change) => {
+                            if !matches!(
+                                change,
+                                crate::fleet::members::FleetModelChange::Unchanged { .. }
+                            ) {
+                                app.fleet_roster_stale = true;
+                            }
+                            crate::fleet::members::change_receipt(
+                                locale, &provider, &model, &change,
+                            )
+                        }
+                        Err(error) => tr(locale, MessageId::FleetAddFailed)
+                            .replace("{error}", &error.message(locale)),
+                    },
+                };
+                app.add_message(HistoryCell::System { content });
+            }
+            AppAction::FleetRemoveModel { provider, model } => {
+                let locale = app.ui_locale;
+                let content = match crate::fleet::members::remove_fleet_model(
+                    &app.workspace,
+                    &provider,
+                    &model,
+                ) {
+                    Ok(change) => {
+                        app.fleet_roster_stale = true;
+                        crate::fleet::members::change_receipt(locale, &provider, &model, &change)
+                    }
+                    Err(error) => tr(locale, MessageId::FleetRemoveFailed)
+                        .replace("{error}", &error.message(locale)),
+                };
+                app.add_message(HistoryCell::System { content });
             }
             AppAction::OpenHotbarSetup => {
                 if app.view_stack.top_kind() != Some(ModalKind::HotbarSetup) {

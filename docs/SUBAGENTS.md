@@ -1,22 +1,22 @@
-# Pod Workers and Sub-Agent Compatibility
+# Fleet workers and sub-agent compatibility
 
 > 阅读简体中文版：[zh_hans/SUBAGENTS.md](zh_hans/SUBAGENTS.md)
 
-Pod roles are the user-facing vocabulary for delegated work: a parent
-launches a focused `worker`, `scout`, `planner`, `reviewer`, `builder`,
-`verifier`, or `consultant` through `agent` and gets back an `agent_id` plus transcript handle
+Fleet roles are the user-facing vocabulary for delegated work: a parent
+launches a focused `general`, `explore`, `planner`, `reviewer`, `implement`,
+`test`, or `advisor` through `agent` and gets back an `agent_id` plus transcript handle
 while the worker runs. The internal runtime type is `FleetRole` (formerly
-`SubAgentType`); the older role spellings (`general`, `explore`, `plan`,
-`review`, `implementer`, `oracle`, …) remain accepted only as a persisted/deserialize
-compatibility adapter during v0.9.x. New prompts and config should use Pod
+`SubAgentType`); the older role spellings (`worker`, `scout`, `plan`,
+`review`, `builder`, `verifier`, `consultant`, `oracle`, …) remain accepted only as a persisted/deserialize
+compatibility adapter during v0.9.x. New prompts and config should use fleet
 names.
 
 Architecturally, sub-agents should not be a second execution substrate. The
-durable primitive is the Pod-backed worker run described in
+durable primitive is the fleet-backed worker run described in
 [`AGENT_RUNTIME.md`](AGENT_RUNTIME.md): retries, terminal status, receipts,
 artifact refs, inspection, and restart behavior belong there. The
 model-facing launcher is the single `agent` tool and detached work should
-converge on the same lifecycle as Agent Pod.
+converge on the same lifecycle as Agent fleet.
 
 The current `agent` implementation delegates to the durable sub-agent runtime
 while that cutover completes. It can still be useful for short in-session
@@ -25,7 +25,7 @@ backoff inside the child runtime before the worker is marked interrupted; if the
 retry budget is exhausted, Codewhale preserves a checkpoint and returns a
 continuation handle instead of leaving the parent to infer what happened. For
 work that must survive process restarts, sleep, or remote execution, prefer
-Pod or a Workflow-backed Pod run.
+fleet or a Workflow-backed fleet run.
 
 Sub-agents inherit the parent's tool registry by default, and that includes
 `agent` itself: children are built with `with_full_agent_surface_options`
@@ -47,7 +47,7 @@ tool description.
 
 ## Role taxonomy
 
-The `type` field on `agent` selects a Pod posture for the child
+The `type` field on `agent` selects a fleet posture for the child
 (`agent_type` is accepted as a compatibility alias). Each role is a distinct
 stance toward the work — not just a different label.
 
@@ -66,13 +66,13 @@ stewardship.
 
 | Role          | Stance                                 | Writes? | Network? | Shell posture | Typical use                                  |
 |---------------|----------------------------------------|---------|----------|---------------|----------------------------------------------|
-| `worker`      | flexible; do whatever the parent says  | yes     | yes      | yes           | the default; multi-step tasks                |
-| `scout`       | read-only; map the relevant code fast  | no      | yes      | read-only (net + bounded verify) | "find every call site of `Foo`; check the PR with gh" |
+| `general`     | flexible; do whatever the parent says  | yes     | yes      | yes           | the default; multi-step tasks                |
+| `explore`     | read-only; map the relevant code fast  | no      | yes      | read-only (net + bounded verify) | "find every call site of `Foo`; check the PR with gh" |
 | `planner`     | analyse and produce a strategy         | no      | yes      | read-only probes | "design the migration; don't execute"        |
 | `reviewer`    | read-and-grade with severity scores    | no      | yes      | read-only (net + bounded verify) | "audit this PR for bugs"                     |
-| `builder`     | land a specific change with min edit   | yes     | yes      | yes           | "rewrite `bar.rs::Foo::bar` to do X"         |
-| `verifier`    | run tests / validation, report outcome | no      | yes      | bounded verification (no writes) | "verify the diff with the bounded test checks; report PASS/FAIL" |
-| `consultant`  | short-lived, high-reasoning counsel     | no      | yes      | none          | "what are we missing in this design?"        |
+| `implement`   | land a specific change with min edit   | yes     | yes      | yes           | "rewrite `bar.rs::Foo::bar` to do X"         |
+| `test`        | run tests / validation, report outcome | no      | yes      | bounded verification (no writes) | "verify the diff with the bounded test checks; report PASS/FAIL" |
+| `advisor`     | short-lived, high-reasoning counsel     | no      | yes      | none          | "what are we missing in this design?"        |
 | `custom`      | explicit narrow tool allowlist         | inherits | inherits | inherits     | hand-picked tools on the parent's posture    |
 
 A role's default is what the role *intends*, and the parent's effective
@@ -164,7 +164,7 @@ To-do: with many workers behind one card there is no truthful place to hang a
 single list. A child To-do appears only when the runtime already represents
 that child as its own delegate card.
 
-The durable Runtime ledger (projected through Pod task status) still owns
+The durable Runtime ledger (projected through fleet task status) still owns
 lifecycle state. `update_plan` is no
 longer reachable by a model: `model_visible()` returns `false`
 (`crates/tui/src/tools/plan.rs:408-413`), so it is filtered out of the API tool
@@ -253,16 +253,16 @@ OUTPUT: VERDICT, EVIDENCE, GAPS, NEXT.
 
 ### When to pick which role
 
-- **`worker`** — when the task is "do this whole thing", not "go
+- **`general`** — when the task is "do this whole thing", not "go
   look", "design", or "verify". This is the right default; reach for
   a more specific role only when the posture matters.
-- **`scout`** — when the parent needs evidence before deciding what
+- **`explore`** — when the parent needs evidence before deciding what
   to do next. Scouts are cheap and fast; open 2–3 in parallel
   for independent regions.
   They should orient first: confirm the project root, read relevant
   `AGENTS.md`/`README.md` guidance in unfamiliar trees, search only the
   likely scope, and return `path:line-range` evidence instead of a narrative
-  tour. The role name to use is `scout`.
+  tour. The role name to use is `explore`.
 - **`planner`** — when the parent has an objective but no executable
   decomposition. Planners write artifacts (`todo_write` items,
   strategy in the response body) but don't carry them out.
@@ -270,20 +270,20 @@ OUTPUT: VERDICT, EVIDENCE, GAPS, NEXT.
   it graded. Reviewers don't patch — they describe the fix in the
   finding so the parent can dispatch a builder if the verdict
   is "fix it".
-- **`builder`** — when the change is already specified and just
+- **`implement`** — when the change is already specified and just
   needs to land. Builders stay tightly scoped: minimum edit, no
   drive-by refactoring, run a quick verification before handing back.
-- **`verifier`** — when the parent needs an authoritative pass/fail
+- **`test`** — when the parent needs an authoritative pass/fail
   on the test suite or other validation. Verifiers don't fix
   failures; they capture the failing assertion + stack and put fix
   candidates under RISKS. The verifier posture never writes, and shell
   is clamped to the bounded built-in verification surface: the write
   ceiling is read-only and unbounded shell forms are refused (#5186).
-- **`consultant`** — when the operator wants a high-leverage second opinion
+- **`advisor`** — when the operator wants a high-leverage second opinion
   before cheaper execution continues. Consultants read enough to ground a
   recommendation, but cannot write or run shell commands. `oracle` and
   `advisor` remain accepted only when loading older requests or persisted
-  records; new prompts, receipts, and UI use `consultant`.
+  records; new prompts, receipts, and UI use `advisor`.
 - **`custom`** — only when the parent needs to constrain the tool
   set explicitly. Pass the allowlist via the `allowed_tools` field
   on legacy/internal sub-agent records; the model-facing `agent` tool keeps the
@@ -295,13 +295,13 @@ The model can spell each role multiple ways:
 
 | Canonical     | Aliases                                                          |
 |---------------|------------------------------------------------------------------|
-| `worker`      | `general`, `default`, `general-purpose`                          |
-| `scout`       | `explore`, `explorer`, `exploration`                             |
+| `general`     | `worker`, `default`, `general-purpose`, `general_purpose`         |
+| `explore`     | `scout`, `explorer`, `exploration`                               |
 | `planner`     | `plan`, `planning`, `awaiter`                                    |
 | `reviewer`    | `review`, `code-review`, `code_review`                           |
-| `builder`     | `implementer`, `implement`, `implementation`                     |
-| `verifier`    | `verify`, `verification`, `validator`, `tester`                  |
-| `consultant`  | `oracle`, `advisor` (compatibility input only)                    |
+| `implement`   | `builder`, `implementer`, `implementation`                       |
+| `test`        | `verifier`, `verify`, `verification`, `validator`, `tester`       |
+| `advisor`     | `consultant`, `oracle` (compatibility input only)                 |
 | `custom`      | (none; explicit `allowed_tools` array required)                  |
 
 All matching is case-insensitive. Unknown values produce a typed
@@ -398,7 +398,7 @@ session (docs/CACHE.md; accepted at the v0.9.9 boundary).
 
 **Parse-accepted but unadvertised (compat).** The following inputs were
 removed from the advertised schema but remain accepted for saved transcripts,
-ACP/MCP clients, Pod execution data, and internal/operator compatibility.
+ACP/MCP clients, fleet execution data, and internal/operator compatibility.
 They are never advertised to the model; Runtime still validates, clamps, and
 intersects them with live policy:
 
@@ -429,7 +429,7 @@ from, in order:
    (replay compat),
 2. the operator defaults `[subagents] default_max_steps` and
    `[subagents] default_wall_time_secs`,
-3. Pod role defaults: **unbounded model turns** for every role
+3. fleet role defaults: **unbounded model turns** for every role
    (`WorkerRuntimeProfile::default_max_steps` returns zero), plus a **1800 s**
    wall-clock default.
 
@@ -511,7 +511,7 @@ network router and keep children on the session model.
 ## Per-profile provider routes (#3965)
 
 `[subagents.models]` changes the child model within the active provider. To pin
-a child to a different provider, use a Pod/AgentProfile and pass it to the
+a child to a different provider, use a fleet/AgentProfile and pass it to the
 model-facing `agent` tool with `profile`. The profile's explicit `provider` +
 `model` fields win over the parent session route; omitting `provider` preserves
 the existing inherit behavior.
@@ -546,7 +546,7 @@ text = "Use small, local edits. Keep formatting changes mechanical."
 ```
 
 Then call `agent(profile: "local-formatter", prompt: "...")`. In-process
-children build a client for `lm-studio`; Pod workers forward
+children build a client for `lm-studio`; fleet workers forward
 `--provider lm-studio` to `codewhale exec`, which resolves the same
 `[providers.lm-studio]` table. Unknown or unconfigured provider ids fail the
 spawn rather than silently falling back to the parent provider.
@@ -622,7 +622,7 @@ manager can't match them to the current boot.
 
 Each compatibility sub-agent has a persisted worker record in
 `.codewhale/state/subagents.v1.json`. The record is the current run-ledger
-slice for sub-agent lanes until those lanes are backed directly by the Pod
+slice for sub-agent lanes until those lanes are backed directly by the fleet
 ledger: it stores `run_id`, objective, role/model,
 workspace/branch, lifecycle events, artifact refs, follow-up target, takeover
 target, usage provenance, and verification provenance.

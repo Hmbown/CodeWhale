@@ -36,7 +36,8 @@ use crate::tools::spec::{
 };
 use crate::tools::subagent::{
     SharedSubAgentManager, SubAgentCompletion, SubAgentManager, SubAgentResult, SubAgentRuntime,
-    SubAgentStatus, WorkflowTaskSpawnIdentity, WorkflowTaskSpawnMetadata, spawn_workflow_task,
+    SubAgentStatus, WorkflowTaskSpawnIdentity, WorkflowTaskSpawnMetadata, public_role_label,
+    spawn_workflow_task,
 };
 use crate::tools::verifier::run_workflow_completion_gates;
 use crate::tools::workflow_plan_approval::{
@@ -971,7 +972,7 @@ impl ToolSpec for WorkflowTool {
 
     fn description(&self) -> &'static str {
         concat!(
-            "Start, run, inspect, or cancel a Workflow. Workflows execute deterministic JS with args, phase/log progress, and task(...) calls that dispatch real sub-agents through Pod/sub-agent scheduling. ",
+            "Start, run, inspect, or cancel a Workflow. Workflows execute deterministic JS with args, phase/log progress, and task(...) calls that dispatch real sub-agents through Fleet/sub-agent scheduling. ",
             "For parallel fan-out, pass an array of zero-argument thunks exactly like `await parallel([() => task({...}), () => task({...})])`; do not pass task promises as variadic arguments. ",
             "Provide exactly one of script, source_path, or plan (structured planner JSON). ",
             "Use action=start for detached orchestration and action=status with run_id to inspect progress. Use action=run when the model needs the final result before continuing. ",
@@ -1002,7 +1003,7 @@ impl ToolSpec for WorkflowTool {
                 },
                 "fleet": {
                     "type": "string",
-                    "description": "Named Pod from $CODEWHALE_HOME/fleets/ or workspace fleets/; qualified origin/name accepted. Exact Pods freeze member identity, route, and reasoning. Runtime derives authority from role and live parent; per-task route/authority overrides are rejected."
+                    "description": "Named Fleet from $CODEWHALE_HOME/fleets/ or workspace fleets/; qualified origin/name accepted. Exact Fleets freeze member identity, route, and reasoning. Runtime derives authority from role and live parent; per-task route/authority overrides are rejected."
                 },
                 "plan": {
                     "type": "object",
@@ -1569,7 +1570,7 @@ fn workflow_fleet_binding(
     let (document, id) = crate::fleet::exact::load_fleet_document(&name, &context.workspace)
         .map_err(|err| {
             ToolError::invalid_input(format!(
-                "Failed to load workflow Pod '{name}' from {}: {err}",
+                "Failed to load workflow Fleet '{name}' from {}: {err}",
                 roots
                     .iter()
                     .map(|root| format!("{}/{}", root.origin, root.root.display()))
@@ -1619,7 +1620,7 @@ fn apply_named_fleet_to_task_request(
         true,
     )
     .map_err(|err| DriverError::Rejected(err.to_string()))?;
-    request.role = resolved.resolved_role;
+    request.role = resolved.resolved_role.as_deref().map(public_role_label);
     request.profile = Some(resolved.resolved_profile);
     Ok(())
 }
@@ -1639,7 +1640,7 @@ fn bind_exact_fleet_task_request(
 ) -> Result<crate::fleet::exact::ExactMemberBinding, DriverError> {
     let fleet = operation.snapshot().fleet().qualified();
 
-    // The exact Pod owns member identity, route, and reasoning. Runtime owns
+    // The exact Fleet owns member identity, route, and reasoning. Runtime owns
     // authority: after selection it derives the closed role posture and
     // intersects it with the live parent. A task may override neither side of
     // that boundary; `subagent_type`, tool lists, and write authority would
@@ -1654,10 +1655,10 @@ fn bind_exact_fleet_task_request(
     ] {
         if present {
             return Err(DriverError::Rejected(format!(
-                "Pod `{fleet}` is an exact Pod: task option `{field}` is not allowed. Every \
-                 member's identity, provider, model, and reasoning are fixed by the saved Pod, \
+                "Fleet `{fleet}` is an exact Fleet: task option `{field}` is not allowed. Every \
+                 member's identity, provider, model, and reasoning are fixed by the saved Fleet, \
                  while Runtime derives authority from its role and the live parent. Switch \
-                 Pods/edit the Pod for identity or route changes; do not override either \
+                 Fleets/edit the Fleet for identity or route changes; do not override either \
                  contract per task."
             )));
         }
@@ -1665,12 +1666,12 @@ fn bind_exact_fleet_task_request(
 
     let binding = operation
         .bind_member(request.profile.as_deref(), request.role.as_deref(), session)
-        .map_err(|err| DriverError::Rejected(format!("Pod `{fleet}`: {err}")))?;
+        .map_err(|err| DriverError::Rejected(format!("Fleet `{fleet}`: {err}")))?;
 
     // Id and role are stamped **separately and semantically**. The member id
     // addresses the run-scoped roster profile projected from the snapshot,
     // which carries the exact provider pin and canonical wire model. The role
-    // stays the Pod's semantic role, because that is what gates, handoffs,
+    // stays the Fleet's semantic role, because that is what gates, handoffs,
     // and records key on — overwriting it with the profile id (as an earlier
     // pass did) silently broke every gate whose member id differs from its
     // role.
@@ -1732,7 +1733,7 @@ fn orphaned_fleet_receipt_line(
     error: &str,
 ) -> String {
     format!(
-        "Pod route {} spawn_failed=true reason={}",
+        "Fleet route {} spawn_failed=true reason={}",
         receipt.line(),
         error.replace('\n', " ")
     )
@@ -1790,7 +1791,7 @@ async fn route_admitted_exact_task(
     let launch = operation
         .route_admitted_task(binding, &request.description)
         .await
-        .map_err(|err| DriverError::Rejected(format!("Pod `{fleet}`: {err}")))?;
+        .map_err(|err| DriverError::Rejected(format!("Fleet `{fleet}`: {err}")))?;
 
     request.thinking = Some(launch.thinking.clone());
     // **The launch authority is what the child runs under.** Binding stamped a
@@ -3810,7 +3811,7 @@ impl SubAgentWorkflowDriver {
             WorkflowUiEventKind::TaskStarted(Box::new(WorkflowTaskStartedEvent {
                 task_id: agent_id.to_string(),
                 label,
-                role: request.role.clone(),
+                role: request.role.as_deref().map(public_role_label),
                 profile: request.profile.clone(),
                 model: request.model.clone(),
                 strength: request.model_strength.clone(),
@@ -3863,7 +3864,7 @@ impl SubAgentWorkflowDriver {
             self.record_run_event(WorkflowUiEvent::new(
                 &self.owner_session_id,
                 WorkflowUiEventKind::Log {
-                    message: format!("Pod route {}", receipt.line()),
+                    message: format!("Fleet route {}", receipt.line()),
                 },
             ));
         }
@@ -4147,7 +4148,7 @@ impl SubAgentWorkflowDriver {
                 |err| {
                     if let Some(fleet) = self.fleet_name.as_deref() {
                         DriverError::Rejected(format!(
-                            "Pod `{fleet}` role resolution failed: {err}"
+                            "Fleet `{fleet}` role resolution failed: {err}"
                         ))
                     } else {
                         err
@@ -6023,7 +6024,7 @@ mod tests {
 
         apply_named_fleet_to_task_request(Some(&fleet), &mut request).expect("resolve");
 
-        assert_eq!(request.role.as_deref(), Some("implementer"));
+        assert_eq!(request.role.as_deref(), Some("implement"));
         assert_eq!(request.profile.as_deref(), Some("builder"));
     }
 
@@ -6143,7 +6144,7 @@ permissions = "read_only"
         // spawn resolves…
         assert_eq!(request.profile.as_deref(), Some("implementer"));
         // …while the semantic role is preserved for gates and records.
-        assert_eq!(request.role.as_deref(), Some("builder"));
+        assert_eq!(request.role.as_deref(), Some("implement"));
         let member = operation.roster().get("implementer").expect("roster");
         assert_eq!(member.profile.provider.as_deref(), Some("zai"));
         assert_eq!(member.profile.model.as_deref(), Some("glm-5"));
@@ -6267,15 +6268,15 @@ permissions = "read_only"
         );
         let state = WorkflowWorkspaceState::open(tmp.path());
         let run_id = "workflow_exact_gate".to_string();
-        // The gate blocks the semantic role `builder`, whose member id is the
-        // *different* string `implementer`.
+        // The gate blocks the semantic role `implement`, whose member id is
+        // the *different* string `implementer`.
         let gates = vec![GateSpec {
-            id: "scout-findings".to_string(),
-            role: "scout".to_string(),
+            id: "explore-findings".to_string(),
+            role: "explore".to_string(),
             on: GateOn::RoleComplete,
             gate: GateKind::Approve,
             on_fail: codewhale_workflow::GateOnFail::Block,
-            blocks_role: Some("builder".to_string()),
+            blocks_role: Some("implement".to_string()),
             max_retries: 0,
             artifact_kind: Some("findings".to_string()),
             require_explicit_verdict: false,
@@ -6302,11 +6303,12 @@ permissions = "read_only"
             tmp.path().to_path_buf(),
         );
 
-        // The upstream scout fails, which puts the gate into a blocking state.
+        // The upstream explore agent fails, which puts the gate into a
+        // blocking state.
         driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
-            agent_id: "scout-agent".to_string(),
-            label: Some("scout".to_string()),
-            role: Some("scout".to_string()),
+            agent_id: "explore-agent".to_string(),
+            label: Some("explore".to_string()),
+            role: Some("explore".to_string()),
             status: IrWorkflowRunStatus::Failed,
             output: None,
             schema_error: None,
@@ -6322,12 +6324,12 @@ permissions = "read_only"
             request.profile.as_deref(),
             "this fleet's ids and roles differ, which is the whole point"
         );
-        assert_eq!(request.role.as_deref(), Some("builder"));
+        assert_eq!(request.role.as_deref(), Some("implement"));
 
         let err = driver
             .prepare_request_for_gates(&mut request)
-            .expect_err("a blocking gate on `builder` must still see `builder`");
-        assert!(err.to_string().contains("builder"), "{err}");
+            .expect_err("a blocking gate on `implement` must still see `implement`");
+        assert!(err.to_string().contains("implement"), "{err}");
 
         // The same gate does *not* block a task carrying the member id, which
         // is exactly why stamping the id into `role` silently disabled it.
@@ -6715,7 +6717,7 @@ permissions = "read_only"
 
         assert_eq!(receipt.fleet, "workspace/glm-pair");
         assert_eq!(receipt.member_id, "implementer");
-        assert_eq!(receipt.member_role, "builder");
+        assert_eq!(receipt.member_role, "implement");
         assert_eq!(receipt.provider, "zai");
         assert_eq!(receipt.model, "glm-5");
         assert_eq!(receipt.requested_reasoning, "auto");
@@ -7174,7 +7176,7 @@ workflow({
             .iter()
             .find(|event| event["type"] == "task_started")
             .expect("task_started receipt");
-        assert_eq!(started["role"], "scout");
+        assert_eq!(started["role"], "explore");
         assert_eq!(started["profile"], "scout");
         assert_eq!(started["resolved_profile"], "scout");
 
@@ -7227,7 +7229,7 @@ workflow({
             conflicting_payload["error"]
                 .as_str()
                 .is_some_and(|error| error
-                    .contains("Pod role conflicts with the explicit legacy agent type")),
+                    .contains("Fleet role conflicts with the explicit legacy agent type")),
             "{conflicting_payload}"
         );
         assert_eq!(
@@ -8723,12 +8725,12 @@ reviewer = "reviewer"
         let state = WorkflowWorkspaceState::open(tmp.path());
         let run_id = "workflow_gate".to_string();
         let gates = vec![GateSpec {
-            id: "scout-findings".to_string(),
-            role: "scout".to_string(),
+            id: "explore-findings".to_string(),
+            role: "explore".to_string(),
             on: GateOn::RoleComplete,
             gate: GateKind::Approve,
             on_fail: codewhale_workflow::GateOnFail::Block,
-            blocks_role: Some("implementer".to_string()),
+            blocks_role: Some("implement".to_string()),
             max_retries: 0,
             artifact_kind: Some("findings".to_string()),
             require_explicit_verdict: false,
@@ -8767,9 +8769,9 @@ reviewer = "reviewer"
         );
 
         driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
-            agent_id: "scout-agent".to_string(),
-            label: Some("scout".to_string()),
-            role: Some("scout".to_string()),
+            agent_id: "explore-agent".to_string(),
+            label: Some("explore".to_string()),
+            role: Some("explore".to_string()),
             status: IrWorkflowRunStatus::Succeeded,
             output: Some("findings: inspect tui exit path".to_string()),
             schema_error: None,
@@ -8778,8 +8780,8 @@ reviewer = "reviewer"
 
         let mut implementer = TaskRequest {
             description: "Use the findings.".to_string(),
-            subagent_type: Some("implementer".to_string()),
-            role: Some("implementer".to_string()),
+            subagent_type: Some("implement".to_string()),
+            role: Some("implement".to_string()),
             profile: None,
             model: None,
             model_strength: None,
@@ -8808,8 +8810,8 @@ reviewer = "reviewer"
             .expect("passed gate should admit implementer");
         assert_eq!(handoffs.len(), 1, "{handoffs:?}");
         assert_eq!(handoffs[0].kind, "findings");
-        assert_eq!(handoffs[0].from_role, "scout");
-        assert_eq!(handoffs[0].to_role, "implementer");
+        assert_eq!(handoffs[0].from_role, "explore");
+        assert_eq!(handoffs[0].to_role, "implement");
         assert!(
             implementer
                 .description
@@ -8824,23 +8826,23 @@ reviewer = "reviewer"
         );
 
         driver.evaluate_gates_for_completed_role(&RuntimeTaskRecord {
-            agent_id: "scout-agent-2".to_string(),
-            label: Some("scout".to_string()),
-            role: Some("scout".to_string()),
+            agent_id: "explore-agent-2".to_string(),
+            label: Some("explore".to_string()),
+            role: Some("explore".to_string()),
             status: IrWorkflowRunStatus::Failed,
-            output: Some("scout incomplete".to_string()),
+            output: Some("explore incomplete".to_string()),
             schema_error: None,
             usage: None,
         });
         let mut blocked = TaskRequest {
             description: "Try after block.".to_string(),
-            role: Some("implementer".to_string()),
+            role: Some("implement".to_string()),
             ..implementer.clone()
         };
         let err = driver
             .prepare_request_for_gates(&mut blocked)
             .expect_err("blocked gate should reject downstream role");
-        assert!(err.to_string().contains("scout incomplete"), "{err}");
+        assert!(err.to_string().contains("explore incomplete"), "{err}");
 
         let run = state
             .runs
@@ -8852,9 +8854,9 @@ reviewer = "reviewer"
         assert!(
             run.gate_status
                 .iter()
-                .any(|line| line.gate_id == "scout-findings"
+                .any(|line| line.gate_id == "explore-findings"
                     && line.state == "blocked"
-                    && line.blocked_reason.as_deref() == Some("scout incomplete")),
+                    && line.blocked_reason.as_deref() == Some("explore incomplete")),
             "{:?}",
             run.gate_status
         );
@@ -10219,10 +10221,10 @@ FINAL RECEIPT
             .filter(|event| event["type"] == "task_started")
             .collect::<Vec<_>>();
         let expected_roles = [
-            ("scout", "scout"),
-            ("implementer", "builder"),
+            ("explore", "scout"),
+            ("implement", "builder"),
             ("reviewer", "reviewer"),
-            ("verifier", "verifier"),
+            ("test", "verifier"),
             ("release_lead", "manager"),
         ];
         assert_eq!(started.len(), expected_roles.len(), "{started:#?}");
@@ -10239,9 +10241,9 @@ FINAL RECEIPT
             .collect::<Vec<_>>();
         assert_eq!(gates.len(), 5, "{gates:#?}");
         assert!(gates.iter().all(|event| event["state"] == "passed"));
-        assert_eq!(gates[0]["role"], "scout");
-        assert_eq!(gates[0]["blocked_role"], "implementer");
-        assert_eq!(gates[3]["role"], "verifier");
+        assert_eq!(gates[0]["role"], "explore");
+        assert_eq!(gates[0]["blocked_role"], "implement");
+        assert_eq!(gates[3]["role"], "test");
         assert_eq!(gates[3]["blocked_role"], "release_lead");
         assert_eq!(gates[4]["role"], "release_lead");
         assert!(gates[4]["blocked_role"].is_null());
@@ -10255,10 +10257,10 @@ FINAL RECEIPT
             .filter(|event| event["type"] == "handoff_consumed")
             .collect::<Vec<_>>();
         let expected_handoffs = [
-            ("scout", "implementer", "source_evidence"),
-            ("implementer", "reviewer", "verification_plan"),
-            ("reviewer", "verifier", "review_report"),
-            ("verifier", "release_lead", "verification_report"),
+            ("explore", "implement", "source_evidence"),
+            ("implement", "reviewer", "verification_plan"),
+            ("reviewer", "test", "review_report"),
+            ("test", "release_lead", "verification_report"),
         ];
         assert_eq!(promoted.len(), expected_handoffs.len(), "{promoted:#?}");
         assert_eq!(consumed.len(), expected_handoffs.len(), "{consumed:#?}");

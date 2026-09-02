@@ -743,7 +743,7 @@ impl CommandPaletteView {
         Line::from(vec![Span::styled(
             format!("  {title} ({count})  "),
             Style::default()
-                .fg(palette::WHALE_INFO)
+                .fg(palette::WHALE_ACTION)
                 .add_modifier(Modifier::BOLD),
         )])
     }
@@ -870,7 +870,7 @@ impl ModalView for CommandPaletteView {
         let block = modal_block().title(Line::from(Span::styled(
             title,
             Style::default()
-                .fg(palette::WHALE_INFO)
+                .fg(palette::WHALE_ACTION)
                 .add_modifier(Modifier::BOLD),
         )));
         let inner = block.inner(popup_area);
@@ -1775,8 +1775,8 @@ mod tests {
 
         assert!(root_labels.contains(&"/provider"));
         assert!(root_labels.contains(&"/model"));
-        assert!(root_labels.contains(&"/pod"));
-        assert!(!root_labels.contains(&"/fleet"));
+        assert!(root_labels.contains(&"/fleet"));
+        assert!(!root_labels.contains(&"/pod"));
         assert!(root_labels.contains(&"/config"));
         assert!(root_labels.contains(&"/statusline"));
         assert!(!root_labels.contains(&"/rlm"));

@@ -437,7 +437,7 @@ impl SkillsManagerView {
             Line::from(Span::styled(
                 skill.name.clone(),
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),

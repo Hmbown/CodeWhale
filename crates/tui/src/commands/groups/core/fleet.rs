@@ -1,9 +1,9 @@
 //! `/pod` command (`/fleet` remains a compatibility alias).
 //!
-//! Pod = who. Bare `/pod` (and `/pod roster`) opens the familiar roster
-//! surface for the selected Pod; `/pod setup` opens the authoring wizard.
+//! Fleet = who. Bare `/pod` (and `/pod roster`) opens the familiar roster
+//! surface for the selected Fleet; `/pod setup` opens the authoring wizard.
 //! `/pod pods` (compatibility alias: `fleets`; other aliases: `saved`, `manage`)
-//! opens the named-Pod picker
+//! opens the named-Fleet picker
 //! for switching between saved configurations — never the primary face.
 //! `/pod list|status|interrupt|resume` are control-plane verbs that run
 //! against the **durable** workspace ledger through the shared contract in
@@ -11,7 +11,7 @@
 //!
 //! `/pod status` used to show the current TUI session's sub-agents. That was
 //! a different thing wearing the same name: session sub-agents are not the
-//! durable Pod ledger, and a run started by `codewhale pod run` never
+//! durable Fleet ledger, and a run started by `codewhale pod run` never
 //! appeared. The session view is still reachable as `/pod workers` (and
 //! `/subagents`), now labelled as what it is.
 
@@ -19,16 +19,17 @@ use codewhale_lane::control::operations_for_domain;
 use codewhale_lane::{ControlDomain, ControlOperation, ControlSurface};
 
 use crate::commands::traits::{CommandInfo, RegisterCommand};
+use crate::config::Config;
 use crate::fleet::control::execute_fleet_control;
-use crate::localization::MessageId;
+use crate::localization::{Locale, MessageId, tr};
 use crate::tui::app::{App, AppAction};
 
 use super::CommandResult;
 
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
-    name: "pod",
-    aliases: &["fleet", "loadout", "party"],
-    usage: "/pod [members|setup|pods|workers|save|save-as|list|status|runs|interrupt <worker-id>|resume <run-id>]",
+    name: "fleet",
+    aliases: &["pod", "loadout", "party"],
+    usage: "/fleet [members|models|add <provider> <model> [role…]|remove <provider> <model>|setup|fleets|workers|save|save-as|list|status|runs|interrupt <worker-id>|resume <run-id>]",
     description_id: MessageId::CmdFleetDescription,
 };
 
@@ -36,15 +37,15 @@ pub(in crate::commands) struct FleetCmd;
 
 fn help_text() -> String {
     let mut out = String::from(
-        "Usage: /pod [members|setup|pods|workers|save|save-as|list|status|runs|interrupt <worker-id>|resume <run-id>]\n\n\
-         Pod is who. /pod (or /pod members) opens the Pod member list and orchestration state — \
-         each member's role, model, and access. /pod setup opens the authoring wizard. \
-         /pod pods (or saved/manage) switches between named saved Pods; /pod fleets remains \
+        "Usage: /fleet [members|setup|fleets|workers|save|save-as|list|status|runs|interrupt <worker-id>|resume <run-id>]\n\n\
+         Fleet is who. /fleet (or /fleet members) opens the fleet member list and orchestration \
+         state — each member's role, model, and access. /fleet setup opens the authoring wizard. \
+         /fleet fleets (or saved/manage) switches between named saved fleets; /fleet pods remains \
          accepted as a compatibility alias.\n\n\
-         /pod list, status, interrupt, and resume act on the durable .codewhale/fleet.jsonl \
-         ledger for this workspace — the same records `codewhale pod` reads and writes. \
-         /pod workers (and /subagents) shows sub-agents in the current TUI session only, which \
-         is a different set: it does not include durable Pod runs. /fleet and `codewhale fleet` \
+         /fleet list, status, interrupt, and resume act on the durable .codewhale/fleet.jsonl \
+         ledger for this workspace — the same records `codewhale fleet` reads and writes. \
+         /fleet workers (and /subagents) shows sub-agents in the current TUI session only, which \
+         is a different set: it does not include durable fleet runs. /pod and `codewhale pod` \
          remain accepted as compatibility aliases; the ledger file, saved rosters, and config \
          tables keep the Fleet name.\n",
     );
@@ -69,6 +70,158 @@ fn split_verb(arg: Option<&str>) -> Option<(&str, Option<&str>)> {
     })
 }
 
+fn fleet_models_text(app: &App) -> String {
+    use crate::fleet::members::fleet_models;
+    let locale = app.ui_locale;
+    let models = match fleet_models(&app.workspace) {
+        Ok(models) if models.is_empty() => {
+            return tr(locale, MessageId::FleetModelsEmpty).into_owned();
+        }
+        Ok(models) => models,
+        // A selected fleet that cannot be read is named, never shown as
+        // "the session model only".
+        Err(error) => {
+            return tr(locale, MessageId::FleetModelsBroken).replace("{error}", &error.to_string());
+        }
+    };
+    let mut lines = vec![
+        tr(locale, MessageId::FleetModelsHeader)
+            .replace("{fleet}", &models[0].fleet)
+            .replace("{count}", &models.len().to_string()),
+    ];
+    for member in &models {
+        let provider = crate::config::ApiProvider::parse(&member.provider);
+        let facts = provider
+            .and_then(|p| crate::provider_lake::catalog_offering_for_model(p, &member.model))
+            .map(|row| {
+                let mut parts = Vec::new();
+                if let Some(cost) = row.cost.as_ref()
+                    && let (Some(input), Some(output)) = (cost.input, cost.output)
+                {
+                    parts.push(
+                        tr(locale, MessageId::FleetModelsFactPrice)
+                            .replace("{input}", &format!("{input:.2}"))
+                            .replace("{output}", &format!("{output:.2}")),
+                    );
+                }
+                if let Some(limit) = row.limit.as_ref()
+                    && let Some(context) = limit.context
+                {
+                    parts.push(
+                        tr(locale, MessageId::FleetModelsFactContext)
+                            .replace("{context}", &(context / 1000).to_string()),
+                    );
+                }
+                if row.tool_call == Some(true) {
+                    parts.push(tr(locale, MessageId::FleetModelsFactTools).into_owned());
+                }
+                parts.join(" · ")
+            })
+            .filter(|facts| !facts.is_empty())
+            .map(|facts| format!(" · {facts}"))
+            .unwrap_or_default();
+        lines.push(format!(
+            "  {}/{} · {}{facts}",
+            member.provider,
+            member.model,
+            member.roles_label()
+        ));
+    }
+    lines.push(tr(locale, MessageId::FleetModelsFooter).into_owned());
+    lines.join("\n")
+}
+
+/// Whether `provider_id` names a provider the user has configured — active
+/// route, explicit `[providers.<id>]` table, or usable credentials — in the
+/// **live** `config`, the same source the `/provider` and `/model` pickers
+/// consult. A startup snapshot goes stale after an in-session provider change.
+fn provider_id_is_configured(app: &App, config: &Config, provider_id: &str) -> bool {
+    let provider_id = provider_id.trim();
+    if provider_id.is_empty() {
+        return false;
+    }
+    if let Some(provider) = crate::config::ApiProvider::parse(provider_id) {
+        return crate::config::provider_is_configured_for_active(
+            config,
+            provider,
+            app.api_provider,
+        );
+    }
+    // Named custom provider: allow the active custom route, or any explicit
+    // `[providers.<name>]` table.
+    if app.api_provider == crate::config::ApiProvider::Custom
+        && app
+            .provider_identity_for_persistence()
+            .eq_ignore_ascii_case(provider_id)
+    {
+        return true;
+    }
+    config.providers.as_ref().is_some_and(|providers| {
+        providers
+            .custom
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(provider_id))
+    })
+}
+
+/// The localized reason `provider` may not enter the fleet, or `None` when
+/// it is configured. Shared by `/fleet add` and the picker's ⇧F so a locked
+/// or unauthenticated provider row is refused on both surfaces alike.
+#[must_use]
+pub(crate) fn fleet_provider_rejection(
+    app: &App,
+    config: &Config,
+    provider: &str,
+) -> Option<String> {
+    (!provider_id_is_configured(app, config, provider)).then(|| {
+        tr(app.ui_locale, MessageId::FleetAddProviderUnconfigured).replace("{provider}", provider)
+    })
+}
+
+/// The localized reason a typed `/fleet add` route is refused when a known
+/// provider's catalog is non-empty and does not list `model`. The picker
+/// skips this check: its rows already come from the catalog or a live list.
+#[must_use]
+pub(crate) fn fleet_catalog_rejection(
+    locale: Locale,
+    provider: &str,
+    model: &str,
+) -> Option<String> {
+    let known = crate::config::ApiProvider::parse(provider)?;
+    let served = crate::provider_lake::all_catalog_models_for_provider(known);
+    (!served.is_empty() && !served.iter().any(|id| id.eq_ignore_ascii_case(model))).then(|| {
+        tr(locale, MessageId::FleetAddModelNotServed)
+            .replace("{provider}", provider)
+            .replace("{model}", model)
+    })
+}
+
+/// `/fleet add <provider> <model> [role…]`: parse here; the write happens in
+/// the UI's `AppAction::FleetAddModel` arm, which holds the live config for
+/// provider validation and the engine handle for the roster refresh.
+fn fleet_add(app: &App, target: Option<&str>) -> CommandResult {
+    let mut words = target.unwrap_or_default().split_whitespace();
+    let (Some(provider), Some(model)) = (words.next(), words.next()) else {
+        return CommandResult::error(tr(app.ui_locale, MessageId::FleetAddUsage));
+    };
+    CommandResult::action(AppAction::FleetAddModel {
+        provider: provider.to_string(),
+        model: model.to_string(),
+        roles: words.map(str::to_string).collect(),
+    })
+}
+
+fn fleet_remove(app: &App, target: Option<&str>) -> CommandResult {
+    let mut words = target.unwrap_or_default().split_whitespace();
+    let (Some(provider), Some(model)) = (words.next(), words.next()) else {
+        return CommandResult::error(tr(app.ui_locale, MessageId::FleetRemoveUsage));
+    };
+    CommandResult::action(AppAction::FleetRemoveModel {
+        provider: provider.to_string(),
+        model: model.to_string(),
+    })
+}
+
 fn run_control(app: &App, operation: ControlOperation, target: Option<&str>) -> CommandResult {
     let receipt = execute_fleet_control(ControlSurface::Slash, &app.workspace, operation, target);
     let rendered = receipt.render();
@@ -86,16 +239,16 @@ impl RegisterCommand for FleetCmd {
 
     fn execute(app: &mut App, arg: Option<&str>) -> CommandResult {
         let Some((verb, target)) = split_verb(arg) else {
-            // Primary face: the familiar roster for the selected Pod.
-            // Named-Pod switching lives under /pod pods — never between
-            // the operator and their Pod.
+            // Primary face: the familiar roster for the selected fleet.
+            // Named-fleet switching lives under /fleet fleets — never between
+            // the operator and their fleet.
             return CommandResult::action(AppAction::OpenFleetRoster);
         };
         match verb {
             "save" | "update" => {
                 // Explicit persistence of the pending session route into the
-                // selected Pod's operator. Only an explicit command can
-                // write a saved Pod after an in-session route change.
+                // selected fleet's operator. Only an explicit command can
+                // write a saved fleet after an in-session route change.
                 let message = app.apply_route_save_choice(
                     crate::tui::views::route_save_prompt::RouteSaveChoice::UpdateFleet,
                 );
@@ -110,10 +263,15 @@ impl RegisterCommand for FleetCmd {
             _ => {}
         }
         match verb {
+            // The fleet as models (design §10 F1): what the person added,
+            // provider-exact, with the roles each model fills.
+            "models" | "model" => CommandResult::message(fleet_models_text(app)),
+            "add" => fleet_add(app, target),
+            "remove" | "rm" | "drop" => fleet_remove(app, target),
             "members" | "member" | "roster" | "party" | "loadout" | "roles" | "role"
             | "profiles" | "profile" => CommandResult::action(AppAction::OpenFleetRoster),
             "setup" | "edit" | "new" => CommandResult::action(AppAction::OpenFleetSetup),
-            // Named saved Pods — secondary surface for multi-Pod pick/switch.
+            // Named saved fleets — secondary surface for multi-fleet pick/switch.
             // Deliberately not "list": that verb is the durable ledger (#4022).
             "pods" | "fleets" | "saved" | "manage" => {
                 CommandResult::action(AppAction::OpenFleetList)
@@ -124,8 +282,8 @@ impl RegisterCommand for FleetCmd {
             other => match ControlOperation::parse_verb(ControlDomain::Fleet, other) {
                 Some(operation) => run_control(app, operation, target),
                 None => CommandResult::error(format!(
-                    "Unknown /pod target '{other}'. Use members, setup, pods, list, status, \
-                     workers, interrupt <worker-id>, or resume <run-id>. /pod fleets remains \
+                    "Unknown /fleet target '{other}'. Use members, setup, fleets, list, status, \
+                     workers, interrupt <worker-id>, or resume <run-id>. /pod pods remains \
                      accepted for compatibility."
                 )),
             },
@@ -156,6 +314,124 @@ mod tests {
         app
     }
 
+    fn isolated_workspace() -> (tempfile::TempDir, crate::test_support::EnvVarGuard, PathBuf) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let guard = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.as_os_str());
+        let workspace = temp.path().join("repo");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        (temp, guard, workspace)
+    }
+
+    #[test]
+    fn fleet_add_and_remove_parse_into_actions_the_ui_applies_with_the_live_config() {
+        let mut app = test_app();
+        let added = FleetCmd::execute(&mut app, Some("add openrouter z-ai/glm-5.3-flash explore"));
+        assert_eq!(
+            added.action,
+            Some(AppAction::FleetAddModel {
+                provider: "openrouter".to_string(),
+                model: "z-ai/glm-5.3-flash".to_string(),
+                roles: vec!["explore".to_string()],
+            })
+        );
+        assert!(!added.is_error && added.message.is_none(), "{added:?}");
+
+        let removed = FleetCmd::execute(&mut app, Some("remove openrouter z-ai/glm-5.3-flash"));
+        assert_eq!(
+            removed.action,
+            Some(AppAction::FleetRemoveModel {
+                provider: "openrouter".to_string(),
+                model: "z-ai/glm-5.3-flash".to_string(),
+            })
+        );
+
+        for arg in ["add openrouter", "add", "remove openrouter", "remove"] {
+            let usage = FleetCmd::execute(&mut app, Some(arg));
+            assert!(usage.is_error && usage.action.is_none(), "{arg}: {usage:?}");
+            assert!(
+                usage
+                    .message
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("Usage: /fleet"),
+                "{arg}: {usage:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fleet_models_lists_the_selected_fleet_and_names_a_broken_selection() {
+        let _lock = crate::test_support::lock_test_env();
+        let (_temp, _home, workspace) = isolated_workspace();
+        let mut app = app_in(workspace.clone());
+
+        let empty = FleetCmd::execute(&mut app, Some("models"));
+        assert!(
+            empty
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("session model only"),
+            "got: {empty:?}"
+        );
+
+        crate::fleet::members::add_fleet_model(
+            &workspace,
+            "openrouter",
+            "z-ai/glm-5.3-flash",
+            &["explore".to_string()],
+        )
+        .expect("add");
+        let listed = FleetCmd::execute(&mut app, Some("models"))
+            .message
+            .unwrap_or_default();
+        assert!(
+            listed.contains("openrouter/z-ai/glm-5.3-flash · explore"),
+            "got: {listed}"
+        );
+        assert!(
+            listed.starts_with("Your fleet `My fleet` (1 models)"),
+            "got: {listed}"
+        );
+
+        // A selected fleet whose file is gone is a broken selection, and
+        // `/fleet models` says so instead of "session model only".
+        let selected = crate::fleet::store::resolve_selected_fleet(&workspace)
+            .expect("ok")
+            .expect("selected");
+        std::fs::remove_file(&selected.path).expect("remove");
+        let broken = FleetCmd::execute(&mut app, Some("models"))
+            .message
+            .unwrap_or_default();
+        assert!(broken.contains("could not be loaded"), "got: {broken}");
+        assert!(!broken.contains("session model only"), "got: {broken}");
+    }
+
+    #[test]
+    fn fleet_add_rejections_come_from_the_live_config_and_the_catalog() {
+        let app = test_app();
+        let mut live = Config::default();
+        assert!(
+            fleet_provider_rejection(&app, &live, "unknown-provider")
+                .is_some_and(|reason| reason.contains("not a configured provider"))
+        );
+        assert!(fleet_provider_rejection(&app, &live, "openrouter").is_some());
+        // An in-session credential change is visible without restarting.
+        live.provider_config_for_mut(crate::config::ApiProvider::Openrouter)
+            .api_key = Some("test-key".to_string());
+        assert_eq!(fleet_provider_rejection(&app, &live, "openrouter"), None);
+
+        assert!(
+            fleet_catalog_rejection(Locale::En, "anthropic", "not-a-real-model")
+                .is_some_and(|reason| reason.contains("does not serve"))
+        );
+        assert_eq!(
+            fleet_catalog_rejection(Locale::En, "some-custom-provider", "anything"),
+            None
+        );
+    }
+
     #[test]
     fn pod_command_opens_roster_view() {
         let mut app = test_app();
@@ -183,8 +459,8 @@ mod tests {
         let mut pod_app = test_app();
         let mut fleet_app = test_app();
 
-        let pod = crate::commands::execute("/pod pods", &mut pod_app);
-        let fleet = crate::commands::execute("/pod fleets", &mut fleet_app);
+        let pod = crate::commands::execute("/fleet fleets", &mut pod_app);
+        let fleet = crate::commands::execute("/pod pods", &mut fleet_app);
 
         assert_eq!(pod.action, Some(AppAction::OpenFleetList));
         assert_eq!(pod.action, fleet.action);
@@ -291,17 +567,21 @@ mod tests {
         assert!(!result.is_error);
         assert!(result.action.is_none());
         let message = result.message.as_deref().unwrap_or_default();
-        for surface in ["/pod members", "/pod setup", "/pod pods", "/pod status"] {
+        for surface in [
+            "/fleet members",
+            "/fleet setup",
+            "/fleet fleets",
+            "/fleet status",
+        ] {
             assert!(message.contains(surface), "help must describe {surface}");
         }
         assert!(
-            message
-                .contains("/fleet and `codewhale fleet` remain accepted as compatibility aliases"),
+            message.contains("/pod and `codewhale pod` remain accepted as compatibility aliases"),
             "help must document the one-way compatibility boundary"
         );
         assert!(
-            message.contains("/pod fleets remains accepted as a compatibility alias"),
-            "help must disclose the saved-Pod compatibility alias"
+            message.contains("/fleet pods remains accepted as a compatibility alias"),
+            "help must disclose the saved-fleet compatibility alias"
         );
         assert!(
             message.contains("config tables keep the Fleet name"),
@@ -309,7 +589,7 @@ mod tests {
         );
         for truth in [
             "current TUI session",
-            "codewhale pod status",
+            "codewhale fleet status",
             ".codewhale/fleet.jsonl",
         ] {
             assert!(message.contains(truth), "help must distinguish {truth}");
@@ -335,30 +615,30 @@ mod tests {
             result
                 .message
                 .as_deref()
-                .is_some_and(|message| message.contains("Unknown /pod target 'bogus'"))
+                .is_some_and(|message| message.contains("Unknown /fleet target 'bogus'"))
         );
         assert!(
             result
                 .message
                 .as_deref()
-                .is_some_and(|message| message.contains("Use members, setup, pods"))
+                .is_some_and(|message| message.contains("Use members, setup, fleets"))
         );
     }
 
     #[test]
     fn fleet_aliases_are_registered_on_command_info() {
-        assert_eq!(FleetCmd::info().name, "pod");
-        assert!(FleetCmd::info().aliases.contains(&"fleet"));
+        assert_eq!(FleetCmd::info().name, "fleet");
+        assert!(FleetCmd::info().aliases.contains(&"pod"));
         assert!(FleetCmd::info().aliases.contains(&"loadout"));
-        assert!(FleetCmd::info().usage.contains("pods"));
+        assert!(FleetCmd::info().usage.contains("fleets"));
         assert!(FleetCmd::info().usage.contains("workers"));
         assert!(FleetCmd::info().usage.contains("save-as"));
-        assert!(!FleetCmd::info().usage.contains("fleets"));
+        assert!(!FleetCmd::info().usage.contains("pods"));
     }
 
     #[test]
     fn pod_and_legacy_fleet_invocations_dispatch_identically() {
-        for invocation in ["/pod", "/fleet"] {
+        for invocation in ["/fleet", "/pod"] {
             let mut app = test_app();
             let result = crate::commands::execute(invocation, &mut app);
             assert_eq!(
@@ -369,16 +649,16 @@ mod tests {
             assert!(!result.is_error, "{invocation}");
         }
 
-        let canonical = crate::commands::get_command_info("pod").expect("canonical /pod");
+        let canonical = crate::commands::get_command_info("fleet").expect("canonical /fleet");
         let compatibility =
             crate::commands::get_command_info("fleet").expect("compatibility /fleet");
         assert!(std::ptr::eq(canonical, compatibility));
-        assert_eq!(compatibility.name, "pod");
+        assert_eq!(compatibility.name, "fleet");
 
         let workspace = tempfile::tempdir().expect("workspace");
         let mut pod_app = app_in(workspace.path().to_path_buf());
         let mut fleet_app = app_in(workspace.path().to_path_buf());
-        let pod_status = crate::commands::execute("/pod status", &mut pod_app);
+        let pod_status = crate::commands::execute("/fleet status", &mut pod_app);
         let fleet_status = crate::commands::execute("/fleet status", &mut fleet_app);
         assert_eq!(pod_status.action, fleet_status.action);
         assert_eq!(pod_status.message, fleet_status.message);
@@ -389,17 +669,17 @@ mod tests {
     fn slash_command_and_cli_agree_on_fleet_verb_ids() {
         for descriptor in operations_for_domain(ControlDomain::Fleet) {
             assert_eq!(descriptor.slash_command, COMMAND_INFO.name);
-            assert_eq!(descriptor.hotbar_action_id(), "slash.pod");
+            assert_eq!(descriptor.hotbar_action_id(), "slash.fleet");
             assert!(
                 COMMAND_INFO.usage.contains(descriptor.verb) || descriptor.verb == "restart",
-                "/pod usage must document {} or declare it CLI-only",
+                "/fleet usage must document {} or declare it CLI-only",
                 descriptor.verb
             );
             assert!(descriptor.offers(ControlSurface::Cli));
         }
         assert!(
             !COMMAND_INFO.requires_required_argument(),
-            "/pod must stay directly runnable from the palette and hotbar"
+            "/fleet must stay directly runnable from the palette and hotbar"
         );
     }
 }

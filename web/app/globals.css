@@ -32,7 +32,7 @@
   --paper-deep: var(--whale-panel);
   --paper-edge: var(--whale-border);
   /* Cards are the TUI's panel plate resting on the deep field. */
-  --paper-card: #101d33;
+  --paper-card: var(--whale-panel);
   --paper-line: var(--whale-border);
   --paper-line-soft: var(--whale-border);
   --ink: var(--whale-text-body);
@@ -48,7 +48,7 @@
   --jade: var(--whale-working-green);
   --seafoam: var(--whale-accent-secondary);
   --cobalt: var(--whale-action);
-  --cyan: var(--whale-cyan); /* bounded accents only — eyebrow chrome, composer prompt */
+  --cyan: var(--whale-cyan); /* reserved for the composer prompt glyph only */
   --settings-state-active: var(--indigo);
   --settings-state-ready: var(--jade);
   --settings-state-muted: var(--ink-mute);
@@ -75,14 +75,11 @@
   --stage-elevated: var(--whale-elevated);
   --stage-line: var(--whale-border); /* blue at 25% on stage */
   --stage-hint: #8491aa;
-  --stage-dim: var(--whale-text-dim);
+  --stage-dim: var(--whale-text-muted);
   --violet: var(--whale-mode-operate); /* 1px rules only, never text */
 
-  /* Type stacks. Display and body are one instrument voice — Tideline sets
-     its headings in the same sans as its copy, separated by weight and
-     tracking, not by a second family. --font-body/--font-mono arrive from
-     next/font in app/[locale]/layout.tsx. */
-  --font-display: var(--font-body);
+  /* Type stacks. IBM Plex Sans Condensed carries the display voice; IBM Plex
+     Sans carries body copy, and JetBrains Mono carries terminal code. */
   --font-cjk: "PingFang SC", "Hiragino Sans GB", "Source Han Serif SC",
     "Noto Serif CJK SC", serif;
 
@@ -113,7 +110,7 @@ body {
      authored panel → chrome → deep descent. Fixed so the page scrolls over
      the water instead of dragging a second gradient with it. */
   background:
-    radial-gradient(1100px 460px at 68% -6%, rgba(33, 149, 214, 0.13), transparent 67%),
+    radial-gradient(1100px 460px at 68% -6%, rgb(var(--whale-action-rgb) / 0.13), transparent 67%),
     linear-gradient(174deg, var(--stage-field-top) 0%, var(--stage-field-mid) 42%, var(--stage-field-deep) 82%);
   background-attachment: fixed;
   background-color: var(--paper);
@@ -130,7 +127,7 @@ body {
 main, header, footer, nav { position: relative; z-index: 1; }
 
 /* ---------- type ---------- */
-.font-display { font-family: var(--font-display), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.font-display { font-family: var(--font-display), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; font-weight: 500; }
 .font-cjk { font-family: var(--font-cjk), "PingFang SC", "Source Han Serif SC", serif; }
 
 /* CJK paragraph rhythm — looser leading, wider tracking for body; tighter for headings */
@@ -164,7 +161,7 @@ main, header, footer, nav { position: relative; z-index: 1; }
   flex-wrap: wrap;
   align-items: baseline;
   font-family: var(--font-mono), "JetBrains Mono", ui-monospace, monospace;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   letter-spacing: 0.02em;
   text-transform: none;
 }
@@ -187,13 +184,14 @@ html[lang="ko"] .dotline {
 h1, h2, h3, h4 {
   font-family: var(--font-display), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   font-weight: 600;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.01em;
   color: var(--ink);
 }
 
-h1 { font-size: clamp(2.25rem, 5vw, 4.75rem); line-height: 0.98; word-break: keep-all; overflow-wrap: anywhere; }
-h2 { font-size: clamp(1.5rem, 2.8vw, 2.6rem); line-height: 1.08; word-break: keep-all; overflow-wrap: anywhere; }
-h3 { font-size: 1.18rem; line-height: 1.25; }
+h1 { font-size: clamp(2.25rem, 4.8vw, 4.25rem); line-height: 1; word-break: keep-all; overflow-wrap: anywhere; }
+h2 { font-size: clamp(1.45rem, 2.6vw, 2.35rem); line-height: 1.08; word-break: keep-all; overflow-wrap: anywhere; }
+h3, h4 { font-size: 1.12rem; line-height: 1.25; font-weight: 500; }
+h1.font-display, h2.font-display { font-weight: 600; }
 
 /* `overflow-wrap: anywhere` keeps long English headings safe, but can strand
    CJK punctuation — or a lone numeral — on a line of its own. Strict CJK
@@ -242,16 +240,13 @@ html[lang="ko"] h3 {
   margin-inline: auto;
 }
 
-/* The single hero band shared by home, docs, and the community portals: the
-   stage surface lightening out of the deep field, with the one cool glow the
-   body field already carries. */
+/* The single hero band shared by home, docs, and the community portals: a
+   quiet, flat stage surface against the deep field. */
 .hero {
   position: relative;
   overflow: hidden;
   border-bottom: 1px solid var(--hairline);
-  background:
-    radial-gradient(circle at 82% 0%, rgba(72, 215, 255, 0.1), transparent 28rem),
-    linear-gradient(180deg, color-mix(in srgb, var(--paper-deep) 88%, transparent) 0%, transparent 100%);
+  background: var(--paper);
   color: var(--ink);
   padding-block: var(--hero-pad);
 }
@@ -279,27 +274,26 @@ html[lang="ko"] h3 {
   .col-rule > * + * { border-left: 0; border-top: 1px solid var(--hairline); }
 }
 
-/* small-caps eyebrow — mono chrome, cyan: the bounded accent the Tideline
-   topbar spends on labels */
+/* small-caps eyebrow — muted mono chrome for compact labels */
 .eyebrow {
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.66rem;
+  font-size: 0.7rem;
   font-weight: 500;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: var(--cyan);
+  color: var(--ink-mute);
 }
 
 /* ---------- compact section marker ---------- */
 /* The seal keeps its Han glyph but speaks as Tideline chrome now: a bordered
-   stage plate with cyan ink, not an ink block on paper. */
+   stage plate with muted ink, not an ink block on paper. */
 .seal {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: var(--paper-deep);
   border: 1px solid var(--stage-line);
-  color: var(--cyan);
+  color: var(--ink-mute);
   font-family: var(--font-cjk), "PingFang SC", serif;
   font-weight: 700;
   width: 2.6rem;
@@ -318,7 +312,7 @@ html[lang="ko"] h3 {
    now, so there is nothing left to invert. */
 .ocean-column .seal {
   background: var(--stage-elevated);
-  color: var(--cyan);
+  color: var(--ink-mute);
 }
 
 /* ---------- pills / status ---------- */
@@ -328,7 +322,7 @@ html[lang="ko"] h3 {
   gap: 0.35rem;
   padding: 0.12rem 0.45rem;
   font-family: var(--font-mono), monospace;
-  font-size: 0.66rem;
+  font-size: 0.7rem;
   font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -374,9 +368,8 @@ pre.code-block::before {
   content: "";
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: 2px;
-  border-radius: 6px 6px 0 0;
-  background: linear-gradient(90deg, var(--action-on-dark) 0 70%, var(--seafoam) 70% 100%);
+  height: 1px;
+  background: var(--hairline);
 }
 pre.code-block .prompt { color: var(--action-on-dark); }
 pre.code-block .comment { color: #8b8f9a; }
@@ -426,7 +419,7 @@ mark.search-highlight {
   z-index: 30;
   top: 0;
   border-bottom: 1px solid var(--hairline);
-  background: rgba(8, 17, 28, 0.88);
+  background: rgb(var(--whale-bg-rgb) / 0.88);
   backdrop-filter: blur(10px);
 }
 
@@ -452,50 +445,12 @@ mark.search-highlight {
   letter-spacing: -0.03em;
 }
 
-/* Newspaper masthead (issue #4934 baseline) */
-.paper-issue-bar {
-  border-bottom: 1px solid var(--hairline);
-  background: var(--paper);
-}
-
-.paper-issue-inner {
-  display: flex;
-  width: var(--container);
-  margin-inline: auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding-block: 0.4rem;
-  font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.62rem;
-  font-weight: 500;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--ink-mute);
-}
-
-.paper-issue-left,
-.paper-issue-right {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-}
-
-.paper-issue-sep { opacity: 0.55; }
-
 .paper-nav-inner {
   min-height: 3.85rem;
   padding-block: 0.55rem;
 }
 
 .paper-wordmark {
-  /* The old `flex: 1 1 auto` with `min-width: 0` let long-locale strips
-     (de, pt-BR, id) collapse the home control to a zero-width hit target.
-     `min-width` is a hard flexbox floor, so the shrink factor stays at 1:
-     the box gives back space down to 8.75rem and no further. Refusing to
-     shrink at all instead pushes the overflow onto the compact controls —
-     at 375px on a docs route the menu toggle is the item that gets clipped.
-     The tag still ellipsizes inside this box. */
   flex: 0 1 auto;
   gap: 0.75rem;
   max-width: 15rem;
@@ -505,38 +460,35 @@ mark.search-highlight {
 
 .paper-wordmark-text {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   line-height: 1.1;
   min-width: 0;
 }
 
-.paper-wordmark-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 1.25rem;
-  letter-spacing: -0.03em;
-}
-
 .paper-wordmark-mark {
-  flex-shrink: 0;
+  display: block;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
 }
 
-.paper-wordmark-tag {
-  margin-top: 0.18rem;
-  font-family: var(--font-cjk), "PingFang SC", "Source Han Serif SC", serif;
-  font-size: 0.66rem;
-  font-weight: 400;
-  letter-spacing: 0.12em;
-  color: var(--ink-mute);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* The traced wordmark is ~7.1:1; when the compact nav clamps its width the
+   glyphs scale down inside the box instead of squashing. */
+.paper-wordmark-logo {
+  display: block;
+  flex: 0 1 auto;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  height: 20px;
+  object-fit: contain;
+  object-position: left center;
 }
 
 .paper-star-badge {
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -580,23 +532,14 @@ mark.search-highlight {
   transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
 }
 
-.paper-auth-signin {
+.paper-auth-signin,
+.paper-auth-register {
   color: var(--ink);
 }
 
-.paper-auth-signin:hover {
-  color: var(--indigo);
-}
-
-.paper-auth-register {
-  color: var(--indigo);
-  border: 1px solid var(--indigo);
-  border-radius: 5px;
-}
-
+.paper-auth-signin:hover,
 .paper-auth-register:hover {
-  background: var(--indigo);
-  color: var(--paper);
+  color: var(--indigo);
 }
 
 .site-nav-actions {
@@ -625,23 +568,11 @@ mark.search-highlight {
   border: 1px solid var(--hairline);
   border-radius: 6px;
   font-family: var(--font-body), "IBM Plex Sans", system-ui, sans-serif;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 600;
 }
 
 .site-github-link:hover { border-color: var(--ink); }
-
-.site-discord-link {
-  display: inline-flex;
-  min-height: 2.25rem;
-  align-items: center;
-  padding: 0.35rem 0.6rem;
-  border: 1px solid var(--hairline);
-  border-radius: 6px;
-  color: var(--ink);
-}
-
-.site-discord-link:hover { border-color: var(--ink); }
 
 .brand-mark { width: 1rem; height: 1rem; display: block; }
 
@@ -687,8 +618,8 @@ mark.search-highlight {
   padding-block: 2.8rem;
 }
 
-.site-wordmark-footer,
-.site-wordmark-footer span { color: var(--stage-text); }
+.site-wordmark-footer { color: var(--stage-text); }
+.site-wordmark-footer img { display: block; width: auto; height: 18px; }
 .site-footer-brand p { max-width: 30rem; margin-top: 0.8rem; color: rgb(var(--c-stage-soft) / 0.62); font-size: 0.86rem; line-height: 1.6; }
 
 .site-footer-links {
@@ -698,7 +629,7 @@ mark.search-highlight {
 }
 
 .site-footer-links > div { display: flex; flex-direction: column; gap: 0.55rem; }
-.site-footer-links span { margin-bottom: 0.25rem; color: var(--ocean-current); font-family: var(--font-mono), "JetBrains Mono", monospace; font-size: 0.64rem; letter-spacing: 0.1em; text-transform: uppercase; }
+.site-footer-links span { margin-bottom: 0.25rem; color: var(--ocean-current); font-family: var(--font-mono), "JetBrains Mono", monospace; font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; }
 .site-footer-links a { color: rgb(var(--c-stage-soft) / 0.76); font-size: 0.82rem; }
 .site-footer-links a:hover { color: var(--stage-text); }
 
@@ -711,11 +642,12 @@ mark.search-highlight {
   border-top: 1px solid rgb(var(--c-stage-soft) / 0.13);
   color: rgb(var(--c-stage-soft) / 0.5);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.62rem;
+  font-size: 0.75rem;
 }
 
 .site-footer-meta a:hover { color: var(--ocean-current); }
 .site-footer-meta > div { display: flex; gap: 1rem; }
+.site-footer-meta > p { min-width: 0; max-width: 70ch; overflow-wrap: anywhere; }
 
 /* ---------- ticker ---------- */
 .ticker-viewport {
@@ -749,7 +681,7 @@ mark.search-highlight {
    recedes to mute. Everything else is the action blue. */
 .ticker-verb {
   color: var(--indigo);
-  font-size: 0.62rem;
+  font-size: 0.7rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
@@ -783,29 +715,14 @@ mark.search-highlight {
   padding: 0 0.35rem;
   border: 1px solid var(--ochre);
   color: var(--ochre);
-  font-size: 0.58rem;
+  font-size: 0.7rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
 .ticker-sep { color: var(--paper-line-soft); }
 
-/* ---------- terminal player caret ---------- */
-.tp-caret {
-  display: inline-block;
-  width: 0.55em;
-  height: 1.05em;
-  margin-left: 1px;
-  vertical-align: text-bottom;
-  background: var(--action-on-dark);
-  animation: tp-blink 1.06s steps(1, end) infinite;
-}
-@keyframes tp-blink {
-  50% { opacity: 0; }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .tp-caret { animation: none; }
   .ticker-track { animation: none; }
   /* A frozen track would clip every entry past the fold with no way to reach
      them. Stopping the motion must not also remove the content. */
@@ -1075,10 +992,10 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 @media (max-width: 900px) {
   .site-nav-inner { gap: 1rem; }
-  .site-github-link,
-  .site-discord-link { display: none; }
+  .site-github-link { display: none; }
   .site-footer-main { grid-template-columns: 1fr; gap: 2.5rem; }
-  .site-footer-meta { grid-template-columns: 1fr; gap: 0.7rem; }
+  .site-footer-meta { grid-template-columns: minmax(0, 1fr); gap: 0.7rem; }
+  .site-footer-meta > div { min-width: 0; flex-wrap: wrap; }
 }
 
 @media (max-width: 700px) {
@@ -1111,7 +1028,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
     ellipse 82% 44% at 24% -22%,
     transparent 0,
     transparent 2.7rem,
-    rgba(104, 143, 157, 0.18) 2.76rem,
+    rgb(var(--whale-text-dim-rgb) / 0.18) 2.76rem,
     transparent 2.83rem
   );
   mask-image: linear-gradient(to bottom, transparent, black 24%, black 72%, transparent);
@@ -1142,7 +1059,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 .portal-hero h1 {
   max-width: 41rem;
-  font-size: clamp(2.4rem, 5vw, 3.7rem);
+  font-size: clamp(2.3rem, 4.8vw, 3.75rem);
   line-height: 1.01;
 }
 
@@ -1206,7 +1123,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 .portal-quickstart {
   padding: clamp(1.35rem, 3vw, 2rem);
-  border: 1px solid rgba(209, 235, 244, 0.22);
+  border: 1px solid rgb(var(--whale-ice-rgb) / 0.22);
   border-radius: 8px;
   background: var(--ocean-deep);
   box-shadow: 0 1.25rem 3rem rgba(0, 0, 0, 0.45);
@@ -1216,7 +1133,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .portal-quickstart > span {
   color: var(--stage-muted);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.65rem;
+  font-size: 0.7rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -1237,8 +1154,8 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 .portal-quickstart pre.code-block {
   margin-top: 1.15rem;
-  border-color: rgba(209, 235, 244, 0.2);
-  background: rgba(2, 8, 18, 0.6);
+  border-color: rgb(var(--whale-ice-rgb) / 0.2);
+  background: rgb(var(--whale-bg-rgb) / 0.6);
 }
 
 .portal-quickstart > a {
@@ -1271,7 +1188,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 .legal-doc-kicker {
   margin: 0 0 0.75rem;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-muted, color-mix(in srgb, var(--ink) 62%, var(--paper)));
@@ -1280,7 +1197,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .legal-doc h1 {
   margin: 0 0 0.5rem;
   font-family: var(--font-display), serif;
-  font-size: clamp(2rem, 4vw, 3rem);
+  font-size: clamp(1.85rem, 3.6vw, 2.7rem);
   line-height: 1.15;
 }
 
@@ -1364,7 +1281,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .settings-pane-heading > div > span,
 .settings-provider-heading {
   color: var(--settings-state-muted);
-  font-size: 0.6875rem;
+  font-size: 0.7rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1438,7 +1355,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   white-space: nowrap;
   color: var(--settings-state-muted);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.5625rem;
+  font-size: 0.7rem;
   font-weight: 500;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1469,7 +1386,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   border-radius: 4px;
   color: var(--settings-state-muted);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.625rem;
+  font-size: 0.7rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -1491,7 +1408,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 .settings-default-model dt {
   color: var(--settings-state-muted);
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 600;
 }
 
@@ -1540,7 +1457,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   margin-top: 4px;
   color: var(--ink-mute);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.625rem;
+  font-size: 0.75rem;
   line-height: 1.5;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -1666,7 +1583,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .portal-docs-heading span,
 .portal-community-grid > div:first-child > span {
   color: var(--ink-mute);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 600;
 }
 
@@ -1769,7 +1686,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .portal-community {
   padding-block: clamp(3.25rem, 6vw, 4.75rem);
   background:
-    radial-gradient(circle at 84% -30%, rgba(111, 183, 204, 0.14), transparent 30rem),
+    radial-gradient(circle at 84% -30%, rgb(var(--whale-cyan-rgb) / 0.14), transparent 30rem),
     var(--ocean-deep);
   color: var(--stage-soft);
 }
@@ -1800,7 +1717,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   gap: 0.8rem 1.5rem;
   margin-top: 1.5rem;
   padding-top: 1.25rem;
-  border-top: 1px solid rgba(209, 235, 244, 0.18);
+  border-top: 1px solid rgb(var(--whale-ice-rgb) / 0.18);
 }
 
 .portal-community-links a {
@@ -1841,7 +1758,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   display: inline-block;
   margin-top: 0.9rem;
   color: var(--indigo-deep);
-  font-size: 0.74rem;
+  font-size: 0.75rem;
   font-weight: 600;
 }
 
@@ -1873,7 +1790,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .contribute-steps li > span {
   color: var(--indigo-deep);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
 }
 
 .contribute-steps h3 {
@@ -1918,8 +1835,8 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 }
 
 .contribute-dev-loop pre.code-block {
-  border-color: rgba(209, 235, 244, 0.2);
-  background: rgba(2, 8, 18, 0.62);
+  border-color: rgb(var(--whale-ice-rgb) / 0.2);
+  background: rgb(var(--whale-bg-rgb) / 0.62);
 }
 
 @media (max-width: 900px) {
@@ -2031,7 +1948,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   border-radius: 4px;
   color: var(--ink-mute);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.62rem;
+  font-size: 0.7rem;
   font-style: normal;
   font-weight: 500;
   letter-spacing: 0.08em;
@@ -2042,7 +1959,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   margin: 0 0 0.85rem;
   color: var(--ink-mute);
   font-family: var(--font-mono), "JetBrains Mono", ui-monospace, monospace;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 500;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -2062,9 +1979,9 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .paper-hero-copy h1 {
   color: var(--ink);
   max-width: 38rem;
-  font-size: clamp(2.35rem, 4.6vw, 4.15rem);
-  line-height: 1.02;
-  letter-spacing: -0.035em;
+  font-size: clamp(2.25rem, 4.6vw, 4.1rem);
+  line-height: 1;
+  letter-spacing: -0.01em;
 }
 
 .product-hero-copy,
@@ -2105,7 +2022,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   border-radius: 5px;
   color: var(--ink);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.74rem;
+  font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2150,7 +2067,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .product-install pre.code-block,
 .paper-install pre.code-block {
   border-color: var(--ocean-mid);
-  background: linear-gradient(180deg, #131d31 0%, #060b16 100%);
+  background: var(--code-bg);
   color: var(--stage-text);
 }
 
@@ -2162,7 +2079,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   gap: 0.5rem 1rem;
   margin-top: 0.55rem;
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   color: var(--ink-mute);
 }
 
@@ -2174,7 +2091,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   margin-top: 1.1rem;
   /* !important because this <p> is also `.product-hero-copy > p`, which sets
      the lede's clamp at higher specificity. The status line is not a lede. */
-  font-size: 0.72rem !important;
+  font-size: 0.75rem !important;
   color: var(--ink-mute);
   line-height: 1.55;
 }
@@ -2197,12 +2114,9 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   position: relative;
   margin: 0;
   overflow: hidden;
-  border: 1px solid rgba(15, 22, 38, 0.88);
+  border: 1px solid rgb(var(--whale-chrome-rgb) / 0.88);
   border-radius: 6px;
   background: var(--ocean-deep);
-  box-shadow:
-    0 0 0 1px rgba(79, 209, 197, 0.08),
-    0 18px 48px rgba(3, 7, 13, 0.18);
 }
 
 .product-shot-toolbar,
@@ -2213,11 +2127,11 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   justify-content: space-between;
   gap: 1rem;
   padding: 0.5rem 0.8rem;
-  border-bottom: 1px solid rgba(79, 209, 197, 0.16);
-  background: linear-gradient(180deg, #131d31 0%, #0a1220 100%);
+  border-bottom: 1px solid rgb(var(--whale-accent-secondary-rgb) / 0.16);
+  background: linear-gradient(180deg, var(--whale-chrome) 0%, var(--whale-bg) 100%);
   color: var(--stage-muted);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.64rem;
+  font-size: 0.7rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -2238,44 +2152,17 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 .product-shot figcaption {
   padding: 0.6rem 0.8rem;
-  border-top: 1px solid rgba(79, 209, 197, 0.12);
-  background: #060b16;
+  border-top: 1px solid rgb(var(--whale-accent-secondary-rgb) / 0.12);
+  background: var(--whale-bg);
   color: var(--stage-muted);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.64rem;
+  font-size: 0.75rem;
   text-align: right;
 }
 
 /* Paper home keeps light sticky nav (no dark ocean override). */
 /* The sticky nav is the same Tideline chrome on every route — no per-page
    overrides. */
-
-/* Constitution trace pane */
-.paper-decides {
-  border-bottom: 1px solid var(--hairline);
-  background: var(--paper-deep);
-  padding-block: clamp(2.5rem, 5vw, 4rem);
-}
-
-.paper-decides-grid {
-  display: grid;
-  grid-template-columns: minmax(14rem, 0.85fr) minmax(20rem, 1.15fr);
-  gap: clamp(1.5rem, 4vw, 3rem);
-  align-items: start;
-}
-
-.paper-decides-lede {
-  max-width: 28rem;
-  color: var(--ink-soft);
-  font-size: 0.95rem;
-  line-height: 1.7;
-}
-
-/* The trace plate lifts off the panel band: on the deep field, depth as
-   hierarchy is a cast shadow, never a lighter sheet. */
-.terminal-frame {
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
-}
 
 .paper-start {
   border-bottom: 1px solid var(--hairline);
@@ -2311,9 +2198,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   line-height: 1.75;
 }
 
-/* Workflow: four numbered steps and a quoted receipt. The steps are panel
-   plates on the field; the receipt below is the composer-dark plate that
-   carries the evidence. */
+/* Workflow: four numbered steps as panel plates on the field. */
 .product-workflow {
   position: relative;
   overflow: hidden;
@@ -2339,7 +2224,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .product-workflow-steps li {
   position: relative;
   min-height: 12rem;
-  padding: 1.35rem 1.5rem 1.5rem;
+  padding: 1rem 1.1rem;
   border: 1px solid var(--stage-line);
   border-radius: 6px;
   background: var(--paper-card);
@@ -2348,7 +2233,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .product-workflow-steps li > span {
   color: var(--indigo);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
 }
 
 .product-workflow-steps h3 {
@@ -2362,34 +2247,6 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   color: var(--ink-soft);
   font-size: 0.84rem;
   line-height: 1.65;
-}
-
-.product-receipt {
-  display: grid;
-  gap: 0.45rem;
-  max-width: 58rem;
-  margin-top: 2.5rem;
-  padding: 1.35rem 1.5rem;
-  border: 1px solid var(--stage-line);
-  background: var(--stage-field-top);
-  color: var(--stage-soft);
-  font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: clamp(0.68rem, 1.2vw, 0.8rem);
-  line-height: 1.45;
-  /* The receipt plate lifts off the field — the same cast depth as the
-     trace pane. */
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
-}
-
-.product-receipt span:first-child {
-  padding-bottom: 0.65rem;
-  border-bottom: 1px solid var(--stage-line);
-  color: var(--stage-text);
-}
-
-.product-receipt strong {
-  color: var(--signal-gold);
-  font-weight: 500;
 }
 
 /* ---------- product: start-here band + shared getting-started steps ---------- */
@@ -2453,7 +2310,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .gs-step-index {
   color: var(--indigo);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
 }
 
 .gs-steps h3 {
@@ -2470,7 +2327,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 .gs-step-commands {
   margin-top: 0.9rem;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .gs-step-link {
@@ -2478,7 +2335,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   margin-top: 0.9rem;
   color: var(--indigo);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .gs-step-link:hover {
@@ -2496,7 +2353,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   background: var(--ink);
   color: var(--paper);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .skip-link:focus-visible {
@@ -2514,7 +2371,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
   padding: 0.2rem 0.55rem;
   border: 1px solid var(--hairline);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.62rem;
+  font-size: 0.7rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-soft);
@@ -2579,7 +2436,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .session-media-caption a {
   color: var(--indigo);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .session-media-caption a:hover {
@@ -2873,8 +2730,7 @@ html[lang="ko"] .ocean-column h2 {
 
 @media (max-width: 1050px) {
   .product-hero-grid,
-  .paper-hero-grid,
-  .paper-decides-grid {
+  .paper-hero-grid {
     grid-template-columns: 1fr;
     min-height: auto;
   }
@@ -2889,10 +2745,6 @@ html[lang="ko"] .ocean-column h2 {
 }
 
 @media (max-width: 760px) {
-  .paper-wordmark-tag {
-    max-width: 11rem;
-  }
-
   .product-proof-grid,
   .product-boundaries-grid,
   .product-install-grid,
@@ -2946,14 +2798,12 @@ html[lang="ko"] .ocean-column h2 {
     max-width: 9.75rem;
   }
 
-  .paper-wordmark-tag {
-    display: none;
-  }
-
   .product-hero-copy h1,
   .paper-hero-copy h1 {
     max-width: 100%;
-    font-size: clamp(2.15rem, 11vw, 3rem);
+    font-size: clamp(2rem, 10vw, 3rem);
+    word-break: normal;
+    overflow-wrap: break-word;
   }
 
   .paper-install-cta {
@@ -2973,7 +2823,7 @@ html[lang="ko"] .ocean-column h2 {
   .product-workflow-steps li + li,
   .product-workflow-steps li:nth-child(3) {
     min-height: 0;
-    padding: 1.25rem 0;
+    padding: 1rem 1.1rem;
     border-left: 0;
   }
 
@@ -2992,11 +2842,6 @@ html[lang="ko"] .ocean-column h2 {
     margin-top: 1.25rem;
   }
 
-  .product-receipt {
-    overflow-x: auto;
-    white-space: nowrap;
-  }
-
   .product-community nav {
     grid-template-columns: 1fr;
   }
@@ -3010,20 +2855,13 @@ html[lang="ko"] .ocean-column h2 {
   background: var(--paper);
 }
 
-.docs-portal-hero-inner,
 .community-welcome-inner {
   position: relative;
 }
 
-.hero .portal-mark {
-  margin-bottom: 1rem;
-}
-
-.docs-portal-hero-inner .docs-hero-title,
-.docs-portal-hero-inner h1,
 .community-welcome-inner h1 {
   max-width: 50rem;
-  font-size: clamp(2.2rem, 4.8vw, 3.55rem);
+  font-size: clamp(2rem, 4.2vw, 3.6rem);
   line-height: 1.03;
 }
 
@@ -3031,13 +2869,33 @@ html[lang="ko"] .ocean-column h2 {
   margin-top: 0.85rem;
 }
 
-.docs-portal-hero-inner p:not(.docs-hero-title),
 .community-welcome-inner p {
   max-width: 47rem;
   margin-top: 1rem;
   color: var(--ink-soft);
   font-size: 1rem;
   line-height: 1.7;
+}
+
+.docs-portal .hero {
+  padding-block: 0.75rem;
+}
+
+.docs-portal-band {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.docs-portal-band .portal-mark,
+.docs-portal-band .release-truth {
+  margin: 0;
+}
+
+.docs-hub-lede {
+  margin: 0.8rem 0 1.5rem;
+  color: var(--ink-soft);
 }
 
 .docs-shell {
@@ -3071,7 +2929,7 @@ html[lang="ko"] .ocean-column h2 {
 
 .docs-sidebar-heading a > span:last-child {
   color: var(--ink-mute);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .docs-sidebar-group {
@@ -3082,7 +2940,7 @@ html[lang="ko"] .ocean-column h2 {
 .docs-sidebar-category {
   margin-bottom: 0.35rem;
   color: var(--ink-mute);
-  font-size: 0.64rem;
+  font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -3111,7 +2969,7 @@ html[lang="ko"] .ocean-column h2 {
 
 .docs-sidebar-link > span:last-child:not(:first-child) {
   color: var(--ink-mute);
-  font-size: 0.68rem;
+  font-size: 0.75rem;
 }
 
 .docs-content {
@@ -3120,11 +2978,15 @@ html[lang="ko"] .ocean-column h2 {
   max-width: 52rem;
 }
 
+.docs-content p {
+  max-width: 70ch;
+}
+
 .docs-breadcrumb {
   margin-bottom: 1.15rem;
   color: var(--ink-mute);
   font-family: var(--font-mono), "JetBrains Mono", ui-monospace, monospace;
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .docs-breadcrumb ol {
@@ -3162,7 +3024,7 @@ html[lang="ko"] .ocean-column h2 {
   display: block;
   margin-bottom: 0.55rem;
   color: var(--ink-mute);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
   font-weight: 600;
 }
 
@@ -3190,7 +3052,7 @@ html[lang="ko"] .ocean-column h2 {
 .docs-search-count {
   margin-top: 0.55rem;
   color: var(--ink-mute);
-  font-size: 0.72rem;
+  font-size: 0.75rem;
 }
 
 .docs-result-groups {
@@ -3213,7 +3075,7 @@ html[lang="ko"] .ocean-column h2 {
 
 .docs-result-heading > span {
   color: var(--ink-mute);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
 }
 
 .docs-topic-list {
@@ -3247,7 +3109,7 @@ html[lang="ko"] .ocean-column h2 {
 
 .docs-topic-title > span:last-child {
   color: var(--ink-mute);
-  font-size: 0.6rem;
+  font-size: 0.75rem;
   font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -3264,9 +3126,13 @@ html[lang="ko"] .ocean-column h2 {
   overflow: hidden;
   color: var(--ink-mute);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.62rem;
+  font-size: 0.75rem;
   line-height: 1.5;
   text-overflow: ellipsis;
+}
+
+.docs-topic-source span {
+  overflow-wrap: anywhere;
 }
 
 .docs-topic-arrow {
@@ -3299,9 +3165,9 @@ html[lang="ko"] .ocean-column h2 {
 }
 
 .docs-source-note p {
-  max-width: 42rem;
+  max-width: 70ch;
   color: var(--ink-mute);
-  font-size: 0.74rem;
+  font-size: 0.75rem;
   line-height: 1.6;
 }
 
@@ -3394,7 +3260,7 @@ html[lang="ko"] .ocean-column h2 {
   border: 1px solid var(--hairline);
   color: var(--ink-soft);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
 }
 
 .community-credit-list a:hover {
@@ -3470,8 +3336,8 @@ html[data-theme="light"] .docs-theme {
   /* 5.3:1 on --paper and 4.9:1 on --paper-deep, so the 0.62rem release-truth
      label clears body-text contrast on the light sheet too. */
   --cyan: #0b6f8c;
-  /* The whale silhouette re-inks to the light sheet's body navy. */
-  --mark-ink: #14213a;
+  /* The whale silhouette re-inks to the brand navy (#142352). */
+  --mark-ink: var(--whale-composer);
   --hairline: rgba(20, 35, 70, 0.14);
   --code-bg: var(--whale-bg);
   --code-fg: var(--whale-text-body);
@@ -3641,7 +3507,7 @@ html[data-theme="light"] .docs-theme {
 .connection-copy { min-width: 0; }
 .connection-title { font-size: 0.86rem; font-weight: 600; }
 .connection-body { margin-top: 0.15rem; color: var(--ink-soft); font-size: 0.78rem; line-height: 1.5; }
-.connection-checked { color: var(--ink-mute); font-family: var(--font-mono), "JetBrains Mono", monospace; font-size: 0.68rem; }
+.connection-checked { color: var(--ink-mute); font-family: var(--font-mono), "JetBrains Mono", monospace; font-size: 0.75rem; }
 
 .connection-actions { display: flex; gap: 0.5rem; }
 
@@ -3654,7 +3520,7 @@ html[data-theme="light"] .docs-theme {
   border-radius: 5px;
   color: var(--ink);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.68rem;
+  font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -3685,10 +3551,10 @@ html[data-theme="light"] .docs-theme {
 }
 
 .release-truth-label {
-  color: var(--cyan);
+  color: var(--ink-mute);
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  font-size: 0.62rem;
+  font-size: 0.7rem;
 }
 
 .release-truth a {
@@ -3731,7 +3597,7 @@ html[data-theme="light"] .docs-theme {
 }
 
 .docs-task-row .docs-topic-source {
-  font-size: 0.66rem;
+  font-size: 0.75rem;
 }
 
 .docs-help {
@@ -3759,7 +3625,7 @@ html[data-theme="light"] .docs-theme {
 
 .docs-help-source {
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.7rem !important;
+  font-size: 0.75rem !important;
   color: var(--ink-mute) !important;
 }
 
@@ -3783,7 +3649,7 @@ html[data-theme="light"] .docs-theme {
   align-items: center;
   color: var(--indigo);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.74rem;
+  font-size: 0.75rem;
 }
 
 .docs-help-links a:hover { color: var(--indigo-deep); text-decoration: underline; text-underline-offset: 0.2rem; }
@@ -3847,7 +3713,7 @@ html[data-theme="light"] .docs-theme {
   display: block;
   color: var(--ink-mute);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.62rem;
+  font-size: 0.7rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -3921,17 +3787,17 @@ html[data-theme="light"] .docs-theme {
   display: flex;
   align-items: baseline;
   gap: 0.6rem;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--cyan);
+  color: var(--ink-mute);
 }
 
 .changelog-sections h3 a {
   color: var(--ink-mute);
   font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.64rem;
+  font-size: 0.75rem;
   letter-spacing: 0.04em;
   text-transform: none;
 }

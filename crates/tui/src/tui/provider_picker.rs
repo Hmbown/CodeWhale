@@ -2504,7 +2504,7 @@ impl ProviderPickerView {
             .title(Line::from(Span::styled(
                 title,
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)
@@ -2865,7 +2865,7 @@ impl ProviderPickerView {
             .title(Line::from(Span::styled(
                 self.tr(MessageId::XaiAuthChoiceTitle),
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)
@@ -2907,7 +2907,7 @@ impl ProviderPickerView {
             .title(Line::from(Span::styled(
                 self.tr(MessageId::ChatgptAuthChoiceTitle),
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)
@@ -2958,7 +2958,7 @@ impl ProviderPickerView {
                     format!(" API key — {} ", row.display_name)
                 },
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)
@@ -3138,7 +3138,7 @@ impl ProviderPickerView {
                 self.tr(MessageId::ProviderExternalChoiceTitle)
                     .replace("{provider}", &provider_name),
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)
@@ -3162,7 +3162,7 @@ impl ProviderPickerView {
                 Span::styled(
                     format!("{marker} {label}"),
                     Style::default().fg(if selected == choice {
-                        palette::WHALE_INFO
+                        palette::WHALE_ACTION
                     } else {
                         palette::TEXT_PRIMARY
                     }),
@@ -3204,7 +3204,7 @@ impl ProviderPickerView {
             .title(Line::from(Span::styled(
                 self.tr(MessageId::ProviderExternalConfirmTitle),
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)
@@ -3279,7 +3279,7 @@ impl ProviderPickerView {
             .title(Line::from(Span::styled(
                 self.tr(MessageId::ProviderExternalRevokeConfirmTitle),
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)
@@ -3319,7 +3319,7 @@ impl ProviderPickerView {
             .title(Line::from(Span::styled(
                 format!(" Default model · {provider_name} "),
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)
@@ -3413,7 +3413,7 @@ impl ProviderPickerView {
             .title(Line::from(Span::styled(
                 " Kimi Code plan tier ",
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)
@@ -3454,7 +3454,7 @@ impl ProviderPickerView {
             .title(Line::from(Span::styled(
                 format!(" {} ", self.tr(MessageId::StepfunBillingRouteTitle)),
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)
@@ -3502,7 +3502,7 @@ impl ProviderPickerView {
             .title(Line::from(Span::styled(
                 " Confirm provider setup ",
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)
@@ -3576,7 +3576,7 @@ impl ProviderPickerView {
             .title(Line::from(Span::styled(
                 title,
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)
@@ -3656,7 +3656,7 @@ impl ProviderPickerView {
             .title(Line::from(Span::styled(
                 format!(" {} ", self.tr(MessageId::ProviderTemplatesTitle)),
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             )))
             .borders(Borders::ALL)
@@ -3819,7 +3819,7 @@ impl ProviderPickerView {
             Style::default().fg(palette::TEXT_PRIMARY)
         };
         let label_style = if selected {
-            menu_style::selected_row_style_with_fg(palette::WHALE_INFO)
+            menu_style::selected_row_style_with_fg(palette::WHALE_ACTION)
         } else {
             Style::default().fg(palette::TEXT_MUTED)
         };

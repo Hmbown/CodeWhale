@@ -609,6 +609,11 @@ fn shell_binding_probe(id: ShellBindingId) -> KeyEvent {
         ShellBindingId::Settings => KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE),
         ShellBindingId::ModeCycle => KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
         ShellBindingId::PermissionCycle => KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE),
+        ShellBindingId::ViewCycle => KeyEvent::new(KeyCode::Char(']'), KeyModifiers::CONTROL),
+        ShellBindingId::ViewCycleBack => KeyEvent::new(
+            KeyCode::BackTab,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ),
     }
 }
 
@@ -11624,9 +11629,9 @@ fn ctrl_alt_4_selects_pinned_rail_panel_without_switching_modes() {
     assert_eq!(app.mode, AppMode::Agent);
     assert_eq!(
         app.work_surface.panel,
-        crate::tui::work_surface::RailPanel::Pinned
+        crate::tui::work_surface::RailPanel::Files
     );
-    assert_eq!(app.status_message.as_deref(), Some("Rail panel: pinned"));
+    assert_eq!(app.status_message.as_deref(), Some("Rail panel: files"));
 }
 
 #[test]
@@ -23749,7 +23754,7 @@ mod work_surface {
         // drag a terminal edge and the strip blinks in and out. Growing the
         // terminal may only ever *add* chrome, never take it away, and the same
         // size must always produce the same answer.
-        for panel in [RailPanel::Pinned, RailPanel::Agents, RailPanel::Context] {
+        for panel in [RailPanel::Tasks, RailPanel::Agents, RailPanel::Context] {
             for idle_empty in [true, false] {
                 let mut previous_strip = 0_u16;
                 for rows in 8_u16..=48 {
@@ -24013,7 +24018,7 @@ mod work_surface {
         // proven present by `strip_height` *before* the frame is searched for
         // chrome, so if Top starts painting "Agents" or "Pinned" again, it fails
         // here rather than quietly re-arming that trap.
-        for panel in [RailPanel::Agents, RailPanel::Pinned, RailPanel::Context] {
+        for panel in [RailPanel::Agents, RailPanel::Tasks, RailPanel::Context] {
             let mut app = idle_rail_app(panel);
             let mut agent = make_subagent(
                 "agent_rail_probe",
@@ -24036,8 +24041,12 @@ mod work_surface {
                  anything"
             );
             let rendered = render_underwater_test_app(&mut app, 100, 34);
+            // A chrome title would be a row that says nothing but the view's
+            // name. The dock tab row and the `▾ Subagents N` group door both
+            // legitimately contain the lowercase word, so probe whole rows.
+            let strip_body = rendered.lines().skip(1).collect::<Vec<_>>().join("\n");
             assert!(
-                !rendered.contains(panel.title()),
+                !strip_body.lines().any(|line| line.trim() == panel.title()),
                 "a {strip}-row {panel:?} strip painted its panel name \
                  ({:?}) as chrome. Top titles are goals only — and a title \
                  probe is what let the rail regression through last time\n{rendered}",
@@ -24052,7 +24061,7 @@ mod work_surface {
         // know the terminal is too narrow to draw the mark at all. Charging the
         // 16-row ambient floor below `AMBIENT_MIN_CHAT_WIDTH` reserves rows for
         // something that can never appear, and the strip yields for nothing.
-        let app = idle_rail_app(RailPanel::Pinned);
+        let app = idle_rail_app(RailPanel::Tasks);
         let narrow = AMBIENT_MIN_CHAT_WIDTH - 1;
         assert_eq!(
             rail_row_budget(&app, narrow, 24, true),

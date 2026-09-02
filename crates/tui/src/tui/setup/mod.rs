@@ -3313,7 +3313,7 @@ impl ModalView for SetupWizardView {
         let title = Line::from(Span::styled(
             title_text,
             Style::default()
-                .fg(palette::WHALE_INFO)
+                .fg(palette::WHALE_ACTION)
                 .add_modifier(Modifier::BOLD),
         ));
         let why = Line::from(Span::raw(question_text));
@@ -3557,7 +3557,7 @@ impl SetupWizardView {
             Span::styled(
                 "/settings  ",
                 Style::default()
-                    .fg(palette::WHALE_INFO)
+                    .fg(palette::WHALE_ACTION)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(tr(self.locale, MessageId::CmdSettingsDescription).to_string()),

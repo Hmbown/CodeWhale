@@ -788,7 +788,7 @@ mod tests {
                 agent_type: crate::tools::subagent::FleetRole::Scout,
                 assignment: crate::tools::subagent::SubAgentAssignment {
                     objective: "look around".to_string(),
-                    role: Some("scout".to_string()),
+                    role: Some("explore".to_string()),
                 },
                 model: "deepseek-v4-flash".to_string(),
                 nickname: None,
@@ -819,7 +819,7 @@ mod tests {
             });
         focus_agent(&mut app, "agent_scout");
         let posture = focused_posture(&app).expect("posture line from the snapshot");
-        assert_eq!(posture, "scout · read-only · network · read-only shell");
+        assert_eq!(posture, "explore · read-only · network · read-only shell");
         let screen = render(&mut app, 100, 8);
         assert!(
             screen.contains("read-only · network · read-only shell"),

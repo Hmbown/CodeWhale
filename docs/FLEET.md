@@ -1,27 +1,29 @@
-# Agent Pod
+# Agent fleet
 
 > Baca terjemahan bahasa Indonesia: [id/FLEET.md](id/FLEET.md)
 
-Agent Pod is the local-first roster and member-selection layer for durable
-multi-worker runs. It does not execute or authorize work. After Pod resolves
+Agent fleet is the local-first roster and member-selection layer for durable
+multi-worker runs. It does not execute or authorize work. After fleet resolves
 who should participate, the delegated coordinator launches a headless
 `codewhale exec` run and the Runtime tracks it durably. See
 [AGENT_RUNTIME.md](AGENT_RUNTIME.md) for how sub-agents, `exec`, and
-Pod-backed workers converge on one runtime. In product language, a user may
+fleet-backed workers converge on one runtime. In product language, a user may
 still "open a sub-agent"; in architecture language, durable nested work uses a
-Pod member identity with delegated runtime execution.
+fleet member identity with delegated runtime execution.
 
 ## Naming and compatibility boundary
 
-**Pod** is the customer-facing name. **Fleet** is the retained serialization
-name and is not going away. Both spellings work everywhere a command is typed:
+**Fleet** is the public product noun. The durable ledger, saved rosters, config
+tables, and `--fleet` flag share that name:
 
 | Surface | Canonical | Compatibility alias |
 | --- | --- | --- |
-| CLI | `codewhale pod …` | `codewhale fleet …` |
-| Slash command | `/pod …` | `/fleet …` |
+| CLI | `codewhale fleet …` | `codewhale pod …` |
+| Slash command | `/fleet …` | `/pod …` |
 
-The Fleet spelling is deliberately preserved wherever changing it would break
+`/pod` and `codewhale pod` remain accepted as compatibility aliases.
+
+These shared names are load-bearing wherever changing them would break
 existing workspaces, receipts, or scripts:
 
 - the durable ledger `.codewhale/fleet.jsonl` and the log directories
@@ -31,58 +33,59 @@ existing workspaces, receipts, or scripts:
 - the `codewhale workflow run --fleet <name>` flag;
 - wire, receipt, and control-plane operation ids such as `fleet.status`.
 
-The rest of this document still describes those stored artifacts by their
-stored names. Where it says Pod, it means the product concept; where it says
-`fleet` in a path, key, flag, or id, it means the literal on-disk token.
+The rest of this document uses fleet as the public product noun and retains
+these literal paths, keys, flags, and ids.
 
-Use a Pod roster rather than anonymous short-lived `agent` fanout whenever a
+Use a fleet roster rather than anonymous short-lived `agent` fanout whenever a
 delegated run needs stable member identities across retries, sleep/restart,
 remote execution, receipts, or a ledgered audit trail. The initial CLI surface
 is:
 
-For a guided start-to-monitor walkthrough that combines Pod task specs with
-Workflow authoring, see [Pod + Workflow Tutorial](FLEET_WORKFLOW_TUTORIAL.md).
+For a guided start-to-monitor walkthrough that combines fleet task specs with
+Workflow authoring, see [fleet + Workflow Tutorial](FLEET_WORKFLOW_TUTORIAL.md).
 
 ```sh
-codewhale pod init
-codewhale pod run tasks.json --max-workers 4
-codewhale pod status
-codewhale pod inspect <worker-id>
-codewhale pod logs <worker-id>
-codewhale pod artifacts <worker-id>
-codewhale pod interrupt <worker-id>
-codewhale pod restart <worker-id>
-codewhale pod resume <run-id>
-codewhale pod stop --all
+codewhale fleet init
+codewhale fleet run tasks.json --max-workers 4
+codewhale fleet status
+codewhale fleet inspect <worker-id>
+codewhale fleet logs <worker-id>
+codewhale fleet artifacts <worker-id>
+codewhale fleet interrupt <worker-id>
+codewhale fleet restart <worker-id>
+codewhale fleet resume <run-id>
+codewhale fleet stop --all
 ```
 
-Every line above also accepts `codewhale fleet` in place of `codewhale pod`.
-
-`codewhale pod resume <run-id>` is the restart-recovery verb: it replays the
+`codewhale fleet resume <run-id>` is the restart-recovery verb: it replays the
 ledger, reconciles any in-flight lease whose worker stopped heartbeating
 (retrying within the task's budget, else failing and escalating per the alert
 policy), and prints the post-resume status. It launches no new work and is
 idempotent, so it is safe to run after a manager exit, laptop sleep, or runtime
 restart.
 
-Coordinator state for Pod-backed runs is stored under the workspace in
+Coordinator state for fleet-backed runs is stored under the workspace in
 `.codewhale/fleet.jsonl`. Worker logs and adapter logs are stored under
 `.codewhale/fleet/` and `.codewhale/fleet-host/`.
 
 ## Public contract: identity, membership, and selection
 
-Pod answers two questions: **who is in the roster?** and **which configured
-member did this request name?** A public roster identity consists only of:
+**Fleet** = the user's model inventory: who is in the roster and which member is selected.
+
+A public fleet identity consists only of:
 
 - a stable member id and an optional user-facing name;
-- a semantic role, such as `scout`, `builder`, or `reviewer`;
+- a semantic role, such as `explore`, `implement`, or `reviewer` (the legacy
+  spellings `worker`, `scout`, `builder`, `verifier`, `consultant`, and `oracle`
+  are still accepted on input and map to `general`, `explore`, `implement`,
+  `test`, and `advisor`);
 - an exact provider/model identity, or an explicit inherited route;
 - visible roster state or origin.
 
 Project or workspace trust, filesystem and network reach, secret access,
 approval mode, sandboxing, tool authorization, and every other form of runtime
 authority are separate delegated-coordination and Runtime policy inputs. They
-are never Pod identity fields, and they never select or reroute a Pod
+are never fleet identity fields, and they never select or reroute a fleet
 member. The Runtime applies and clamps those policies only after member
 selection; if the selected member cannot run inside the effective envelope,
 launch fails closed instead of choosing somebody else.
@@ -91,7 +94,7 @@ Natural-language member selection is deterministic. A caller may name:
 
 - an exact member id, optionally as `member:<id>` or `id:<id>`;
 - a unique user-facing member name, optionally as `name:<name>`;
-- a unique semantic role, for example `scout` or `role:scout`;
+- a unique semantic role, for example `explore` or `role:explore`;
 - an exact pinned model id, for example `deepseek-v4-flash`, or its offline
   display name, for example `DeepSeek V4 Flash`; or
 - an exact `route:<provider>/<model>`.
@@ -100,14 +103,38 @@ An unqualified exact member id wins. Every other match succeeds only when it
 identifies one distinct roster member. Multiple matches produce an ambiguity
 error that names the candidates and asks for `member:<id>`; Codewhale never
 picks whichever match happened to be listed first. Users do not need to know
-an internal role label such as `scout`: a unique member name, display model, or
-exact model id is equally valid. Saved v2 Pods store that optional human name
+an internal role label such as `explore`: a unique member name, display model, or
+exact model id is equally valid. Saved v2 fleets store that optional human name
 as `display_name` (the input alias `name` is also accepted); it must be one
 trimmed printable line of at most 80 characters.
 
+### Your fleet as models
+
+The same fleet file answers a third question: **which models has this person
+put in their fleet?** Every exact `provider` + `model` pin in the selected
+fleet — the operator route and each pinned member — is a fleet model, and the
+member rows that pin it are the roles it fills. There is no second list.
+
+- `/fleet models` prints the fleet: `provider/model · roles · price · context ·
+  tools`, facts read from the model catalog. With no selected fleet the line
+  reads "Your fleet is the session model only".
+- `/fleet add <provider> <model> [role…]` adds a model (one member row per
+  role; none for a role-less add). The provider must be one you configured
+  and, when the catalog knows the provider, must serve that exact id.
+  With no fleet selected, a user-global fleet named `My fleet` is created and
+  selected first. `/fleet remove <provider> <model>` drops every row that pins
+  the route; the operator route is changed with `/fleet save`, not removed.
+- In `/model`, `⇧F` on a row adds or removes that exact route the same way;
+  fleet models are listed first, labelled `fleet · <roles>`, ahead of your
+  own `⇧P` pins and the provider lists. `/models` prints the fleet before the
+  provider's list.
+
+The operator model reads this list when it assigns sub-agents (design
+`MODEL-ROUTING-CATALOG-20260901.md` §10, slice F2).
+
 ### Interactive and persistent status
 
-`/pod status` and `codewhale pod status` are the **same** command on two
+`/fleet status` and `codewhale fleet status` are the **same** command on two
 surfaces. Both read the durable `.codewhale/fleet.jsonl` ledger for the
 workspace, through one shared control-plane contract, and both report the same
 verb id (`fleet.status`), read-vs-write authority, persistence scope, and
@@ -118,32 +145,31 @@ neither creates the ledger as a side effect of reading it.
 The current interactive session's sub-agents are a **different set**, and now
 have their own name:
 
-- `/pod workers` (or `/subagents`, or `n`) shows sub-agents attached to the
+- `/fleet workers` (or `/subagents`, or `n`) shows sub-agents attached to the
   current TUI session. It does not read the persistent ledger.
-- `/pod list|status|interrupt|resume` and `codewhale pod
+- `/fleet list|status|interrupt|resume` and `codewhale fleet
   list|status|interrupt|resume` act on the durable ledger.
-- `codewhale pod restart <worker-id>` is CLI-only: it re-leases the task and
-  then drives the manager loop to completion. `/pod restart` does not
+- `codewhale fleet restart <worker-id>` is CLI-only: it re-leases the task and
+  then drives the manager loop to completion. `/fleet restart` does not
   silently do a smaller thing — it reports `surface_not_supported` and names
   the CLI command.
 
-Before v0.9.2, `/pod status` showed session sub-agents. That reading is gone;
-`/pod workers` replaces it.
+Before v0.9.2, `/fleet status` showed session sub-agents. That reading is gone;
+`/fleet workers` replaces it.
 
 The contract behind this — descriptors, availability reasons, exact-identity
 targets, receipts, typed unknowns, and bounds — is documented in
 [`docs/COMMAND_CONTROL_PLANE.md`](COMMAND_CONTROL_PLANE.md).
 
-## Authoring agent profiles (`/pod setup`)
+## Authoring agent profiles (`/fleet setup`)
 
-`/pod setup` (also `/pod setup edit` / `new`) opens an in-TUI wizard for
-authoring a reusable agent-team profile. Bare `/pod` and the
-`roster`/`roles`/`profiles`/`party` aliases open the selected Pod's member
-roster. `/pod pods` opens the named saved-Pod picker; `/pod fleets` remains an
-accepted compatibility alias for that picker. `/pod workers` opens the
+`/fleet setup` (also `/fleet setup edit` / `new`) opens an in-TUI wizard for
+authoring a reusable agent-team profile. Bare `/fleet` and the
+`roster`/`roles`/`profiles`/`party` aliases open the selected fleet's member
+roster. `/fleet saved` opens the named saved-fleet picker. `/fleet workers` opens the
 current-session worker view; `/subagents` is a
 compatibility shortcut for that view. For durable run history, use
-`/pod status` or the shell command `codewhale pod status` described above —
+`/fleet status` or the shell command `codewhale fleet status` described above —
 they are the same command.
 
 The wizard is progressive: you make one focused choice at a time — a **role**,
@@ -152,7 +178,7 @@ provider*, not only the one the parent session is currently using), then
 **where the profile lives**, and finally a **review** of the member identity
 and route. When the review also previews thinking, tools, approvals, or another
 execution control, those rows summarize separate Runtime policy; they do not
-become Pod identity or member selectors. The header shows "Saves to: …" on
+become fleet identity or member selectors. The header shows "Saves to: …" on
 every step — the choice you still have to make, or the exact resolved file
 once you have made it. Nothing is written until you activate the save control
 on the review step.
@@ -178,10 +204,10 @@ project**, **Save as Personal profile**, or **Replace …**. Replacing an
 existing file needs a second Enter on the save control. Tab / Shift+Tab (or
 ←/→) move focus between the save control, **Change destination**, and
 **Back**; `s` is a secondary shortcut back to the Destination step. Reopening a
-saved member from `/pod` starts from what is on disk: its member identity,
+saved member from `/fleet` starts from what is on disk: its member identity,
 route, and save scope. Thinking (`inherit`, `off`, `low`, `medium`, `high`,
 `max`, or `auto`) is adjusted on the review step with `t`, but remains a route
-execution setting rather than part of the member's Pod identity.
+execution setting rather than part of the member's fleet identity.
 
 Profile scope controls where a role definition is reusable; it does not widen
 the authority of a running operation and is not a project-trust setting. To
@@ -190,7 +216,7 @@ parent directory so that parent is the workspace. Project/workspace trust,
 external paths, filesystem and network reach, secrets, approvals, sandboxing,
 and tool authorization come from delegated-coordination and Runtime policy.
 For nested delegation, Runtime intersects the requested child posture with the
-live parent. For standalone `codewhale pod` execution, Runtime instead uses
+live parent. For standalone `codewhale fleet` execution, Runtime instead uses
 the bounded tool-authority envelope minted from the task's explicit write
 scope together with live config, sandbox, and platform enforcement. Neither
 path reads authority from the profile's storage scope or identity selector.
@@ -209,7 +235,7 @@ Profiles are also how the model-facing `agent` tool selects a route since the
 v0.9.9 schema slim (#5324, #5123): the advertised surface no longer carries
 `model` or `thinking` — a child either runs as a `profile` (whose saved route
 and thinking tier it uses exactly) or inherits the operator's model. Removed
-fields stay parse-accepted for saved transcripts, ACP/MCP clients and Pod
+fields stay parse-accepted for saved transcripts, ACP/MCP clients and fleet
 configs; see docs/SUBAGENTS.md for the advertised 12-field list and the
 compat list.
 
@@ -226,12 +252,12 @@ drafting behind an explicit preview-before-save gate:
   to redraft). Saving writes the profile to the project or personal scope
   shown in the preview.
 
-## Naming: Modes, Workflow, and Pod
+## Naming: Modes, Workflow, and fleet
 
 These names describe different layers, not competing systems. Plan and Act are
 the everyday work modes. Operate accepts ordinary messages and keeps the
 parent's normal tool surface under the same approval, sandbox, shell, ask-rule,
-and repository protections as Act. It prefers background Pod workers for
+and repository protections as Act. It prefers background fleet workers for
 independent, parallel, isolated, or long-running work, but does not require a
 worker for every executable step. Workflow is an optional orchestration overlay
 for work that needs ordering, gates, shared budgets, replay, or deterministic
@@ -239,10 +265,9 @@ fan-in.
 
 The short public vocabulary is:
 
-- **Pod** = who is in the roster and which member is selected.
-  Pod records member ids and names, semantic roles, provider/model
-  identities, and roster state. **Fleet** is the retained serialization
-  spelling for storage, wire formats, and compatibility aliases.
+- **Fleet** is the durable roster and deterministic member-selection surface.
+  It records member ids and names, semantic roles, provider/model identities,
+  and roster state. Fleet is also the name used by storage and wire formats.
 - **Workflow** = what order the work follows: phases, gates, budgets, replay,
   and fan-in.
 - **Lane** = one running Workflow instance and its live progress.
@@ -256,14 +281,14 @@ The short public vocabulary is:
   intermediate results out of the main conversation, and can be inspected or
   rerun. A Workflow run should have a visible progress view and a clear active
   header state instead of feeling like a hidden background task.
-- **Pod** is the durable roster and deterministic member-selection surface:
+- **Fleet** is the durable roster and deterministic member-selection surface:
   member ids and names, semantic roles, pinned or inherited provider/model
   identities, and roster state. The delegated
   coordinator and Runtime own launch concurrency, leases, heartbeats, logs,
   receipts, tools, sandboxing, approvals, and authority.
 - **High fan-out** is a behavior of a Workflow run, not a separate system:
   when a phase needs many workers at once, Workflow dispatches them as a
-  Pod-backed run (durable workers, receipts, goal re-dispatch) rather than
+  fleet-backed run (durable workers, receipts, goal re-dispatch) rather than
   reviving prompt-only sub-agent fanout.
 - **Fan-in is explicit:** when the user needs one combined result, an owner
   aggregates, verifies, and synthesizes the worker receipts. Independent tasks
@@ -275,11 +300,11 @@ a side rail) with phase names, worker counts, receipts, and nested
 indentation for child workers. Use the whale mark sparingly as an active
 header/status signal; avoid repeating emoji-heavy rows for every worker.
 
-## Saved Pods and the Reasoning Router
+## Saved fleets and the Reasoning Router
 
-A selected v2 Pod freezes each selected member's id, semantic role, provider,
+A selected v2 fleet freezes each selected member's id, semantic role, provider,
 and model identity into the durable run before a Workflow starts. Save the
-Pod as `fleets/<name>.toml` in the workspace or under `$CODEWHALE_HOME`.
+fleet as `fleets/<name>.toml` in the workspace or under `$CODEWHALE_HOME`.
 Models cannot replace those identity or route assignments at runtime:
 
 ```toml
@@ -294,13 +319,13 @@ model = "deepseek-v4-pro"
 [[members]]
 id = "implementer"
 display_name = "Release Builder"
-role = "builder"
+role = "implement"
 provider = "zai"
 model = "glm-5.2"
 
 [[members]]
 id = "advice"
-role = "consultant"
+role = "advisor"
 provider = "openai"
 model = "gpt-5.6"
 ```
@@ -309,10 +334,10 @@ The workflow crate's older `schema = "exact"`, revision 1 files are migration
 input only. Do not author them for v0.9.11; the selected roster and setup UI
 read and write only `schema = "fleet"`, revision 2.
 
-Reasoning is a separate route-execution decision, not Pod identity. The
-optional Reasoning Router is a reusable Runtime service, not a Pod member.
+Reasoning is a separate route-execution decision, not fleet identity. The
+optional Reasoning Router is a reusable Runtime service, not a fleet member.
 Save one profile at `routers/<name>.toml` in either search root and reference it
-from any number of Pods:
+from any number of fleets:
 
 ```toml
 name = "luna-low"
@@ -329,11 +354,11 @@ Router call itself is capped at `off` or `low`; more expensive values are
 rejected. A manually selected worker reasoning tier makes no Router call. Route
 and reasoning receipts name the worker model and, when used, the Router's exact
 provider/model so the operator can see which model did which job. If the same
-bare Router or Pod name exists in both roots, qualify it as
+bare Router or fleet name exists in both roots, qualify it as
 `workspace/<name>` or `codewhale_home/<name>` instead of relying on shadowing.
 
 Compatibility schemas may serialize `reasoning`, `permissions`, tool hints, or
-other execution settings beside a member. Those values are not Pod identity,
+other execution settings beside a member. Those values are not fleet identity,
 member selectors, or active authority. A valid legacy `schema = "exact"` roster snapshot
 retains its old `permissions` bytes only while verifying and replaying that
 snapshot's recorded content hash; a fresh capture emits the authority-free
@@ -341,7 +366,7 @@ member shape. New-run validation rejects legacy roster
 `security_policy` and worker `trust_level` fields; configure execution authority
 through Runtime policy. The delegated coordinator resolves and durably freezes
 the member first. Runtime then applies either the delegating parent's effective
-ceiling or, for standalone Pod CLI work, Runtime execution configuration plus
+ceiling or, for standalone fleet CLI work, Runtime execution configuration plus
 live sandbox/platform enforcement. That boundary may
 reduce or refuse the selected worker's execution surface, but it must never
 choose a different member or route. See
@@ -357,7 +382,7 @@ call actually carries is spelled by that route's own normalizer, not by the tier
 label: an OpenAI Codex route is asked for `xhigh`, not `max`, and cannot be
 asked for `off` at all.
 
-A v0.9.11 durable Pod CLI receipt keeps the selected profile id in
+A v0.9.11 durable fleet CLI receipt keeps the selected profile id in
 `effective_permissions.profile_id`, the resolved semantic role in
 `resolved_route.role`, and the effective Runtime surface in the permission,
 shell, and tool-scope fields. An exact Workflow launch receipt records
@@ -393,14 +418,14 @@ Raw `agent` fan-out is appropriate only for independent, fire-and-forget work
 where no single fan-in result is required. If results must be merged, compared,
 or verified, route through `workflow` so the manager owns fan-in.
 
-## Workflow on Pod
+## Workflow on fleet
 
 The intended high-capability path is agent-authored. When the main agent
 decides a task needs more durable coordination than turn-by-turn sub-agent
 calls, it drafts a Workflow script/IR, presents the run plan according to the
-active permission mode, and the runtime compiles it into typed Pod work.
+active permission mode, and the runtime compiles it into typed fleet work.
 
-Pod remains the sub-agent roster and member-selection surface. It owns member
+fleet remains the sub-agent roster and member-selection surface. It owns member
 identity, membership, semantic roles, saved provider/model pins or inheritance,
 and roster state. Workflow owns the orchestration plan:
 branch, sequence, loop, expand, review, and reduce decisions. The delegated
@@ -410,18 +435,18 @@ shell, filesystem, network, provider-secret, cancellation, or TUI authority;
 workers perform real work as `codewhale exec` processes under the effective
 Runtime policy.
 
-Default Workflow-to-Pod validation is intentionally bounded:
+Default Workflow-to-fleet validation is intentionally bounded:
 
 - 1,000 total worker agents per Workflow run;
 - 16 live worker agents at once; larger populations queue (block) on the host's
-  per-run concurrency gate until a live slot frees, then route through Pod;
+  per-run concurrency gate until a live slot frees, then route through fleet;
 - Workflow IR structural nesting no deeper than 5;
 - Runtime child delegation defaults to 3 levels and has an opt-in hard ceiling
   of 8, independently of the Workflow document's structural depth;
 - bounded loops only (`max_iterations` required);
 - bounded dynamic expansion only (`max_children` plus a template required).
 
-These are delegated-coordination population limits, not Pod identity and not
+These are delegated-coordination population limits, not fleet identity and not
 a demand to launch everything at once. A 1,000-agent Workflow should still
 drain through the configured Runtime worker pool. They are also not model-step
 budgets: omitted or zero `max_steps` remains unbounded. An explicit positive
@@ -432,7 +457,7 @@ Recommended model layouts, such as a DeepSeek Pro orchestrator with Flash
 workers in the first ring and cheaper workers farther out, are presets only.
 Every slot can inherit the active model or carry an explicit model override.
 Inheritance is literal: the model you select in `/model` is the **operator**
-(the pinned first row in `/pod roster`), and any worker whose task spec and
+(the pinned first row in `/fleet roster`), and any worker whose task spec and
 roster profile pin no model runs on that session model. Once a selected member
 has an exact provider/model pin, the Runtime does not silently reroute that
 identity because a policy input differs; it either runs that route inside the
@@ -445,7 +470,7 @@ next recursive ring rather than trying to show the whole tree at once.
 
 ## Task Spec
 
-`codewhale pod run` accepts JSON or TOML. A minimal JSON spec:
+`codewhale fleet run` accepts JSON or TOML. A minimal JSON spec:
 
 ```json
 {
@@ -465,7 +490,7 @@ Workers are optional. If omitted, Codewhale creates local worker slots up to
 `--max-workers`.
 
 Task specs are typed in Rust and keep verification data separate from worker
-transcripts. Only the `worker` member/role reference participates in Pod
+transcripts. Only the `worker` member/role reference participates in fleet
 identity selection. The remaining execution fields are delegated-coordination
 or Runtime inputs applied after the member is resolved. A task can declare:
 
@@ -475,7 +500,7 @@ or Runtime inputs applied after the member is resolved. A task can declare:
 - `input_files`, extra `context`, `budget`, `timeout_seconds`, and `retry_policy`
 - `expected_artifacts`, `scorer`, `tags`, and free-form `metadata`
 
-None of those execution-policy fields becomes part of a Pod identity or an
+None of those execution-policy fields becomes part of a fleet identity or an
 alternate member selector. Omitted or zero `max_steps` means no model-step
 ceiling; Codewhale must not synthesize a default step budget. Explicit positive
 step limits, timeouts, cancellation, provider safeguards, heartbeats, and
@@ -485,7 +510,7 @@ Runtime.
 Workers write bounded artifact files under `.codewhale/fleet/` and ledger only
 the artifact refs: kind, path, checksum, MIME type, and size. Receipts record
 `pass`, `fail`, `partial`, `skip`, or `timeout`; failed receipts may also mark
-the source as `transport`, `task`, or `verifier`. `codewhale pod status`
+the source as `transport`, `task`, or `verifier`. `codewhale fleet status`
 surfaces those failure-source counts separately.
 
 Deterministic built-in scorers are `exit_code`, `file_exists`, `regex_match`,
@@ -539,7 +564,7 @@ Runtime clamping. A task spec may request its execution settings explicitly:
 
 ### Multi-Task Run Example
 
-A single Pod run can dispatch several independent tasks in parallel:
+A single fleet run can dispatch several independent tasks in parallel:
 
 ```json
 {
@@ -576,8 +601,8 @@ A single Pod run can dispatch several independent tasks in parallel:
 
 ## Alerts
 
-Pod alerting is disabled by default. A caller must supply an enabled alert
-config before anything is sent. Routes match typed Pod event classes, not log
+fleet alerting is disabled by default. A caller must supply an enabled alert
+config before anything is sent. Routes match typed fleet event classes, not log
 strings:
 
 - `stale`
@@ -627,7 +652,7 @@ Example alert config shape:
 Use dry-run to inspect a redacted adapter payload without sending:
 
 ```sh
-codewhale pod alert-dry-run \
+codewhale fleet alert-dry-run \
   --event stale \
   --run-id fleet-demo \
   --worker-id fleet-demo-local-1 \
@@ -637,13 +662,13 @@ codewhale pod alert-dry-run \
 ```
 
 The payload includes the run id, worker id, task id, status, short reason, and
-safe inspection commands such as `codewhale pod status` and
-`codewhale pod inspect <worker-id>`. Endpoints, webhook secrets, and
+safe inspection commands such as `codewhale fleet status` and
+`codewhale fleet inspect <worker-id>`. Endpoints, webhook secrets, and
 PagerDuty routing keys are shown as `<redacted:env:...>`.
 
 ## Status Surfaces
 
-`codewhale pod status` shows compact counts for queued, running, completed,
+`codewhale fleet status` shows compact counts for queued, running, completed,
 partial, failed, restarted, escalated, cancelled, stale, and verifier/transport
 failure sources. `inspect` shows the worker state plus the current task
 objective, role, host, heartbeat, latest event, artifact refs, latest error, and
@@ -664,13 +689,13 @@ POST /v1/fleet/runs/{run_id}/stop
 ```
 
 Action endpoints call the same manager controls as the CLI and record their
-decisions in the Pod ledger.
+decisions in the fleet ledger.
 
 ## Manager-Agent Runbook
 
-Manager agents should treat Pod operations as typed, ledgered control-plane
-work. Start with `codewhale pod status`, then inspect one run or worker with
-`codewhale pod inspect <worker-id>`, `logs`, and `artifacts`. Use direct
+Manager agents should treat fleet operations as typed, ledgered control-plane
+work. Start with `codewhale fleet status`, then inspect one run or worker with
+`codewhale fleet inspect <worker-id>`, `logs`, and `artifacts`. Use direct
 reads of `.codewhale/fleet.jsonl`, host logs, or remote files only when the
 typed CLI/API surface cannot provide the required evidence.
 
@@ -691,15 +716,15 @@ Choose one typed action:
 
 - Restart a worker only when the failure is transient, retry budget remains,
   the task is idempotent or retry-safe, and no permission or secret boundary is
-  involved: `codewhale pod restart <worker-id>`.
+  involved: `codewhale fleet restart <worker-id>`.
 - Interrupt or stop only when the current task is unsafe to continue or the
-  operator explicitly asks for cancellation: `codewhale pod interrupt
-  <worker-id>` or `codewhale pod stop --all`.
+  operator explicitly asks for cancellation: `codewhale fleet interrupt
+  <worker-id>` or `codewhale fleet stop --all`.
 - Do not restart pure task failures by default; preserve artifacts and hand the
   receipt to the task owner unless the task spec says retrying can produce new
   evidence.
 - For verifier failures, inspect scorer inputs and artifact refs first. If the
-  verifier cannot be corrected through typed Pod actions, escalate for human
+  verifier cannot be corrected through typed fleet actions, escalate for human
   review.
 - For `needs-human`, draft an escalation instead of sending it unless alert
   config explicitly authorizes sending.
@@ -707,13 +732,13 @@ Choose one typed action:
 Safe Slack or PagerDuty draft:
 
 ```text
-Codewhale Pod needs attention
+Codewhale fleet needs attention
 Run: <run-id>
 Worker: <worker-id>
 Task: <task-id or unknown>
 Classification: <transient failure | task failure | verifier failure | needs-human>
 Reason: <one sentence, no secrets>
-Latest typed evidence: codewhale pod inspect <worker-id>; codewhale pod artifacts <worker-id>
+Latest typed evidence: codewhale fleet inspect <worker-id>; codewhale fleet artifacts <worker-id>
 Safe log excerpt: <3 lines max or "see artifact <ref>">
 Requested decision: <restart approval | verifier review | task owner review | permission decision>
 ```
@@ -730,7 +755,7 @@ skill registry after system skills are installed or refreshed.
 ## Host Adapters
 
 The Runtime host-adapter boundary supports local child processes and explicit
-SSH workers. Host choice is Runtime placement on a worker spec, not Pod member
+SSH workers. Host choice is Runtime placement on a worker spec, not fleet member
 identity or a member selector. It does not authenticate the host or grant
 access. Adapters expose the same operations: start, read status, read bounded
 logs, interrupt, restart, stop, and cleanup.
@@ -741,7 +766,7 @@ such as `PATH` and explicitly allowlisted variables.
 
 SSH workers run through the system `ssh` client with `BatchMode=yes` and a
 bounded connect timeout. Remote environment variables are sent with OpenSSH
-`SendEnv`; values are not embedded in the local ssh argv or Pod logs.
+`SendEnv`; values are not embedded in the local ssh argv or fleet logs.
 
 Example SSH worker spec:
 
@@ -771,11 +796,11 @@ Defaults are intentionally conservative:
 - secret-like environment names such as `TOKEN`, `SECRET`, `PASSWORD`,
   `API_KEY`, and `PRIVATE_KEY` are rejected from adapter allowlists;
 - secrets should remain in Codewhale config providers or remote host config,
-  not in task instructions, argv, or Pod logs.
+  not in task instructions, argv, or fleet logs.
 
-## Runtime policy and authority are not Pod identity
+## Runtime policy and authority are not fleet identity
 
-Pod does not define a project/workspace trust level, filesystem or network
+fleet does not define a project/workspace trust level, filesystem or network
 reach, secret access, approval mode, sandbox, tool set, or execution authority.
 Those belong to delegated-coordination and Runtime policy. This separation is
 load-bearing:
@@ -784,20 +809,20 @@ load-bearing:
   provider/model identity, and roster state;
 - the selected identity is frozen before any authority policy is evaluated;
 - the Runtime applies the live parent ceiling when one exists; standalone
-  Pod CLI launches instead carry an explicit bounded authority envelope,
+  fleet CLI launches instead carry an explicit bounded authority envelope,
   and both paths remain subject to live sandbox and platform enforcement;
 - no trust, permission, capability, secret, sandbox, approval, or tool-policy
   value may select another member or silently change its provider/model route;
   and
 - receipts report requested and effective Runtime posture separately from the
-  Pod member identity.
+  fleet member identity.
 
 Older persisted configuration and protocol shapes may still contain fields such as
 `security_policy`, `trust_level`, `permissions`, `capability_grants`, secret
 references, host authentication, environment allowlists, or tool profiles.
-They remain deserializable for ledger replay, but new Pod run creation rejects
+They remain deserializable for ledger replay, but new fleet run creation rejects
 `security_policy` and worker `trust_level` rather than pretending they grant
-authority. Their presence in old data does not make them Pod variables or
+authority. Their presence in old data does not make them fleet variables or
 grants. The active Runtime remains the final authority and fails closed when a
 requested operation cannot be enforced.
 
@@ -805,4 +830,4 @@ For current enforcement behavior, use [Modes](MODES.md),
 [Sub-agents](SUBAGENTS.md), [Agent Runtime](AGENT_RUNTIME.md), and the
 [Command Control Plane](COMMAND_CONTROL_PLANE.md). Keep secret values out of
 task instructions, arguments, logs, and receipts; adapter and Runtime layers
-must continue to redact or reject them independently of Pod selection.
+must continue to redact or reject them independently of fleet selection.

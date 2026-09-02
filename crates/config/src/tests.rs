@@ -512,31 +512,31 @@ action = "session.compact"
 }
 
 #[test]
-fn legacy_fleet_hotbar_action_resolves_to_canonical_pod_without_rewriting_disk() {
+fn legacy_pod_hotbar_action_resolves_to_canonical_fleet_without_rewriting_disk() {
     let config: ConfigToml = toml::from_str(
         r#"
 [[hotbar]]
 slot = 3
-action = "slash.fleet"
-label = "Pod"
+action = "slash.pod"
+label = "fleet"
 "#,
     )
     .expect("parse legacy hotbar binding");
 
-    let resolved = config.resolve_hotbar_bindings(&["slash.pod"]);
+    let resolved = config.resolve_hotbar_bindings(&["slash.fleet"]);
 
     assert_eq!(resolved.warnings, Vec::new());
     assert_eq!(
         resolved.bindings,
         vec![HotbarBinding {
             slot: 3,
-            action: "slash.pod".to_string(),
-            label: Some("Pod".to_string()),
+            action: "slash.fleet".to_string(),
+            label: Some("fleet".to_string()),
         }]
     );
     assert_eq!(
         config.hotbar.as_ref().unwrap()[0].action,
-        "slash.fleet",
+        "slash.pod",
         "read-time compatibility must not mutate the parsed on-disk value"
     );
 }

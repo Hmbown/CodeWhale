@@ -1,23 +1,19 @@
-//! Phase and identity bands for the underwater shell.
+//! The posture bar and the route-identity shedding it shares with the
+//! metrics line.
 //!
-//! Two one-row bands bracket the composer, and they never trade places
-//! with it:
+//! Two one-row bands sit under the composer and never trade places with
+//! it: the **posture bar** (this module's widget — permission, mode, live
+//! counts, the one hint that applies now, with the remote-control state or
+//! a live notice pinned right) and the **metrics line**
+//! (`crate::tui::infoline` — model, context, cost, ttft, tok/s, output
+//! tokens). Both rows are reserved in every frame, so a turn moving between
+//! idle, thinking, tool use, approval, completion, failure, and cancellation
+//! changes text inside fixed rows and never displaces the composer.
 //!
-//! * the **identity band** below the composer is the canonical, persistent
-//!   home for `provider · model · thinking level`. The same standing facts
-//!   render before, during, and after a prompt; a live turn never relocates
-//!   them and neither band ever duplicates them.
-//! * the **activity band** above the composer carries the transient pulse:
-//!   phase marker, live work detail, session notices, and the cost/metrics
-//!   ledger.
-//!
-//! Both bands are reserved in every frame, so a turn moving between idle,
-//! thinking, tool use, approval, completion, failure, and cancellation
-//! changes text inside fixed rows and never displaces the composer — the
-//! route identity does not jump above the prompt when a turn starts, and
-//! the prompt does not slide down to make room for it.
-
-use std::borrow::Cow;
+//! One owner per fact: the context reading and the price are the metrics
+//! line's; mode and permission are this bar's. The module name is the
+//! historical one — the phase word it painted now lives in the transcript's
+//! active row.
 
 use ratatui::{
     buffer::Buffer,
@@ -43,19 +39,6 @@ pub fn height() -> u16 {
 /// while the model is thinking.
 /// Kept quieter than the classic footer's verbose tool-status line so the
 /// transcript owns the ledger and the strip only names the live pulse.
-fn working_detail(app: &App, activity: LiveActivity) -> Option<String> {
-    let running = activity.running_tool_count();
-    let secs = app
-        .turn_started_at
-        .map(|started| started.elapsed().as_secs());
-    match (running, secs) {
-        (0, Some(secs)) if secs > 0 => Some(crate::elapsed::format_elapsed_secs(secs)),
-        (n, Some(_)) if n > 0 => Some(format!("×{n}")),
-        (n, None) if n > 0 => Some(format!("×{n}")),
-        _ => None,
-    }
-}
-
 /// Route identity for a rail or info line segment, shed field by field until it
 /// fits `budget`.
 ///
@@ -241,56 +224,6 @@ fn selected_notice(
 /// the row quiet; idle and drafting advertise the chords the shell owns.
 /// `← for agents · ↓ to manage` joins the chorus whenever the empty composer
 /// still owns those keys.
-fn keys_legend(app: &App, tier: ShellTier, phase: ShellPhase) -> Cow<'static, str> {
-    let right_text: Cow<'static, str> = if matches!(
-        phase,
-        ShellPhase::Working
-            | ShellPhase::Verifying
-            | ShellPhase::Waiting
-            | ShellPhase::Approval
-            | ShellPhase::Failed
-    ) {
-        Cow::Borrowed("")
-    } else {
-        use crate::tui::shell_key_routing::{ShellBindingId, binding, footer_action_hints};
-        let hint_keys = tr(app.ui_locale, MessageId::FooterHintKeys);
-        let hint_output = tr(app.ui_locale, MessageId::FooterHintOutput);
-        Cow::Owned(match tier {
-            ShellTier::Compact => {
-                format!("{}:{hint_keys}", binding(ShellBindingId::Help).footer_chord)
-            }
-            // Wide used to add `/context:context`. The rail advertises
-            // chords you cannot discover any other way; a slash command
-            // announces itself the moment you type `/`, so it was paying
-            // eighteen columns of a 24-row screen to tell you something
-            // the composer already tells you. The rail now reads the same
-            // at 80 columns as at 200.
-            ShellTier::Normal | ShellTier::Wide => footer_action_hints(false)
-                .replace("{output}", hint_output.as_ref())
-                .replace("{keys}", hint_keys.as_ref()),
-        })
-    };
-
-    // `← for agents · ↓ to manage`: advertise only while the empty
-    // composer owns those keys and a worker exists. Focused surfaces,
-    // modals, attachments, and draft text keep the arrows' local meaning.
-    let agent_hints = (tier != ShellTier::Compact
-        // Slash and mention menus require non-empty trigger text, which the
-        // shared predicate rejects; dispatch additionally passes its exact
-        // post-completion menu ownership into the same predicate.
-        && crate::tui::agent_focus::shell_shortcuts_available(app, false))
-    .then(|| crate::tui::agent_focus::footer_agent_hints(app));
-    match agent_hints {
-        Some(hints) if !right_text.is_empty() => {
-            Cow::Owned(format!("{hints}{ITEM_SEPARATOR}{right_text}"))
-        }
-        // A settled turn keeps the agent keys meaningful, so they stay
-        // visible on the identity row after `done` even without the chorus.
-        Some(hints) if phase == ShellPhase::Done => Cow::Owned(hints),
-        _ => right_text,
-    }
-}
-
 /// Peers inside one group — provider and model, a count and its verb — keep
 /// the middle dot.
 const ITEM_SEPARATOR: &str = " · ";
@@ -444,63 +377,6 @@ mod tests {
         );
     }
 
-    /// The merged footer owns phase/cost/detail only: scheduled automation
-    /// work is the TOP strip's fact (TUI band contract), so the footer facts
-    /// must never carry an automation slot. The info line-side rendering is
-    /// pinned by `ui/frame.rs` tests (`info_segments` reads the same
-    /// `AutomationPanelState` projection).
-    #[test]
-    fn the_footer_does_not_carry_automation_work() {
-        let mut app = test_app();
-        app.ui_locale = crate::localization::Locale::En;
-        app.automation_panel.active_automations = 2;
-        app.automation_panel.live_runs = 1;
-
-        // The projection still speaks; the footer just does not own it.
-        assert_eq!(
-            app.automation_panel
-                .activity_slot(crate::localization::Locale::En),
-            Some("⏱ 2 scheduled · 1 running".to_string())
-        );
-        assert_eq!(
-            app.automation_panel.activity_slot_compact(),
-            Some("⏱ 2·1".to_string())
-        );
-
-        // Zero-suppressed: no Active automations, no slot — the count never
-        // becomes permanent furniture.
-        app.automation_panel.active_automations = 0;
-        app.automation_panel.live_runs = 0;
-        assert_eq!(
-            app.automation_panel
-                .activity_slot(crate::localization::Locale::En),
-            None
-        );
-    }
-
-    /// The keys legend (the merged footer's right side) advertises chords
-    /// you cannot discover any other way; a slash command announces itself
-    /// the moment you type `/`, so it must not pay columns to advertise
-    /// itself. Ported from the identity band to its live consumer.
-    #[test]
-    fn the_keys_legend_advertises_chords_not_slash_commands() {
-        let mut app = test_app();
-        app.ui_locale = crate::localization::Locale::En;
-        for tier in [ShellTier::Compact, ShellTier::Normal, ShellTier::Wide] {
-            let legend = keys_legend(&app, tier, ShellPhase::Idle).into_owned();
-            assert!(
-                legend.contains("keys") || legend.contains('?'),
-                "{tier:?}: {legend}"
-            );
-            assert!(!legend.contains("/context"), "{tier:?}: {legend}");
-        }
-        // Live phases keep the row quiet — the legend stands down, not clips.
-        assert_eq!(
-            keys_legend(&app, ShellTier::Wide, ShellPhase::Working),
-            Cow::Borrowed("")
-        );
-    }
-
     /// The route identity (the info line Model segment's value) sheds whole
     /// fields — provider first, then the effort label — and stands down
     /// entirely rather than clip a model name. Ported from the identity
@@ -597,45 +473,56 @@ mod tests {
 // Wired into `ui/frame.rs` as the shell's single footer row: the classic
 // activity band (slot 6) and identity band (slot 8) collapsed into it, with
 // the old header's mode/permission chips carried in the left half per §3.
+// ---------------------------------------------------------------------------
+// The posture bar (SHELL-DESIGN-20260901 §2.0 item 3, §2.3b; founder
+// direction 2026-09-02): the first row under the composer, in Claude Code's
+// grammar —
 //
-// Motion contract (spec §5e): the echolocation chip renders its still frame
-// `<·>` — the animated family is the landing slice's job through the 420 ms
-// heartbeat.
+//   ▶▶ full access (Shift+Tab) · work (Tab) · 2 agents, 1 task · Esc to interrupt      rc connected
 //
-// The depth sparkline and its percentage are gone: the info line's context
-// meter is the one reading, and this band was printing the same number from
-// the same snapshot a second time on every screen. A nine-cell sparkline
-// encoding a number printed beside it is decoration, not a fact.
+// permission chip first (never sheds, #5796), the mode, the live counts,
+// then the one hint that applies right now; the remote-control state or a
+// live notice pinned right. No phase word, no elapsed, no cost: the
+// transcript's active row owns the pulse, the roster owns per-agent
+// elapsed, and the metrics line owns the price. The context reading is the
+// metrics line's; this row only says what to do about it at the cap.
+// ---------------------------------------------------------------------------
 
 /// The context cap warning at ≥80% (spec §5a/§5e). The reading itself lives
-/// in the info line; this band still says what to do about it.
+/// in the metrics line; this bar still says what to do about it.
 const DEPTH_WARN: &str = "surface soon — /compact";
 
-/// What the caller owes the merged footer. All injected, deterministic.
+/// The bar's leading glyph — Claude Code's double chevron, in the
+/// permission chip's ink.
+const POSTURE_MARK: &str = "▶▶";
+/// Inside the counts group (`2 agents, 1 task`).
+const COUNT_SEPARATOR: &str = ", ";
+
+/// What the caller owes the posture bar. All injected, deterministic.
 pub struct TidelineFooter<'a> {
     pub theme: &'a crate::palette::UiTheme,
-    /// Phase word, e.g. `thinking` / `surfaced` / `idle`.
-    pub phase_word: &'a str,
-    /// Per-phase ink (the caller maps phase → ChromeInk; §5a "per-phase ink").
-    pub phase_ink: crate::palette::ChromeInk,
-    /// Live detail (`1m 15s`, `×3`), None when idle.
-    pub live_detail: Option<&'a str>,
-    /// Cost ledger label, e.g. `$0.42 · 61K tok`.
-    pub cost_label: &'a str,
-    /// Context window percentage 0–100. The info line paints the reading; this
-    /// band only uses it to decide whether the ≥80% cap warning is owed.
-    pub context_percent: u8,
-    /// Key legend, e.g. `Enter send · Ctrl+K clear · ? help`.
-    pub keys_legend: &'a str,
-    /// Mode chip (`act` / `plan` / `operate`) in its Policy ink — the old
-    /// header's leftmost posture word, moved into the footer per spec §3.
+    /// Permission chip (`ask` / `auto` / `full access`, plus the filesystem
+    /// scope notice when it deviates) in its Permission ink. Never sheds.
+    pub permission_chip: (&'a str, crate::palette::ChromeInk),
+    /// The chord that cycles the permission posture, when the binding is
+    /// live for the current focus (`Shift+Tab`).
+    pub permission_key: Option<&'a str>,
+    /// Mode chip (`work` / `plan` / `operate`) in its Policy ink.
     pub mode_chip: Option<(&'a str, crate::palette::ChromeInk)>,
-    /// Permission chip (`ask` / `auto review` / `full access`, plus the
-    /// filesystem scope notice when it deviates) in its Permission ink.
-    pub permission_chip: Option<(&'a str, crate::palette::ChromeInk)>,
-    /// Urgent session notice (status toast / boot activity chip) that owns the
-    /// right-hand keys slot while it is live.
-    pub notice: Option<(&'a str, crate::palette::ChromeInk)>,
+    /// The chord that cycles the mode, when the binding is live (`Tab`).
+    pub mode_key: Option<&'a str>,
+    /// Live counts (`2 agents`, `1 task`) in their own inks, joined with
+    /// `, `.
+    pub counts: &'a [(String, ChromeInk)],
+    /// The one hint that applies right now (`Esc to interrupt`).
+    pub hint: Option<(&'a str, crate::palette::ChromeInk)>,
+    /// Context window percentage 0–100. The metrics line paints the reading;
+    /// this bar only uses it to decide whether the ≥80% cap warning outranks
+    /// `hint`.
+    pub context_percent: u8,
+    /// Pinned right: a live notice (status toast / boot activity chip) or
+    /// the remote-control state.
+    pub right: Option<(&'a str, crate::palette::ChromeInk)>,
     pub ascii_safe: bool,
 }
 
@@ -643,30 +530,25 @@ impl<'a> TidelineFooter<'a> {
     #[must_use]
     pub fn new(
         theme: &'a crate::palette::UiTheme,
-        phase_word: &'a str,
-        phase_ink: crate::palette::ChromeInk,
-        cost_label: &'a str,
-        context_percent: u8,
-        keys_legend: &'a str,
+        permission_chip: (&'a str, crate::palette::ChromeInk),
     ) -> Self {
         Self {
             theme,
-            phase_word,
-            phase_ink,
-            live_detail: None,
-            cost_label,
-            context_percent,
-            keys_legend,
+            permission_chip,
+            permission_key: None,
             mode_chip: None,
-            permission_chip: None,
-            notice: None,
+            mode_key: None,
+            counts: &[],
+            hint: None,
+            context_percent: 0,
+            right: None,
             ascii_safe: false,
         }
     }
 
     #[must_use]
-    pub fn live_detail(mut self, detail: Option<&'a str>) -> Self {
-        self.live_detail = detail;
+    pub fn permission_key(mut self, key: Option<&'a str>) -> Self {
+        self.permission_key = key;
         self
     }
 
@@ -677,14 +559,32 @@ impl<'a> TidelineFooter<'a> {
     }
 
     #[must_use]
-    pub fn permission_chip(mut self, chip: Option<(&'a str, crate::palette::ChromeInk)>) -> Self {
-        self.permission_chip = chip;
+    pub fn mode_key(mut self, key: Option<&'a str>) -> Self {
+        self.mode_key = key;
         self
     }
 
     #[must_use]
-    pub fn notice(mut self, notice: Option<(&'a str, crate::palette::ChromeInk)>) -> Self {
-        self.notice = notice;
+    pub fn counts(mut self, counts: &'a [(String, ChromeInk)]) -> Self {
+        self.counts = counts;
+        self
+    }
+
+    #[must_use]
+    pub fn hint(mut self, hint: Option<(&'a str, crate::palette::ChromeInk)>) -> Self {
+        self.hint = hint;
+        self
+    }
+
+    #[must_use]
+    pub fn context_percent(mut self, percent: u8) -> Self {
+        self.context_percent = percent;
+        self
+    }
+
+    #[must_use]
+    pub fn right(mut self, right: Option<(&'a str, crate::palette::ChromeInk)>) -> Self {
+        self.right = right;
         self
     }
 
@@ -710,6 +610,19 @@ impl<'a> TidelineFooter<'a> {
             })
             .collect()
     }
+
+    /// The hint the left run ends on: the cap warning outranks whatever the
+    /// caller passed, because a full context is the one thing that stops the
+    /// next turn.
+    fn effective_hint(&self) -> Option<(String, ChromeInk)> {
+        if self.context_percent.clamp(0, 100) >= 80 {
+            return Some((
+                format!("{} {}", self.sym("▲"), self.sym(DEPTH_WARN)),
+                ChromeInk::Attention,
+            ));
+        }
+        self.hint.map(|(text, ink)| (self.sym(text), ink))
+    }
 }
 
 fn tchrome(theme: &crate::palette::UiTheme, ink: crate::palette::ChromeInk) -> Style {
@@ -720,165 +633,157 @@ fn tput(buf: &mut Buffer, x: u16, y: u16, text: &str, style: Style) {
     buf.set_stringn(x, y, text, text.width(), style);
 }
 
-const COMPACT_KEYS_LEGEND: &str = "? help";
-
-struct TrailingExtra {
+/// One painted item of the left run: text, ink, and whether it is a chip
+/// (bold) or a hint.
+struct PostureItem {
     text: String,
     ink: ChromeInk,
-    append_help: bool,
+    bold: bool,
+    /// Painted after `, ` rather than ` · `: the counts are one group.
+    joined: bool,
 }
 
-impl TrailingExtra {
-    fn width(&self, footer: &TidelineFooter<'_>) -> usize {
-        self.text.width()
-            + if self.append_help {
-                ITEM_SEPARATOR_WIDTH + footer.sym(COMPACT_KEYS_LEGEND).width()
-            } else {
-                0
-            }
+/// Shed ladder for the left run, most expendable first: the hint, the
+/// counts, the mode key, the mode, the permission key. The permission chip
+/// itself never sheds (#5796): a silently missing `full access` is the bar
+/// under-reporting the authority the session actually holds.
+fn posture_items(footer: &TidelineFooter<'_>, shed: u8) -> Vec<PostureItem> {
+    let chip = |text: &str, key: Option<&str>| -> String {
+        match key {
+            Some(key) => format!("{text} ({key})"),
+            None => text.to_string(),
+        }
+    };
+    let mut items = vec![PostureItem {
+        text: chip(
+            &footer.sym(footer.permission_chip.0),
+            footer.permission_key.filter(|_| shed < 5),
+        ),
+        ink: footer.permission_chip.1,
+        bold: true,
+        joined: false,
+    }];
+    if let Some((mode, ink)) = footer.mode_chip.filter(|_| shed < 4) {
+        items.push(PostureItem {
+            text: chip(&footer.sym(mode), footer.mode_key.filter(|_| shed < 3)),
+            ink,
+            bold: true,
+            joined: false,
+        });
+    }
+    if shed < 2 {
+        for (index, (count, ink)) in footer.counts.iter().enumerate() {
+            items.push(PostureItem {
+                text: footer.sym(count),
+                ink: *ink,
+                bold: false,
+                joined: index > 0,
+            });
+        }
+    }
+    if shed < 1
+        && let Some((text, ink)) = footer.effective_hint()
+    {
+        items.push(PostureItem {
+            text,
+            ink,
+            bold: false,
+            joined: false,
+        });
+    }
+    items
+}
+
+/// The separator painted before an item: `, ` inside the counts group,
+/// ` · ` between groups.
+fn separator_before(item: &PostureItem) -> &'static str {
+    if item.joined {
+        COUNT_SEPARATOR
+    } else {
+        ITEM_SEPARATOR
     }
 }
 
-/// Paint the merged footer band (spec §5b: `Constraint::Length(1)`).
+fn left_run_width(mark: &str, items: &[PostureItem]) -> usize {
+    mark.width()
+        + 1
+        + items.iter().map(|item| item.text.width()).sum::<usize>()
+        + items
+            .iter()
+            .skip(1)
+            .map(|item| separator_before(item).width())
+            .sum::<usize>()
+}
+
+/// Paint the posture bar (spec §5b: `Constraint::Length(1)`).
 ///
-/// Left half: still-frame echolocation chip, phase word, live detail, the
-/// cost ledger, then the posture chips (`mode · permission`) the old header
-/// carried. Right half, pinned: the live notice if one is owed, else the
-/// ≥80% cap warning, else the key legend. The context reading itself is the
-/// info line's, painted once per screen.
+/// Left: the mark, the permission chip, the mode, the counts, the hint —
+/// shed from the right until the run fits beside the pinned right slot.
+/// Right: the notice or remote-control state, clause-shed by the caller and
+/// truncated here as the last resort; it never covers the permission chip.
 pub fn render_tideline_footer(area: Rect, buf: &mut Buffer, footer: &TidelineFooter<'_>) {
     if area.width < 8 || area.height < 1 {
         return;
     }
     let theme = footer.theme;
+    let width = usize::from(area.width);
+    let mark = footer.sym(POSTURE_MARK);
 
-    // Right block first (it is pinned; the left half's cost truncates
-    // against whatever the right half claims).
-    //
-    // Trailing-slot precedence: a live notice outranks the cap warning,
-    // which outranks the posture chips, which outrank the key chorus (the
-    // classic bands' own rule that identity outranks hints). A non-urgent
-    // notice may keep the compact help route when both fit beside the minimum
-    // phase floor; warnings and failures remain undiluted.
-    let extra = trailing_extra(footer, area.width);
-    let right_width = extra.width(footer) as u16 + 1;
+    // The permission chip alone is the floor; the right slot takes what is
+    // left after it, and the rest of the left run sheds against the slot.
+    let floor = left_run_width(&mark, &posture_items(footer, 5));
+    let right = footer.right.map(|(text, ink)| {
+        let budget = width.saturating_sub(floor + 1);
+        (truncate_owned(&footer.sym(text), budget), ink)
+    });
+    let right_width = right
+        .as_ref()
+        .map(|(text, _)| text.width() + 1)
+        .unwrap_or(0);
+    let left_budget = width.saturating_sub(right_width);
+    let items = (0..=5u8)
+        .map(|shed| posture_items(footer, shed))
+        .find(|items| left_run_width(&mark, items) <= left_budget)
+        .unwrap_or_else(|| posture_items(footer, 5));
 
-    // Left: still-frame echolocation chip + phase word + live detail + cost.
-    // Scheduled automation work lives on the top strip, not this footer.
-    let chip = footer.sym("<·>");
-    let phase = footer.sym(footer.phase_word);
-    let cost = footer.sym(footer.cost_label);
-    tput(buf, area.x, area.y, &chip, tchrome(theme, footer.phase_ink));
-    let mut x = area.x + chip.width() as u16 + 1;
+    let permission_ink = footer.permission_chip.1;
+    let mut x = usize::from(area.x);
+    let clip = |x: usize, text: &str| -> String {
+        truncate_owned(text, (usize::from(area.x) + left_budget).saturating_sub(x))
+    };
     tput(
         buf,
-        x,
+        x as u16,
         area.y,
-        &phase,
-        tchrome(theme, footer.phase_ink).add_modifier(Modifier::BOLD),
+        &clip(x, &mark),
+        tchrome(theme, permission_ink).add_modifier(Modifier::BOLD),
     );
-    x += phase.width() as u16 + 1;
-    let left_edge_end = (area.x + area.width).saturating_sub(right_width + 1);
-    if let Some(detail) = footer.live_detail {
-        let detail = footer.sym(detail);
-        tput(
-            buf,
-            x,
-            area.y,
-            &detail,
-            tchrome(theme, crate::palette::ChromeInk::Metadata),
-        );
-        x += detail.width() as u16 + 1;
-    }
-    if x + 2 <= left_edge_end {
-        tput(
-            buf,
-            x,
-            area.y,
-            "│",
-            tchrome(theme, crate::palette::ChromeInk::MetadataDim),
-        );
-        x += 2;
-    }
-    if x < left_edge_end && !footer.cost_label.is_empty() {
-        let budget = (left_edge_end - x) as usize;
-        let cost = truncate_owned(&cost, budget);
-        tput(
-            buf,
-            x,
-            area.y,
-            &cost,
-            tchrome(theme, crate::palette::ChromeInk::MetadataValue),
-        );
-        x += cost.width() as u16;
-    }
-    // Posture chips after the cost, each fitting whole or standing down —
-    // a clipped posture word is worse than none (the classic header's rule).
-    //
-    // When only one of the two can fit, permission keeps the cells. The mode
-    // word is a preference (`act` / `plan` / `operate`); the permission
-    // phrase is a safety fact, and a silently shed `full access` is the
-    // footer under-reporting the authority the session actually holds. This
-    // bit most in operate mode, whose mode word is the longest of the three
-    // and so consumed the budget the permission chip needed. Painting order
-    // stays mode-then-permission, so the lockup does not shift when both fit.
-    let chip_cells = |text: &str| ITEM_SEPARATOR_WIDTH + footer.sym(text).width();
-    let mut mode_chip = footer.mode_chip;
-    if let (Some(mode), Some(permission)) = (footer.mode_chip, footer.permission_chip) {
-        let both = chip_cells(mode.0) + chip_cells(permission.0);
-        mode_chip = (usize::from(x) + both <= usize::from(left_edge_end)).then_some(mode);
-    }
-    for chip in [mode_chip, footer.permission_chip].into_iter().flatten() {
-        let text = footer.sym(chip.0);
-        let needs = ITEM_SEPARATOR_WIDTH + text.width();
-        if x + needs as u16 <= left_edge_end {
+    x += mark.width() + 1;
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            let separator = separator_before(item);
             tput(
                 buf,
-                x,
+                x as u16,
                 area.y,
-                ITEM_SEPARATOR,
-                tchrome(theme, crate::palette::ChromeInk::MetadataDim),
+                &clip(x, separator),
+                tchrome(theme, ChromeInk::MetadataDim),
             );
-            tput(
-                buf,
-                x + ITEM_SEPARATOR_WIDTH as u16,
-                area.y,
-                &text,
-                tchrome(theme, chip.1),
-            );
-            x += needs as u16;
+            x += separator.width();
         }
+        let mut style = tchrome(theme, item.ink);
+        if item.bold {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        tput(buf, x as u16, area.y, &clip(x, &item.text), style);
+        x += item.text.width();
     }
 
-    // Paint the right block pinned to the area edge.
-    let mut sx = (area.x + area.width)
-        .saturating_sub(right_width)
-        .max(area.x);
-    let budget = (area.x + area.width).saturating_sub(sx) as usize;
-    let text_budget = budget.saturating_sub(if extra.append_help {
-        ITEM_SEPARATOR_WIDTH + footer.sym(COMPACT_KEYS_LEGEND).width()
-    } else {
-        0
-    });
-    let painted = truncate_owned(&extra.text, text_budget);
-    tput(buf, sx, area.y, &painted, tchrome(theme, extra.ink));
-    sx += painted.width() as u16;
-    if extra.append_help {
-        tput(
-            buf,
-            sx,
-            area.y,
-            ITEM_SEPARATOR,
-            tchrome(theme, ChromeInk::MetadataDim),
-        );
-        sx += ITEM_SEPARATOR_WIDTH as u16;
-        tput(
-            buf,
-            sx,
-            area.y,
-            &footer.sym(COMPACT_KEYS_LEGEND),
-            tchrome(theme, ChromeInk::MetadataHint),
-        );
+    if let Some((text, ink)) = right
+        && !text.is_empty()
+    {
+        let sx = (usize::from(area.x) + width).saturating_sub(text.width());
+        tput(buf, sx as u16, area.y, &text, tchrome(theme, ink));
     }
 }
 
@@ -896,226 +801,177 @@ fn truncate_owned(text: &str, width: usize) -> String {
     out
 }
 
-/// Pick the full key chorus when it fits without displacing posture. When it
-/// does not, keep the pinned help route if the minimum phase facts still fit;
-/// small terminals should not lose every discoverable keyboard action.
-fn trailing_keys_legend(footer: &TidelineFooter<'_>, area_width: u16) -> String {
-    let keys = footer.sym(footer.keys_legend);
-    let keys_w = keys.width();
-    let posture_w: usize = [footer.mode_chip, footer.permission_chip]
-        .into_iter()
-        .flatten()
-        .map(|(text, _)| ITEM_SEPARATOR_WIDTH + footer.sym(text).width())
-        .sum();
-    if posture_w == 0 {
-        return keys;
-    }
-    // The left half's standing width before the posture chips: chip, phase
-    // word, live detail, divider, cost.
-    let chip = footer.sym("<·>");
-    let phase = footer.sym(footer.phase_word);
-    let detail_w = footer
-        .live_detail
-        .map(|detail| footer.sym(detail).width() + 1)
-        .unwrap_or(0);
-    let cost = footer.sym(footer.cost_label);
-    let prefix_w = chip.width() + 1 + phase.width() + 1 + detail_w + 2 + cost.width();
-    let available_with_keys = usize::from(area_width)
-        .saturating_sub(keys_w + 1)
-        .saturating_sub(1);
-    if prefix_w + posture_w <= available_with_keys {
-        return keys;
-    }
-
-    let compact = footer.sym(COMPACT_KEYS_LEGEND);
-    let compact_floor = chip.width() + 1 + phase.width() + 1 + compact.width() + 1;
-    if compact_floor <= usize::from(area_width) {
-        compact
-    } else {
-        String::new()
-    }
-}
-
-fn minimum_footer_width(footer: &TidelineFooter<'_>, extra_w: usize) -> usize {
-    let chip = footer.sym("<·>");
-    let phase = footer.sym(footer.phase_word);
-    let detail_w = footer
-        .live_detail
-        .map(|detail| footer.sym(detail).width() + 1)
-        .unwrap_or(0);
-    let left_floor = chip.width() + 1 + phase.width() + 1 + detail_w;
-    left_floor + 1 + extra_w + 1
-}
-
-fn trailing_extra(footer: &TidelineFooter<'_>, area_width: u16) -> TrailingExtra {
-    if let Some((text, ink)) = footer.notice {
-        let text = footer.sym(text);
-        let help = footer.sym(COMPACT_KEYS_LEGEND);
-        let can_append_help = !matches!(ink, ChromeInk::Attention | ChromeInk::Failure)
-            && minimum_footer_width(footer, text.width() + ITEM_SEPARATOR_WIDTH + help.width())
-                <= usize::from(area_width);
-        return TrailingExtra {
-            text,
-            ink,
-            append_help: can_append_help,
-        };
-    }
-    if footer.context_percent.clamp(0, 100) >= 80 {
-        // The cap mark stays with the microcopy now that the percentage it
-        // used to precede lives in the info line.
-        return TrailingExtra {
-            text: format!("{} {}", footer.sym("▲"), footer.sym(DEPTH_WARN)),
-            ink: ChromeInk::Attention,
-            append_help: false,
-        };
-    }
-    TrailingExtra {
-        text: trailing_keys_legend(footer, area_width),
-        ink: ChromeInk::MetadataHint,
-        append_help: false,
-    }
-}
-
-/// Owned footer facts, built from real `App` state at render time and lent
-/// to [`TidelineFooter`] for painting. Every field names the surface it
-/// replaced when slots 6+8 merged:
-///
-/// - `phase_word`/`phase_ink`/`live_detail` — the activity band's phase verb
-///   and working detail (same phase machinery, same inks).
-/// - `cost_label` — the activity band's cost chip (`cumulative_usage_chip`).
-/// - `keys_legend` — the identity band's key chorus plus agent hints, and
-///   the activity band's `Esc to interrupt` while a turn is live.
-/// - `mode_chip`/`permission_chip` — the old header's posture lockup
-///   (`underwater::posture_chips`, same words, same inks).
-/// - `notice` — the activity band's status toast, or the compact MCP/plugin
-///   boot chip when no toast is live; it owns the trailing right slot while
-///   present.
-///
-/// Session metrics (turns/steps/TTFT/cache) move behind `/cost` per spec §3.
+/// Owned posture facts, built from real `App` state at render time and lent
+/// to [`TidelineFooter`] for painting.
 pub(crate) struct TidelineFooterFacts {
-    pub phase_word: String,
-    pub phase_ink: crate::palette::ChromeInk,
-    pub live_detail: Option<String>,
-    pub cost_label: String,
-    pub context_percent: u8,
-    pub keys_legend: String,
+    pub permission_chip: (String, crate::palette::ChromeInk),
+    pub permission_key: Option<&'static str>,
     pub mode_chip: Option<(String, crate::palette::ChromeInk)>,
-    pub permission_chip: Option<(String, crate::palette::ChromeInk)>,
-    pub notice: Option<(String, crate::palette::ChromeInk)>,
+    pub mode_key: Option<&'static str>,
+    pub counts: Vec<(String, ChromeInk)>,
+    pub hint: Option<(String, crate::palette::ChromeInk)>,
+    pub context_percent: u8,
+    pub right: Option<(String, crate::palette::ChromeInk)>,
 }
 
 impl TidelineFooterFacts {
-    /// Borrow the facts as the deterministic footer widget's input.
+    /// Borrow the facts as the deterministic widget's input.
     pub(crate) fn widget<'a>(
         &'a self,
         theme: &'a crate::palette::UiTheme,
         ascii_safe: bool,
     ) -> TidelineFooter<'a> {
+        let borrow = |chip: &'a Option<(String, ChromeInk)>| {
+            chip.as_ref().map(|(text, ink)| (text.as_str(), *ink))
+        };
         TidelineFooter::new(
             theme,
-            &self.phase_word,
-            self.phase_ink,
-            &self.cost_label,
-            self.context_percent,
-            &self.keys_legend,
+            (self.permission_chip.0.as_str(), self.permission_chip.1),
         )
-        .live_detail(self.live_detail.as_deref())
-        .mode_chip(
-            self.mode_chip
-                .as_ref()
-                .map(|(text, ink)| (text.as_str(), *ink)),
-        )
-        .permission_chip(
-            self.permission_chip
-                .as_ref()
-                .map(|(text, ink)| (text.as_str(), *ink)),
-        )
-        .notice(
-            self.notice
-                .as_ref()
-                .map(|(text, ink)| (text.as_str(), *ink)),
-        )
+        .permission_key(self.permission_key)
+        .mode_chip(borrow(&self.mode_chip))
+        .mode_key(self.mode_key)
+        .counts(&self.counts)
+        .hint(borrow(&self.hint))
+        .context_percent(self.context_percent)
+        .right(borrow(&self.right))
         .ascii_safe(ascii_safe)
     }
 }
 
-/// Context window percentage — the snapshot the info line's context
-/// meter reads, and the footer's ≥80% cap-warning trigger.
+/// Context window percentage — the snapshot the metrics line's reading
+/// paints, and the posture bar's ≥80% cap-warning trigger.
 pub(crate) fn context_percent_from_app(app: &App) -> u8 {
     crate::tui::ui::context_usage_snapshot(app)
         .map(|(_, _, percent)| percent.round().clamp(0.0, 100.0) as u8)
         .unwrap_or(0)
 }
 
-/// Build the merged footer's facts from live `App` state. `width` is the
-/// footer row's width — notices clause-shed against it, never dangle.
+/// The live counts: running sub-agents, live shells, background tasks, and
+/// scheduled automation. Each count is zero-suppressed — the bar never
+/// grows furniture for work that is not happening.
+fn live_counts(app: &App, tier: ShellTier) -> Vec<(String, ChromeInk)> {
+    use crate::tui::background_indicator::{PendingItemKind, pending_work_from_app};
+    let mut counts = Vec::new();
+    let agents = crate::tui::subagent_routing::running_agent_count(app);
+    match agents {
+        0 => {}
+        1 => counts.push((
+            tr(app.ui_locale, MessageId::FooterAgentSingular).into_owned(),
+            ChromeInk::Active,
+        )),
+        n => counts.push((
+            tr(app.ui_locale, MessageId::FooterAgentsPlural).replace("{count}", &n.to_string()),
+            ChromeInk::Active,
+        )),
+    }
+    let shells = app
+        .task_panel
+        .iter()
+        .filter(|entry| crate::tui::background_indicator::is_live_shell_entry(entry))
+        .count();
+    if shells > 0 {
+        counts.push((
+            format!("{shells} {}", PendingItemKind::Shell.plural_noun(shells)),
+            ChromeInk::Active,
+        ));
+    }
+    let tasks = pending_work_from_app(app).count(PendingItemKind::Task);
+    if tasks > 0 {
+        counts.push((
+            format!("{tasks} {}", PendingItemKind::Task.plural_noun(tasks)),
+            ChromeInk::Active,
+        ));
+    }
+    // Scheduled automation: the `AutomationPanelState` projection stays the
+    // single owner; Compact keeps the abbreviated count (chrome sheds
+    // before content) and the ink says whether a run failed unacknowledged.
+    let automation = if tier == ShellTier::Compact {
+        app.automation_panel.activity_slot_compact()
+    } else {
+        app.automation_panel.activity_slot(app.ui_locale)
+    };
+    if let Some(automation) = automation {
+        counts.push((automation, app.automation_panel.activity_ink()));
+    }
+    counts
+}
+
+/// Build the posture bar's facts from live `App` state. `width` is the
+/// row's width — notices clause-shed against it, never dangle.
 pub(crate) fn tideline_footer_from_app(app: &mut App, width: u16) -> TidelineFooterFacts {
+    use crate::tui::shell_key_routing::{ShellBindingId, binding};
     let activity = LiveActivity::from_app(app);
     let phase = ShellPhase::from_app_with_activity(app, activity);
-    let tier = ShellTier::for_chrome_width(width);
     let (_, phase_label) = phase_marker_with_activity(app, phase, activity);
-    let phase_word = phase_label.clone().into_owned();
-
-    let live_detail = matches!(phase, ShellPhase::Working | ShellPhase::Verifying)
-        .then(|| working_detail(app, activity))
-        .flatten();
-
-    // Same cost chip the classic activity band spent its ledger on.
-    let usage_chip = app.cumulative_usage_chip();
-    let cost_label = match &usage_chip {
-        crate::route_billing::UsageChip::Money(amount) => Some(amount.clone()),
-        crate::route_billing::UsageChip::PricedSubtotal { .. }
-        | crate::route_billing::UsageChip::Unknown => {
-            crate::route_billing::format_usage_chip(&usage_chip)
-        }
-        _ => None,
-    }
-    .unwrap_or_default();
-
-    // While a turn is live the band carries the interrupt affordance the
-    // activity band used to render beside the verb; idle keeps the chorus.
-    let legend = if tier != ShellTier::Compact
-        && matches!(phase, ShellPhase::Working | ShellPhase::Verifying)
-    {
-        tr(app.ui_locale, MessageId::FooterHintEscInterrupt).into_owned()
-    } else {
-        keys_legend(app, tier, phase).into_owned()
-    };
+    let tier = ShellTier::for_chrome_width(width);
+    let focus = app.focus();
 
     let (mode_chip, permission_chip) = crate::tui::underwater::posture_chips(app);
-    let map_chip = |chip: Option<(Cow<'static, str>, crate::palette::ChromeInk)>| {
-        chip.map(|(text, ink)| (text.into_owned(), ink))
+    let permission_chip = permission_chip
+        .map(|(text, ink)| (text.into_owned(), ink))
+        .unwrap_or_else(|| (String::new(), ChromeInk::PermissionAsk));
+    let mode_chip = mode_chip.map(|(text, ink)| (text.into_owned(), ink));
+    // Cycle keys come from the binding table and only when that binding is
+    // live for the current focus — the launch stage's Tab moves focus, so
+    // the mode chip there carries no key.
+    let live_chord = |id: ShellBindingId| -> Option<&'static str> {
+        let binding = binding(id);
+        binding.focus.admits(focus).then_some(binding.footer_chord)
     };
 
-    // Scheduled automation work is NOT a footer fact: the TUI band contract
-    // puts work in the top strip, so `info_segments` reads the
-    // `AutomationPanelState` projection directly.
+    // The one hint that applies now: the double-tap send-now window while a
+    // turn is running, else the interrupt affordance, else the arrow keys
+    // the empty composer lends to the agent roster.
+    let hint = if app.double_tap_window_open() {
+        Some((
+            tr(app.ui_locale, MessageId::PostureHintEnterAgain)
+                .replace("{enter}", "Enter")
+                .replace("{steer}", "Ctrl+Enter"),
+            ChromeInk::MetadataHint,
+        ))
+    } else if matches!(phase, ShellPhase::Working | ShellPhase::Verifying) {
+        Some((
+            tr(app.ui_locale, MessageId::FooterHintEscInterrupt).into_owned(),
+            ChromeInk::MetadataHint,
+        ))
+    } else if crate::tui::agent_focus::shell_shortcuts_available(app, false) {
+        Some((
+            crate::tui::agent_focus::footer_agent_hints(app),
+            ChromeInk::MetadataHint,
+        ))
+    } else {
+        None
+    };
 
-    // The notice: the live status toast if one is owed, else the compact MCP
-    // or plugin boot chip. A slow optional server must not look like a hung
-    // turn, while plugin diagnostics stay available through `/plugins` rather
-    // than taking rows from the transcript. Clause-shed against half the row
-    // — the keys legend owns the other half.
+    // The right slot: the live status toast if one is owed, else the compact
+    // MCP or plugin boot chip, else the remote-control state when it is on.
+    // Clause-shed against half the row — the posture facts own the other
+    // half.
     let notice_budget = (usize::from(width) / 2).max(8);
-    let notice = selected_notice(app.active_status_toast(), phase, &phase_word)
+    let right = selected_notice(app.active_status_toast(), phase, &phase_label)
         .map(|(text, ink, _urgent)| (text, ink))
         .or_else(|| {
             let boot = crate::tui::session_boot::SessionBootSurface::from_app(app);
             boot.activity_notice(app.ui_locale, notice_budget)
                 .map(|chip| (chip.text, boot_activity_ink(chip.level)))
         })
-        .and_then(|(text, ink)| fit_notice(&text, notice_budget).map(|fitted| (fitted, ink)));
+        .and_then(|(text, ink)| fit_notice(&text, notice_budget).map(|fitted| (fitted, ink)))
+        .or_else(|| {
+            app.remote_control
+                .status_word()
+                .map(|word| (format!("/rc {word}"), ChromeInk::Info))
+        });
 
     TidelineFooterFacts {
-        phase_word,
-        phase_ink: crate::tui::underwater::phase_ink(phase),
-        live_detail,
-        cost_label,
+        permission_chip,
+        permission_key: live_chord(ShellBindingId::PermissionCycle),
+        mode_chip,
+        mode_key: live_chord(ShellBindingId::ModeCycle),
+        counts: live_counts(app, tier),
+        hint,
         context_percent: context_percent_from_app(app),
-        keys_legend: legend,
-        mode_chip: map_chip(mode_chip),
-        permission_chip: map_chip(permission_chip),
-        notice,
+        right,
     }
 }
 

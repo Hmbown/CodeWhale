@@ -153,11 +153,7 @@ fn operator_row_is_pinned_first_with_the_session_model() {
     );
     assert!(text.contains("deepseek-v4-pro"), "session model shown");
     assert!(text.contains("full session access"), "{text}");
-    assert!(text.contains("leads the Pod"), "{text}");
-    assert!(
-        !text.contains("Fleet"),
-        "customer-facing operator detail leaked the internal name: {text}"
-    );
+    assert!(text.contains("leads the Fleet"), "{text}");
 }
 
 #[test]
@@ -287,7 +283,7 @@ fn saved_profile_rows_keep_view_owned_typed_actions() {
     for (_, action) in hitboxes.iter() {
         assert!(matches!(
             action,
-            PodRosterRowAction::SelectOrActivate { .. }
+            FleetRosterRowAction::SelectOrActivate { .. }
         ));
     }
 }
@@ -350,13 +346,9 @@ fn selected_named_fleet_member_shows_edit_affordance() {
         text.contains("m model"),
         "footer should advertise the model shortcut: {text}"
     );
-    assert!(text.contains("Pod `Default`"), "{text}");
-    assert!(text.contains("edit Pod"), "{text}");
-    assert!(text.contains("saved Pods"), "{text}");
-    assert!(
-        !text.contains("Fleet"),
-        "customer-facing /pod roster copy leaked the internal name: {text}"
-    );
+    assert!(text.contains("Fleet `Default`"), "{text}");
+    assert!(text.contains("edit Fleet"), "{text}");
+    assert!(text.contains("saved Fleets"), "{text}");
 }
 
 #[test]
@@ -575,9 +567,9 @@ fn fleet_roster_is_usable_and_opaque_at_blocker_sizes() {
             );
             // Some action label is always visible.
             assert!(text.contains("close"), "{label} {w}x{h}: missing footer");
-            // The first impression names Pod as the worker/orchestration surface.
+            // The first impression names the fleet as the worker/orchestration surface.
             assert!(
-                text.contains("pod") && text.contains("workers"),
+                text.contains("fleet") && text.contains("workers"),
                 "{label} {w}x{h}: missing framing"
             );
             // The selected row's detail is on screen.

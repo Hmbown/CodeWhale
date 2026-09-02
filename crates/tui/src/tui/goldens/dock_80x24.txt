@@ -1,0 +1,24 @@
+ agents 1    tasks 3    context    git    price                                ×
+ ▾ Subagents 1                                                                  
+ ▸ scout  running  objective for dock-golden-agent                           0s 
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+────────────────────────────────────────────────────────────────────────────────

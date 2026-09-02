@@ -28,25 +28,34 @@ export const CHANGELOG: ChangelogRelease[] = [
     "compareUrl": "https://github.com/Hmbown/CodeWhale/compare/v0.9.11...HEAD",
     "sections": [
       {
+        "heading": "Added",
+        "items": [
+          "Alibaba Model Studio joins the data-driven provider table as an openai-compatible descriptor: international compatible-mode endpoint, DASHSCOPE_API_KEY credential, live /v1/models discovery. Qwen 3.8 Flash and Qwen 3.8 Max arrive through the catalog authority — never a hard-coded id."
+        ],
+        "itemCount": 1
+      },
+      {
         "heading": "Changed",
         "items": [
-          "First run paints the composer immediately: the Welcome/language/provider/ trust gates no longer precede the first keystroke. Missing-key and workspace-trust recovery stay for returning users; language and provider remain in /setup.",
-          "The canonical whale-tile mark propagates beyond web to the exact-raster surfaces that can carry it (#5738).",
-          "Dead-code sweep: delete proven-unreferenced helpers (unused builders, wrappers, and leftover identifiers) and drop stale #[allow(dead_code)] where the item is production-called or test-exercised. No runtime behavior change (#5791, #5587).",
-          "Remote-control recovery gives every fresh pre-dispatch attempt a new lease generation while preserving that generation across its typed start (#5605).",
-          "Public roster language is Pod. /pod is the customer surface; fleet remains the internal wire, storage, and migration name (#5776).",
-          "Compaction replacement history keeps a bounded last user round (assistant + tool results) instead of dropping them behind a summary. /context names the compaction path and /anchor survival. Failed compact still does not replace live history (#4394).",
-          "Provider catalogs: compatible hosts (Baseten, Groq, Cerebras, SenseNova, Command Code) no longer compile a frozen model roster. Descriptors name the wire, URL, and env; live GET /v1/models and a Codewhale-owned catalog layer are the offering list. Command Code is a catalog/descriptor row, not a ProviderKind. Catalog presence is not an availability, entitlement, or provider-acceptance claim (#5783).",
-          "Provider selection no longer probes or adopts an external CLI credential on ordinary picker use. Reuse requires an explicit \"Use external CLI credentials\" choice, exact-path confirmation, and Codewhale-owned revoke (#5772).",
-          "TUI: startup no longer presents an approximate ASCII or block-glyph whale as the product mark. It keeps the direct Tideline prompt while exact-raster surfaces remain responsible for the canonical asset.",
-          "TUI: the active-session composer paints the same three-cell [↑] send target as Startup and clicks it through the existing Enter submit dispatcher (#5771). Compact/quiet composers still omit the control.",
-          "TUI/CLI: Pod is the public roster surface. User-facing Fleet wording moves to Pod; durable receipt keys stay compatible (#5776)."
+          "The launch screen is our own card take: a thin top line ⑂ branch path; a centred bordered card with the whale mark, Codewhale + version, one announcement line only when it is true (the no-model warning, or MCP news), and the menu New worktree / Resume session / Changelog / Quit with their real chords right-aligned. Enter runs the highlighted entry, Up/Down move it, and typing goes straight to the composer. The card dissolves on the first keystroke or command (≤240 ms,…",
+          "After the card dissolves, the working screen shows ⑂ branch path with ⋮ MCP n/m on the right, the transcript starts with the ◆ session_start receipt (naming the configured session-start hooks), and the composer's bottom rule carries model (effort) · permission — the route's one launch reading. The posture bar and metrics line appear only once a session exists.",
+          "Vocabulary: fleet is the public term and Pod is retired from copy — roster, setup, detail, worker-runtime and managed-API messages now say Fleet (/fleet canonical, /pod alias). The workflow wire accepts the canonical role spellings (general/explore/planner/reviewer/implement/ test/advisor) with the pre-rename ones kept as load-time aliases, and serializes canonical names.",
+          "The Operate mode-picker hint is shortened to fit 80 columns.",
+          "The footer always shows the permission posture; when only one chip fits, the permission chip outranks the mode word (#5796).",
+          "Local Ollama: the header names a model only when the local catalog can serve it, and says unknown until it knows. The startup mark, web and app icon carry the new side-view prompt-eye whale (#5795).",
+          "One focus owner: Tab and Shift+Tab work regardless of what is in the composer; Alt shortcuts survive mid-draft; Ctrl+Tab no longer cycles the mode by accident (#5798).",
+          "Tool cells carry their own state: a running, failed or warned tool reads as such in the transcript itself, with per-entry rail dots and family-coloured glyphs (#5799).",
+          "Web: docs hub with task search, shared empty/loading/error states, an offline-to-back-online banner, /changelog in every locale, and real 404s with correct metadata (#5743).",
+          "Web: the app's colours come from one file generated from the TUI whale palette; re-typing a colour by hand fails web CI (#5797).",
+          "Web: a one-way ceiling on isZh branching outside the i18n spine — the count may only go down (#5805).",
+          "An internal agent handoff doc was removed from the public tree and .playwright-mcp/ is now ignored (#5800)."
         ],
-        "itemCount": 11
+        "itemCount": 23
       },
       {
         "heading": "Added",
         "items": [
+          "Native ChatGPT sign-in for the openai-codex route: codewhale auth chatgpt opens a browser PKCE flow and stores refreshable tokens in Codewhale-owned credentials — no Codex CLI install required. /auth chatgpt-revoke clears them off the event loop (#5784).",
           "MCP servers and plugins can be connected self-serve from the session: a unified auth flow with rotation-safe token handling, a spoken authorization URL, and catalog refresh when stored credentials stop working (#5747).",
           "/operate reads match the landed CWC OperateRecord contract: fetching an absent record returns a truthful not-found view instead of a fabricated operation, and an empty evidence path is rejected rather than resolving to the workspace directory (#5703).",
           "TUI: scheduled automations project into the top strip (⏱ N scheduled · M running, compact ⏱ N·M) with typed HistoryCell::Automation receipts when a run this session watched settle. /automation acknowledges failures. The merged footer does not carry the work fact (#5748).",
@@ -57,10 +66,9 @@ export const CHANGELOG: ChangelogRelease[] = [
           "Internal: codewhale-config gains RouteAuthoritySnapshot, one immutable authority that owns a compiled provider catalog together with the route resolver projected from it, so a picker, a readiness view, and an execution path can no longer resolve against different catalog snapshots without a type-level signal. Resolution still goes through the sole resolver; the returned receipt distinguishes an exact catalog row, a custom-endpoint route whose provider facts are deliberately…",
           "Computer session records now count only time a provider actually accepted the session as active, at per-second granularity. Idle, queued, stopped, and teardown time are excluded, and a session whose allocation does not match a standard profile is refused rather than recorded approximately. Covered by hermetic fixtures; no live provider call and no deploy (#5781).",
           "Website: the public site moves to the Tideline deep-ocean design language (dark by default with an opt-in light documentation sheet, palette grounded in the TUI's WHALE_* tokens) and the new whale brand mark across the favicon, app icons, web manifest, nav wordmark, and social card (#5573).",
-          "Add codewhale dispatch / /dispatch so a local session can propose a Codewhale cloud agent against an explicit github, cnb, or gitee remote. Confirmation is required; missing credentials fail closed; cloud jobs share the existing /jobs surface as kind=cloud. See DAYTONA_CLOUD_DISPATCH.md.",
-          "/login reports the Codewhale account session and provider-key next steps. The internal cloud-agent credential is not user surface: there is no auth set-slot/auth clear-slot command, no hint, and no completion entry for it — signing in with codewhale login is the only door."
+          "Add codewhale dispatch / /dispatch so a local session can propose a Codewhale cloud agent against an explicit github, cnb, or gitee remote. Confirmation is required; missing credentials fail closed; cloud jobs share the existing /jobs surface as kind=cloud. See DAYTONA_CLOUD_DISPATCH.md."
         ],
-        "itemCount": 37
+        "itemCount": 38
       },
       {
         "heading": "Changed",

@@ -485,7 +485,12 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
             .interaction_targets
             .target_at(mouse.column, mouse.row)
             .and_then(|target| target.mouse_action);
-        if let Some(action) = action {
+        if let Some(action) = action
+            && !matches!(
+                action,
+                InteractionAction::ShowDockPanel(_) | InteractionAction::DismissDock
+            )
+        {
             app.needs_redraw = true;
             return match action {
                 InteractionAction::InspectContext => {
@@ -495,88 +500,29 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
                 InteractionAction::OpenProviderPicker => {
                     vec![ViewEvent::TopbarRoutePickerRequested]
                 }
+                InteractionAction::ShowDockPanel(_) | InteractionAction::DismissDock => {
+                    unreachable!("dock targets defer to the strip")
+                }
             };
         }
     }
 
     // The launch surface owns the whole frame until a session is chosen.
     // Consume every mouse event here so wheel input cannot leak into the
-    // transcript or composer behind the splash.
+    // transcript or composer behind the launch header. The composer is the
+    // screen's one focus owner, so a click can only submit; nothing else on
+    // the launch screen is a target.
     if app.launch.visible {
-        match mouse.kind {
-            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                // Wheeling away from the composer returns focus to the menu.
-                app.launch.composer_focus = false;
-                let key = if matches!(mouse.kind, MouseEventKind::ScrollUp) {
-                    KeyCode::Up
-                } else {
-                    KeyCode::Down
-                };
-                crate::tui::underwater::handle_launch_key(
-                    &mut app.launch,
-                    KeyEvent::new(key, KeyModifiers::NONE),
-                    app.ui_locale,
-                );
+        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+            let send_hit = app
+                .launch
+                .send_area
+                .is_some_and(|area| mouse_hits_rect(mouse, Some(area)));
+            if send_hit && !app.input.trim().is_empty() {
+                // Same submit path as the composer's Enter key.
+                app.pending_launch_action =
+                    Some(crate::tui::underwater::LaunchAction::SendComposer);
             }
-            MouseEventKind::Down(MouseButton::Left) => {
-                // Send glyph first: it sits inside the composer row.
-                let send_hit = app
-                    .launch
-                    .send_area
-                    .is_some_and(|area| mouse_hits_rect(mouse, Some(area)));
-                let composer_hit = app
-                    .launch
-                    .composer_area
-                    .is_some_and(|area| mouse_hits_rect(mouse, Some(area)));
-                if send_hit && !app.input.trim().is_empty() {
-                    // Same submit path as the composer's Enter key.
-                    app.pending_launch_action =
-                        Some(crate::tui::underwater::LaunchAction::SendComposer);
-                } else if composer_hit || send_hit {
-                    // Clicking the composer — or its send glyph with nothing
-                    // to send — focuses it, exactly like the Tab key.
-                    app.launch.composer_focus = true;
-                } else {
-                    // Clicking anywhere else hands focus back to the menu.
-                    app.launch.composer_focus = false;
-                    // Option-strip tiles (below the quick-action rows, never
-                    // overlapping them): every tile dispatches through the
-                    // launch table — the same code its printed key takes
-                    // (spec §6 parity).
-                    if let Some((action, _)) = app
-                        .launch
-                        .option_areas
-                        .iter()
-                        .find(|(_, area)| mouse_hits_rect(mouse, Some(*area)))
-                        .map(|(action, area)| (*action, *area))
-                    {
-                        app.launch.selected = action.launch_row();
-                        app.pending_launch_action =
-                            Some(crate::tui::underwater::handle_launch_key(
-                                &mut app.launch,
-                                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-                                app.ui_locale,
-                            ));
-                    } else if let Some((index, _)) = app
-                        .launch
-                        .row_areas
-                        .iter()
-                        .enumerate()
-                        .find(|(_, area)| mouse_hits_rect(mouse, Some(**area)))
-                    {
-                        // `row_areas` is the launch table's seven slots, so
-                        // the clicked slot IS the table row.
-                        app.launch.selected = index;
-                        app.pending_launch_action =
-                            Some(crate::tui::underwater::handle_launch_key(
-                                &mut app.launch,
-                                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-                                app.ui_locale,
-                            ));
-                    }
-                }
-            }
-            _ => {}
         }
         app.needs_redraw = true;
         return Vec::new();
@@ -847,16 +793,6 @@ pub(crate) fn apply_sidebar_row_action(app: &mut App, action: SidebarRowAction) 
             app.needs_redraw = true;
             Vec::new()
         }
-        SidebarRowAction::ToggleAgentDetails { agent_id } => {
-            if !app.expanded_sidebar_agents.insert(agent_id.clone()) {
-                app.expanded_sidebar_agents.remove(&agent_id);
-                app.status_message = Some("Agent details collapsed".to_string());
-            } else {
-                app.status_message = Some("Agent details expanded".to_string());
-            }
-            app.needs_redraw = true;
-            Vec::new()
-        }
         SidebarRowAction::ShowSubagentsPanel => {
             use crate::tui::work_surface::RailPanel;
             // The register header is a two-way door: opening the Agents panel
@@ -866,8 +802,7 @@ pub(crate) fn apply_sidebar_row_action(app: &mut App, action: SidebarRowAction) 
                 RailPanel::Agents => RailPanel::Tasks,
                 _ => RailPanel::Agents,
             };
-            app.work_surface.panel = target;
-            app.work_surface.focused = true;
+            crate::tui::work_surface::select_dock_panel(app, target);
             app.status_message = Some(
                 match target {
                     RailPanel::Agents => "Showing subagents",
@@ -995,30 +930,6 @@ pub(crate) fn resolve_agent_transcript_text(app: &App, agent_id: &str) -> Option
         return None;
     }
     Some(text)
-}
-
-pub(crate) fn resident_agent_transcript_available(app: &App, agent_id: &str) -> bool {
-    use crate::tools::handle::{HandleValue, VarHandle};
-
-    let lookup = VarHandle {
-        kind: "var_handle".to_string(),
-        session_id: format!("agent:{agent_id}"),
-        name: "full_transcript".to_string(),
-        type_name: String::new(),
-        length: 0,
-        repr_preview: String::new(),
-        sha256: String::new(),
-    };
-    let Ok(store) = app.runtime_services.handle_store.try_lock() else {
-        return false;
-    };
-    let Some(record) = store.get(&lookup) else {
-        return false;
-    };
-    match &record.value {
-        HandleValue::Json(payload) => !agent_transcript_text(payload).trim().is_empty(),
-        HandleValue::Text(_) => false,
-    }
 }
 
 pub(crate) fn agent_transcript_evidence_available(app: &App, agent_id: &str) -> bool {
@@ -1965,54 +1876,18 @@ mod tests {
     }
 
     #[test]
-    fn every_visible_launch_row_dispatches_the_same_action_as_keyboard() {
-        // `row_areas` is the launch table's seven slots; the stage shows the
-        // three quick actions at slots [2, 4, 1] (New session, Chat only,
-        // Resume last). Clicking a row selects its TABLE row, so mouse and
-        // keyboard (select the row, Enter) dispatch identically.
-        for index in [2usize, 4, 1] {
-            let mut app = create_test_app();
-            app.launch.visible = true;
-            app.launch.worktree_available = true;
-            let stage = Rect::new(0, 1, 80, 22); // the frame's stage slot at 80x24
-            let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
-            crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
-
-            let mut keyboard = app.launch.clone();
-            keyboard.selected = index;
-            let keyboard_action = crate::tui::underwater::handle_launch_key(
-                &mut keyboard,
-                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-                app.ui_locale,
-            );
-
-            let row = app.launch.row_areas[index];
-            assert!(row.width > 0, "slot {index} must own a painted row");
-            handle_mouse_event(&mut app, left_click(row.x, row.y));
-            assert_eq!(app.launch.selected, index);
-            assert_eq!(app.pending_launch_action.take(), Some(keyboard_action));
-            assert_eq!(app.launch.worktree_input, keyboard.worktree_input);
-            assert_eq!(app.launch.status, keyboard.status);
-        }
-    }
-
-    #[test]
-    fn composer_click_focuses_and_send_click_matches_the_keyboard_submit() {
+    fn send_click_matches_the_keyboard_submit_and_focus_never_leaves_the_composer() {
         let mut app = create_test_app();
         app.launch.visible = true;
         app.launch.worktree_available = true;
         let stage = Rect::new(0, 1, 80, 22); // the frame's stage slot at 80x24
         let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
         crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
-        assert_eq!(
-            app.launch.row_areas.len(),
-            7,
-            "one slot per launch-table row"
-        );
         let composer = app.launch.composer_area.expect("composer hitbox");
         let send = app.launch.send_area.expect("send hitbox");
+        assert!(app.launch.composer_focus, "focused from first paint");
 
-        // Clicking the composer focuses it — the mouse equivalent of Tab.
+        // Clicking the composer is a no-op: it already holds focus.
         handle_mouse_event(&mut app, left_click(composer.x + 4, composer.y));
         assert!(app.launch.composer_focus);
         assert_eq!(app.pending_launch_action, None);
@@ -2028,20 +1903,16 @@ mod tests {
         assert_eq!(app.input, "ship it");
         assert!(app.launch.composer_focus);
 
-        // Nothing to send: the send glyph focuses the composer instead.
+        // Nothing to send: the send glyph does nothing.
         app.input.clear();
         handle_mouse_event(&mut app, left_click(send.x, send.y));
         assert_eq!(app.pending_launch_action, None);
         assert!(app.launch.composer_focus);
 
-        // Clicking a startup row hands focus back to the menu.
-        let row = app.launch.row_areas[2];
-        handle_mouse_event(&mut app, left_click(row.x, row.y));
-        assert!(!app.launch.composer_focus);
-        assert_eq!(app.launch.selected, 2);
-
-        // Wheeling away from the composer also returns focus to the menu.
-        app.launch.composer_focus = true;
+        // Clicking the header, or wheeling, never takes focus away — there
+        // is nowhere else for it to go.
+        handle_mouse_event(&mut app, left_click(3, 2));
+        assert!(app.launch.composer_focus);
         handle_mouse_event(
             &mut app,
             MouseEvent {
@@ -2051,7 +1922,8 @@ mod tests {
                 modifiers: KeyModifiers::NONE,
             },
         );
-        assert!(!app.launch.composer_focus);
+        assert!(app.launch.composer_focus);
+        assert_eq!(app.pending_launch_action, None);
     }
 
     #[test]
@@ -2146,93 +2018,6 @@ mod tests {
     }
 
     #[test]
-    fn quick_action_row_clicks_select_their_launch_table_rows() {
-        let mut app = create_test_app();
-        app.launch.visible = true;
-        app.launch.worktree_available = true;
-        let stage = Rect::new(0, 1, 80, 22); // the frame's stage slot at 80x24
-        let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
-        crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
-
-        // The Chat only quick action is launch-table row 4 (its `C` direct
-        // key), not the strip position: clicking it selects row 4 and Enter
-        // dispatches NewChat through the same table.
-        let chat = app.launch.row_areas[4];
-        handle_mouse_event(&mut app, left_click(chat.x + 2, chat.y));
-        assert_eq!(app.launch.selected, 4);
-        assert_eq!(
-            app.pending_launch_action.take(),
-            Some(crate::tui::underwater::LaunchAction::NewChat)
-        );
-
-        // The New session quick action is table row 2 (its `W` direct key).
-        let work = app.launch.row_areas[2];
-        handle_mouse_event(&mut app, left_click(work.x + 2, work.y));
-        assert_eq!(app.launch.selected, 2);
-        assert_eq!(
-            app.pending_launch_action.take(),
-            Some(crate::tui::underwater::LaunchAction::NewSession)
-        );
-    }
-
-    #[test]
-    fn launch_option_tiles_dispatch_the_same_actions_as_their_keys() {
-        let mut app = create_test_app();
-        app.launch.visible = true;
-        app.launch.worktree_available = true;
-        let stage = Rect::new(0, 1, 80, 22);
-        let startup = crate::tui::underwater::tideline_startup_from_app(&app);
-        drop(startup);
-        let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
-        crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
-        assert_eq!(app.launch.option_areas.len(), 4, "four tiles at 80 cols");
-
-        // Worktree tile: same path as Ctrl+N — the name prompt opens.
-        let (worktree, area) = app.launch.option_areas[0];
-        assert_eq!(
-            worktree,
-            crate::tui::underwater::LaunchOptionAction::Worktree
-        );
-        handle_mouse_event(&mut app, left_click(area.x + 1, area.y + 1));
-        assert!(
-            app.launch.worktree_input.is_some(),
-            "worktree tile opens the name prompt"
-        );
-        app.launch.worktree_input = None;
-
-        // Chat tile: same path as C.
-        let (chat, area) = app.launch.option_areas[1];
-        assert_eq!(chat, crate::tui::underwater::LaunchOptionAction::Chat);
-        handle_mouse_event(&mut app, left_click(area.x + 1, area.y + 1));
-        assert_eq!(
-            app.pending_launch_action.take(),
-            Some(crate::tui::underwater::LaunchAction::NewChat)
-        );
-
-        // Theme tile: launch-table row 5 — the same LaunchAction::Theme its
-        // printed `T` key and the event loop's table dispatch take (the
-        // picker itself opens when the pending action is consumed).
-        let (theme, area) = app.launch.option_areas[2];
-        assert_eq!(theme, crate::tui::underwater::LaunchOptionAction::Theme);
-        handle_mouse_event(&mut app, left_click(area.x + 1, area.y + 1));
-        assert_eq!(app.launch.selected, 5);
-        assert_eq!(
-            app.pending_launch_action.take(),
-            Some(crate::tui::underwater::LaunchAction::Theme)
-        );
-
-        // Help tile: launch-table row 6 (`F1`).
-        let (help, area) = app.launch.option_areas[3];
-        assert_eq!(help, crate::tui::underwater::LaunchOptionAction::Help);
-        handle_mouse_event(&mut app, left_click(area.x + 1, area.y + 1));
-        assert_eq!(app.launch.selected, 6);
-        assert_eq!(
-            app.pending_launch_action.take(),
-            Some(crate::tui::underwater::LaunchAction::Help)
-        );
-    }
-
-    #[test]
     fn context_menu_keeps_paste_first_outside_sidebar() {
         let mut app = create_test_app();
         app.work_surface.last_area = Some(Rect::new(60, 4, 20, 6));
@@ -2313,7 +2098,7 @@ mod tests {
                     full_text: "agent row".to_string(),
                     detail: None,
                     is_truncated: false,
-                    click_action: Some(SidebarRowAction::ToggleAgentDetails {
+                    click_action: Some(SidebarRowAction::OpenAgentDetail {
                         agent_id: "agent_123".to_string(),
                     }),
                     stop_action: None,
@@ -2335,7 +2120,7 @@ mod tests {
         );
         assert!(matches!(
             sidebar_click_action(&app, left_click(60, 7)),
-            Some(SidebarRowAction::ToggleAgentDetails { agent_id })
+            Some(SidebarRowAction::OpenAgentDetail { agent_id })
                 if agent_id == "agent_123"
         ));
         assert_eq!(
@@ -2384,7 +2169,7 @@ mod tests {
                 full_text: "[~] Agent 1 is working [x]".to_string(),
                 detail: None,
                 is_truncated: false,
-                click_action: Some(SidebarRowAction::ToggleAgentDetails {
+                click_action: Some(SidebarRowAction::OpenAgentDetail {
                     agent_id: "agent_123".to_string(),
                 }),
                 stop_action: Some(SidebarRowAction::CancelAgent {
@@ -2397,7 +2182,7 @@ mod tests {
 
         assert!(matches!(
             sidebar_click_action(&app, left_click(62, 4)),
-            Some(SidebarRowAction::ToggleAgentDetails { agent_id })
+            Some(SidebarRowAction::OpenAgentDetail { agent_id })
                 if agent_id == "agent_123"
         ));
         assert!(matches!(

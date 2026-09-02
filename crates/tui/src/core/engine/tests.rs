@@ -3157,6 +3157,245 @@ async fn explicit_natural_goal_activates_before_provider_request() {
     run_task.await.expect("engine task");
 }
 
+/// Drive one turn in `mode` and report what the goal path did before the
+/// provider was called: the objective published by `GoalUpdated` (if any),
+/// whether the engine goal state is active, and how many Operate contract
+/// messages the session log holds afterwards.
+async fn operate_goal_probe(mode: AppMode, prompt: &str) -> (Option<String>, bool, usize) {
+    let request_entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release_request = std::sync::Arc::new(tokio::sync::Notify::new());
+    let model = std::sync::Arc::new(FirstRequestGatedGoalModelClient {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        request_entered: std::sync::Arc::clone(&request_entered),
+        release_request: std::sync::Arc::clone(&release_request),
+    });
+    let config = goal_custom_route_config();
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let (engine, handle) = Engine::new_with_model_client(
+        EngineConfig {
+            model: "local-model".to_string(),
+            max_steps: 1,
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            ..EngineConfig::default()
+        },
+        &config,
+        client,
+    );
+    let goal_state = engine.config.goal_state.clone();
+    let run_task = tokio::spawn(engine.run());
+
+    handle
+        .send(Op::SendMessage {
+            content: prompt.to_string(),
+            mode,
+            route: resolved_route_for_test(&config, "local-model"),
+            compaction: Box::new(CompactionConfig::default()),
+            goal_objective: None,
+            goal_token_budget: None,
+            goal_status: crate::tools::goal::GoalStatus::Active,
+            reasoning_effort: None,
+            reasoning_effort_auto: false,
+            auto_model: false,
+            allow_shell: false,
+            trust_mode: false,
+            auto_approve: false,
+            approval_mode: crate::tui::approval::ApprovalMode::Suggest,
+            translation_enabled: false,
+            allowed_tools: None,
+            dynamic_tools: Vec::new(),
+            hook_executor: None,
+            verbosity: None,
+            provenance: UserInputProvenance::ExternalUser,
+        })
+        .await
+        .expect("send probe turn");
+
+    let mut published_objective = None;
+    loop {
+        let event = tokio::time::timeout(model_turn_event_timeout(), async {
+            handle.rx_event.write().await.recv().await
+        })
+        .await
+        .expect("probe event timeout")
+        .expect("probe event");
+        match event {
+            Event::GoalUpdated { snapshot } if snapshot.status == "active" => {
+                published_objective = snapshot.objective;
+            }
+            Event::TurnStarted { .. } => break,
+            _ => {}
+        }
+    }
+    tokio::time::timeout(model_turn_event_timeout(), request_entered.notified())
+        .await
+        .expect("provider request was never entered");
+    let active = goal_state.lock().expect("goal lock").is_active();
+    if active {
+        // Stop autonomous continuation after the one provider call.
+        handle
+            .send(Op::SetGoalStatus {
+                status: crate::tools::goal::GoalStatus::Paused,
+                clear: false,
+            })
+            .await
+            .expect("queue goal pause");
+    }
+    release_request.notify_one();
+    let snapshot = tokio::time::timeout(model_turn_event_timeout(), handle.get_session_snapshot())
+        .await
+        .expect("probe turn did not settle")
+        .expect("probe session snapshot");
+    let contracts = snapshot
+        .messages
+        .iter()
+        .filter(|message| crate::runtime_handoff::is_operate_contract_message(message))
+        .count();
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    run_task.await.expect("engine task");
+    (published_objective, active, contracts)
+}
+
+#[tokio::test]
+async fn operate_turns_a_work_prompt_into_the_goal_but_work_mode_does_not() {
+    let prompt =
+        "Migrate the settings loader to the new config crate and keep the old keys readable";
+
+    let (objective, active, contracts) = operate_goal_probe(AppMode::Operate, prompt).await;
+    assert_eq!(
+        objective.as_deref(),
+        Some(prompt),
+        "Operate must publish the prompt as the goal before the provider call"
+    );
+    assert!(active, "Operate goal must be active in engine state");
+    assert_eq!(contracts, 1, "Operate appends its contract exactly once");
+
+    let (objective, active, contracts) = operate_goal_probe(AppMode::Agent, prompt).await;
+    assert_eq!(objective, None, "Work must not promote a prompt to a goal");
+    assert!(!active);
+    assert_eq!(contracts, 0, "Work never sees the Operate contract");
+
+    let (objective, active, contracts) =
+        operate_goal_probe(AppMode::Operate, "thanks, looks good").await;
+    assert_eq!(objective, None, "chat stays chat even in Operate");
+    assert!(!active);
+    assert_eq!(contracts, 1, "the contract is about the mode, not the goal");
+}
+
+#[tokio::test]
+async fn operate_contract_is_appended_once_and_an_existing_goal_is_never_replaced() {
+    let first_entered = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release_first = std::sync::Arc::new(tokio::sync::Notify::new());
+    let model = std::sync::Arc::new(IndexedGatedGoalModelClient {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        gates: HashMap::from([(
+            1,
+            (
+                std::sync::Arc::clone(&first_entered),
+                std::sync::Arc::clone(&release_first),
+            ),
+        )]),
+        max_calls: 2,
+    });
+    let config = goal_custom_route_config();
+    let client: crate::core::model_client::SharedModelClient = model.clone();
+    let (engine, handle) = Engine::new_with_model_client(
+        EngineConfig {
+            model: "local-model".to_string(),
+            max_steps: 1,
+            snapshots_enabled: false,
+            terminal_chrome_enabled: false,
+            ..EngineConfig::default()
+        },
+        &config,
+        client,
+    );
+    let goal_state = engine.config.goal_state.clone();
+    let run_task = tokio::spawn(engine.run());
+
+    let send = |content: &str, goal_objective: Option<String>, goal_status| Op::SendMessage {
+        content: content.to_string(),
+        mode: AppMode::Operate,
+        route: resolved_route_for_test(&config, "local-model"),
+        compaction: Box::new(CompactionConfig::default()),
+        goal_objective,
+        goal_token_budget: None,
+        goal_status,
+        reasoning_effort: None,
+        reasoning_effort_auto: false,
+        auto_model: false,
+        allow_shell: false,
+        trust_mode: false,
+        auto_approve: false,
+        approval_mode: crate::tui::approval::ApprovalMode::Suggest,
+        translation_enabled: false,
+        allowed_tools: None,
+        dynamic_tools: Vec::new(),
+        hook_executor: None,
+        verbosity: None,
+        provenance: UserInputProvenance::ExternalUser,
+    };
+
+    let first =
+        "Migrate the settings loader to the new config crate and keep the old keys readable";
+    handle
+        .send(send(first, None, crate::tools::goal::GoalStatus::Active))
+        .await
+        .expect("send first Operate turn");
+    tokio::time::timeout(model_turn_event_timeout(), first_entered.notified())
+        .await
+        .expect("first provider request was never entered");
+    assert_eq!(
+        goal_state.lock().expect("goal lock").objective(),
+        Some(first)
+    );
+    handle
+        .send(Op::SetGoalStatus {
+            status: crate::tools::goal::GoalStatus::Paused,
+            clear: false,
+        })
+        .await
+        .expect("queue goal pause");
+    release_first.notify_one();
+    let _ = tokio::time::timeout(model_turn_event_timeout(), handle.get_session_snapshot())
+        .await
+        .expect("first turn did not settle")
+        .expect("first session snapshot");
+
+    // Second Operate prompt while the (paused) goal is still unfinished: the
+    // host reports that goal, so the prompt is ordinary work under it.
+    handle
+        .send(send(
+            "Refactor the provider table so it survives a config reload",
+            Some(first.to_string()),
+            crate::tools::goal::GoalStatus::Paused,
+        ))
+        .await
+        .expect("send second Operate turn");
+    let snapshot = tokio::time::timeout(model_turn_event_timeout(), handle.get_session_snapshot())
+        .await
+        .expect("second turn did not settle")
+        .expect("second session snapshot");
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    let contracts = snapshot
+        .messages
+        .iter()
+        .filter(|message| crate::runtime_handoff::is_operate_contract_message(message))
+        .count();
+    assert_eq!(
+        contracts, 1,
+        "the contract must not repeat on later Operate turns"
+    );
+    let goal = goal_state.lock().expect("goal lock").snapshot();
+    assert_eq!(goal.objective.as_deref(), Some(first));
+    assert_eq!(goal.status, "paused");
+
+    handle.send(Op::Shutdown).await.expect("shutdown engine");
+    run_task.await.expect("engine task");
+}
+
 fn without_named_custom_route(mut config: Config) -> Config {
     config
         .providers
@@ -11031,10 +11270,25 @@ async fn operate_model_shell_uses_normal_approval_and_workspace_sandbox() {
         "\"finish_reason\":\"stop\"}]}\n\n",
         "data: [DONE]\n\n",
     );
+    // Operate turns the work prompt into a goal, so after the approved shell
+    // runs, the model must seal the goal through the same `update_goal` tool
+    // a live Operate turn uses; only then does the final "done" arrive.
+    let goal_seal_marker = "goal-seal-receipt-0902";
+    let goal_sse = concat!(
+        "data: {\"id\":\"chatcmpl-operate-goal\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[",
+        "{\"index\":0,\"id\":\"call_operate_goal\",\"type\":\"function\",\"function\":{\"name\":\"update_goal\",",
+        "\"arguments\":\"{\\\"status\\\":\\\"complete\\\",\\\"evidence\\\":\\\"goal-seal-receipt-0902: operate-mode-approved.txt written\\\",",
+        "\\\"verification\\\":{\\\"status\\\":\\\"passed\\\",\\\"check\\\":\\\"cat operate-mode-approved.txt\\\",\\\"summary\\\":\\\"fixture contains operate-approved\\\"}}\"}}",
+        "]},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"chatcmpl-operate-goal\",\"choices\":[{\"index\":0,\"delta\":{},",
+        "\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
 
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
-        .and(body_string_contains("operate-mode-approved.txt"))
+        .and(body_string_contains(goal_seal_marker))
+        .and(body_string_contains("tokens_used"))
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
@@ -11042,6 +11296,32 @@ async fn operate_model_shell_uses_normal_approval_and_workspace_sandbox() {
         )
         .expect(1)
         .with_priority(1)
+        .mount(&server)
+        .await;
+    // The first `update_goal` call only loads the deferred tool; the retry —
+    // the request carrying the deferral receipt — is the one that executes.
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(body_string_contains("was deferred and has now been loaded"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(goal_sse),
+        )
+        .expect(1)
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .and(body_string_contains("operate-mode-approved.txt"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(goal_sse),
+        )
+        .expect(1)
+        .with_priority(3)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -11052,7 +11332,7 @@ async fn operate_model_shell_uses_normal_approval_and_workspace_sandbox() {
                 .set_body_string(tool_call_sse),
         )
         .expect(1)
-        .with_priority(2)
+        .with_priority(3)
         .mount(&server)
         .await;
 
@@ -11113,6 +11393,18 @@ async fn operate_model_shell_uses_normal_approval_and_workspace_sandbox() {
             Event::ApprovalRequired { id, tool_name, .. } => {
                 saw_approval = true;
                 assert_eq!(tool_name, "Bash");
+                // Operate turned this work prompt into the goal; pause it
+                // before the turn ends so the goal-continuation loop cannot
+                // queue passes nobody answers in this mock. The goal-complete
+                // `update_goal` response below stays: it is the receipt a
+                // real Operate turn seals with.
+                handle_for_approval
+                    .send(Op::SetGoalStatus {
+                        status: crate::tools::goal::GoalStatus::Paused,
+                        clear: false,
+                    })
+                    .await
+                    .expect("queue goal pause");
                 handle_for_approval
                     .approve_tool_call(id)
                     .await

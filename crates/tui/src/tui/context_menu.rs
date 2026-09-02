@@ -314,7 +314,7 @@ impl ModalView for ContextMenuView {
         let progress = self.appear_progress();
         let elevated = palette::SURFACE_ELEVATED;
         let shadow = ocean::mix_colors(elevated, palette::WHALE_BG, 0.35);
-        let accent = palette::WHALE_INFO;
+        let accent = palette::WHALE_ACTION;
         let soft_accent = ocean::mix_colors(accent, elevated, 0.72);
 
         // Soft depth: paint a one-cell shadow offset below/right when space allows.
