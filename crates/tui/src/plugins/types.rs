@@ -203,6 +203,15 @@ impl LoadedPlugin {
         self.trust_status == PluginTrustStatus::Trusted
     }
 
+    /// Explicit-review confirmation token binding a trust confirmation to
+    /// both complete SHA-256 receipts, so a same-inventory bundle cannot
+    /// collide through a short content prefix. The TUI `/plugin trust` flow
+    /// and the Runtime API trust endpoint both compare against this value.
+    #[must_use]
+    pub fn review_token(&self) -> String {
+        format!("{}.{}", self.content_hash, self.capability_hash)
+    }
+
     #[must_use]
     pub fn compatibility(&self) -> PluginCompatibility {
         self.inventory.compatibility()
