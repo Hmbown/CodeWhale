@@ -62,7 +62,6 @@ pub fn redacted_identifier_for_log(identifier: &str) -> String {
     format!("<redacted:{hash:016x}>")
 }
 
-#[cfg(windows)]
 /// Win32 process-creation flag: detach the child from the console so helper
 /// exes don't flash a terminal window. One definition for every Command type.
 #[cfg(windows)]
