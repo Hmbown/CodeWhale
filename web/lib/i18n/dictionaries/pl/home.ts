@@ -44,7 +44,7 @@ export const home: HomeDict = {
     "Bieżąca sesja Codewhale w terminalu: tryb Operate, wieloryb, kompozytor i stopka",
   figcaption: "Bieżąca sesja Codewhale · tryb Operate · postawa uprawnień Ask",
 
-  proofHeading: "fleetwodna powłoka terminala. Dowolny model. Na twojej maszynie.",
+  proofHeading: "Podwodna powłoka terminala. Dowolny model. Na twojej maszynie.",
   proofBody:
     "Przynieś model, którego już używasz — hostowany, przez gateway albo lokalny. Plan / Work / Operate i jawne postawy uprawnień trzymają nurkowanie pod twoją kontrolą.",
 

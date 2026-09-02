@@ -549,7 +549,7 @@ pub enum AgentType {
     General,
     #[serde(alias = "scout")]
     Explore,
-    #[serde(alias = "plan", alias = "planner", alias = "awaiter")]
+    #[serde(rename = "planner", alias = "plan", alias = "awaiter")]
     Plan,
     #[serde(
         alias = "review",

@@ -4,7 +4,7 @@
  * This module is the single source of truth for the exact product nouns a new
  * user meets on the site: the Fleet/Workflow/Lane/Runtime execution nouns,
  * the Plan/Work/Operate + Ask/Auto-Review/Full Access control vocabulary, the
- * public Consultant role, and the fields that make route provenance legible.
+ * public Advisor role, and the fields that make route provenance legible.
  *
  * TRUTH CONTRACT:
  *   - `short.en` for every product term MUST equal the verbatim definition in

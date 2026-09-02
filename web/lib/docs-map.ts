@@ -70,8 +70,8 @@ export const DOC_TOPICS: DocTopic[] = [
     slug: "vocabulary",
     label: { en: "Vocabulary", zh: "产品名词" },
     description: {
-      en: "The exact product nouns — Fleet, Workflow, Lane, Runtime; Plan / Work / Operate; Consultant; and explicit route provenance — plus measurement principles.",
-      zh: "确切的产品名词——Fleet、Workflow、Lane、Runtime；Plan / Work / Operate；Consultant；明确的路由来源——以及测量原则。",
+      en: "The exact product nouns — Fleet, Workflow, Lane, Runtime; Plan / Work / Operate; Advisor; and explicit route provenance — plus measurement principles.",
+      zh: "确切的产品名词——Fleet、Workflow、Lane、Runtime；Plan / Work / Operate；Advisor；明确的路由来源——以及测量原则。",
     },
     repoSource: ["docs/FLEET.md", "docs/MODES.md", "docs/public-surface-facts.json"],
     hasPage: true,
