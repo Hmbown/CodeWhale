@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Sans, JetBrains_Mono } from "next/font/google";
+import { IBM_Plex_Sans, IBM_Plex_Sans_Condensed, JetBrains_Mono } from "next/font/google";
 import { Nav } from "@/components/nav";
 import { Footer } from "@/components/footer";
 import { localeDirection, locales, type Locale } from "@/lib/i18n/config";
@@ -9,9 +9,8 @@ import { buildPageMetadata } from "@/lib/page-meta";
 import { buildSiteJsonLd } from "@/lib/site-schema";
 import "../globals.css";
 
-// Tideline typography: one sans voice for display and body (weight and
-// tracking separate them, not a second family), JetBrains Mono for the
-// terminal chrome. Display/CJK stacks resolve in globals.css.
+// Display voice is IBM Plex Sans Condensed (condensed sibling of the body face).
+// Display/CJK stacks resolve in globals.css.
 const body = IBM_Plex_Sans({
   subsets: ["latin", "cyrillic", "vietnamese"],
   weight: ["400", "500", "600"],
@@ -23,6 +22,13 @@ const mono = JetBrains_Mono({
   subsets: ["latin", "cyrillic"],
   weight: ["400", "500", "600"],
   variable: "--font-mono",
+  display: "swap",
+});
+
+const display = IBM_Plex_Sans_Condensed({
+  subsets: ["latin"],
+  weight: ["500", "600"],
+  variable: "--font-display",
   display: "swap",
 });
 
@@ -59,7 +65,7 @@ export default async function LocaleLayout({
     <html
       lang={locale}
       dir={dir}
-      className={`${body.variable} ${mono.variable}`}
+      className={`${body.variable} ${mono.variable} ${display.variable}`}
       suppressHydrationWarning
     >
       <body>

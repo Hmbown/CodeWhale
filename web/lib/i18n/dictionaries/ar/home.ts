@@ -6,7 +6,7 @@ import type { HomeDict } from "../types";
  * إعادة صياغة أصلية باتجاه الإنجليزية الحالي: أحضر نموذجك، وكل شيء
  * يجري على جهاك. مفردات المنتج تبقى حرفية كما في حزمة TUI:
  * Plan / Work / Operate، Ask / Auto-Review / Full Access، Codewhale،
- * TUI، `codewhale exec`، Runtime API + MCP، Pod، Node 18+، Rust، MIT.
+ * TUI، `codewhale exec`، Runtime API + MCP، fleet، Node 18+، Rust، MIT.
  *
  * أختام الأقسام (法، 行، …) محارف مشتركة مع النسخة الإنجليزية —
  * علامات لا نثرًا. الأسهم تشير إلى الأمام في سياق RTL (←).
@@ -90,7 +90,7 @@ export const home: HomeDict = {
     ["codewhale exec", "سكربتات وCI"],
     ["عميل الويب", "عميل متصفح محصور في loopback"],
     ["Runtime API + MCP", "تكاملات محلية"],
-    ["Pod", "عمل متعدد الوكلاء دائم"],
+    ["fleet", "عمل متعدد الوكلاء دائم"],
   ],
   runtimeLink: "اطّلع على واجهات الـ Runtime وملاحظات الاستقرار ←",
 

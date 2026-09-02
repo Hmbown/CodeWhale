@@ -11,7 +11,7 @@ const EXTRA_PAGES: readonly { path: string; title: string; description: string }
     path: "/docs",
     title: "Documentation",
     description:
-      "Documentation hub: install, guide, configuration, providers, modes, tools, MCP, sandbox, Pod, and the Runtime API.",
+      "Documentation hub: install, guide, configuration, providers, modes, tools, MCP, sandbox, Fleet, and the Runtime API.",
   },
   {
     path: "/faq",

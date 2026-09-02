@@ -11,7 +11,7 @@ import type { ChromeDict } from "../types";
  * Terminologia alineada amb el pack TUI: els modes i les postures de
  * permisos es mantenen literals (Plan / Work / Operate, Ask / Auto-Review /
  * Full Access), «permisos» és permissions, «resguard» és receipt; `Runtime`,
- * `Pod` i `TUI` resten noms de producte.
+ * `fleet` i `TUI` resten noms de producte.
  *
  * Les etiquetes secundàries de navegació aparien l’etiqueta catalana amb
  * un equivalent anglès curt — la parella han és el recurs editorial propi

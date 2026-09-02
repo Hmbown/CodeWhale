@@ -28,7 +28,7 @@ export const docsRuntimeApi: DocsRuntimeApiDict = {
     ["acp", "ACP (Agent Client Protocol) stdio adapter for editors such as Zed."],
     [
       "exec",
-      "The one-shot headless worker (stream-json, pod subprocess, CI primitive) — not part of this API, but it shares the same runtime and event vocabulary.",
+      "The one-shot headless worker (stream-json, fleet subprocess, CI primitive) — not part of this API, but it shares the same runtime and event vocabulary.",
     ],
   ],
   stdioTitle: "Probe without model tokens",

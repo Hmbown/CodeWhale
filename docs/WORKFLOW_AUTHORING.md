@@ -20,8 +20,8 @@ Compatibility launch paths on the `workflow` tool:
 | `script` | Short inline JS the model owns |
 | `source_path` | Checked-in `.workflow.js` / `.workflow.ts` in the workspace |
 
-For a guided walkthrough from Pod task specs to Workflow authoring and
-monitoring, see [Pod + Workflow Tutorial](FLEET_WORKFLOW_TUTORIAL.md).
+For a guided walkthrough from fleet task specs to Workflow authoring and
+monitoring, see [fleet + Workflow Tutorial](FLEET_WORKFLOW_TUTORIAL.md).
 
 
 ## Access model
@@ -84,7 +84,7 @@ Supported node wrappers: `agent`, `branch`, `sequence`, `reduce`,
 `teacher_review`, `loop_until`, `cond`, and `expand`. Raw `WorkflowNode` JSON IR
 with `kind` / `spec` also remains valid.
 
-An `agent` node may declare `"profile": "reviewer"` to run as a named Pod
+An `agent` node may declare `"profile": "reviewer"` to run as a named fleet
 roster profile. The name is trimmed and lowercased at compile time and must be
 a single token (no whitespace, quotes, or `=`); the saved roster is resolved at
 dispatch time, and explicit fields on the agent override profile defaults.
@@ -106,7 +106,7 @@ a familiar declaration format, not a second execution runtime.
 
 Current example: `workflows/issue_audit.workflow.js`.
 
-## Agent-Written Pod Workflows
+## Agent-Written fleet Workflows
 
 The primary product flow is not "ask the user to write a script." The main
 agent should decide when a task deserves workflow orchestration, draft the
@@ -114,10 +114,10 @@ Workflow source, show the plan for the current permission mode, and then let
 the runtime compile and monitor it.
 
 Workflow owns the plan: phases, branches, loops, reducers, and intermediate
-results. Pod owns the durable roster, member identity, semantic role, and
+results. fleet owns the durable roster, member identity, semantic role, and
 saved provider/model pins or inheritance. Runtime owns tool posture, launch
 concurrency, leases, heartbeats, logs, receipts, and resume/stop/restart
-controls. In other words, a workflow can select Pod members and monitor their
+controls. In other words, a workflow can select fleet members and monitor their
 Runtime runs, but it must not become a second executor with its own shell or
 filesystem authority.
 
@@ -127,7 +127,7 @@ before any Workflow IR is lowered to selected workers:
 - up to 1,000 total worker agents per Workflow run;
 - up to 16 live worker agents at once; larger populations queue (block) on the
   host's per-run concurrency gate until a live slot frees, then select through
-  Pod and execute through Runtime;
+  fleet and execute through Runtime;
 - Workflow IR structural nesting no deeper than 5;
 - Runtime child delegation defaults to 3 levels and has an opt-in hard ceiling
   of 8; that execution budget is independent of Workflow IR shape;

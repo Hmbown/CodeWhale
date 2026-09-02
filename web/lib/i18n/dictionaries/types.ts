@@ -122,9 +122,9 @@ export interface ChromeDict {
   /** aria-label for the ticker's group landmark. */
   tickerAria: string;
 
-  /** TerminalPlayer title-bar label, e.g. "reasoning trace". */
+  /** Reasoning trace title-bar label, e.g. "reasoning trace". */
   traceLabel: string;
-  /** aria-label for the TerminalPlayer scene tablist. */
+  /** aria-label for the reasoning trace scene tablist. */
   traceTabsAria: string;
 
   /** Mobile-menu toggle labels. */
@@ -638,7 +638,7 @@ export interface DocsConstitutionDict {
   sourceNote: string;
 }
 
-/** `app/[locale]/docs/pod/page.tsx` (the `DocsFleetDict` name is internal compatibility). */
+/** `app/[locale]/docs/fleet/page.tsx` (the `DocsFleetDict` name is internal compatibility). */
 export interface DocsFleetDict {
   metaTitle: string;
   metaDescription: string;

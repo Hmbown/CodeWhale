@@ -1,37 +1,37 @@
-# Pod + Workflow Tutorial
+# Fleet + Workflow Tutorial
 
-Pod and Workflow are meant to work together, but they solve different parts
+Fleet and Workflow are meant to work together, but they solve different parts
 of the problem:
 
-- **Pod** runs durable workers, records a ledger, keeps logs and artifacts,
+- **Fleet** runs durable workers, records a ledger, keeps logs and artifacts,
   and exposes status/restart/stop controls.
 - **Workflow** describes orchestration: phases, branches, reducers, loops, and
-  agent leaves that can dispatch through the Pod/sub-agent runtime.
+  agent leaves that can dispatch through the fleet/sub-agent runtime.
 
 **Default product path:** ask in natural language. Operate can use direct tools
-under the active posture, and prefers one or more background Pod workers when
+under the active posture, and prefers one or more background fleet workers when
 work is independent, parallel, isolated, or long-running. Background work keeps
 the composer available for more messages. It chooses Workflow only when
 ordered phases, gates, shared budgets, or deterministic fan-in add real value;
 you do not need to write workflow files for ordinary multi-agent work. Details:
 [Automatic Workflows](AUTOMATIC_WORKFLOWS.md).
 
-This tutorial covers the **manual** Pod task-spec / checked-in Workflow path
+This tutorial covers the **manual** fleet task-spec / checked-in Workflow path
 for operators who want durable host workers and reviewable specs. A
 one-sentence request should still not silently generate `tasks.json`; worker
 cards and permission posture make dispatch visible without exposing authoring
 mechanics.
 
-The examples use the canonical `codewhale pod` and `/pod` spellings. Existing
-`codewhale fleet` and `/fleet` commands remain compatibility aliases, while
-on-disk paths, config keys, and the Workflow `--fleet` flag retain `fleet`.
+The examples use the canonical `codewhale fleet` and `/fleet` spellings.
+`/pod` and `codewhale pod` remain accepted as compatibility aliases. On-disk
+paths, config keys, and the Workflow `--fleet` flag use the Fleet name.
 
 ## 1. Prepare The Workspace
 
-Run Pod from the workspace you want workers to inspect or modify:
+Run fleet from the workspace you want workers to inspect or modify:
 
 ```sh
-codewhale pod init
+codewhale fleet init
 ```
 
 This creates the workspace ledger at `.codewhale/fleet.jsonl`. Worker logs and
@@ -41,7 +41,7 @@ bounded artifacts live under `.codewhale/fleet/`; host adapter logs live under
 If you want named reusable workers, open the TUI and run:
 
 ```text
-/pod setup
+/fleet setup
 ```
 
 Pick a role, choose whether that profile inherits the operator route or pins a
@@ -51,23 +51,23 @@ specific provider/model, choose where the profile lives (**This project** →
 same-id project profile remains the higher-priority override), then review the
 exact file, permissions/tools/route posture, and save. The save control names
 its effect ("Save to this project" / "Save as Personal profile"), and
-replacing an existing file always asks for a second confirmation. Pod task
+replacing an existing file always asks for a second confirmation. fleet task
 specs can reference either resolved profile with `worker.agent_profile` or the
 shorter `worker.profile` alias.
 
-This makes the Pod definition cross-repository, not the authority of one
+This makes the fleet definition cross-repository, not the authority of one
 running session. For a multi-repository operation, launch Codewhale from a
 shared parent workspace. Profile availability does not grant filesystem access;
 the session's workspace, explicit trusted paths, trust mode, and permission
 posture remain authoritative.
 
-## 2. Write A Pod Task Spec
+## 2. Write A fleet Task Spec
 
-`codewhale pod run` accepts JSON or TOML. The checked-in
+`codewhale fleet run` accepts JSON or TOML. The checked-in
 `docs/examples/fleet-dogfood.toml` file is the realistic manual smoke example;
 the JSON below shows the same authoring shape with one read-only reviewer and
 one bounded docs-note worker. The live Runtime policy controls secrets and
-trust; Pod identity carries neither.
+trust; fleet identity carries neither.
 
 ```json
 {
@@ -79,7 +79,7 @@ trust; Pod identity carries neither.
     {
       "id": "map-docs",
       "name": "Map current docs",
-      "objective": "Find the docs that describe Pod and Workflow.",
+      "objective": "Find the docs that describe fleet and Workflow.",
       "instructions": "Read docs/FLEET.md and docs/WORKFLOW_AUTHORING.md. Report the command surfaces, current limitations, and any confusing gaps.",
       "worker": {
         "role": "reviewer",
@@ -108,7 +108,7 @@ trust; Pod identity carries neither.
       "id": "draft-gap-note",
       "name": "Draft gap note",
       "objective": "Draft a short local note for any missing tutorial steps.",
-      "instructions": "Write a concise Markdown note with the missing Pod + Workflow tutorial steps. Do not edit public docs unless explicitly asked.",
+      "instructions": "Write a concise Markdown note with the missing fleet + Workflow tutorial steps. Do not edit public docs unless explicitly asked.",
       "worker": {
         "role": "builder",
         "tools": ["rg", "sed"]
@@ -138,7 +138,7 @@ Common task fields:
 | `id`, `name` | Stable task identity and display name. |
 | `objective`, `instructions` | The worker goal and exact operating instructions. |
 | `worker.role` | Built-in or custom role intent, such as `reviewer`, `builder`, `read-only`, or `smoke-runner`. |
-| `worker.profile` / `worker.agent_profile` | Saved Pod roster profile resolved from project `.codewhale/agents/`, personal `$CODEWHALE_HOME/agents/`, or `[fleet.profiles]`. |
+| `worker.profile` / `worker.agent_profile` | Saved fleet roster profile resolved from project `.codewhale/agents/`, personal `$CODEWHALE_HOME/agents/`, or `[fleet.profiles]`. |
 | `worker.tools` | Tool names the task expects the worker to use. |
 | `worker.model` | Preferred explicit model pin. Route resolution still owns provider/model validation. |
 | `worker.model_class`, `worker.loadout` | Compatibility routing hints for older task specs; prefer `worker.profile` plus saved profile route pins for new specs. |
@@ -150,36 +150,36 @@ Common task fields:
 | `scorer` | Deterministic or manual verification rule. |
 | `retry_policy`, `timeout_seconds`, `budget` | Retry and budget controls. |
 
-Do not put `security_policy` or worker `trust_level` in a new Pod task spec.
+Do not put `security_policy` or worker `trust_level` in a new fleet task spec.
 Those legacy fields remain readable only for old ledger replay and new-run
 validation rejects them. Project trust, filesystem/network reach, secrets,
 approvals, sandboxing, and tool authority are Runtime policy inputs.
 
-## 3. Start And Monitor Pod
+## 3. Start And Monitor fleet
 
 Launch the run:
 
 ```sh
-codewhale pod run tasks.json --max-workers 4
+codewhale fleet run tasks.json --max-workers 4
 ```
 
 The command prints the run id and worker ids. In another terminal, monitor the
 ledgered state:
 
 ```sh
-codewhale pod status
-codewhale pod inspect <worker-id>
-codewhale pod logs <worker-id>
-codewhale pod artifacts <worker-id>
+codewhale fleet status
+codewhale fleet inspect <worker-id>
+codewhale fleet logs <worker-id>
+codewhale fleet artifacts <worker-id>
 ```
 
 Use typed controls when a worker needs intervention:
 
 ```sh
-codewhale pod interrupt <worker-id>
-codewhale pod restart <worker-id>
-codewhale pod resume <run-id>
-codewhale pod stop --all
+codewhale fleet interrupt <worker-id>
+codewhale fleet restart <worker-id>
+codewhale fleet resume <run-id>
+codewhale fleet stop --all
 ```
 
 `resume` is for restart recovery after a manager exit, laptop sleep, or stale
@@ -199,7 +199,7 @@ repo also includes `workflows/issue_audit.workflow.js` as a maintained example.
 ```js
 export default workflow({
   "id": "docs-readiness",
-  "goal": "Inspect Pod and Workflow docs, then synthesize a readiness note",
+  "goal": "Inspect fleet and Workflow docs, then synthesize a readiness note",
   "nodes": [
     {
       "branch": {
@@ -242,7 +242,7 @@ export default workflow({
 
 Current Workflow node wrappers are `agent`, `branch`, `sequence`, `reduce`,
 `teacher_review`, `loop_until`, `cond`, and `expand`. `agent.profile` names a
-Pod roster profile; explicit agent fields override profile defaults.
+fleet roster profile; explicit agent fields override profile defaults.
 
 The model-facing `workflow` tool can start, run, inspect, or cancel a workflow
 from inline source or a `source_path`. When Codewhale uses this path, ask it to
@@ -253,13 +253,13 @@ show the plan first if the workflow will launch multiple workers or touch files.
 A good prompt today is:
 
 ```text
-Draft a Pod task spec for this goal, but do not run it yet.
+Draft a fleet task spec for this goal, but do not run it yet.
 Show the proposed tasks, worker profiles, writable paths, expected artifacts,
 scorers, and security policy. Keep secrets disabled unless I explicitly grant
 them.
 ```
 
-After reviewing the generated spec, save it as `tasks.json` and run the Pod
+After reviewing the generated spec, save it as `tasks.json` and run the fleet
 commands above. For workflows, ask Codewhale to draft a `.workflow.js` file,
 show the plan, and use the workflow tool path only after approval.
 

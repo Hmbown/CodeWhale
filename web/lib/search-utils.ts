@@ -33,6 +33,7 @@ export function docTopicHaystack(t: DocTopic): string {
     CATEGORY_LABELS[t.category]?.en ?? "",
     CATEGORY_LABELS[t.category]?.zh ?? "",
   ];
+  if (t.id === "fleet") parts.push("pod");
   return parts.join(" ").toLowerCase();
 }
 

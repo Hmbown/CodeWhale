@@ -7,11 +7,11 @@ import type { DocsGuideDict } from "../types";
 export const docsGuide: DocsGuideDict = {
   metaTitle: "Erste Schritte · Codewhale-Dokumentation",
   metaDescription:
-    "Der komplette Weg von der Installation bis zu deiner idealen Pod: Installation, eine erste schlüssellose Sitzung, Provider-Anbindung und Pod-Setup.",
+    "Der komplette Weg von der Installation bis zu deiner idealen fleet: Installation, eine erste schlüssellose Sitzung, Provider-Anbindung und fleet-Setup.",
   bodyClassName: "text-ink-soft leading-relaxed",
   overviewTitle: "Erste Schritte",
   overviewLead:
-    "Vier Schritte von einem Installationsbefehl bis zur einsatzbereiten Pod.",
+    "Vier Schritte von einem Installationsbefehl bis zur einsatzbereiten fleet.",
   sessionTitle: "Eine echte Sitzung ansehen",
   sessionLead:
     "Hier erscheint die Aufnahme einer echten Sitzung. Es gibt noch keine Aufnahme, daher wird nichts angezeigt.",

@@ -6,7 +6,7 @@ import type { HomeDict } from "../types";
  * Native Neufassung in der aktuellen englischen Richtung: eigenes Modell
  * mitbringen, alles läuft auf der eigenen Maschine. Produktvokabular bleibt
  * literal wie im TUI-Pack: Plan / Work / Operate, Ask / Auto-Review /
- * Full Access, Codewhale, TUI, `codewhale exec`, Runtime API + MCP, Pod,
+ * Full Access, Codewhale, TUI, `codewhale exec`, Runtime API + MCP, fleet,
  * Node 18+, Rust, MIT.
  *
  * Die Sektions-Siegel (法, 行, …) sind Glyphen, die mit der englischen
@@ -70,7 +70,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "Neu bei Codewhale? Vier Schritte von Anfang bis Ende.",
   startLede:
-    "Installieren → erste schlüssellose Sitzung → Provider verbinden → Pod einrichten. Begriffe werden auf der Vokabularseite definiert.",
+    "Installieren → erste schlüssellose Sitzung → Provider verbinden → fleet einrichten. Begriffe werden auf der Vokabularseite definiert.",
   startGuideLink: "Leitfaden für die ersten Schritte lesen →",
   startVocabularyLink: "Produktvokabular ansehen →",
 
@@ -91,7 +91,7 @@ export const home: HomeDict = {
     ["codewhale exec", "Skripte und CI"],
     ["Web-Client", "Browser-Client, nur Loopback"],
     ["Runtime API + MCP", "Lokale Integrationen"],
-    ["Pod", "Dauerhafte Multi-Agenten-Arbeit"],
+    ["fleet", "Dauerhafte Multi-Agenten-Arbeit"],
   ],
   runtimeLink: "Runtime-Oberflächen und Stabilitätshinweise ansehen →",
 
