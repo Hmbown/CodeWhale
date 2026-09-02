@@ -10,7 +10,7 @@ import type { ChromeDict } from "../types";
  * and the terminal name the same things the same way: modes stay literal
  * (Plan / Work / Operate), permission postures stay literal (Ask /
  * Auto-Review / Full Access) under "postura de permisos", `Runtime`,
- * `Pod`, and `Workflow` stay literal product nouns, and "receipt" is
+ * `fleet`, and `Workflow` stay literal product nouns, and "receipt" is
  * "recibo".
  *
  * Secondary nav labels pair the Spanish primary with the short English

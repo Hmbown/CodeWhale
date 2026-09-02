@@ -123,7 +123,7 @@
     "receiptReport": "checks passed · summary saved",
     "sealStart": "起",
     "startHeading": "New here? Four steps.",
-    "startLede": "Install → first session, no key → connect a provider → set up a pod.",
+    "startLede": "Install → first session, no key → connect a provider → set up a fleet.",
     "startGuideLink": "Read the getting-started guide →",
     "startVocabularyLink": "Look up a term →",
     "sealBoundaries": "界",
@@ -154,7 +154,7 @@
         "Local integrations"
       ],
       [
-        "Pod",
+        "Fleet",
         "Several agents on one job"
       ]
     ],
@@ -171,10 +171,10 @@
   },
   "docs-guide": {
     "metaTitle": "Getting started · Codewhale Docs",
-    "metaDescription": "The full path from install to your ideal pod: install, a first keyless session, provider connection, and pod setup.",
+    "metaDescription": "The full path from install to your ideal fleet: install, a first keyless session, provider connection, and fleet setup.",
     "bodyClassName": "text-ink-soft leading-relaxed",
     "overviewTitle": "Getting started",
-    "overviewLead": "Four steps from one install command to a pod set up for your work.",
+    "overviewLead": "Four steps from one install command to a fleet set up for your work.",
     "sessionTitle": "Watch a real session",
     "sessionLead": "A recording of a real session will go here. There is no recording yet, so nothing is shown.",
     "nextTitle": "Where next",
@@ -324,18 +324,18 @@
     "sourceNote": "Source document: docs/ARCHITECTURE.md · Update docs-map.ts when changing."
   },
   "docs-fleet": {
-    "metaTitle": "Pod & Workflow · Codewhale Docs",
+    "metaTitle": "Fleet & Workflow · Codewhale Docs",
     "metaDescription": "The durable Agent roster and member-selection layer, plus the optional Workflow orchestration overlay.",
     "bodyClassName": "text-ink-soft leading-relaxed",
-    "overviewTitle": "Pod & Workflow",
-    "overviewLead": "Pod is the durable roster: who is available and which member is selected. It is not an execution or authority engine. Runtime launches and tracks the selected member as a headless codewhale exec run, owns retry and remote placement, and writes the durable receipts and ledger projection. Fleet is the retained storage name: the ledger file, saved rosters, config tables, and the workflow --fleet flag keep it, and codewhale fleet stays accepted as a command alias.",
-    "runTitle": "Run a pod",
-    "runLead": "The Runtime's Pod-run projection lives in the workspace's .codewhale/fleet.jsonl ledger, with worker logs under .codewhale/fleet/. codewhale pod resume <run-id> asks Runtime to replay the ledger and reconcile stale leases; it is idempotent after a manager exit, laptop sleep, or runtime restart.",
-    "statusLead": "The TUI command {fleetStatusTui} and the shell command {fleetStatusShell} read the same durable Pod ledger. Use {podWorkers} (or {subagents}) for the sub-agents attached only to the current interactive session.",
-    "profilesTitle": "Saved Pods, roles, and /pod setup",
-    "profilesLead": "{podPods} opens the picker for named saved Pods; bare /pod opens the selected Pod's member roster. /pod setup opens a progressive wizard for authoring a reusable roster member: one focused choice at a time — semantic role, model (inherit or a concrete configured route), thinking tier, then an exact identity/route review before save. Profiles live in project scope (.codewhale/agents/<role>.toml) or personal scope ($CODEWHALE_HOME/agents/<role>.toml); a same-id project profile wins. Runtime separately owns trust, filesystem/network reach, secrets, approvals, sandboxing, and tools, so profile storage scope never widens execution authority.",
+    "overviewTitle": "Fleet & Workflow",
+    "overviewLead": "Fleet is the durable roster: who is available and which member is selected. It is not an execution or authority engine. Runtime launches and tracks the selected member as a headless codewhale exec run, owns retry and remote placement, and writes the durable receipts and ledger projection. The ledger file, saved rosters, config tables, and the workflow --fleet flag share the Fleet name.",
+    "runTitle": "Run a fleet",
+    "runLead": "The Runtime's fleet-run projection lives in the workspace's .codewhale/fleet.jsonl ledger, with worker logs under .codewhale/fleet/. codewhale fleet resume <run-id> asks Runtime to replay the ledger and reconcile stale leases; it is idempotent after a manager exit, laptop sleep, or runtime restart.",
+    "statusLead": "The TUI command {fleetStatusTui} and the shell command {fleetStatusShell} read the same durable fleet ledger. Use {fleetWorkers} (or {subagents}) for the sub-agents attached only to the current interactive session.",
+    "profilesTitle": "Saved fleets, roles, and /fleet setup",
+    "profilesLead": "{fleetSaved} opens the picker for named saved fleets; bare /fleet opens the selected fleet's member roster. /fleet setup opens a progressive wizard for authoring a reusable roster member: one focused choice at a time — semantic role, model (inherit or a concrete configured route), thinking tier, then an exact identity/route review before save. Profiles live in project scope (.codewhale/agents/<role>.toml) or personal scope ($CODEWHALE_HOME/agents/<role>.toml); a same-id project profile wins. Runtime separately owns trust, filesystem/network reach, secrets, approvals, sandboxing, and tools, so profile storage scope never widens execution authority.",
     "workflowTitle": "Workflow orchestration",
-    "workflowLead": "Ordinary multi-agent work does not need Workflow: send normal messages in Operate and let Codewhale prefer background workers when parallelism, isolation, or duration makes delegation useful. Use Workflow when ordered phases, gates, shared budgets, replay, or deterministic fan-in matter. A Workflow script coordinates only: it selects Pod members but has no filesystem or shell; Runtime launches the real workers under live authority policy. Scripts use a declarative compile-only JS subset that lowers to a typed WorkflowSpec validated and executed by Rust; import, fetch, process, eval, and async/await are rejected.",
+    "workflowLead": "Ordinary multi-agent work does not need Workflow: send normal messages in Operate and let Codewhale prefer background workers when parallelism, isolation, or duration makes delegation useful. Use Workflow when ordered phases, gates, shared budgets, replay, or deterministic fan-in matter. A Workflow script coordinates only: it selects fleet members but has no filesystem or shell; Runtime launches the real workers under live authority policy. Scripts use a declarative compile-only JS subset that lowers to a typed WorkflowSpec validated and executed by Rust; import, fetch, process, eval, and async/await are rejected.",
     "workflowLimits": "Default validation bounds: up to 1,000 worker agents per Workflow run, Workflow IR structural nesting no deeper than 5, loops must declare max_iterations, and dynamic expand nodes must declare max_children plus a template. Runtime child delegation is a separate execution budget: it defaults to 3 levels and has an opt-in hard ceiling of 8. These are population and shape limits, not launch concurrency: Runtime admits at most 16 live workers for one run and queues the rest. Omitted or zero max_steps stays unbounded; only a positive value adds a model-turn ceiling.",
     "sourceNote": "Source documents: docs/FLEET.md, docs/WORKFLOW_AUTHORING.md · Update docs-map.ts when changing."
   },
@@ -374,7 +374,7 @@
       ],
       [
         "Operate",
-        "Multitask coordination from the same composer. The parent can inspect, edit, and use shell or MCP tools under the same permission posture, sandbox, and safety rules as Act. Pod workers are preferred for independent, parallel, background, or long-running work, but delegation is not required for every executable step. Workflow is optional unless the work needs ordered phases, gates, or deterministic fan-in."
+        "Multitask coordination from the same composer. The parent can inspect, edit, and use shell or MCP tools under the same permission posture, sandbox, and safety rules as Act. Fleet workers are preferred for independent, parallel, background, or long-running work, but delegation is not required for every executable step. Workflow is optional unless the work needs ordered phases, gates, or deterministic fan-in."
       ]
     ],
     "switchingTitle": "Switch modes",
@@ -431,7 +431,7 @@
       ],
       [
         "exec",
-        "The one-shot headless worker (stream-json, pod subprocess, CI primitive) — not part of this API, but it shares the same runtime and event vocabulary."
+        "The one-shot headless worker (stream-json, fleet subprocess, CI primitive) — not part of this API, but it shares the same runtime and event vocabulary."
       ]
     ],
     "stdioTitle": "Probe without model tokens",
@@ -474,11 +474,11 @@
   },
   "docs-subagents": {
     "metaTitle": "Sub-Agents · Codewhale Docs",
-    "metaDescription": "The agent tool, Pod roles, context forking, worktree isolation, and concurrency caps.",
+    "metaDescription": "The agent tool, fleet roles, context forking, worktree isolation, and concurrency caps.",
     "bodyClassName": "text-ink-soft leading-relaxed",
     "overviewTitle": "Sub-Agents",
     "overviewLead": "A parent session launches one focused sub-agent through the agent tool and immediately gets back an agent_id, a compact receipt, and a transcript handle while the worker runs in the background. Sub-agents inherit the parent's tool registry by default, but they are leaf workers: they do not receive agent or nested lifecycle tools. agent launches detached background work — cancelling the parent turn stops the parent's wait path, but it does not kill already-opened child runs.",
-    "overviewFleetNote": "For work that must survive process restarts, sleep, or remote execution, prefer a Pod or a Workflow-backed pod run over a short in-session agent call.",
+    "overviewFleetNote": "For work that must survive process restarts, sleep, or remote execution, prefer a fleet or a Workflow-backed fleet run over a short in-session agent call.",
     "roles": [
       [
         "worker",

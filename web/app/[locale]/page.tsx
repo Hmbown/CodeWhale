@@ -4,19 +4,13 @@ import Link from "next/link";
 import { GettingStartedSteps } from "@/components/getting-started-steps";
 import { InstallCodeBlock } from "@/components/install-code-block";
 import { RevealOnScroll } from "@/components/reveal-on-scroll";
-import { Seal } from "@/components/seal";
 import { TerminalPlayer } from "@/components/terminal-player";
-import { Ticker } from "@/components/ticker";
-import { TiltFigure } from "@/components/tilt-figure";
 import { Whale } from "@/components/whale";
 import { getFacts } from "@/lib/facts";
-import { fetchFeed } from "@/lib/github";
 import { fill, getChrome, getHome, splitToken } from "@/lib/i18n/dictionaries";
 import { REPO_ISSUES_URL, REPO_RELEASES_URL, REPO_URL, DISCORD_URL } from "@/lib/i18n/links";
 import { serializeJsonLd } from "@/lib/json-ld";
-import { getEnv } from "@/lib/kv";
 import { buildSoftwareApplicationJsonLd } from "@/lib/software-application-schema";
-import type { FeedItem } from "@/lib/types";
 
 // Revalidate against source-proven runtime facts without giving up static edge
 // caching. `getFacts()` rejects legacy or older KV snapshots.
@@ -55,14 +49,6 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
   // fragments around a variable, and a locale may place the brand anywhere.
   const ledeParts = splitToken(d.heroIntro, "brand");
 
-  let feed: FeedItem[] = [];
-  try {
-    const env = await getEnv();
-    feed = await fetchFeed(env.GITHUB_TOKEN, 20);
-  } catch {
-    /* ticker is optional chrome */
-  }
-
   return (
     <div className="product-home paper-home">
       <script
@@ -78,7 +64,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         <div className="product-container product-hero-grid paper-hero-grid">
           <div className="product-hero-copy paper-hero-copy">
             <div className="mb-5">
-              <span className="pill pill-hot">{d.kicker}</span>
+              <span className="eyebrow">{d.kicker}</span>
             </div>
 
             <h1 className="font-display tracking-crisp">
@@ -151,7 +137,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
             </p>
           </div>
 
-          <TiltFigure className="product-shot paper-shot">
+          <figure className="product-shot paper-shot">
             <div className="product-shot-toolbar paper-shot-toolbar">
               <span>
                 <Whale size={18} />
@@ -168,29 +154,9 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
               priority
             />
             <figcaption>{d.figcaption}</figcaption>
-          </TiltFigure>
+          </figure>
         </div>
       </section>
-
-      {/* Live repo wire — merges, issues, and releases straight from GitHub,
-          with the contributor named. Absent entirely when the feed is empty. */}
-      {feed.length > 0 ? (
-        <Ticker
-          items={feed}
-          labels={{
-            liveLabel: chrome.tickerLiveLabel,
-            liveTag: chrome.tickerLiveTag,
-            ariaLabel: chrome.tickerAria,
-            merged: chrome.tickerMerged,
-            opened: chrome.tickerOpened,
-            closed: chrome.tickerClosed,
-            released: chrome.tickerReleased,
-            firstContribution: chrome.tickerFirstContribution,
-            by: chrome.tickerBy,
-            dateLocale: chrome.dateLocale,
-          }}
-        />
-      ) : null}
 
       {/* Proof strip */}
       <section className="product-proof paper-proof">
@@ -205,7 +171,6 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         <div className="product-container paper-decides-grid" data-reveal>
           <div>
             <div className="flex items-baseline gap-4 mb-3 hairline-b pb-3">
-              <Seal char={d.sealDecides} size="sm" variant="indigo" />
               <div>
                 <div className="eyebrow mb-1">{d.decidesEyebrow}</div>
                 <h2 className="font-display text-2xl sm:text-3xl">{d.decidesHeading}</h2>
@@ -227,7 +192,6 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
       <section className="product-workflow paper-workflow">
         <div className="product-container">
           <div className="flex items-baseline gap-4 mb-6 hairline-b pb-4" data-reveal>
-            <Seal char={d.sealWorkflow} size="sm" />
             <h2 className="font-display">{d.workflowHeading}</h2>
           </div>
           <ol className="product-workflow-steps" data-reveal-group>
@@ -253,7 +217,6 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
       <section className="product-start paper-start">
         <div className="product-container">
           <div className="flex items-baseline gap-4 mb-4 hairline-b pb-4" data-reveal>
-            <Seal char={d.sealStart} size="sm" />
             <h2 className="font-display">{d.startHeading}</h2>
           </div>
           <p className="product-start-lede" data-reveal>{d.startLede}</p>
@@ -270,7 +233,6 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         <div className="product-container product-boundaries-grid">
           <div data-reveal>
             <div className="flex items-baseline gap-4 mb-4">
-              <Seal char={d.sealBoundaries} size="sm" />
               <h2 className="font-display">
                 {d.boundariesHeadingA}
                 <br />
@@ -311,7 +273,6 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         <section className="product-surfaces paper-surfaces">
           <div className="product-container">
             <div className="flex items-baseline gap-4 mb-6 hairline-b pb-4" data-reveal>
-              <Seal char={d.sealSurfaces} size="sm" />
               <h2 className="font-display">{d.surfacesHeading}</h2>
             </div>
             <div className="product-surface-list" data-reveal-group>
@@ -363,9 +324,6 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
         {/* Community */}
         <section className="product-community paper-community">
           <div className="product-container product-community-grid" data-reveal>
-            <div className="product-community-illustration" aria-hidden="true">
-              <Seal char={d.sealCommunity} size="lg" />
-            </div>
             <div>
               <h2 className="font-display">{d.communityHeading}</h2>
               <p>{d.communityBody}</p>

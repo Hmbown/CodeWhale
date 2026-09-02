@@ -141,15 +141,15 @@ export const DOC_TASKS: DocTask[] = [
     keywords: { en: "hook lifecycle pre post event", zh: "钩子 生命周期 事件" },
   },
   {
-    id: "pod",
-    label: { en: "Write a Workflow for a Pod", zh: "为 Pod 编写 Workflow" },
+    id: "fleet",
+    label: { en: "Write a Workflow for a Fleet", zh: "为 fleet 编写 Workflow" },
     description: {
       en: "Durable task execution, roster management, and Workflow authoring.",
       zh: "持久任务执行、成员管理和 Workflow 编写。",
     },
-    href: "/docs/pod",
-    topicId: "pod",
-    keywords: { en: "pod workflow lane operate durable", zh: "编排 持久 工作流" },
+    href: "/docs/fleet",
+    topicId: "fleet",
+    keywords: { en: "fleet workflow lane operate durable", zh: "编排 持久 工作流" },
   },
   {
     id: "browser-client",

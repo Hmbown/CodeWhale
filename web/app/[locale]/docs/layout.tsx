@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { DocsBreadcrumb } from "@/components/docs-breadcrumb";
 import { DocsHelp } from "@/components/docs-help";
 import { DocsSidebar } from "@/components/docs-sidebar";
@@ -39,29 +38,10 @@ export default async function DocsLayout({
   return (
     <div className="docs-theme docs-portal min-h-screen">
       <section className="hero">
-        <div className="portal-current" aria-hidden="true" />
-        <div className="portal-container docs-portal-hero-inner">
+        <div className="portal-container docs-portal-band">
           <div className="portal-mark">
             <Whale size={28} />
             <span>{t.portalMark}</span>
-          </div>
-          {/* Shell chrome, not the page heading: this line is identical on all
-              docs URLs, so each page owns its own <h1> (its topic) and this
-              keeps the hero's display size without claiming the heading rank. */}
-          <p className="docs-hero-title">{t.heroTitle}</p>
-          <p>{t.heroLead}</p>
-          <div className="portal-actions">
-            <Link href={`/${locale}/install`} className="portal-button portal-button-primary">
-              {t.installCta}
-            </Link>
-            <Link
-              href="https://github.com/Hmbown/CodeWhale/tree/main/docs"
-              target="_blank"
-              rel="noreferrer"
-              className="portal-button portal-button-secondary"
-            >
-              {t.sourceDocsCta}
-            </Link>
           </div>
           <ReleaseTruth locale={locale} facts={facts} />
         </div>

@@ -18,9 +18,8 @@ export default async function DocsHubPage({ params }: { params: Promise<{ locale
   const t = getDocsShell(locale);
   return (
     <>
-      {/* The hub's own heading. The hero line above is shell chrome shared by
-          every docs URL, so it is no longer an <h1>; this names the page. */}
-      <h1 className="sr-only">{t.portalMark}</h1>
+      <h1>{t.heroTitle}</h1>
+      <p className="docs-hub-lede">{t.heroLead}</p>
       <DocsSearch locale={locale} />
     </>
   );

@@ -81,12 +81,10 @@ describe("Tideline public-surface contract", () => {
     expect(mobile).toMatch(
       /\.site-nav-actions select\s*\{[\s\S]*?width:\s*6\.75rem;[\s\S]*?min-width:\s*0/,
     );
-    expect(mobile).toMatch(/\.paper-wordmark-tag\s*\{\s*display:\s*none/);
+    expect(CSS).toMatch(/\.paper-wordmark-logo img\s*\{[^}]*height:\s*22px;/);
     expect(CSS).toMatch(/\.site-nav-actions\s*\{[\s\S]*?flex-shrink:\s*0/);
     expect(CSS).toMatch(/\.site-nav-actions\s*>\s*\*\s*\{\s*flex-shrink:\s*0/);
-    expect(CSS).toMatch(
-      /@media \(max-width: 900px\)[\s\S]*?\.site-github-link,[\s\S]*?\.site-discord-link\s*\{\s*display:\s*none/,
-    );
+    expect(CSS).toMatch(/@media \(max-width: 900px\)[\s\S]*?\.site-github-link\s*\{\s*display:\s*none/);
     expect(mobile).not.toMatch(/body:has\(\.product-home\) \.site-nav-actions select/);
     // The locale <select> and the home wordmark must keep a usable hit
     // target on every viewport, not only below 520px. Long native option

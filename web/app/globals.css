@@ -78,11 +78,8 @@
   --stage-dim: var(--whale-text-dim);
   --violet: var(--whale-mode-operate); /* 1px rules only, never text */
 
-  /* Type stacks. Display and body are one instrument voice — Tideline sets
-     its headings in the same sans as its copy, separated by weight and
-     tracking, not by a second family. --font-body/--font-mono arrive from
-     next/font in app/[locale]/layout.tsx. */
-  --font-display: var(--font-body);
+  /* Type stacks. Space Mono carries the display voice; IBM Plex Sans carries
+     body copy, and JetBrains Mono carries terminal code. */
   --font-cjk: "PingFang SC", "Hiragino Sans GB", "Source Han Serif SC",
     "Noto Serif CJK SC", serif;
 
@@ -186,14 +183,14 @@ html[lang="ko"] .dotline {
 
 h1, h2, h3, h4 {
   font-family: var(--font-display), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-weight: 600;
-  letter-spacing: -0.03em;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   color: var(--ink);
 }
 
-h1 { font-size: clamp(2.25rem, 5vw, 4.75rem); line-height: 0.98; word-break: keep-all; overflow-wrap: anywhere; }
-h2 { font-size: clamp(1.5rem, 2.8vw, 2.6rem); line-height: 1.08; word-break: keep-all; overflow-wrap: anywhere; }
-h3 { font-size: 1.18rem; line-height: 1.25; }
+h1 { font-size: clamp(2rem, 4.2vw, 3.6rem); line-height: 1.02; word-break: keep-all; overflow-wrap: anywhere; }
+h2 { font-size: clamp(1.3rem, 2.3vw, 2.05rem); line-height: 1.12; word-break: keep-all; overflow-wrap: anywhere; }
+h3 { font-size: 1.05rem; line-height: 1.25; }
 
 /* `overflow-wrap: anywhere` keeps long English headings safe, but can strand
    CJK punctuation — or a lone numeral — on a line of its own. Strict CJK
@@ -452,50 +449,12 @@ mark.search-highlight {
   letter-spacing: -0.03em;
 }
 
-/* Newspaper masthead (issue #4934 baseline) */
-.paper-issue-bar {
-  border-bottom: 1px solid var(--hairline);
-  background: var(--paper);
-}
-
-.paper-issue-inner {
-  display: flex;
-  width: var(--container);
-  margin-inline: auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding-block: 0.4rem;
-  font-family: var(--font-mono), "JetBrains Mono", monospace;
-  font-size: 0.62rem;
-  font-weight: 500;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--ink-mute);
-}
-
-.paper-issue-left,
-.paper-issue-right {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-}
-
-.paper-issue-sep { opacity: 0.55; }
-
 .paper-nav-inner {
   min-height: 3.85rem;
   padding-block: 0.55rem;
 }
 
 .paper-wordmark {
-  /* The old `flex: 1 1 auto` with `min-width: 0` let long-locale strips
-     (de, pt-BR, id) collapse the home control to a zero-width hit target.
-     `min-width` is a hard flexbox floor, so the shrink factor stays at 1:
-     the box gives back space down to 8.75rem and no further. Refusing to
-     shrink at all instead pushes the overflow onto the compact controls —
-     at 375px on a docs route the menu toggle is the item that gets clipped.
-     The tag still ellipsizes inside this box. */
   flex: 0 1 auto;
   gap: 0.75rem;
   max-width: 15rem;
@@ -512,26 +471,15 @@ mark.search-highlight {
 
 .paper-wordmark-logo {
   display: block;
-  width: 8.75rem;
+  width: auto;
   max-width: 100%;
 }
 
 .paper-wordmark-logo img {
   display: block;
-  width: 100%;
-  height: auto;
-}
-
-.paper-wordmark-tag {
-  margin-top: 0.18rem;
-  font-family: var(--font-cjk), "PingFang SC", "Source Han Serif SC", serif;
-  font-size: 0.66rem;
-  font-weight: 400;
-  letter-spacing: 0.12em;
-  color: var(--ink-mute);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  width: auto;
+  max-width: 100%;
+  height: 22px;
 }
 
 .paper-star-badge {
@@ -580,23 +528,14 @@ mark.search-highlight {
   transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
 }
 
-.paper-auth-signin {
+.paper-auth-signin,
+.paper-auth-register {
   color: var(--ink);
 }
 
-.paper-auth-signin:hover {
-  color: var(--indigo);
-}
-
-.paper-auth-register {
-  color: var(--indigo);
-  border: 1px solid var(--indigo);
-  border-radius: 5px;
-}
-
+.paper-auth-signin:hover,
 .paper-auth-register:hover {
-  background: var(--indigo);
-  color: var(--paper);
+  color: var(--indigo);
 }
 
 .site-nav-actions {
@@ -630,18 +569,6 @@ mark.search-highlight {
 }
 
 .site-github-link:hover { border-color: var(--ink); }
-
-.site-discord-link {
-  display: inline-flex;
-  min-height: 2.25rem;
-  align-items: center;
-  padding: 0.35rem 0.6rem;
-  border: 1px solid var(--hairline);
-  border-radius: 6px;
-  color: var(--ink);
-}
-
-.site-discord-link:hover { border-color: var(--ink); }
 
 .brand-mark { width: 1rem; height: 1rem; display: block; }
 
@@ -687,8 +614,8 @@ mark.search-highlight {
   padding-block: 2.8rem;
 }
 
-.site-wordmark-footer,
-.site-wordmark-footer span { color: var(--stage-text); }
+.site-wordmark-footer { color: var(--stage-text); }
+.site-wordmark-footer img { display: block; width: auto; height: 18px; }
 .site-footer-brand p { max-width: 30rem; margin-top: 0.8rem; color: rgb(var(--c-stage-soft) / 0.62); font-size: 0.86rem; line-height: 1.6; }
 
 .site-footer-links {
@@ -716,6 +643,7 @@ mark.search-highlight {
 
 .site-footer-meta a:hover { color: var(--ocean-current); }
 .site-footer-meta > div { display: flex; gap: 1rem; }
+.site-footer-meta > p { min-width: 0; overflow-wrap: anywhere; }
 
 /* ---------- ticker ---------- */
 .ticker-viewport {
@@ -1075,10 +1003,10 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 @media (max-width: 900px) {
   .site-nav-inner { gap: 1rem; }
-  .site-github-link,
-  .site-discord-link { display: none; }
+  .site-github-link { display: none; }
   .site-footer-main { grid-template-columns: 1fr; gap: 2.5rem; }
-  .site-footer-meta { grid-template-columns: 1fr; gap: 0.7rem; }
+  .site-footer-meta { grid-template-columns: minmax(0, 1fr); gap: 0.7rem; }
+  .site-footer-meta > div { min-width: 0; flex-wrap: wrap; }
 }
 
 @media (max-width: 700px) {
@@ -1142,8 +1070,8 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 
 .portal-hero h1 {
   max-width: 41rem;
-  font-size: clamp(2.4rem, 5vw, 3.7rem);
-  line-height: 1.01;
+  font-size: clamp(2rem, 4.2vw, 3.6rem);
+  line-height: 1.02;
 }
 
 .portal-lede {
@@ -1280,7 +1208,7 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .legal-doc h1 {
   margin: 0 0 0.5rem;
   font-family: var(--font-display), serif;
-  font-size: clamp(2rem, 4vw, 3rem);
+  font-size: clamp(1.85rem, 3.6vw, 2.7rem);
   line-height: 1.15;
 }
 
@@ -2062,9 +1990,9 @@ a.body-link:hover { background-size: 100% 6px; color: var(--ink); }
 .paper-hero-copy h1 {
   color: var(--ink);
   max-width: 38rem;
-  font-size: clamp(2.35rem, 4.6vw, 4.15rem);
+  font-size: clamp(2rem, 4.2vw, 3.6rem);
   line-height: 1.02;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.02em;
 }
 
 .product-hero-copy,
@@ -2889,10 +2817,6 @@ html[lang="ko"] .ocean-column h2 {
 }
 
 @media (max-width: 760px) {
-  .paper-wordmark-tag {
-    max-width: 11rem;
-  }
-
   .product-proof-grid,
   .product-boundaries-grid,
   .product-install-grid,
@@ -2946,14 +2870,10 @@ html[lang="ko"] .ocean-column h2 {
     max-width: 9.75rem;
   }
 
-  .paper-wordmark-tag {
-    display: none;
-  }
-
   .product-hero-copy h1,
   .paper-hero-copy h1 {
     max-width: 100%;
-    font-size: clamp(2.15rem, 11vw, 3rem);
+    font-size: clamp(2rem, 10vw, 3rem);
   }
 
   .paper-install-cta {
@@ -3010,20 +2930,13 @@ html[lang="ko"] .ocean-column h2 {
   background: var(--paper);
 }
 
-.docs-portal-hero-inner,
 .community-welcome-inner {
   position: relative;
 }
 
-.hero .portal-mark {
-  margin-bottom: 1rem;
-}
-
-.docs-portal-hero-inner .docs-hero-title,
-.docs-portal-hero-inner h1,
 .community-welcome-inner h1 {
   max-width: 50rem;
-  font-size: clamp(2.2rem, 4.8vw, 3.55rem);
+  font-size: clamp(2rem, 4.2vw, 3.6rem);
   line-height: 1.03;
 }
 
@@ -3031,13 +2944,33 @@ html[lang="ko"] .ocean-column h2 {
   margin-top: 0.85rem;
 }
 
-.docs-portal-hero-inner p:not(.docs-hero-title),
 .community-welcome-inner p {
   max-width: 47rem;
   margin-top: 1rem;
   color: var(--ink-soft);
   font-size: 1rem;
   line-height: 1.7;
+}
+
+.docs-portal .hero {
+  padding-block: 0.75rem;
+}
+
+.docs-portal-band {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.docs-portal-band .portal-mark,
+.docs-portal-band .release-truth {
+  margin: 0;
+}
+
+.docs-hub-lede {
+  margin: 0.8rem 0 1.5rem;
+  color: var(--ink-soft);
 }
 
 .docs-shell {

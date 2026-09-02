@@ -638,7 +638,7 @@ export interface DocsConstitutionDict {
   sourceNote: string;
 }
 
-/** `app/[locale]/docs/pod/page.tsx` (the `DocsFleetDict` name is internal compatibility). */
+/** `app/[locale]/docs/fleet/page.tsx` (the `DocsFleetDict` name is internal compatibility). */
 export interface DocsFleetDict {
   metaTitle: string;
   metaDescription: string;

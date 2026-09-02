@@ -4,8 +4,8 @@ Issues #1888 and #4022.
 
 Codewhale exposes the same lifecycle operations on three surfaces: a slash
 command typed into the composer, a bound hotbar slot, and a CLI entrypoint.
-Before this contract those three could — and did — drift: `/pod status`
-showed the current session's sub-agents while `codewhale pod status` read the
+Before this contract those three could — and did — drift: `/fleet status`
+showed the current session's sub-agents while `codewhale fleet status` read the
 durable ledger, and the CLI's Lane verbs had no slash equivalent at all.
 
 The contract is one typed descriptor table plus one executor per domain, in
@@ -17,7 +17,7 @@ forking.
 
 ## Vocabulary
 
-Unchanged and load-bearing: **Pod = who**, **Workflow = order**, **Lane = one
+Unchanged and load-bearing: **Fleet = who**, **Workflow = order**, **Lane = one
 running Workflow**, **Runtime = where/how**. Auto-Review is a permission
 posture, never a reviewer role. There is no "Operation" product noun; the
 internal `ControlOperation` type names control-plane *verbs* and never appears
@@ -41,7 +41,7 @@ stable id of the form `<domain>.<verb>`:
 
 The verb table today:
 
-| Verb | Lane | Pod |
+| Verb | Lane | fleet |
 | --- | --- | --- |
 | `list` | read, whole registry | read, whole ledger |
 | `status` | read, one Lane | read, whole ledger |
@@ -56,13 +56,13 @@ a typed `UnavailableReason` with a sanitized hint:
 
 - `backend_not_implemented` — nobody has built it. Every surface refuses.
 - `surface_not_supported` — the backend exists but not here. The hint names the
-  surface that works (`codewhale pod restart <worker-id>`).
+  surface that works (`codewhale fleet restart <worker-id>`).
 - `no_lane_registry` / `no_fleet_ledger` — the durable store does not exist yet.
 
 Availability is probed **read-only**. `LaneRegistry::open_default` and
 `FleetManager::open` both create their store as a side effect, so a status verb
 probes `lane_registry_root()` / `fleet_ledger_path()` first. Otherwise "this
-workspace has no Pod ledger" silently becomes "here is an empty Pod ledger
+workspace has no fleet ledger" silently becomes "here is an empty fleet ledger
 I just made".
 
 ## Exact run identity
@@ -100,12 +100,12 @@ Run DTOs never imply absence. `Known<T>` is either `Known(value)` or
 `redacted`, and renders as `<not_recorded>` rather than a blank or a plausible
 default.
 
-Concretely: the Pod receipt's `FleetResolvedRoute` records the **effective**
+Concretely: the fleet receipt's `FleetResolvedRoute` records the **effective**
 reasoning tier only, so `requested_reasoning` is `not_recorded` — it is not
 back-filled from the effective value, and `reasoning_downgraded()` returns
 `None` rather than guessing. The Lane registry records no route or usage at
-all, so those fields are uniformly `not_recorded`. Pod runs are fenced per
-task rather than per run, so a Pod run's `lifecycle_seq` is
+all, so those fields are uniformly `not_recorded`. fleet runs are fenced per
+task rather than per run, so a fleet run's `lifecycle_seq` is
 `not_applicable`.
 
 ## Bounds and redaction
@@ -139,7 +139,7 @@ measurement is required.
   unknowns, bounded pages and rows, absent-ledger reporting without creation,
   CLI-only `fleet.restart`, and cross-surface identity of `fleet.status`.
 - `crates/tui/src/commands/groups/core/lane.rs` and `…/fleet.rs` — slash verbs
-  map onto the shared operations, `/pod status` reads the durable ledger
+  map onto the shared operations, `/fleet status` reads the durable ledger
   rather than session sub-agents, and bare dispatch (what the hotbar fires) is
   read-only.
 - `crates/cli/src/lib.rs` — the CLI exposes exactly the declared Lane verbs

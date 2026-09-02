@@ -9,7 +9,7 @@ export const docsModes: DocsModesDict = {
   modes: [
     ["Plan", "用于只读调查与规划。Codewhale 可以检查工作区，但不能执行 Shell 命令或修改文件。"],
     ["Act", "用于常规交互式编码。Codewhale 可以检查、编辑并使用工具；Shell 是否可用以及何时请求批准，取决于当前配置和权限姿态。"],
-    ["Operate", "用于从同一个输入区协调多项任务。父回合可以直接检查、编辑并使用 Shell 或 MCP 工具，其权限姿态、沙箱和安全规则与 Act 相同。独立、并行、后台或长时间工作会优先交给 Pod worker，但并非所有可执行步骤都必须委派。只有需要有序阶段、门禁或确定性汇总时才需要 Workflow。"],
+    ["Operate", "用于从同一个输入区协调多项任务。父回合可以直接检查、编辑并使用 Shell 或 MCP 工具，其权限姿态、沙箱和安全规则与 Act 相同。独立、并行、后台或长时间工作会优先交给 fleet worker，但并非所有可执行步骤都必须委派。只有需要有序阶段、门禁或确定性汇总时才需要 Workflow。"],
   ],
   switchingTitle: "切换模式",
   switchingLead:

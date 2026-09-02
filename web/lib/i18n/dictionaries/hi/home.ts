@@ -6,7 +6,7 @@ import type { HomeDict } from "../types";
  * अंग्रेज़ी की वर्तमान दिशा में मूल पुनर्लेखन: मॉडल अपना लाइए, सब कुछ आपकी
  * मशीन पर। उत्पाद-शब्दावली TUI पैक की तरह literal रहती है: Plan / Work /
  * Operate, Ask / Auto-Review / Full Access, Codewhale, TUI,
- * `codewhale exec`, Runtime API + MCP, Pod, Node 18+, Rust, MIT।
+ * `codewhale exec`, Runtime API + MCP, fleet, Node 18+, Rust, MIT।
  *
  * सेक्शन-मुहरें (法, 行, …) अंग्रेज़ी संस्करण के साथ साझा ग्लिफ़ हैं —
  * चिह्न, गद्य नहीं।
@@ -69,7 +69,7 @@ export const home: HomeDict = {
   sealStart: "起",
   startHeading: "Codewhale पर नए हैं? शुरू से अंत तक चार कदम।",
   startLede:
-    "इंस्टॉल → बिना कुंजी पहला सेशन → प्रोवाइडर जोड़ें → अपनी Pod सेट करें। शब्दावली पेज पर परिभाषित हैं।",
+    "इंस्टॉल → बिना कुंजी पहला सेशन → प्रोवाइडर जोड़ें → अपनी fleet सेट करें। शब्दावली पेज पर परिभाषित हैं।",
   startGuideLink: "शुरुआती गाइड पढ़ें →",
   startVocabularyLink: "उत्पाद शब्दावली देखें →",
 
@@ -90,7 +90,7 @@ export const home: HomeDict = {
     ["codewhale exec", "स्क्रिप्ट और CI"],
     ["वेब क्लाइंट", "केवल-लूपबैक ब्राउज़र क्लाइंट"],
     ["Runtime API + MCP", "लोकल इंटीग्रेशन"],
-    ["Pod", "टिकाऊ मल्टी-एजेंट काम"],
+    ["fleet", "टिकाऊ मल्टी-एजेंट काम"],
   ],
   runtimeLink: "रनटाइम सतहें और स्थिरता टिप्पणियाँ देखें →",
 
