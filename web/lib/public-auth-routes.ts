@@ -11,10 +11,15 @@
 import { APP_URL } from "./i18n/links";
 import { pathLocale } from "./i18n/path";
 
-/** Exact founder raster (1254×1254) used on public account-entry pages. */
+/**
+ * App-icon raster (1254×1254) used on public account-entry pages: the canonical
+ * mark in white on a navy field, generated from `public/brand/mark.svg`. The
+ * vector is the master — never hand-edit this PNG, regenerate it. Pinned by
+ * hash so a redrawn or stale substitute fails the test rather than shipping.
+ */
 export const CANONICAL_MARK_SRC = "/brand/codewhale-mark.png";
 export const CANONICAL_MARK_SHA256 =
-  "5a2a34283560a3f0d65ab966ae49b88f67f5f26d659791213fa1120c1bc8929d";
+  "8b4c25460cb2a913bc42e4b97a06a09e4fd3bb31a93dc2da169a2858bbb34f01";
 
 export const APP_AUTH_CALLBACK_URL = `${APP_URL}/auth/callback`;
 

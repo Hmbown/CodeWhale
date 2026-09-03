@@ -22,7 +22,7 @@ export function PublicAccountEntry({
     <div className="portal-home">
       <section className="portal-section">
         <div className="portal-container public-account-entry">
-          {/* Exact founder raster; do not restyle or substitute a traced SVG. */}
+          {/* Pinned app-icon raster generated from brand/mark.svg; do not restyle. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             className="public-account-mark"

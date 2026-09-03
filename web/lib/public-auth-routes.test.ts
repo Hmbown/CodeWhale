@@ -63,7 +63,7 @@ describe("CWC destinations", () => {
 });
 
 describe("canonical mark", () => {
-  it("ships the exact founder raster, not a redrawn substitute", () => {
+  it("ships the pinned raster generated from the canonical vector", () => {
     const bytes = readFileSync(new URL("../public/brand/codewhale-mark.png", import.meta.url));
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(CANONICAL_MARK_SHA256);
     expect(CANONICAL_MARK_SRC).toBe("/brand/codewhale-mark.png");
