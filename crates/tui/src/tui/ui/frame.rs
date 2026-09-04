@@ -611,6 +611,8 @@ pub(crate) fn build_engine_config(app: &App, config: &Config) -> EngineConfig {
         goal_status: app.goal.status,
         goal_max_continuations: config.goal_max_continuations(),
         goal_continuation_delay_seconds: config.goal_continuation_delay_seconds(),
+        reasoning_only_max_reprompts: config.reasoning_only_max_reprompts(),
+        reasoning_only_reprompt_message: Some(config.reasoning_only_reprompt_message().to_string()),
         locale_tag: app.ui_locale.tag().to_string(),
         workshop: {
             crate::tools::large_output_router::WorkshopConfig::install_active(

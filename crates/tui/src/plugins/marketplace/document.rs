@@ -213,16 +213,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let real = dir.path().join("real.json");
         std::fs::write(&real, "{}").unwrap();
-        let link = dir.path().join("link.json");
+        let _link = dir.path().join("link.json");
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&real, &link).unwrap();
+        std::os::unix::fs::symlink(&real, &_link).unwrap();
         #[cfg(not(unix))]
-        let link = real.clone();
+        let _link = real.clone();
 
-        let error = load_catalog_document("test", dir.path(), link.to_str().unwrap())
+        let _error = load_catalog_document("test", dir.path(), _link.to_str().unwrap())
             .expect_err("symlink document must be refused");
         #[cfg(unix)]
-        assert!(error.contains("symlink"), "{error}");
+        assert!(_error.contains("symlink"), "{_error}");
     }
 
     #[test]

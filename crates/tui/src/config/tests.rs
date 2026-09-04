@@ -258,6 +258,62 @@ continuation_delay_seconds = 999999999
 }
 
 #[test]
+fn reasoning_only_config_loads_from_table() -> Result<()> {
+    // Absent table → built-in defaults.
+    let config: Config = toml::from_str("")?;
+    assert_eq!(
+        config.reasoning_only_max_reprompts(),
+        crate::config::DEFAULT_REASONING_ONLY_REPROMPTS
+    );
+    assert_eq!(
+        config.reasoning_only_reprompt_message(),
+        crate::config::DEFAULT_REASONING_ONLY_REPROMPT_MESSAGE
+    );
+
+    // Explicit max_reprompts override.
+    let config: Config = toml::from_str(
+        r#"
+[reasoning_only]
+max_reprompts = 10
+"#,
+    )?;
+    assert_eq!(config.reasoning_only_max_reprompts(), 10);
+    assert_eq!(
+        config.reasoning_only_reprompt_message(),
+        crate::config::DEFAULT_REASONING_ONLY_REPROMPT_MESSAGE
+    );
+
+    // Explicit reprompt_message override.
+    let config: Config = toml::from_str(
+        r#"
+[reasoning_only]
+max_reprompts = 5
+reprompt_message = "tu n'as rien a dire"
+"#,
+    )?;
+    assert_eq!(config.reasoning_only_max_reprompts(), 5);
+    assert_eq!(
+        config.reasoning_only_reprompt_message(),
+        "tu n'as rien a dire"
+    );
+
+    // 0 = disable automatic recovery.
+    let config: Config = toml::from_str(
+        r#"
+[reasoning_only]
+max_reprompts = 0
+"#,
+    )?;
+    assert_eq!(config.reasoning_only_max_reprompts(), 0);
+    assert_eq!(
+        config.reasoning_only_reprompt_message(),
+        crate::config::DEFAULT_REASONING_ONLY_REPROMPT_MESSAGE
+    );
+
+    Ok(())
+}
+
+#[test]
 fn modelstudio_coding_plan_mode_resolves_the_official_chat_base_url() {
     // The picker represents Coding Plan as the primary Model Studio provider
     // plus a mode, rather than switching to the legacy Coding Plan identity.

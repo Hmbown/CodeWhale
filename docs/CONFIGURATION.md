@@ -2321,6 +2321,39 @@ starts. Failed turns and policy/route failures never schedule another turn.
 Only the numeric cadence is stored in config; no prompt, credential, or secret
 is persisted for the loop.
 
+### Reasoning-only recovery (`[reasoning_only]`)
+
+When a reasoning model (thinking mode) finishes a response with only hidden
+reasoning and no answer text or tool call, the engine can automatically
+re-request the answer. Configure this behavior with the `[reasoning_only]`
+table:
+
+```toml
+[reasoning_only]
+# Maximum number of automatic re-requests. Default: 2.
+# Set to 0 to disable automatic recovery (fail immediately).
+max_reprompts = 10
+
+# Optional custom message sent to the model on each re-request.
+# When set, overrides the built-in default message.
+# When unset (or commented out), the engine uses:
+#   "So, what's up ? Keep running !"
+reprompt_message = "Allez, répond quelque chose !"
+```
+
+This only applies when the model returns a clean `stop` finish reason with
+only thinking content. An output-length stop (`length`/`max_tokens`) is never
+retried, and a persistently answerless model still fails honestly after the
+configured bound.
+
+To disable the reprompt message entirely (silent retry), set it to an empty
+string:
+
+```toml
+[reasoning_only]
+reprompt_message = ""
+```
+
 ### Notifications
 
 The TUI can emit a desktop notification (OSC 9 escape or plain BEL) when a turn **completes successfully** and took longer than a threshold, so you can tab away while a long task runs. Failed or cancelled turns are intentionally silent — the notification is a "your task is ready" cue, not a generic ping. Configuration lives under `[notifications]`:

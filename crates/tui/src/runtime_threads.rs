@@ -8087,6 +8087,10 @@ impl RuntimeThreadManager {
                 goal_status,
                 goal_max_continuations: cfg.goal_max_continuations(),
                 goal_continuation_delay_seconds: cfg.goal_continuation_delay_seconds(),
+                reasoning_only_max_reprompts: cfg.reasoning_only_max_reprompts(),
+                reasoning_only_reprompt_message: Some(
+                    cfg.reasoning_only_reprompt_message().to_string(),
+                ),
                 allowed_tools: isolated_chat.then(Vec::new),
                 disallowed_tools: None,
                 max_tool_calls: None,

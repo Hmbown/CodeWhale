@@ -2324,7 +2324,7 @@ impl Engine {
                         false,
                     )
                     && !stop_reason_is_output_limit(stop_reason.as_deref())
-                    && reasoning_only_reprompts < MAX_REASONING_ONLY_REPROMPTS
+                    && reasoning_only_reprompts < self.config.reasoning_only_max_reprompts
                 {
                     // Reasoning-only, clean stop: recover instead of dead-ending
                     // the turn. Nothing was persisted for this response (a bare
@@ -2334,13 +2334,38 @@ impl Engine {
                     // because retrying would only reproduce it.
                     reasoning_only_reprompts += 1;
                     let attempt = reasoning_only_reprompts;
+                    let max_reprompts = self.config.reasoning_only_max_reprompts;
+
+                    // If a custom reprompt message is configured, insert it as
+                    // a runtime-generated user message to nudge the model.
+                    if let Some(ref msg) = self.config.reasoning_only_reprompt_message
+                        && !msg.is_empty()
+                    {
+                        let reprompt = self.runtime_text_message_with_turn_metadata(
+                            msg.clone(),
+                            UserInputProvenance::Runtime,
+                        );
+                        self.add_session_message(reprompt).await;
+                        let _ = self
+                            .tx_event
+                            .send(Event::status(format!(
+                                "Model returned only reasoning; sending reprompt message ({attempt}/{max_reprompts})"
+                            )))
+                            .await;
+                        crate::logging::warn(format!(
+                            "Model returned only reasoning with no answer or tool call (attempt {attempt}/{max_reprompts}); sending reprompt message"
+                        ));
+                        turn_error = None;
+                        continue;
+                    }
+
                     crate::logging::warn(format!(
-                        "Model returned only reasoning with no answer or tool call (attempt {attempt}/{MAX_REASONING_ONLY_REPROMPTS}); re-requesting the answer"
+                        "Model returned only reasoning with no answer or tool call (attempt {attempt}/{max_reprompts}); re-requesting the answer"
                     ));
                     let _ = self
                         .tx_event
                         .send(Event::status(format!(
-                            "Model returned only reasoning; re-requesting the answer ({attempt}/{MAX_REASONING_ONLY_REPROMPTS})"
+                            "Model returned only reasoning; re-requesting the answer ({attempt}/{max_reprompts})"
                         )))
                         .await;
                     turn_error = None;
@@ -5699,12 +5724,7 @@ fn resolve_tool_definition<'a>(
 /// point the turn truly ends; emitting it earlier (at the persist site) would
 /// show a spurious terminal error immediately before the turn resumed for a
 /// steer or a sub-agent completion.
-/// Ceiling on reasoning-only auto re-requests within a single turn. A reasoning
-/// model that answers with only hidden reasoning is recovered up to this many
-/// times before the turn fails honestly; the prefix is cached, so each retry is
-/// cheap, and the bound keeps a persistently-answerless model from looping.
-pub(super) const MAX_REASONING_ONLY_REPROMPTS: u32 = 2;
-
+//
 /// Whether a provider stop reason names an output-length cap. Re-requesting
 /// after one only reproduces it, so those fail honestly (the user needs a
 /// larger max-tokens or a shorter turn) rather than retry.

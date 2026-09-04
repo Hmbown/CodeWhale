@@ -196,6 +196,16 @@ memory_path = "~/.codewhale/memory.md"
 [speech]
 # output_dir = "./speech"
 
+# ─────────────────────────────────────────────────────────────────────────────────
+# Reasoning-only recovery
+# ─────────────────────────────────────────────────────────────────────────────────
+# When a reasoning model returns only hidden thinking without any answer text
+# or tool call, the engine can re-request the answer automatically.
+# Set max_reprompts = 0 to disable automatic recovery entirely.
+# [reasoning_only]
+# max_reprompts = 2
+# reprompt_message = "So, what's up ? Keep running !"
+
 # Native tool catalog controls (#2076). By default only the core tool surface
 # is loaded into the model context; less common native tools are discoverable
 # through ToolSearch and loaded on first use.

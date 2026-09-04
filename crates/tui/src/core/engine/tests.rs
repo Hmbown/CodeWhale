@@ -20116,10 +20116,12 @@ async fn reasoning_only_clean_stop_is_retried_and_recovers() {
         .expect("terminal TurnComplete");
     assert_eq!(status, TurnOutcomeStatus::Completed);
 
+    // With the default reprompt message configured, the engine emits a status
+    // notice saying it sent a reprompt message rather than staying silent.
     let recovery = events
         .iter()
         .filter_map(|event| match event {
-            Event::Status { message } if message.contains("re-requesting the answer") => {
+            Event::Status { message } if message.contains("sending reprompt message") => {
                 Some(message.clone())
             }
             _ => None,
@@ -20152,10 +20154,12 @@ async fn reasoning_only_length_stop_fails_without_retry() {
         1,
         "a length stop must not be retried"
     );
+    // Neither the old silent-retry message nor the new reprompt message should
+    // appear: a length stop must not retry at all.
     assert!(
         !events.iter().any(|event| matches!(
             event,
-            Event::Status { message } if message.contains("re-requesting the answer")
+            Event::Status { message } if message.contains("reprompt")
         )),
         "a length stop must not announce a retry: {events:?}"
     );
@@ -20177,8 +20181,8 @@ async fn reasoning_only_forever_is_bounded_then_fails() {
 
     assert_eq!(
         model.calls.load(std::sync::atomic::Ordering::SeqCst),
-        1 + super::MAX_REASONING_ONLY_REPROMPTS as usize,
-        "reasoning-only retries are bounded by MAX_REASONING_ONLY_REPROMPTS"
+        1 + crate::config::DEFAULT_REASONING_ONLY_REPROMPTS as usize,
+        "reasoning-only retries are bounded by DEFAULT_REASONING_ONLY_REPROMPTS"
     );
     let status = events
         .iter()

@@ -298,6 +298,12 @@ pub(crate) async fn run_exec_agent(
         goal_status: crate::tools::goal::GoalStatus::Active,
         goal_max_continuations: execution_config.goal_max_continuations(),
         goal_continuation_delay_seconds: execution_config.goal_continuation_delay_seconds(),
+        reasoning_only_max_reprompts: execution_config.reasoning_only_max_reprompts(),
+        reasoning_only_reprompt_message: Some(
+            execution_config
+                .reasoning_only_reprompt_message()
+                .to_string(),
+        ),
         allowed_tools: allowed_tools.clone(),
         disallowed_tools: disallowed_tools.clone(),
         max_tool_calls,
