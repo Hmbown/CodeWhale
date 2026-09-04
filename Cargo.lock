@@ -4450,13 +4450,14 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "2.2.0"
+version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14db48ee17a9ba61810ab1a9c1beb7d06d8136ae39ac25a1137f10d357af01af"
+checksum = "42b6914fac0be956fe704a38239c3f44a9f841d1b06a5713d2f638065593f5b5"
 dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "indexmap",
  "oauth2",
  "pin-project-lite",
  "reqwest 0.13.4",
