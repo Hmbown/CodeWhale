@@ -24,11 +24,15 @@ pub(crate) fn route_context_window_tokens(
     model: &str,
     route_limits: Option<RouteLimits>,
 ) -> u32 {
+    route_context_limit_tokens(route_limits)
+        .unwrap_or_else(|| provider_capability(provider, model).context_window)
+}
+
+fn route_context_limit_tokens(route_limits: Option<RouteLimits>) -> Option<u32> {
     route_limits
         .and_then(|limits| limits.context_tokens)
         .and_then(|tokens| u32::try_from(tokens).ok())
         .filter(|tokens| *tokens > 0)
-        .unwrap_or_else(|| provider_capability(provider, model).context_window)
 }
 
 /// Provider/offering output cap, when the resolved route reports one.
@@ -230,7 +234,14 @@ pub(crate) fn effective_max_output_tokens_for_route(
     model: &str,
     route_limits: Option<RouteLimits>,
 ) -> u32 {
-    let requested_cap = effective_max_output_tokens(model);
+    let requested_cap = explicit_max_output_tokens_override().unwrap_or_else(|| {
+        route_context_limit_tokens(route_limits)
+            .filter(|_| context_window_for_model(model).is_none())
+            .map_or_else(
+                || effective_max_output_tokens(model),
+                |window| (window / 2).min(API_MAX_OUTPUT_TOKENS),
+            )
+    });
     let compatibility_source = output_ceiling_source(provider, model);
     let compatibility_cap = compatibility_source.clamp_tokens();
     let route_cap = route_output_limit_tokens(route_limits);
@@ -770,6 +781,37 @@ mod tests {
             );
             assert!(budget.available_input_tokens > 0, "window={window}");
         }
+    }
+
+    /// #5820: an uncatalogued local model must derive its automatic output
+    /// reservation from the route's real window instead of the 128K fallback.
+    #[test]
+    fn uncatalogued_local_model_uses_declared_window_for_output_default() {
+        let _lock = crate::test_support::lock_test_env();
+        let _deepseek = crate::test_support::EnvVarGuard::remove("DEEPSEEK_MAX_OUTPUT_TOKENS");
+        let limits = RouteLimits {
+            context_tokens: Some(32_768),
+            ..RouteLimits::default()
+        };
+        let model = "uncatalogued-local-model";
+
+        {
+            let _codewhale =
+                crate::test_support::EnvVarGuard::remove("CODEWHALE_MAX_OUTPUT_TOKENS");
+            let budget = route_context_budget(ApiProvider::Ollama, model, Some(limits), 0)
+                .expect("Ollama route budget");
+
+            assert_eq!(budget.output_cap_tokens, 16_384);
+            assert_eq!(budget.input_budget_ceiling, 15_360);
+        }
+
+        let _codewhale =
+            crate::test_support::EnvVarGuard::set("CODEWHALE_MAX_OUTPUT_TOKENS", "8192");
+        assert_eq!(
+            effective_max_output_tokens_for_route(ApiProvider::Ollama, model, Some(limits)),
+            8_192,
+            "an explicit operator cap must retain precedence"
+        );
     }
 
     #[test]
