@@ -91,7 +91,7 @@ jobs:
       - name: Mint Codewhale Agent app token
         if: env.HAS_ANY_KEY == 'true' && env.HAS_APP_KEY == 'true' && vars.CODEWHALE_APP_ID != ''
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.CODEWHALE_APP_ID }}
           private-key: ${{ secrets.CODEWHALE_APP_PRIVATE_KEY }}
