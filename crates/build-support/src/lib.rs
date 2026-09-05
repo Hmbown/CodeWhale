@@ -76,8 +76,8 @@ fn format_build_version(
     commit: Option<&str>,
     packaged_source: bool,
 ) -> String {
-    match commit {
-        Some(sha) => format!("{package_version} ({})", &sha[..12]),
+    match commit.and_then(|sha| short_sha(sha.to_string())) {
+        Some(sha) => format!("{package_version} ({sha})"),
         None if packaged_source => package_version.to_string(),
         None => format!("{package_version} (dev)"),
     }
