@@ -1,8 +1,11 @@
 // exec + transport safety tests.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { run, runOk, ExecError, have, trim } from "../src/exec.mjs";
-import { safeRemotePath, b64, localExec } from "../src/transport.mjs";
+import { safeRemotePath, b64, localExec, hdcExec } from "../src/transport.mjs";
 
 test("run captures stdout/stderr and exit codes without a shell", async () => {
   const r = await run("node", ["-e", "console.log('hello'); console.error('boo')"]);
@@ -55,3 +58,29 @@ test("localExec provides run/runOk/tmpFile", async () => {
   const f = ex.tmpFile("cu-test-");
   assert.ok(typeof f === "string");
 });
+
+for (const outcome of ["success", "transfer failure", "read failure"]) {
+  test(`hdc readFile cleans only its owned files after ${outcome}`, async (t) => {
+    // Contain even the old recursive-deletion bug inside this fixture.
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cu-hdc-test-"));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    t.mock.method(os, "tmpdir", () => root);
+    await fs.writeFile(path.join(root, "unrelated"), "keep me");
+    const ex = hdcExec({});
+    const transferError = new Error("transfer interrupted");
+    ex.pullFile = async (remote, local) => {
+      assert.equal(remote, "fixture.txt");
+      if (outcome === "read failure") return;
+      await fs.writeFile(local, "downloaded bytes");
+      if (outcome === "transfer failure") throw transferError;
+    };
+    if (outcome === "success") {
+      assert.equal((await ex.readFile("fixture.txt")).toString(), "downloaded bytes");
+    } else {
+      await assert.rejects(ex.readFile("fixture.txt"), (error) =>
+        outcome === "transfer failure" ? error === transferError : error.code === "ENOENT");
+    }
+    assert.equal(await fs.readFile(path.join(root, "unrelated"), "utf8"), "keep me");
+    assert.deepEqual(await fs.readdir(root), ["unrelated"]);
+  });
+}
