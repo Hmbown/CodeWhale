@@ -693,19 +693,22 @@ fn review_confirmation_in_text(text: &str) -> Option<String> {
     // The confirmation is `/plugin trust demo <64-hex>.<64-hex>` (129 chars).
     // Transcript cards wrap well before that, so a single rendered line no
     // longer holds the token. Join trimmed lines and recover the two digests.
+    // The transcript may also retain an earlier partial command, so scan every
+    // marker instead of rejecting after the first malformed candidate.
     let joined: String = text.lines().map(str::trim).collect();
     let marker = "/plugin trust demo ";
-    let start = joined.find(marker)?;
-    let token: String = joined[start + marker.len()..]
-        .chars()
-        .take_while(|ch| ch.is_ascii_hexdigit() || *ch == '.')
-        .collect();
-    let (content, capability) = token.split_once('.')?;
-    (content.len() == 64
-        && capability.len() == 64
-        && content.chars().all(|ch| ch.is_ascii_hexdigit())
-        && capability.chars().all(|ch| ch.is_ascii_hexdigit()))
-    .then(|| format!("{marker}{content}.{capability}"))
+    joined.match_indices(marker).find_map(|(start, _)| {
+        let token: String = joined[start + marker.len()..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_hexdigit() || *ch == '.')
+            .collect();
+        let (content, capability) = token.split_once('.')?;
+        (content.len() == 64
+            && capability.len() == 64
+            && content.chars().all(|ch| ch.is_ascii_hexdigit())
+            && capability.chars().all(|ch| ch.is_ascii_hexdigit()))
+        .then(|| format!("{marker}{content}.{capability}"))
+    })
 }
 
 #[cfg(all(unix, feature = "long-running-tests"))]
@@ -970,11 +973,11 @@ async fn plugin_toml_binary_lifecycle_skill_and_stdio_mcp_acceptance() {
 
 #[cfg(all(unix, feature = "long-running-tests"))]
 #[test]
-fn review_confirmation_survives_transcript_wrap() {
+fn review_confirmation_skips_partial_candidates_and_survives_transcript_wrap() {
     let content = "a".repeat(64);
     let capability = "b".repeat(64);
     let wrapped = format!(
-        "  /plugin trust demo {head}\n  {mid}\n  {tail}\n",
+        "/plugin trust demo partial\n  /plugin trust demo {head}\n  {mid}\n  {tail}\n",
         head = &format!("{content}.{capability}")[..40],
         mid = &format!("{content}.{capability}")[40..90],
         tail = &format!("{content}.{capability}")[90..],

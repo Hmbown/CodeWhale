@@ -3719,7 +3719,8 @@ async fn wait_for_terminal_turn(
                 | RuntimeTurnStatus::Interrupted
                 | RuntimeTurnStatus::Canceled
         );
-        if terminal {
+        let timed_out = Instant::now() >= deadline;
+        if terminal || timed_out {
             let receipt_is_durable =
                 manager
                     .events_since(&turn.thread_id, None)?
@@ -3727,16 +3728,21 @@ async fn wait_for_terminal_turn(
                     .any(|event| {
                         event.event == "turn.completed" && event.turn_id.as_deref() == Some(turn_id)
                     });
-            let claim_is_clear = manager
+            let active_claim_present = manager
                 .active_turn_flags(&turn.thread_id, turn_id)
                 .await
-                .is_none();
-            if receipt_is_durable && claim_is_clear {
+                .is_some();
+            if terminal && receipt_is_durable && !active_claim_present {
                 return Ok(turn);
             }
-        }
-        if Instant::now() >= deadline {
-            bail!("Timed out waiting for turn {turn_id}");
+            if timed_out {
+                bail!(
+                    "Timed out waiting for turn {turn_id}: status={:?}, \
+                     completion_receipt_present={receipt_is_durable}, \
+                     active_claim_present={active_claim_present}",
+                    turn.status
+                );
+            }
         }
         sleep(Duration::from_millis(20)).await;
     }
@@ -5420,7 +5426,8 @@ async fn monitor_separates_lifecycle_start_from_billing_dispatch_and_child_usage
         })
         .await?;
 
-    let completed = wait_for_terminal_turn(&manager, &turn.id, Duration::from_secs(2)).await?;
+    let completed =
+        wait_for_terminal_turn(&manager, &turn.id, TURN_SETTLEMENT_DEADLOCK_TIMEOUT).await?;
     assert_eq!(completed.effective_provider.as_deref(), Some("stepfun"));
     assert_eq!(
         completed.effective_provider_id.as_deref(),

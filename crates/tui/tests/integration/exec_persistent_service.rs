@@ -18,7 +18,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 async fn serialize_persistent_service_tests() -> tokio::sync::MutexGuard<'static, ()> {
@@ -129,13 +129,14 @@ fn json_response(value: Value) -> ResponseTemplate {
 }
 
 /// Sequential provider: first POST stages the service; later POSTs get the
-/// scenario's second turn. An optional delay on the second turn holds the
-/// exec mid-turn for the signal scenario.
+/// scenario's second turn. The failure scenario waits for explicit service
+/// readiness; an optional delay holds the exec mid-turn for the signal case.
 struct SequentialTurns {
     requests: Arc<AtomicUsize>,
     stage_command: String,
     second_turn: String,
     second_turn_delay: Option<Duration>,
+    second_turn_ready: Option<Mutex<mpsc::Receiver<()>>>,
 }
 
 impl Respond for SequentialTurns {
@@ -144,6 +145,17 @@ impl Respond for SequentialTurns {
         if call == 0 {
             sse_response(stage_service_sse(&self.stage_command))
         } else {
+            if call == 1
+                && let Some(ready) = &self.second_turn_ready
+                && ready
+                    .lock()
+                    .expect("service readiness receiver")
+                    .recv_timeout(RUN_TIMEOUT)
+                    .is_err()
+            {
+                return ResponseTemplate::new(504)
+                    .set_body_string("test did not confirm service readiness");
+            }
             let response = sse_response(self.second_turn.clone());
             match self.second_turn_delay {
                 Some(delay) => response.set_delay(delay),
@@ -157,6 +169,7 @@ async fn start_mock_llm(
     stage_command: &str,
     second_turn: String,
     second_turn_delay: Option<Duration>,
+    second_turn_ready: Option<mpsc::Receiver<()>>,
 ) -> MockServer {
     let server = MockServer::start().await;
 
@@ -176,6 +189,7 @@ async fn start_mock_llm(
             stage_command: stage_command.to_string(),
             second_turn,
             second_turn_delay,
+            second_turn_ready: second_turn_ready.map(Mutex::new),
         })
         .mount(&server)
         .await;
@@ -299,26 +313,20 @@ fn kill_process_group(pid: i32) {
     }
 }
 
-fn wait_for_pid_file(path: &Path) -> i32 {
-    // Staging latency is setup, not the assertion under test, and 30s was
-    // tuned against a lightly loaded host. On a machine running the whole
-    // 14k-test suite at once, staging a real child process past 30s is
-    // ordinary, and the suite reported it as "service pid file never
-    // appeared" -- a product failure that was not one. Bound it to the same
-    // budget the run itself uses so a service that genuinely never starts is
-    // still a failure, and load alone is not.
+fn wait_for_pid_file(path: &Path) -> Result<i32, String> {
     let deadline = Instant::now() + RUN_TIMEOUT;
     loop {
         if let Ok(contents) = std::fs::read_to_string(path)
             && let Ok(pid) = contents.trim().parse::<i32>()
         {
-            return pid;
+            return Ok(pid);
         }
-        assert!(
-            Instant::now() < deadline,
-            "service pid file never appeared at {}",
-            path.display()
-        );
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "service pid file never appeared at {}",
+                path.display()
+            ));
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
 }
@@ -340,7 +348,7 @@ const SERVICE_COMMAND: &str = "echo $$ > service.pid; exec sleep 600";
 #[tokio::test(flavor = "multi_thread")]
 async fn successful_exec_releases_persisted_service() {
     let _serial = serialize_persistent_service_tests().await;
-    let server = start_mock_llm(SERVICE_COMMAND, final_answer_sse(), None).await;
+    let server = start_mock_llm(SERVICE_COMMAND, final_answer_sse(), None, None).await;
     let workspace = TempDir::new().expect("workspace tempdir");
     let home = TempDir::new().expect("home tempdir");
 
@@ -360,7 +368,8 @@ async fn successful_exec_releases_persisted_service() {
     let stdout = join_pipe(stdout_reader, "stdout");
     let stderr = join_pipe(stderr_reader, "stderr");
 
-    let service_pid = wait_for_pid_file(&workspace.path().join("service.pid"));
+    let service_pid = wait_for_pid_file(&workspace.path().join("service.pid"))
+        .unwrap_or_else(|error| panic!("{error}\nstdout:\n{stdout}\nstderr:\n{stderr}"));
     let events = stream_events(&stdout);
     let released = events
         .iter()
@@ -393,7 +402,14 @@ async fn successful_exec_releases_persisted_service() {
 #[tokio::test(flavor = "multi_thread")]
 async fn failed_exec_kills_pending_service_and_exits_nonzero() {
     let _serial = serialize_persistent_service_tests().await;
-    let server = start_mock_llm(SERVICE_COMMAND, incomplete_answer_sse(), None).await;
+    let (service_ready, service_ready_receiver) = mpsc::channel();
+    let server = start_mock_llm(
+        SERVICE_COMMAND,
+        incomplete_answer_sse(),
+        None,
+        Some(service_ready_receiver),
+    )
+    .await;
     let workspace = TempDir::new().expect("workspace tempdir");
     let home = TempDir::new().expect("home tempdir");
 
@@ -403,18 +419,42 @@ async fn failed_exec_kills_pending_service_and_exits_nonzero() {
     let stdout_reader = read_pipe_in_background(child.stdout.take().expect("stdout pipe"));
     let stderr_reader = read_pipe_in_background(child.stderr.take().expect("stderr pipe"));
 
-    // Observe the pid file while the exec is still running, exactly as
-    // `terminating_signal_kills_pending_service_and_exits_nonzero` does. Read
-    // after the wait, this raced the very teardown under test: a failing exec
-    // kills its pending service on the way out, so the file could be gone (or
-    // never written) by the time the process had exited. Isolated, staging won
-    // the race; under a loaded CI host it lost, and the suite reported
-    // "service pid file never appeared" as a product failure.
-    //
-    // The order also states the precondition properly: this case is about
-    // killing a service that *was* pending, so the staging must be observed
-    // before the exit, not inferred after it.
-    let service_pid = wait_for_pid_file(&workspace.path().join("service.pid"));
+    // Spawning a background process does not mean its first instruction ran.
+    // Hold the deliberate model failure until the real service is ready, so
+    // cancellation cannot kill it before it writes the PID we need to check.
+    let service_pid = match wait_for_pid_file(&workspace.path().join("service.pid")) {
+        Ok(pid) => pid,
+        Err(error) => {
+            drop(service_ready);
+            // Let the host clean up its managed services before forcing exit.
+            // SAFETY: direct child of this test.
+            unsafe {
+                libc::kill(
+                    i32::try_from(child.id()).expect("child pid fits i32"),
+                    libc::SIGTERM,
+                );
+            }
+            if child
+                .wait_timeout(Duration::from_secs(5))
+                .ok()
+                .flatten()
+                .is_none()
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            let stdout = join_pipe(stdout_reader, "stdout");
+            let stderr = join_pipe(stderr_reader, "stderr");
+            panic!("{error}\nstdout:\n{stdout}\nstderr:\n{stderr}");
+        }
+    };
+    assert!(
+        pid_is_alive(service_pid),
+        "service must be alive before the model fails"
+    );
+    service_ready
+        .send(())
+        .expect("release the deliberate model failure");
 
     let status = match child.wait_timeout(RUN_TIMEOUT).expect("wait for exec") {
         Some(status) => status,
@@ -449,6 +489,7 @@ async fn terminating_signal_kills_pending_service_and_exits_nonzero() {
         SERVICE_COMMAND,
         final_answer_sse(),
         Some(Duration::from_secs(300)),
+        None,
     )
     .await;
     let workspace = TempDir::new().expect("workspace tempdir");
@@ -461,7 +502,8 @@ async fn terminating_signal_kills_pending_service_and_exits_nonzero() {
     let stderr_reader = read_pipe_in_background(child.stderr.take().expect("stderr pipe"));
 
     // The pid file proves the service was staged before the signal.
-    let service_pid = wait_for_pid_file(&workspace.path().join("service.pid"));
+    let service_pid = wait_for_pid_file(&workspace.path().join("service.pid"))
+        .unwrap_or_else(|error| panic!("{error}"));
     assert!(pid_is_alive(service_pid));
 
     // SAFETY: direct child of this test.
