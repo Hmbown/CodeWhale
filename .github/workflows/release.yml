@@ -114,7 +114,7 @@ jobs:
         run: node scripts/release/ensure-release-assets-absent.js "${GITHUB_REPOSITORY}" "${TAG}"
 
   parity:
-    timeout-minutes: 20
+    timeout-minutes: 45
     needs: resolve
     runs-on: ubuntu-latest
     steps:

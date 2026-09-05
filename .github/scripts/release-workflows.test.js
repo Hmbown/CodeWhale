@@ -665,7 +665,9 @@ for (const job of ["bundle", "windows-installer", "assemble", "smoke"]) {
 }
 assert.equal(jobTimeout(nightly, "build"), 90);
 assert.equal(jobTimeout(release, "resolve"), 10);
-assert.equal(jobTimeout(release, "parity"), 20);
+// The v0.9.12 tag push finished every parity step and was then cancelled at
+// 20 minutes inside rust-cache's post-run save; 45 keeps that margin.
+assert.equal(jobTimeout(release, "parity"), 45);
 
 console.log(
   "Workflow contracts OK: 6-target/12-asset single-runtime nightly and exact-head 7-target/34-asset release candidate.",

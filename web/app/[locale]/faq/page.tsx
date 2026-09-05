@@ -229,7 +229,7 @@ codewhale --provider openrouter --model deepseek/deepseek-v4-pro
       <>
         The Codewhale runtime, workspace state, and audit log stay on your machine.
         Codewhale 0.9.12 counts anonymous usage by default and says so at first launch
-        (the published 0.9.11 release asked first). Turning it off is a saved choice that
+        (the earlier 0.9.11 release asked first). Turning it off is a saved choice that
         later versions keep, and an opt-out recorded under the earlier opt-in policy stays
         off; showing the notice never records any acceptance on your behalf. While on, a
         session posts aggregate session, feature, and error counts
@@ -597,7 +597,7 @@ codewhale --provider openrouter --model deepseek/deepseek-v4-pro
     q: "我的代码安全吗？Codewhale 使用什么沙箱机制？",
     a: (
       <>
-        Codewhale 运行时、工作区状态与审计日志保留在你的机器上。Codewhale 0.9.12 默认统计匿名使用量，并在首次启动时告知你（已发布的 0.9.11 版本会先询问）。
+        Codewhale 运行时、工作区状态与审计日志保留在你的机器上。Codewhale 0.9.12 默认统计匿名使用量，并在首次启动时告知你（早先的 0.9.11 版本会先询问）。
         关闭是会被后续版本保留的选择，在早先的自愿开启政策下记录的关闭也始终有效；显示告知绝不会代你记录任何同意。开启时，会话只会把聚合的会话、功能与错误计数以及封闭枚举 POST 到第一方端点{" "}
         <code className="inline">https://telemetry.codewhale.net/v1/telemetry</code>，
         那是一个 Cloudflare Worker，完整源码就在仓库的 <code className="inline">telemetry-ingest/</code> 目录里。
