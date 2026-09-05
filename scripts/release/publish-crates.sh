@@ -14,12 +14,19 @@ case "${mode}" in
     ;;
 esac
 
+# Multi-package publication verification was stabilized in Cargo 1.90.
+# Release tooling can require a newer Cargo than the runtime's Rust MSRV.
+cargo_version="$(cargo --version)"
+if [[ ! "${cargo_version}" =~ ^cargo[[:space:]]+([0-9]+)\.([0-9]+)\. ]] ||
+   (( BASH_REMATCH[1] < 1 || (BASH_REMATCH[1] == 1 && BASH_REMATCH[2] < 90) )); then
+  echo "Release preflight requires Cargo 1.90 or newer; found ${cargo_version}. Run rustup update stable and use that toolchain." >&2
+  exit 1
+fi
+
 packages=("${release_crates[@]}")
 crates_user_agent="CodeWhale release publish check (https://github.com/Hmbown/CodeWhale)"
 
 workspace_version=""
-workspace_codewhale_packages=()
-workspace_package_dep_flags=()
 
 metadata_inventory="$(
   python3 "${script_dir}/validate-crate-publish-order.py" "${packages[@]}"
@@ -28,10 +35,6 @@ while IFS=$'\t' read -r kind name value; do
   case "${kind}" in
     version)
       workspace_version="${name}"
-      ;;
-    crate)
-      workspace_codewhale_packages+=("${name}")
-      workspace_package_dep_flags+=("${value}")
       ;;
   esac
 done <<<"${metadata_inventory}"
@@ -48,19 +51,23 @@ if [[ "${mode}" == "publish" ]]; then
   "${script_dir}/verify-release-assets.sh"
 fi
 
-package_has_workspace_deps() {
-  local package_name="$1"
-  local index
-  for ((index = 0; index < ${#workspace_codewhale_packages[@]}; index += 1)); do
-    if [[ "${workspace_codewhale_packages[$index]}" == "${package_name}" ]]; then
-      [[ "${workspace_package_dep_flags[$index]}" == "1" ]]
-      return
-    fi
-  done
+# Verify the complete release together, including Cargo's publication checks.
+# Unpublished dependencies resolve through a temporary local registry, and
+# each unpacked tarball builds before the first real upload is attempted.
+package_args=(--dry-run --locked --registry crates-io)
+if [[ "${mode}" == "dry-run" ]]; then
+  package_args+=(--allow-dirty)
+fi
+for package in "${packages[@]}"; do
+  package_args+=(-p "${package}")
+done
 
-  echo "Unknown workspace crate: ${package_name}" >&2
-  return 1
-}
+echo "Verifying all ${#packages[@]} release package tarballs before any upload..."
+cargo publish "${package_args[@]}"
+if [[ "${mode}" == "dry-run" ]]; then
+  echo "Release package verification OK; no crates uploaded."
+  exit 0
+fi
 
 crate_version_exists() {
   local crate_name="$1"
@@ -87,20 +94,11 @@ wait_for_crate_version() {
 
 for package in "${packages[@]}"; do
   echo "::group::${mode} ${package}"
-  if [[ "${mode}" == "dry-run" ]]; then
-    if package_has_workspace_deps "${package}"; then
-      cargo package --allow-dirty --locked --list -p "${package}" >/dev/null
-      echo "Verified package contents for ${package}; full crates.io dry-run requires workspace dependencies at ${workspace_version} to be published first."
-    else
-      cargo publish --dry-run --locked --allow-dirty -p "${package}"
-    fi
+  if crate_version_exists "${package}" "${workspace_version}"; then
+    echo "Skipping ${package} ${workspace_version}; already published."
   else
-    if crate_version_exists "${package}" "${workspace_version}"; then
-      echo "Skipping ${package} ${workspace_version}; already published."
-    else
-      cargo publish --locked -p "${package}"
-      wait_for_crate_version "${package}" "${workspace_version}"
-    fi
+    cargo publish --locked --registry crates-io -p "${package}"
+    wait_for_crate_version "${package}" "${workspace_version}"
   fi
   echo "::endgroup::"
 done

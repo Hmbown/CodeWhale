@@ -97,7 +97,7 @@ export default async function HomePage({ params }: { params: Promise<{ locale: s
               alt={d.screenshotAlt}
               width={2760}
               height={1494}
-              sizes="(max-width: 1280px) calc(100vw - 2rem), 1248px"
+              sizes="(max-width: 58rem) calc(100vw - 2rem), 56rem"
               priority
             />
             <figcaption>

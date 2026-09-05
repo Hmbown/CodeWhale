@@ -4065,14 +4065,14 @@ html[data-theme="dark"] .docs-theme {
   font-size: 1.4rem;
 }
 
-/* The terminal is the main product image, at a readable full-column scale. */
+/* Keep the terminal centered and compact beneath the introductory copy. */
 .folio-hero-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; row-gap: 2rem; }
 .folio-hero-copy { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: clamp(2rem, 5vw, 5rem); max-width: none; grid-column: 1; grid-row: 1; padding-bottom: 0; }
 .folio-hero-copy .folio-kicker { grid-column: 1 / -1; }
 .folio-hero-copy h1 { grid-column: 1; grid-row: 2 / 4; font-size: clamp(2.75rem, 5vw, 4.5rem); }
 .folio-hero-copy .folio-lede { grid-column: 2; grid-row: 2; margin-top: 0; align-self: end; }
 .folio-hero-copy .folio-actions { grid-column: 2; grid-row: 3; align-self: start; margin-top: 1.25rem; }
-.folio-shot { grid-column: 1; grid-row: 2; width: 100%; margin-top: 0; }
+.folio-shot { grid-column: 1; grid-row: 2; width: min(100%, 56rem); justify-self: center; margin-top: 0; }
 .folio-chapter { grid-column: 1; grid-row: 3; justify-self: start; }
 .product-install-grid > div, .product-composer, .product-composer > div { min-width: 0; }
 @media (max-width: 760px) {

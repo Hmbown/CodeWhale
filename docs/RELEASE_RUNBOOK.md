@@ -99,12 +99,21 @@ clippy/test/npm-smoke gates for `fix/*`, `rebrand/*`, `work/v*`, and `main`.
 GitHub Actions keeps the cheap drift/fmt statuses plus macOS and Windows
 coverage, while CNB carries the Linux work.
 
-`publish-crates.sh dry-run` first validates the maintained publication order
-against the locked Cargo workspace graph. It then performs a full
-`cargo publish --dry-run` for crates without unpublished workspace dependencies
-and a packaging preflight for dependent workspace crates. That avoids false
-negatives from crates.io not yet containing the new workspace version while
-still validating package contents before publish.
+`publish-crates.sh` requires Cargo 1.90 or newer for multi-package verification;
+this release-tool requirement is separate from the runtime's Rust 1.88 MSRV.
+Use an up-to-date stable toolchain (`rustup update stable`) for release work.
+
+Both modes validate publication order against the locked workspace graph, then
+run one `cargo publish --dry-run --locked --registry crates-io` covering all
+21 release crates. Cargo resolves unpublished workspace dependencies through a
+temporary local registry, builds every unpacked tarball, and checks publication
+metadata before any upload. Dry-run mode permits source edits and stops there.
+Publish mode requires the approved release checkout and assets, then skips
+versions already on crates.io and uploads the remaining crates in dependency
+order. Resuming still verifies the complete source release; it never weakens
+the artifact gate merely because an earlier crate was already uploaded.
+Registry-side acceptance and credentials are still checked during real upload;
+a successful preflight cannot guarantee that every later upload will succeed.
 
 For npm wrapper verification, build the single runtime and run the
 cross-platform smoke harness. This packs the npm wrapper, installs it into a

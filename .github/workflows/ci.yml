@@ -213,6 +213,7 @@ jobs:
           bash scripts/release/prepare-release.test.sh
           bash scripts/release/require-release-tag-checkout.test.sh
           bash scripts/release/validate-crate-publish-order.test.sh
+          python3 scripts/release/publish-crates.test.py
           bash scripts/release/verify-remote-tag.test.sh
           bash packaging/aur/render.test.sh
           sh scripts/dev-cache.test.sh
