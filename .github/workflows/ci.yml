@@ -249,7 +249,7 @@ jobs:
         # The bundled plugin is dependency-free too; its suites cover the
         # manifest contract, the registry, the exec/ssh transport, the four
         # platform backends, and the MCP stdio protocol. No GUI input runs.
-        run: (cd plugins/computer-use && npm test)
+        run: (cd crates/tui/plugins/computer-use && npm test)
 
   safety-gate:
     name: Safety gate

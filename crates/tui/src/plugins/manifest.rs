@@ -2305,10 +2305,7 @@ args = ["server.js", "--mode=worker", "-e", "console.log('ready')"]
     #[test]
     fn bundled_computer_use_plugin_validates() {
         use crate::plugins::agent_plugin;
-        let root = PathBuf::from(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../plugins/computer-use"
-        ));
+        let root = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/plugins/computer-use"));
         let validated = PluginManifest::validate_from_path(&root.join("plugin.json"))
             .expect("in-repo computer-use bundle must validate");
         assert_eq!(validated.manifest.plugin.name, "computer-use");

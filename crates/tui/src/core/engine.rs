@@ -6329,6 +6329,7 @@ impl Engine {
                 }
                 self.mcp_event_generation = generation;
                 self.replace_mcp_boot_errors(&authority_errors, connection_errors);
+                self.session.pending_prefix_change_reason = Some("mcp-session-boot".to_string());
                 if let Ok(snapshot) = self.mcp_session_snapshot().await {
                     let _ = self.tx_event.try_send(Event::McpSessionBoot {
                         generation,
@@ -6382,6 +6383,8 @@ impl Engine {
                     }
                     self.mcp_event_generation = generation;
                     self.replace_mcp_boot_errors(&authority_errors, connection_errors);
+                    self.session.pending_prefix_change_reason =
+                        Some("mcp-session-boot".to_string());
                 }
                 McpBootUpdate::Finished {
                     generation,
@@ -6484,33 +6487,54 @@ impl Engine {
             async move {
                 let mut remaining: Vec<String> =
                     pending.iter().map(|(name, _)| name.clone()).collect();
-                let results = McpPool::connect_pending_concurrently(
+                let mut connects = McpPool::spawn_pending_connects(
                     pending,
                     timeouts,
                     network_policy,
                     catalog_generation,
-                )
-                .await;
+                );
                 let mut connection_errors = HashMap::new();
-                {
-                    let mut pool = pool_for_task.lock().await;
-                    for (name, result) in results {
-                        remaining.retain(|pending_name| pending_name != &name);
-                        match result {
-                            Ok(connection) => pool.store_ready_connection(name, connection),
-                            Err(error) => {
-                                pool.note_connect_failure(&name, &error);
-                                connection_errors
-                                    .insert(name, crate::mcp::format_mcp_error_for_display(&error));
+                while let Some(joined) = connects.join_next().await {
+                    let (name, result) = joined
+                        .unwrap_or_else(|error| ("connection task".to_string(), Err(error.into())));
+                    remaining.retain(|pending_name| pending_name != &name);
+                    {
+                        let mut pool = pool_for_task.lock().await;
+                        // A turn may have reloaded the pool while these handshakes
+                        // were in flight. Never let their old authority or failures
+                        // overwrite the newly installed configuration.
+                        let reload = pool.reload_if_config_changed().await;
+                        if reload.is_err()
+                            || pool.current_catalog_generation() != catalog_generation
+                        {
+                            connects.abort_all();
+                            connection_errors.clear();
+                            if let Err(error) = reload {
+                                connection_errors.insert(
+                                    "configuration".to_string(),
+                                    crate::mcp::format_mcp_error_for_display(&error),
+                                );
                             }
+                            break;
                         }
-                        let _ = progress_tx.send(McpBootUpdate::Progress {
-                            generation,
-                            authority_errors: Arc::clone(&authority_errors),
-                            connection_errors: connection_errors.clone(),
-                            connecting: remaining.clone(),
+                        let result = result.and_then(|connection| {
+                            pool.store_ready_connection(name.clone(), connection)
                         });
+                        if let Err(error) = result {
+                            pool.note_connect_failure(&name, &error);
+                            connection_errors
+                                .insert(name, crate::mcp::format_mcp_error_for_display(&error));
+                        }
                     }
+                    let _ = progress_tx.send(McpBootUpdate::Progress {
+                        generation,
+                        authority_errors: Arc::clone(&authority_errors),
+                        connection_errors: connection_errors.clone(),
+                        connecting: remaining.clone(),
+                    });
+                }
+                {
+                    let pool = pool_for_task.lock().await;
                     let mut required = Vec::new();
                     pool.push_required_server_errors(&mut required);
                     for (name, error) in required {
@@ -6609,8 +6633,9 @@ impl Engine {
         if self.mcp_boot_in_flight {
             // Optional servers are still connecting in the background. Snapshot
             // currently-ready tools so the first LLM call is not serialized
-            // behind the slowest handshake. The catalog refreshes on a later
-            // turn once boot settles (KV-cache prefix re-pin: mcp-session-boot).
+            // behind the slowest handshake. Declare the refresh here as well
+            // as on Progress: a ready connection can precede its mailbox update.
+            self.session.pending_prefix_change_reason = Some("mcp-session-boot".to_string());
             return pool.lock().await.to_api_tools();
         }
 

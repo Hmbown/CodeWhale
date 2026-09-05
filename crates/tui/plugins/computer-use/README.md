@@ -89,7 +89,7 @@ recorder.
 
 ## Development
 
-The bundle lives at `plugins/computer-use` in the Codewhale repository and has
+The bundle lives at `crates/tui/plugins/computer-use` in the Codewhale repository and has
 no dependencies to install; run its suites from that directory.
 
 ```bash

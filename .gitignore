@@ -161,4 +161,4 @@ CODEWHALE_0_9_0_CUTOVER.md
 .playwright-mcp/
 
 # computer-use plugin smoke receipts (per-run local evidence)
-plugins/computer-use/receipts/
+crates/tui/plugins/computer-use/receipts/

@@ -402,7 +402,7 @@ fn reviewed_product_catalog(locale: Locale) -> Vec<PluginProduct> {
             )
             .into_owned(),
             publisher: "Codewhale".into(),
-            source_reference: "plugins/computer-use".into(),
+            source_reference: "crates/tui/plugins/computer-use".into(),
             components: vec![
                 PluginProductComponent {
                     kind: PluginProductComponentKind::Mcp,

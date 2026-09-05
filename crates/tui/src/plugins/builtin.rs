@@ -3,8 +3,8 @@
 //! [`super::discovery::DiscoveryConfig::builtin_plugin_dirs`] and
 //! [`super::types::PluginScope::Builtin`] have existed since plugin discovery
 //! landed, with no producer: every construction site passed an empty list, so
-//! the in-repo `plugins/computer-use` bundle reached nobody who had not cloned
-//! the repository. This module is that producer. It is not a second install
+//! the in-repo `crates/tui/plugins/computer-use` bundle reached nobody who had
+//! not cloned the repository. This module is that producer. It is not a second install
 //! path — installed bundles still arrive through
 //! [`super::install`], and discovery, trust, and enablement are unchanged.
 //!
@@ -47,12 +47,12 @@ macro_rules! bundle_file {
     ($relative:literal) => {
         (
             $relative,
-            include_str!(concat!("../../../../plugins/computer-use/", $relative)),
+            include_str!(concat!("../../plugins/computer-use/", $relative)),
         )
     };
 }
 
-/// The runtime tree of `plugins/computer-use`, relative path → contents.
+/// The runtime tree of `crates/tui/plugins/computer-use`, relative path → contents.
 ///
 /// Development-only files (`tests/`, `scripts/smoke.mjs`, `package.json`,
 /// `README.md`) are deliberately absent: nothing at runtime reads them, and
