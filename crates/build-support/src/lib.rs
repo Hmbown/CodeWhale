@@ -7,7 +7,8 @@
 //! Two different shas live here and they are not interchangeable.
 //! `CODEWHALE_BUILD_VERSION`/`CODEWHALE_BUILD_COMMIT` describe *the build the
 //! environment asked for* (`CODEWHALE_BUILD_SHA`/`DEEPSEEK_BUILD_SHA`/`GITHUB_SHA`); an unstamped
-//! local build renders a `(dev)` marker instead.
+//! local checkout renders `(dev)`; an unstamped Cargo source package displays
+//! its package version without claiming a release-binary SHA.
 //! `CODEWHALE_RELEASE_BUILD_SHA` describes a *published* binary and has no
 //! fallback at all, because it leaves the machine.
 //!
@@ -23,7 +24,8 @@
 //! So the contract is: a sha appears in the version string only when the
 //! build environment supplied one (`CODEWHALE_BUILD_SHA` wins over
 //! `GITHUB_SHA`), the build script reruns only when those variables change,
-//! and a build nobody stamped says `(dev)`. CI and release builds are
+//! and an unstamped checkout says `(dev)`. Cargo source packages use the plain
+//! package version. CI and release builds are
 //! byte-identical to the old behavior; dogfood builds pass the sha
 //! explicitly (the install script prints the exact command).
 
@@ -44,19 +46,21 @@ pub fn declare_rerun_conditions(_manifest_dir: &Path) {
 
 /// Emit `cargo:rustc-env=CODEWHALE_BUILD_VERSION=...` — the package version,
 /// suffixed with the short build SHA when the environment supplied one
-/// (`CODEWHALE_BUILD_SHA`, then `DEEPSEEK_BUILD_SHA`, then `GITHUB_SHA`), or with the literal `dev`
-/// marker when it did not. `CODEWHALE_BUILD_COMMIT` is emitted only in the
-/// stamped case.
+/// (`CODEWHALE_BUILD_SHA`, then `DEEPSEEK_BUILD_SHA`, then `GITHUB_SHA`).
+/// Unstamped Cargo source packages show the plain package version; unpackaged
+/// checkouts retain `(dev)`. `CODEWHALE_BUILD_COMMIT` is emitted only when stamped.
 ///
 /// `package_version` is the calling build script's `CARGO_PKG_VERSION`;
-/// `manifest_dir` is accepted for call-shape stability.
-pub fn emit_build_version(_manifest_dir: &Path, package_version: &str) {
+/// Cargo writes `Cargo.toml.orig` when normalizing a distributable package.
+/// Its presence classifies the source layout, not release provenance: no VCS
+/// metadata is read and no additional commit value is emitted.
+pub fn emit_build_version(manifest_dir: &Path, package_version: &str) {
     let commit = build_commit();
-    let build_version = commit
-        .as_ref()
-        .and_then(|sha| short_sha(sha.clone()))
-        .map(|sha| format!("{package_version} ({sha})"))
-        .unwrap_or_else(|| format!("{package_version} (dev)"));
+    let build_version = format_build_version(
+        package_version,
+        commit.as_deref(),
+        manifest_dir.join("Cargo.toml.orig").is_file(),
+    );
 
     println!("cargo:rustc-env=CODEWHALE_BUILD_VERSION={build_version}");
     // Keep the pre-rebrand compile-time name through the 0.9.x compatibility
@@ -64,6 +68,18 @@ pub fn emit_build_version(_manifest_dir: &Path, package_version: &str) {
     println!("cargo:rustc-env=DEEPSEEK_BUILD_VERSION={build_version}");
     if let Some(commit) = commit {
         println!("cargo:rustc-env=CODEWHALE_BUILD_COMMIT={commit}");
+    }
+}
+
+fn format_build_version(
+    package_version: &str,
+    commit: Option<&str>,
+    packaged_source: bool,
+) -> String {
+    match commit.and_then(|sha| short_sha(sha.to_string())) {
+        Some(sha) => format!("{package_version} ({sha})"),
+        None if packaged_source => package_version.to_string(),
+        None => format!("{package_version} (dev)"),
     }
 }
 
@@ -153,6 +169,24 @@ fn short_sha(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{full_sha, release_build_sha, short_sha};
+
+    #[test]
+    fn packaged_sources_do_not_claim_to_be_unreleased_or_stamped() {
+        assert_eq!(super::format_build_version("0.9.13", None, true), "0.9.13");
+        assert_eq!(
+            super::format_build_version("0.9.13", None, false),
+            "0.9.13 (dev)"
+        );
+        let sha = "abcdef0123456789abcdef0123456789abcdef01";
+        for packaged in [true, false] {
+            assert_eq!(
+                super::format_build_version("0.9.13", Some(sha), packaged),
+                "0.9.13 (abcdef012345)"
+            );
+        }
+        // Source packaging must not create a telemetry/release provenance SHA.
+        assert_eq!(release_build_sha(|_| None), None);
+    }
 
     #[test]
     fn full_commit_requires_exact_forty_hex_characters() {
