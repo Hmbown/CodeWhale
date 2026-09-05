@@ -722,7 +722,7 @@ impl App {
                 selected_attachment_index: None,
                 slash_menu_selected: 0,
                 slash_menu_hidden: false,
-                    mention_menu_selected: 0,
+                mention_menu_selected: 0,
                 mention_menu_hidden: false,
                 mention_completion_cache: None,
                 mention_discovery: crate::tui::mention_completion::MentionDiscovery::default(),

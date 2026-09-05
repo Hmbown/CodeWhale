@@ -1359,7 +1359,11 @@ impl Renderable for ComposerWidget<'_> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         // Slash rows are re-recorded below; clear first so a closed or
         // resized menu cannot keep stale hitboxes from the prior frame.
-        self.app.viewport.last_slash_menu_hitboxes.borrow_mut().clear();
+        self.app
+            .viewport
+            .last_slash_menu_hitboxes
+            .borrow_mut()
+            .clear();
         let background = Style::default().bg(self.app.ui_theme.composer_bg);
         let has_panel = self.has_panel(area);
         let inner_area = self.inner_area(area);
@@ -1826,10 +1830,7 @@ impl Renderable for ComposerWidget<'_> {
                         .viewport
                         .last_slash_menu_hitboxes
                         .borrow_mut()
-                        .push((
-                            idx,
-                            Rect::new(inner_area.x, row_y, inner_area.width, 1),
-                        ));
+                        .push((idx, Rect::new(inner_area.x, row_y, inner_area.width, 1)));
                 }
 
                 if name_was_truncated || description_was_truncated {
