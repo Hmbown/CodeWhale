@@ -67,7 +67,7 @@ pub(super) fn command_guidance(kind: &ShellKind) -> String {
         _ => FALLBACK_GUIDANCE,
     };
     format!(
-        "The command to execute (action=run). Actual execution shell: `{}`. {syntax}",
+        "The command to execute. Actual execution shell: `{}`. {syntax}",
         kind.binary()
     )
 }
@@ -85,6 +85,16 @@ pub(super) fn description() -> &'static str {
          \"wait\" blocks for a background task until completion or timeout; \"interact\" sends stdin to a background task; \
          \"cancel\" kills a background task. Pass wait=false for a nonblocking task snapshot. Foreground mode is for bounded commands; \
          use background=true for work expected to take >5 seconds.",
+            runtime_command_guidance()
+        )
+    })
+}
+
+pub(super) fn foreground_description() -> &'static str {
+    static DESCRIPTION: OnceLock<String> = OnceLock::new();
+    DESCRIPTION.get_or_init(|| {
+        format!(
+            "{} Execute a shell command in the workspace and return stdout and stderr. Output keeps the last 2000 lines or 50KB. An optional timeout is expressed in seconds; when omitted the command is killed after 120 seconds, so pass an explicit timeout for work expected to take longer. In Ask, after a sandbox denial, retry the exact command once with sandbox_permissions (the narrowest wider mode that suffices) and a one-sentence justification; the approval prompt asks the user.",
             runtime_command_guidance()
         )
     })

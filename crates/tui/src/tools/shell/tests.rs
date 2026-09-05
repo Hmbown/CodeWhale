@@ -23,7 +23,7 @@ const BACKGROUND_COMPLETION_WAIT_MS: u64 = 30_000;
 
 #[test]
 fn shell_catalog_guidance_matches_execution() {
-    let tool = BashTool::new("Bash");
+    let tool = LowercaseBashTool;
     let schema = tool.input_schema();
     let command = schema["properties"]["command"]["description"]
         .as_str()
@@ -31,9 +31,15 @@ fn shell_catalog_guidance_matches_execution() {
     let dispatcher = crate::shell_dispatcher::global_dispatcher();
     assert!(command.contains(dispatcher.kind().binary()));
     assert!(tool.description().contains(command));
-    assert_eq!(tool.name(), "Bash");
+    assert_eq!(tool.name(), "bash");
     assert!(tool.model_visible());
-    assert!(tool.description().contains("background=true"));
+    assert!(!command.contains("action=run"));
+    assert!(!tool.description().contains("background=true"));
+    let legacy = BashTool::new("Bash");
+    assert!(!legacy.model_visible());
+    assert!(legacy.description().contains(command));
+    assert!(legacy.description().contains("background=true"));
+    assert!(legacy.description().contains("wait=false"));
     let readonly = BashTool::read_only("Bash");
     assert!(readonly.description().contains("never through a shell"));
     assert!(
@@ -43,12 +49,14 @@ fn shell_catalog_guidance_matches_execution() {
             .contains("Actual execution shell")
     );
     let alias = BashTool::alias("exec_shell", "run");
-    assert_eq!(alias.description(), tool.description());
+    assert_eq!(alias.description(), legacy.description());
     let workspace = tempdir().unwrap();
     let mut registry = crate::tools::ToolRegistry::new(ToolContext::new(workspace.path()));
     registry.register(std::sync::Arc::new(BashTool::new("Bash")));
+    registry.register(std::sync::Arc::new(LowercaseBashTool));
     let catalog = registry.to_api_tools();
     assert_eq!(catalog.len(), 1);
+    assert_eq!(catalog[0].name, "bash");
     assert_eq!(catalog[0].description, tool.description());
     assert_eq!(
         catalog[0].input_schema["properties"]["command"]["description"],
@@ -60,14 +68,16 @@ fn shell_catalog_guidance_matches_execution() {
 #[ignore = "Exports model-visible shell fixtures for opt-in live model evaluation"]
 fn export_shell_guidance_eval_fixture() {
     let path = std::env::var_os("SHELL_GUIDANCE_FIXTURE").expect("SHELL_GUIDANCE_FIXTURE");
-    let tool = BashTool::new("Bash");
-    let mut schema = tool.input_schema();
-    crate::tools::schema_sanitize::sanitize(&mut schema);
-    crate::tools::schema_canonicalize::canonicalize_schema(&mut schema);
+    let workspace = tempdir().unwrap();
+    let mut registry = crate::tools::ToolRegistry::new(ToolContext::new(workspace.path()));
+    registry.register(std::sync::Arc::new(BashTool::new("Bash")));
+    registry.register(std::sync::Arc::new(LowercaseBashTool));
+    let catalog = registry.to_api_tools();
+    let tool = catalog.iter().find(|tool| tool.name == "bash").unwrap();
     let fixture = json!({
-        "name": tool.name(),
-        "description": tool.description(),
-        "input_schema": schema,
+        "name": tool.name,
+        "description": tool.description,
+        "input_schema": tool.input_schema,
         "shell": crate::shell_dispatcher::global_dispatcher().kind().binary(),
     });
     std::fs::write(path, serde_json::to_vec_pretty(&fixture).unwrap()).unwrap();
