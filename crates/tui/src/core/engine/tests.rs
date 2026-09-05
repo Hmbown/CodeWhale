@@ -20755,6 +20755,113 @@ async fn reload_mcp_op_recovers_from_invalid_initial_config_in_process() {
 }
 
 #[tokio::test]
+async fn mcp_boot_reports_ready_server_before_stalled_server_finishes() {
+    let tmp = tempdir().expect("tempdir");
+    let server = tmp.path().join("server.mjs");
+    let release = tmp.path().join("release-slow");
+    std::fs::write(
+        &server,
+        r#"import fs from 'node:fs';
+import readline from 'node:readline';
+const lines = readline.createInterface({ input: process.stdin });
+lines.on('line', async (line) => {
+  const request = JSON.parse(line);
+  if (request.id === undefined) return;
+  if (process.argv[2] === 'slow' && request.method === 'initialize') {
+    while (!fs.existsSync(process.argv[3])) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  }
+  const result = request.method === 'initialize'
+    ? { protocolVersion: '2024-11-05', capabilities: { tools: {} },
+        serverInfo: { name: process.argv[2], version: '1' } }
+    : { tools: [{ name: 'ready', inputSchema: { type: 'object' } }] };
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
+});
+"#,
+    )
+    .expect("server fixture");
+    let config_path = tmp.path().join("mcp.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&serde_json::json!({
+            "timeouts": { "connect_timeout": 30 },
+            "servers": {
+                "fast": { "command": "node", "args": [server, "fast", release] },
+                "slow": { "command": "node", "args": [server, "slow", release] }
+            }
+        }))
+        .expect("config JSON"),
+    )
+    .expect("MCP config");
+    let (engine, handle) = Engine::new(
+        EngineConfig {
+            workspace: tmp.path().to_path_buf(),
+            mcp_config_path: config_path,
+            ..Default::default()
+        },
+        &Config::default(),
+    );
+    let task = tokio::spawn(async move { engine.run().await });
+    let mut events = handle.rx_event.write().await;
+    let progress = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = events.recv().await {
+            if let Event::McpSessionBoot {
+                snapshot,
+                connecting,
+                finished: false,
+                ..
+            } = event
+                && connecting == ["slow"]
+            {
+                return snapshot;
+            }
+        }
+        panic!("engine event channel closed");
+    })
+    .await;
+    // Release and shut down even when testing the old batch-buffered behavior.
+    std::fs::write(&release, "continue").expect("release stalled fixture");
+    let finished = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = events.recv().await {
+            if let Event::McpSessionBoot {
+                snapshot,
+                finished: true,
+                ..
+            } = event
+            {
+                return snapshot;
+            }
+        }
+        panic!("engine event channel closed");
+    })
+    .await;
+    drop(events);
+    handle.send(Op::Shutdown).await.expect("shutdown");
+    task.await.expect("engine task");
+    let progress = progress.expect("fast server must be visible before slow server is released");
+    assert!(
+        progress
+            .servers
+            .iter()
+            .any(|row| row.name == "fast" && row.connected)
+    );
+    assert!(
+        progress
+            .servers
+            .iter()
+            .any(|row| row.name == "slow" && !row.connected)
+    );
+    assert!(
+        finished
+            .expect("finished boot")
+            .servers
+            .iter()
+            .all(|row| row.connected)
+    );
+}
+
+#[tokio::test]
 async fn mcp_boot_updates_preserve_authority_errors_and_replace_ordinary_errors() {
     let tmp = tempdir().expect("tempdir");
     let engine_config = EngineConfig {

@@ -3094,15 +3094,12 @@ impl McpPool {
     /// Handshake the pending servers concurrently without holding the pool
     /// lock. Callers insert results under a short lock so a live turn can
     /// snapshot ready tools while optional servers are still connecting.
-    pub(crate) async fn connect_pending_concurrently(
+    pub(crate) fn spawn_pending_connects(
         pending: Vec<McpPendingConnect>,
         timeouts: McpTimeouts,
         network_policy: Option<NetworkPolicyDecider>,
         catalog_generation: u64,
-    ) -> Vec<(String, Result<McpConnection, anyhow::Error>)> {
-        if pending.is_empty() {
-            return Vec::new();
-        }
+    ) -> tokio::task::JoinSet<(String, Result<McpConnection, anyhow::Error>)> {
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(Self::CONNECT_CONCURRENCY));
         let mut joins: tokio::task::JoinSet<(String, Result<McpConnection, anyhow::Error>)> =
             tokio::task::JoinSet::new();
@@ -3126,20 +3123,7 @@ impl McpPool {
             });
         }
 
-        let mut results = Vec::new();
-        while let Some(joined) = joins.join_next().await {
-            match joined {
-                Ok(result) => results.push(result),
-                // A panicked connect task loses its server name in the
-                // JoinError; attribute generically. The sequential loop
-                // would have propagated the panic and taken the whole
-                // pool down with it, so this is strictly better.
-                Err(join_error) => {
-                    results.push(("connection task".to_string(), Err(join_error.into())));
-                }
-            }
-        }
-        results
+        joins
     }
 
     /// Connect to all enabled servers, returning errors for failed connections.
@@ -3197,14 +3181,15 @@ impl McpPool {
                 break;
             }
 
-            let results = Self::connect_pending_concurrently(
+            let mut connects = Self::spawn_pending_connects(
                 pending,
                 self.config.timeouts,
                 self.network_policy.clone(),
                 self.catalog_generation.load(Ordering::SeqCst),
-            )
-            .await;
-            for (name, result) in results {
+            );
+            while let Some(joined) = connects.join_next().await {
+                let (name, result) = joined
+                    .unwrap_or_else(|error| ("connection task".to_string(), Err(error.into())));
                 match result {
                     Ok(connection) => self.store_ready_connection(name, connection),
                     Err(error) => {

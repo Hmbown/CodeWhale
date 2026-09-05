@@ -6484,18 +6484,19 @@ impl Engine {
             async move {
                 let mut remaining: Vec<String> =
                     pending.iter().map(|(name, _)| name.clone()).collect();
-                let results = McpPool::connect_pending_concurrently(
+                let mut connects = McpPool::spawn_pending_connects(
                     pending,
                     timeouts,
                     network_policy,
                     catalog_generation,
-                )
-                .await;
+                );
                 let mut connection_errors = HashMap::new();
-                {
-                    let mut pool = pool_for_task.lock().await;
-                    for (name, result) in results {
-                        remaining.retain(|pending_name| pending_name != &name);
+                while let Some(joined) = connects.join_next().await {
+                    let (name, result) = joined
+                        .unwrap_or_else(|error| ("connection task".to_string(), Err(error.into())));
+                    remaining.retain(|pending_name| pending_name != &name);
+                    {
+                        let mut pool = pool_for_task.lock().await;
                         match result {
                             Ok(connection) => pool.store_ready_connection(name, connection),
                             Err(error) => {
@@ -6504,13 +6505,16 @@ impl Engine {
                                     .insert(name, crate::mcp::format_mcp_error_for_display(&error));
                             }
                         }
-                        let _ = progress_tx.send(McpBootUpdate::Progress {
-                            generation,
-                            authority_errors: Arc::clone(&authority_errors),
-                            connection_errors: connection_errors.clone(),
-                            connecting: remaining.clone(),
-                        });
                     }
+                    let _ = progress_tx.send(McpBootUpdate::Progress {
+                        generation,
+                        authority_errors: Arc::clone(&authority_errors),
+                        connection_errors: connection_errors.clone(),
+                        connecting: remaining.clone(),
+                    });
+                }
+                {
+                    let pool = pool_for_task.lock().await;
                     let mut required = Vec::new();
                     pool.push_required_server_errors(&mut required);
                     for (name, error) in required {
