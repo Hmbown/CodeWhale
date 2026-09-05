@@ -59,28 +59,38 @@ test("localExec provides run/runOk/tmpFile", async () => {
   assert.ok(typeof f === "string");
 });
 
-for (const outcome of ["success", "transfer failure", "read failure"]) {
-  test(`hdc readFile cleans only its owned files after ${outcome}`, async (t) => {
-    // Contain even the old recursive-deletion bug inside this fixture.
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "cu-hdc-test-"));
-    t.after(() => fs.rm(root, { recursive: true, force: true }));
-    t.mock.method(os, "tmpdir", () => root);
-    await fs.writeFile(path.join(root, "unrelated"), "keep me");
-    const ex = hdcExec({});
-    const transferError = new Error("transfer interrupted");
-    ex.pullFile = async (remote, local) => {
-      assert.equal(remote, "fixture.txt");
-      if (outcome === "read failure") return;
-      await fs.writeFile(local, "downloaded bytes");
-      if (outcome === "transfer failure") throw transferError;
-    };
-    if (outcome === "success") {
-      assert.equal((await ex.readFile("fixture.txt")).toString(), "downloaded bytes");
-    } else {
-      await assert.rejects(ex.readFile("fixture.txt"), (error) =>
-        outcome === "transfer failure" ? error === transferError : error.code === "ENOENT");
-    }
-    assert.equal(await fs.readFile(path.join(root, "unrelated"), "utf8"), "keep me");
-    assert.deepEqual(await fs.readdir(root), ["unrelated"]);
-  });
+for (const cleanupFails of [false, true]) {
+  for (const outcome of ["success", "transfer failure", "read failure"]) {
+    test(`hdc readFile preserves ${outcome} when cleanup ${cleanupFails ? "fails" : "succeeds"}`, async (t) => {
+      // Contain even the old recursive-deletion bug inside this fixture.
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "cu-hdc-test-"));
+      const realRm = fs.rm.bind(fs);
+      t.after(() => realRm(root, { recursive: true, force: true }));
+      if (cleanupFails) {
+        t.mock.method(fs, "rm", async (dir) => {
+          assert.equal(path.dirname(dir), root, "cleanup stays inside its fixture");
+          assert.ok(path.basename(dir).startsWith("cu-hdc-"));
+          throw Object.assign(new Error("cleanup denied"), { code: "EACCES" });
+        });
+      }
+      t.mock.method(os, "tmpdir", () => root);
+      await fs.writeFile(path.join(root, "unrelated"), "keep me");
+      const ex = hdcExec({});
+      const transferError = new Error("transfer interrupted");
+      ex.pullFile = async (remote, local) => {
+        assert.equal(remote, "fixture.txt");
+        if (outcome === "read failure") return;
+        await fs.writeFile(local, "downloaded bytes");
+        if (outcome === "transfer failure") throw transferError;
+      };
+      if (outcome === "success") {
+        assert.equal((await ex.readFile("fixture.txt")).toString(), "downloaded bytes");
+      } else {
+        await assert.rejects(ex.readFile("fixture.txt"), (error) =>
+          outcome === "transfer failure" ? error === transferError : error.code === "ENOENT");
+      }
+      assert.equal(await fs.readFile(path.join(root, "unrelated"), "utf8"), "keep me");
+      if (!cleanupFails) assert.deepEqual(await fs.readdir(root), ["unrelated"]);
+    });
+  }
 }

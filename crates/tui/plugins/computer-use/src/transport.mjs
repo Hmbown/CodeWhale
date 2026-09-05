@@ -124,7 +124,8 @@ export function hdcExec(computer) {
         await this.pullFile(remotePath, tmp, opts);
         return await fs.promises.readFile(tmp);
       } finally {
-        await fs.promises.rm(dir, { recursive: true, force: true });
+        // Cleanup must not replace downloaded bytes or the original I/O error.
+        await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
       }
     },
   };
