@@ -44,6 +44,7 @@ use windows::core::PCWSTR;
 #[cfg(not(target_env = "ohos"))]
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
+mod guidance;
 mod output;
 
 use super::shell_output::{summarize_output, truncate_with_meta};
@@ -4360,14 +4361,14 @@ impl ToolSpec for LowercaseBashTool {
     }
 
     fn description(&self) -> &'static str {
-        "Execute a shell command in the workspace and return stdout and stderr. Output keeps the last 2000 lines or 50KB. An optional timeout is expressed in seconds; when omitted the command is killed after 120 seconds, so pass an explicit timeout for work expected to take longer. In Ask, after a sandbox denial, retry the exact command once with sandbox_permissions (the narrowest wider mode that suffices) and a one-sentence justification; the approval prompt asks the user."
+        guidance::foreground_description()
     }
 
     fn input_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
-                "command": { "type": "string", "description": "Bash command to execute." },
+                "command": { "type": "string", "description": guidance::runtime_command_guidance() },
                 "timeout": { "type": "number", "description": "Optional timeout in seconds; when omitted the command is killed after 120 seconds." },
                 "sandbox_permissions": {
                     "type": "string",
@@ -4541,7 +4542,7 @@ impl ToolSpec for BashTool {
         if self.read_only {
             "Inspect the workspace with the bounded read-only command subset. Commands run directly as argv, never through a shell; only action=run plus command, cwd, and timeout_ms are accepted."
         } else {
-            "Execute a shell command in the workspace. Action \"run\" (default) executes a command; \"wait\" blocks for a background task until completion or timeout; \"interact\" sends stdin to a background task; \"cancel\" kills a background task. Pass wait=false for a nonblocking task snapshot. Foreground mode is for bounded commands; use background=true for work expected to take >5 seconds. Commands run via the user's login shell ($SHELL); when that shell is zsh, a bare word starting with `=` undergoes `=command` PATH expansion (e.g. `echo ===` fails) — quote such arguments, e.g. `echo '==='`."
+            guidance::description()
         }
     }
 
@@ -4559,7 +4560,7 @@ impl ToolSpec for BashTool {
                 },
                 "command": {
                     "type": "string",
-                    "description": "The shell command to execute (action=run)"
+                    "description": guidance::runtime_command_guidance()
                 },
                 "timeout_ms": {
                     "type": "integer",
