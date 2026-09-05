@@ -118,11 +118,15 @@ export function hdcExec(computer) {
       return localPath;
     },
     async readFile(remotePath, opts = {}) {
-      const tmp = path.join(os.tmpdir(), `cu-hdc-${crypto.randomBytes(4).toString("hex")}`);
-      await this.pullFile(remotePath, tmp, opts);
-      const data = await fs.promises.readFile(tmp);
-      await fs.promises.rm(path.dirname(tmp), { recursive: true, force: true }).catch(() => {});
-      return data;
+      const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "cu-hdc-"));
+      try {
+        const tmp = path.join(dir, "out");
+        await this.pullFile(remotePath, tmp, opts);
+        return await fs.promises.readFile(tmp);
+      } finally {
+        // Cleanup must not replace downloaded bytes or the original I/O error.
+        await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
     },
   };
 }
