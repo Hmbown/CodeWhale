@@ -3,7 +3,7 @@
 //! Product job (#4276): **find and run one action** — not a dense manual.
 //! Help owns concepts; Config owns settings; Fleet owns worker readiness.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -65,6 +65,9 @@ pub struct CommandPaletteView {
     /// Entry rows from the most recent render. Keeping the absolute filtered
     /// index here makes mouse activation use the exact same action as Enter.
     row_hitboxes: RefCell<Vec<(Rect, usize)>>,
+    /// Absolute filtered index under the pointer, tinted with the shared
+    /// hover style. Hover never moves the keyboard selection.
+    hovered: Cell<Option<usize>>,
 }
 
 pub fn build_entries(
@@ -330,7 +333,7 @@ fn build_mcp_entries(
             description: format!(
                 "{} {} [{}] tools={} resources={} prompts={}",
                 server.transport,
-                server.command_or_url,
+                crate::mcp::mcp_display_target(&server.transport, &server.command_or_url),
                 state,
                 server.tools.len(),
                 server.resources.len(),
@@ -447,7 +450,10 @@ fn format_mcp_server_details(
         format!("Enabled: {}", server.enabled),
         format!("Connected: {}", server.connected),
         format!("Transport: {}", server.transport),
-        format!("Target: {}", server.command_or_url),
+        format!(
+            "Target: {}",
+            crate::mcp::mcp_display_target(&server.transport, &server.command_or_url)
+        ),
         format!(
             "Timeouts: connect={}s execute={}s read={}s",
             server.connect_timeout, server.execute_timeout, server.read_timeout
@@ -688,6 +694,7 @@ impl CommandPaletteView {
             query: String::new(),
             selected: 0,
             row_hitboxes: RefCell::new(Vec::new()),
+            hovered: Cell::new(None),
         };
         view.refilter();
         view
@@ -720,6 +727,7 @@ impl CommandPaletteView {
         if self.selected >= self.filtered.len() {
             self.selected = 0;
         }
+        self.hovered.set(None);
     }
 
     fn scope_hint_lines() -> Line<'static> {
@@ -750,6 +758,7 @@ impl CommandPaletteView {
 
     fn move_selection(&mut self, delta: isize) {
         self.selected = crate::tui::list_nav::wrap_index(self.selected, self.filtered.len(), delta);
+        self.hovered.set(None);
     }
 
     fn selected_entry(&self) -> Option<&CommandPaletteEntry> {
@@ -770,6 +779,13 @@ impl ModalView for CommandPaletteView {
 
     fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
         match mouse.kind {
+            MouseEventKind::Moved => {
+                let hovered = self.row_hitboxes.borrow().iter().find_map(|(rect, index)| {
+                    rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                        .then_some(*index)
+                });
+                self.hovered.set(hovered);
+            }
             MouseEventKind::ScrollUp => self.move_selection(-1),
             MouseEventKind::ScrollDown => self.move_selection(1),
             MouseEventKind::Down(MouseButton::Left) => {
@@ -967,8 +983,14 @@ impl ModalView for CommandPaletteView {
                     active_section = Some(entry.section);
                 }
 
+                // Hover tints but never steals the keyboard selection.
+                let hovered = !is_selected && self.hovered.get() == Some(absolute);
                 let style = if is_selected {
                     menu_style::selected_row_style()
+                } else if hovered {
+                    Style::default()
+                        .fg(palette::TEXT_PRIMARY)
+                        .patch(menu_style::hovered_row_style())
                 } else {
                     Style::default().fg(palette::TEXT_PRIMARY)
                 };
@@ -2129,6 +2151,39 @@ mod tests {
                 }) if command == "$plugin:review"
             ));
         }
+    }
+
+    #[test]
+    fn command_palette_hover_tints_entry_without_moving_selection() {
+        let mut view = sample_palette_view();
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        assert_eq!(view.selected, 0);
+        let (rect, _) = view
+            .row_hitboxes
+            .borrow()
+            .iter()
+            .find(|(_, index)| *index == 1)
+            .copied()
+            .expect("second entry should have a mouse hitbox");
+        let hover = MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::empty(),
+        };
+        assert!(matches!(view.handle_mouse(hover), ViewAction::None));
+        assert_eq!(view.hovered.get(), Some(1));
+        assert_eq!(view.selected, 0);
+
+        let mut hovered_buf = Buffer::empty(area);
+        view.render(area, &mut hovered_buf);
+        assert_eq!(
+            hovered_buf[(rect.x, rect.y)].bg,
+            crate::palette::SURFACE_ELEVATED,
+            "hovered palette entry must show the shared hover band"
+        );
     }
 
     /// The four terminal sizes the v0.8.66 modal blocker (#3732) requires every

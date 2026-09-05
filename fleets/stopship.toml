@@ -1,26 +1,26 @@
-# Fleet roster: stopship
+# Fleet roles: stopship
 #
-# Named stopship fleet binding roles → AgentProfile ids. Fleet resolves roles
-# only — it does NOT spawn tmux or manage worktrees (Runtime owns those).
+# Named stopship fleet binding workflow roles → Fleet roles. Spawns resolve
+# roles only — there are no saved members to bind, and Fleet does NOT spawn
+# tmux or manage worktrees (Runtime owns those).
 #
 # Load path (when wired by workflow run --fleet):
 #   1. $CODEWHALE_HOME/fleets/stopship.toml
 #   2. <workspace>/fleets/stopship.toml  (this file)
 #
-# Profile ids name built-in roster members (scout, builder, reviewer,
-# verifier, manager); role names use the canonical Codewhale role
-# vocabulary (explore, implement, reviewer, test, custom names).
+# Values use the canonical Codewhale role vocabulary (explore, implement,
+# reviewer, test, advisor); keys are the workflow's own step names.
 
 name = "stopship"
 description = "Read-only current release orchestration acceptance fleet"
 
 [roles]
-# role name = AgentProfile id (built-in or workspace profile)
+# workflow role name = Fleet role (canonical or legacy alias)
 explore = "scout"
 implement = "builder"
 reviewer = "reviewer"
 test = "verifier"
-release_lead = "manager"
+release_lead = "advisor"
 
 [role_intents.explore]
 mode = "read_only"

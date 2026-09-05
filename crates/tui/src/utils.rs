@@ -281,24 +281,67 @@ pub fn write_atomic_workspace(path: &Path, contents: &[u8]) -> std::io::Result<(
     // with another name cannot be proven to stay inside the writable root by
     // path checks. Atomic rename would replace the directory entry (leaving
     // the outside link on the old inode), but that silently splits the pair
-    // and would not block a future non-atomic writer. Fail closed. Windows
-    // std has no link-count introspection; its atomic rename still replaces
-    // the directory entry rather than the inode.
-    #[cfg(unix)]
-    if let Ok(metadata) = std::fs::metadata(path)
-        && metadata.is_file()
-        && metadata.nlink() > 1
+    // and would not block a future non-atomic writer. Fail closed on both
+    // platforms that can count links.
+    if let Some(links) = hard_link_count(path)
+        && links > 1
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
-                "refusing to rewrite {}: the file has {} hard links and path checks cannot prove the other links stay inside the workspace; copy it to a new name to break the link",
+                "refusing to rewrite {}: the file has {links} hard links and path checks cannot prove the other links stay inside the workspace; copy it to a new name to break the link",
                 path.display(),
-                metadata.nlink(),
             ),
         ));
     }
     write_atomic_with_permissions(path, contents, AtomicWritePermissions::Workspace)
+}
+
+/// Hard-link count for an existing regular file, or `None` when the platform
+/// cannot answer or the path is not a regular file.
+///
+/// `None` means "unknown", never "one". A caller guarding against link
+/// escapes must treat an unknown count as unguarded, not as safe.
+#[cfg(unix)]
+fn hard_link_count(path: &Path) -> Option<u64> {
+    let metadata = std::fs::metadata(path).ok()?;
+    metadata.is_file().then(|| metadata.nlink())
+}
+
+/// Windows counts links too — `std` does not expose it, but the Win32 call
+/// that does is already used for the workspace `.env` guard in `lib.rs`.
+/// Leaving this side unguarded meant a hard-linked file outside the
+/// workspace was rewritable on Windows and refused on Unix, which is the
+/// worse half of the platform to leave open.
+///
+/// The handle is opened read-only and closed by `File`'s Drop, so this adds
+/// one open/close on a path that is about to be rewritten anyway.
+#[cfg(windows)]
+fn hard_link_count(path: &Path) -> Option<u64> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: `file` owns a live kernel handle for the duration of the call
+    // and `information` stays writable across it. The call is synchronous and
+    // performs no path lookup or re-open.
+    unsafe {
+        GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut information).ok()?;
+    }
+    Some(u64::from(information.nNumberOfLinks))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn hard_link_count(_path: &Path) -> Option<u64> {
+    None
 }
 
 fn write_atomic_with_permissions(
@@ -1002,16 +1045,20 @@ mod atomic_write_tests {
         );
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn write_atomic_workspace_refuses_a_hard_linked_target() {
+    #[cfg(any(unix, windows))]
+    fn assert_workspace_hard_link_is_refused() {
         let dir = tempdir().expect("tempdir");
-        let outside = dir.path().join("outside.txt");
+        let workspace = dir.path().join("workspace");
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(&workspace).expect("create workspace");
+        fs::create_dir_all(&outside).expect("create outside directory");
+        let outside = outside.join("outside.txt");
         fs::write(&outside, b"outside").expect("outside state");
-        let linked = dir.path().join("linked.txt");
+        let linked = workspace.join("linked.txt");
         fs::hard_link(&outside, &linked).expect("hard link");
 
         let err = write_atomic_workspace(&linked, b"new").expect_err("must refuse");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(
             err.to_string().contains("hard links"),
             "the refusal must name the hard-link reason: {err}"
@@ -1034,6 +1081,30 @@ mod atomic_write_tests {
             fs::read_to_string(&outside).expect("outside read"),
             "outside"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_workspace_refuses_a_hard_linked_target() {
+        assert_workspace_hard_link_is_refused();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_write_atomic_workspace_refuses_a_hard_linked_target() {
+        assert_workspace_hard_link_is_refused();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_hard_link_count_detects_multiple_links() {
+        let dir = tempdir().expect("tempdir");
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        fs::write(&first, b"linked").expect("write fixture");
+        fs::hard_link(&first, &second).expect("hard link");
+
+        assert_eq!(hard_link_count(&second), Some(2));
     }
 
     #[cfg(unix)]
@@ -1209,9 +1280,10 @@ mod atomic_write_tests {
     }
 
     #[test]
-    fn write_atomic_workspace_writes_content() {
+    fn write_atomic_workspace_rewrites_a_single_link_file() {
         let tmp = tempdir().expect("tempdir");
         let path = tmp.path().join("workspace.txt");
+        fs::write(&path, b"before").expect("write initial content");
         write_atomic_workspace(&path, b"workspace").expect("write_atomic_workspace");
         assert_eq!(fs::read(&path).expect("read"), b"workspace");
     }

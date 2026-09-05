@@ -342,11 +342,9 @@ pub(crate) async fn run_exec_agent(
     };
 
     let engine_handle = spawn_engine(engine_config, &execution_config);
-    let mode = if auto_approve {
-        AppMode::Yolo
-    } else {
-        AppMode::Agent
-    };
+    // The Full Access posture travels in the op's auto_approve/approval_mode
+    // fields; modes no longer carry permission.
+    let mode = AppMode::Agent;
 
     let resuming_session = resume_session.is_some();
     let mut loaded_session_id = None;

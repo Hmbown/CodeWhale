@@ -404,10 +404,11 @@ impl HistoryCell {
 
     /// Render with an explicit per-cell fold override for thinking cells.
     ///
-    /// Uses XOR with the `verbose` flag so that pressing Space toggles
-    /// the collapsed state *relative* to the global setting:
-    /// - verbose off (default): thinking is collapsed; Space unfolds it
-    /// - verbose on: thinking is expanded; Space folds it
+    /// Space toggles the collapsed state *relative* to the expanded
+    /// baseline, which is on when either the session is verbose or the
+    /// thinking default is expanded:
+    /// - baseline off (default): thinking is collapsed; Space unfolds it
+    /// - baseline on: thinking is expanded; Space folds it
     pub fn lines_with_options_folded(
         &self,
         width: u16,
@@ -432,7 +433,7 @@ impl HistoryCell {
                 streaming,
                 duration_secs,
             } => {
-                let collapsed = folded ^ !options.verbose ^ options.thinking_default_expanded;
+                let collapsed = folded ^ !(options.verbose || options.thinking_default_expanded);
                 let (lines, expandable) = thinking::render_thinking_with_preview_limit(
                     content,
                     width,

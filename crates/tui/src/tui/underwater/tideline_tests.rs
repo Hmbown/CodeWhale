@@ -10,7 +10,8 @@ use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
 use super::{
-    MarkTier, McpFacts, TidelineStartup, render_tideline_startup, tideline_startup_hitboxes,
+    LaunchRecentEntry, MarkTier, McpFacts, TidelineStartup, render_tideline_startup,
+    tideline_startup_hitboxes,
 };
 use crate::palette::UI_THEME;
 use crate::tui::golden_harness::{
@@ -19,7 +20,7 @@ use crate::tui::golden_harness::{
 
 fn draw(width: u16, height: u16, startup: &TidelineStartup<'_>) -> String {
     render_golden_text(width, height, |buf| {
-        render_tideline_startup(Rect::new(0, 0, width, height), buf, startup)
+        let _ = render_tideline_startup(Rect::new(0, 0, width, height), buf, startup);
     })
 }
 
@@ -60,6 +61,21 @@ fn connected(theme: &crate::palette::UiTheme) -> TidelineStartup<'_> {
         needs_sign_in: 1,
         enabled: 3,
     }))
+    .recent(
+        vec![
+            LaunchRecentEntry {
+                id: "sess-aaa".to_string(),
+                title: "Fix login flow".to_string(),
+                detail: "2h ago · 4 msgs".to_string(),
+            },
+            LaunchRecentEntry {
+                id: "sess-bbb".to_string(),
+                title: "Plan export".to_string(),
+                detail: "3d ago · 12 msgs".to_string(),
+            },
+        ],
+        false,
+    )
     .composer(docked_composer());
     startup.version = "0.9.12";
     startup
@@ -105,12 +121,12 @@ fn startup_first_run_matches_its_golden() {
 #[test]
 fn startup_matches_golden_at_the_40x12_terminal_floor() {
     // A 40x12 terminal leaves the stage 10 rows after the topbar and merged
-    // footer: the tiny mark, the three header lines, the state line, and a
-    // four-row dock all still fit.
+    // footer: the tiny mark, the title, the new-session entry, and the dock
+    // all still fit.
     let text = draw(40, 10, &connected(&UI_THEME));
     assert_matches_golden("startup_40x10", &text);
-    assert!(text.contains("Codewhale"), "{text}");
-    assert!(text.contains("New worktree"), "{text}");
+    assert!(text.contains("codewhale"), "{text}");
+    assert!(text.contains("New session"), "{text}");
     assert!(text.contains("❯"), "the floor keeps the composer: {text}");
 }
 
@@ -128,29 +144,83 @@ fn startup_surfacing_midpoint_matches_its_golden() {
         "the midpoint frame differs from the still frame"
     );
     // The header copy is already in place; only the mark is mid-surface.
-    assert!(text.contains("Codewhale v0.9.12"), "{text}");
+    assert!(text.contains("codewhale v0.9.12"), "{text}");
 }
 
 #[test]
-fn the_card_states_the_workspace_menu_and_mcp_news() {
+fn sixel_tier_reserves_a_blank_block_and_reports_it() {
+    // The sixel tier paints no ink of its own: a blank 6x3 block the event
+    // loop draws the raster over, reported back so the reconciler can
+    // position it. Braille and kitty tiers report nothing.
+    let area = Rect::new(0, 0, 80, 24);
+    let mut sixel = Buffer::empty(area);
+    let startup = connected(&UI_THEME).mark(MarkTier::Sixel);
+    let reserved = render_tideline_startup(area, &mut sixel, &startup);
+    assert_eq!((reserved.width, reserved.height), (6, 3));
+    for y in reserved.y..reserved.y + reserved.height {
+        for x in reserved.x..reserved.x + reserved.width {
+            assert_eq!(
+                sixel[(x, y)].symbol(),
+                " ",
+                "reserve cell ({x},{y}) is blank"
+            );
+        }
+    }
+    let mut braille = Buffer::empty(area);
+    let settled = render_tideline_startup(area, &mut braille, &connected(&UI_THEME));
+    assert_eq!(settled.width, 0, "braille tier reserves no block");
+    // The braille still frame carries the founder whale's dots, not blanks.
+    let dots = braille_content(&braille);
+    assert!(
+        dots.chars()
+            .any(|glyph| ('\u{2800}'..='\u{28ff}').contains(&glyph)),
+        "braille tier still paints dots"
+    );
+}
+
+/// Collect the card's mark cells as text for tier assertions.
+fn braille_content(buf: &Buffer) -> String {
+    (0..buf.area.height)
+        .flat_map(|y| (0..buf.area.width).map(move |x| buf[(x, y)].symbol().to_string()))
+        .collect()
+}
+
+#[test]
+fn the_card_states_the_workspace_recent_work_and_mcp_news() {
     let text = draw(100, 30, &connected(&UI_THEME));
     for fact in [
-        "Codewhale v0.9.12",
+        "codewhale v0.9.12",
         // The top line owns the workspace truth now.
         "Hmbown/CodeWhale · main",
         // The card's announcement: only when true.
         "● 2 MCP servers connected · 1 needs sign-in · run /mcp",
-        // The menu with its real chords.
-        "New worktree",
-        "ctrl+n",
-        "Resume session",
-        "ctrl+r",
-        "Changelog",
-        "ctrl+l",
-        "Quit",
-        "ctrl+q",
+        // The prominent new-session entry over the recent-work list.
+        "New session",
+        "Recent",
+        "Fix login flow",
+        "2h ago",
+        "Plan export",
+        "3d ago",
     ] {
         assert!(text.contains(fact), "missing {fact:?} in:\n{text}");
+    }
+    // The new-session entry leads the recent work.
+    assert!(
+        text.find("New session").unwrap() < text.find("Fix login flow").unwrap(),
+        "new session leads the list:\n{text}"
+    );
+    // The old menu is gone: no rows, no chords.
+    for gone in [
+        "New worktree",
+        "Resume session",
+        "Changelog",
+        "Quit",
+        "ctrl+n",
+        "ctrl+r",
+        "ctrl+l",
+        "ctrl+q",
+    ] {
+        assert!(!text.contains(gone), "{gone:?} is back:\n{text}");
     }
     // Row 0 is the thin top line; the wordmark lives in the card.
     let first = text.lines().next().unwrap_or_default();
@@ -159,7 +229,7 @@ fn the_card_states_the_workspace_menu_and_mcp_news() {
         "top line opens with the branch glyph: {first:?}"
     );
     assert!(
-        !first.contains("Codewhale"),
+        !first.contains("codewhale"),
         "the wordmark left row 0: {first:?}"
     );
     // Nothing from the old stage survives.
@@ -202,7 +272,7 @@ fn startup_ascii_safe_drops_the_mark_and_every_wide_glyph() {
         "the branch glyph falls back to ASCII on row 0: {first:?}"
     );
     assert!(
-        text.contains("Codewhale"),
+        text.contains("codewhale"),
         "the card keeps the wordmark: {text}"
     );
     assert!(

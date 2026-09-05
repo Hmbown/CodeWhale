@@ -30,14 +30,14 @@ impl RuntimePolicyProjection {
             .and_then(ApprovalMode::from_config_value)
             .filter(|permission| *permission != ApprovalMode::Never)
             .unwrap_or_else(|| {
-                if parsed_mode == AppMode::Yolo || auto_approve {
+                if legacy_yolo_alias(mode) || auto_approve {
                     ApprovalMode::Bypass
                 } else {
                     ApprovalMode::Suggest
                 }
             });
         Self {
-            mode: visible_mode(parsed_mode),
+            mode: parsed_mode,
             permission,
         }
     }
@@ -58,16 +58,14 @@ impl RuntimePolicyProjection {
                     "unsupported permission posture {value:?}; expected ask, auto-review, or full-access"
                 )
             })?,
-            None if parsed_mode == AppMode::Yolo || auto_approve.unwrap_or(false) => {
-                ApprovalMode::Bypass
-            }
+            None if legacy_yolo_alias(mode) || auto_approve.unwrap_or(false) => ApprovalMode::Bypass,
             None => ApprovalMode::Suggest,
         };
         if permission == ApprovalMode::Never {
             bail!("permission posture 'never' is not part of the Runtime product contract");
         }
         Ok(Self {
-            mode: visible_mode(parsed_mode),
+            mode: parsed_mode,
             permission,
         })
     }
@@ -101,12 +99,15 @@ pub(crate) fn parse_runtime_mode(value: &str) -> Option<AppMode> {
     }
 }
 
+/// Legacy mode spellings that carried the Full Access posture. `AppMode::
+/// parse` folds them to Agent; the posture is re-derived from the raw wire
+/// value so old persisted shapes keep their permission meaning.
 #[must_use]
-fn visible_mode(mode: AppMode) -> AppMode {
-    match mode {
-        AppMode::Auto | AppMode::Yolo => AppMode::Agent,
-        other => other,
-    }
+fn legacy_yolo_alias(mode: &str) -> bool {
+    matches!(
+        mode.trim().to_ascii_lowercase().as_str(),
+        "yolo" | "4" | "bypass" | "bypass-permissions" | "bypasspermissions"
+    )
 }
 
 #[cfg(test)]

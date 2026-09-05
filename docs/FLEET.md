@@ -16,12 +16,10 @@ fleet member identity with delegated runtime execution.
 **Fleet** is the public product noun. The durable ledger, saved rosters, config
 tables, and `--fleet` flag share that name:
 
-| Surface | Canonical | Compatibility alias |
-| --- | --- | --- |
-| CLI | `codewhale fleet …` | `codewhale pod …` |
-| Slash command | `/fleet …` | `/pod …` |
-
-`/pod` and `codewhale pod` remain accepted as compatibility aliases.
+| Surface | Canonical |
+| --- | --- |
+| CLI | `codewhale fleet …` |
+| Slash command | `/fleet …` |
 
 These shared names are load-bearing wherever changing them would break
 existing workspaces, receipts, or scripts:
@@ -295,8 +293,8 @@ The short public vocabulary is:
   may finish separately; dispatch is never presented as completion.
 
 UI guidance: keep the main transcript calm. A Workflow run should appear as a
-compact progress card plus work-bar rows (the strip above the transcript, or
-a side rail) with phase names, worker counts, receipts, and nested
+compact progress card plus workbar rows (the strip under the composer, or
+a side workbar) with phase names, worker counts, receipts, and nested
 indentation for child workers. Use the whale mark sparingly as an active
 header/status signal; avoid repeating emoji-heavy rows for every worker.
 

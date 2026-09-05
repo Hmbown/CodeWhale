@@ -299,7 +299,7 @@ pub struct WorkSurfaceState {
     pub(super) effective_placement: WorkSurfacePlacement,
     /// Panel selection — orthogonal to placement.
     pub panel: RailPanel,
-    /// The user picked `panel` (cycle key, tab click, `/rail <view>`), so
+    /// The user picked `panel` (cycle key, tab click, `/workbar <view>`), so
     /// the auto rule leaves it alone and an empty view still paints. Esc
     /// clears it and the dock goes back to showing whichever work view has
     /// content.
@@ -700,7 +700,7 @@ fn agents_view_rows(app: &mut App) -> Vec<WorkRow> {
 
 /// Pick the view for this frame when the user has not picked one.
 ///
-/// The dock is one bottom view. Cycling, a tab click, or `/rail <view>`
+/// The dock is one bottom view. Cycling, a tab click, or `/workbar <view>`
 /// makes the choice explicit and it sticks until Esc; otherwise the first of
 /// [`RailPanel::AUTO_ORDER`] with content wins — agents while a sub-agent
 /// runs, then the to-do list, then background work — and the persisted

@@ -699,7 +699,7 @@ pub fn set_title_prefix(prefix: Option<&str>) {
     if TITLE_ANIMATION_RUNNING.load(Ordering::SeqCst) {
         let base = title_animation_base()
             .lock()
-            .map_or_else(|_| "Codewhale".to_string(), |base| base.clone());
+            .map_or_else(|_| "codewhale".to_string(), |base| base.clone());
         let motion = TITLE_MOTION_ENABLED.load(Ordering::SeqCst);
         set_terminal_title(&title_activity_label(
             &base,
@@ -722,7 +722,7 @@ fn resting_title_body() -> &'static str {
     if COMPLETION_MARKER_SHOWN.load(Ordering::SeqCst) {
         "✓ done"
     } else {
-        "Codewhale"
+        "codewhale"
     }
 }
 
@@ -746,7 +746,7 @@ const TITLE_FRAME_HOLD: Duration = Duration::from_millis(800);
 const TITLE_WHALE_FRAMES: &[&str] = &["🐳", "🐋", "🐳", "🐋"];
 
 fn title_animation_base() -> &'static Mutex<String> {
-    TITLE_ANIMATION_BASE.get_or_init(|| Mutex::new("Codewhale".to_string()))
+    TITLE_ANIMATION_BASE.get_or_init(|| Mutex::new("codewhale".to_string()))
 }
 
 fn title_activity_verb() -> &'static Mutex<String> {
@@ -779,7 +779,7 @@ pub fn set_title_activity_verb(verb: &str) {
     }
     let base = title_animation_base()
         .lock()
-        .map_or_else(|_| "Codewhale".to_string(), |base| base.clone());
+        .map_or_else(|_| "codewhale".to_string(), |base| base.clone());
     set_terminal_title(&title_activity_label(
         &base,
         Duration::ZERO,
@@ -911,7 +911,7 @@ pub fn set_terminal_focused(focused: bool) {
     }
     let base = title_animation_base()
         .lock()
-        .map_or_else(|_| "Codewhale".to_string(), |base| base.clone());
+        .map_or_else(|_| "codewhale".to_string(), |base| base.clone());
     let motion = TITLE_MOTION_ENABLED.load(Ordering::SeqCst);
     set_terminal_title(&title_activity_label(
         &base,
@@ -946,7 +946,7 @@ pub fn stop_title_animation_quietly() {
     TITLE_ANIMATION_RUNNING.store(false, Ordering::SeqCst);
     TITLE_ANIMATION_GENERATION.fetch_add(1, Ordering::SeqCst);
     COMPLETION_MARKER_SHOWN.store(false, Ordering::SeqCst);
-    set_terminal_title(&decorate_title("Codewhale"));
+    set_terminal_title(&decorate_title("codewhale"));
 }
 
 /// Clear the completion marker from the title when the user interacts.
@@ -955,7 +955,7 @@ pub fn stop_title_animation_quietly() {
 /// marker doesn't persist once the user is back at the terminal.
 pub fn reset_title_on_interaction() {
     if COMPLETION_MARKER_SHOWN.swap(false, Ordering::SeqCst) {
-        set_terminal_title(&decorate_title("Codewhale"));
+        set_terminal_title(&decorate_title("codewhale"));
     }
 }
 
@@ -1423,19 +1423,19 @@ mod tests {
             "in the current…".clone_into(&mut *verb);
         }
         assert_eq!(
-            title_activity_label("Codewhale", Duration::ZERO, true, true),
+            title_activity_label("codewhale", Duration::ZERO, true, true),
             "🐳 in the current…"
         );
         assert_eq!(
-            title_activity_label("Codewhale", Duration::ZERO, false, false),
+            title_activity_label("codewhale", Duration::ZERO, false, false),
             "🐳 in the current…"
         );
         assert_eq!(
-            title_activity_label("Codewhale", Duration::ZERO, false, true),
+            title_activity_label("codewhale", Duration::ZERO, false, true),
             "🐳 in the current…"
         );
         assert_eq!(
-            title_activity_label("Codewhale", Duration::from_millis(800), false, true),
+            title_activity_label("codewhale", Duration::from_millis(800), false, true),
             "🐋 in the current…"
         );
     }
@@ -1460,16 +1460,16 @@ mod tests {
             "reasoning…".clone_into(&mut *verb);
         }
         assert_eq!(
-            title_activity_label("Codewhale", Duration::ZERO, true, true),
+            title_activity_label("codewhale", Duration::ZERO, true, true),
             "[task-7] 🐳 reasoning…"
         );
         assert_eq!(
-            title_activity_label("Codewhale", Duration::ZERO, false, true),
+            title_activity_label("codewhale", Duration::ZERO, false, true),
             "[task-7] 🐳 reasoning…"
         );
         set_title_prefix(None);
         assert_eq!(
-            title_activity_label("Codewhale", Duration::ZERO, true, true),
+            title_activity_label("codewhale", Duration::ZERO, true, true),
             "🐳 reasoning…"
         );
     }
@@ -1478,14 +1478,14 @@ mod tests {
     fn title_prefix_decorates_rest_and_completion_titles() {
         let _guard = prefix_lock();
         set_title_prefix(Some("feature/x"));
-        assert_eq!(decorate_title("Codewhale"), "[feature/x] Codewhale");
+        assert_eq!(decorate_title("codewhale"), "[feature/x] codewhale");
         assert_eq!(decorate_title("✓ done"), "[feature/x] ✓ done");
         set_title_prefix(None);
-        assert_eq!(decorate_title("Codewhale"), "Codewhale");
+        assert_eq!(decorate_title("codewhale"), "codewhale");
         assert_eq!(decorate_title("✓ done"), "✓ done");
         // Empty/whitespace prefixes behave exactly like `None`.
         set_title_prefix(Some("   "));
-        assert_eq!(decorate_title("Codewhale"), "Codewhale");
+        assert_eq!(decorate_title("codewhale"), "codewhale");
         set_title_prefix(None);
     }
 
@@ -1512,7 +1512,7 @@ mod tests {
         // whole render loop. Exercise the exact path: prefix change while
         // the animation worker is running.
         let _guard = prefix_lock();
-        start_title_animation("Codewhale");
+        start_title_animation("codewhale");
         assert!(TITLE_ANIMATION_RUNNING.load(Ordering::SeqCst));
         set_title_prefix(Some("task-7"));
         assert_eq!(title_prefix_slot().lock().unwrap().as_str(), "task-7");
@@ -1900,12 +1900,12 @@ mod tests {
         TITLE_ANIMATION_RUNNING.store(false, Ordering::SeqCst);
         COMPLETION_MARKER_SHOWN.store(false, Ordering::SeqCst);
         set_title_prefix(Some("Alpha"));
-        assert_eq!(decorate_title(resting_title_body()), "[Alpha] Codewhale");
+        assert_eq!(decorate_title(resting_title_body()), "[Alpha] codewhale");
         COMPLETION_MARKER_SHOWN.store(true, Ordering::SeqCst);
         assert_eq!(decorate_title(resting_title_body()), "[Alpha] ✓ done");
         COMPLETION_MARKER_SHOWN.store(false, Ordering::SeqCst);
         set_title_prefix(None);
-        assert_eq!(decorate_title(resting_title_body()), "Codewhale");
+        assert_eq!(decorate_title(resting_title_body()), "codewhale");
     }
 
     #[test]

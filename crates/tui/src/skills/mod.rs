@@ -40,13 +40,58 @@ use std::sync::{OnceLock, RwLock};
 
 use crate::logging;
 
-const MAX_SKILL_DESCRIPTION_CHARS: usize = 280;
-/// Hard ceiling for the complete model-facing skill index, including routing
-/// instructions. The complete registry remains available through
-/// `load_skill name="list"`, so large cross-tool installations do not consume
-/// every fresh session's context merely to stay discoverable.
-const MAX_AVAILABLE_SKILLS_CHARS: usize = 2_400;
+/// Per-entry ceiling for a skill's one-line description in the ambient index.
+/// Split between the summary and its `Use when:` trigger when a description
+/// carries one, so the trigger phrase — the part the model actually routes on
+/// — survives shortening. Over-length descriptions are reported by
+/// `/skills` as a load warning rather than silently cut mid-sentence.
+pub(crate) const MAX_SKILL_DESCRIPTION_CHARS: usize = 400;
+/// Floor for the model-facing skill index budget, in chars. The real budget
+/// scales with the route's context window ([`skills_prompt_budget_chars`]);
+/// this floor keeps tiny local windows from erasing the index altogether.
+const MIN_AVAILABLE_SKILLS_CHARS: usize = 2_400;
+/// Ceiling for the index budget: past this, `load_skill name="list"` is a
+/// better deal than the ambient page even on a 1M window.
+const MAX_AVAILABLE_SKILLS_CHARS_CEILING: usize = 40_000;
+/// Share of the context window the ambient index may take. Conservative on
+/// purpose — the index is routing metadata, not the work.
+const SKILL_BUDGET_CONTEXT_PERCENT: u64 = 5;
+/// Chars-per-token estimate for the budget; matches the conservative
+/// estimator used by the context report.
+const SKILL_BUDGET_CHARS_PER_TOKEN: u64 = 4;
+/// Window assumed when the caller has no route yet (tests, headless doctor
+/// without a provider). 128k is the smallest common hosted window today.
+const SKILL_BUDGET_DEFAULT_WINDOW_TOKENS: u32 = 128_000;
+/// Shortest a proportionally-shortened description may get before the index
+/// drops to names-only. Below this a description is noise.
+const MIN_SHORTENED_DESCRIPTION_CHARS: usize = 40;
+/// Compatibility name for tests and the catalog matrix: the budget at the
+/// default window.
+#[cfg(test)]
+pub(crate) const MAX_AVAILABLE_SKILLS_CHARS: usize =
+    skills_prompt_budget_chars(Some(SKILL_BUDGET_DEFAULT_WINDOW_TOKENS));
 const MAX_SKILL_NAME_CHARS: usize = 64;
+
+/// Chars of system prompt the ambient skill index may occupy for a route
+/// with `window_tokens` of context. Session-pinned: the window is fixed per
+/// route, so the rendered block is byte-stable across turns and never moves
+/// the KV-cache prefix on its own (docs/CACHE.md).
+#[must_use]
+pub const fn skills_prompt_budget_chars(window_tokens: Option<u32>) -> usize {
+    let window = match window_tokens {
+        Some(tokens) if tokens > 0 => tokens as u64,
+        _ => SKILL_BUDGET_DEFAULT_WINDOW_TOKENS as u64,
+    };
+    let chars = window * SKILL_BUDGET_CHARS_PER_TOKEN * SKILL_BUDGET_CONTEXT_PERCENT / 100;
+    let chars = chars as usize;
+    if chars < MIN_AVAILABLE_SKILLS_CHARS {
+        MIN_AVAILABLE_SKILLS_CHARS
+    } else if chars > MAX_AVAILABLE_SKILLS_CHARS_CEILING {
+        MAX_AVAILABLE_SKILLS_CHARS_CEILING
+    } else {
+        chars
+    }
+}
 
 /// Test-only observations of the synchronous skill-discovery walk.
 ///
@@ -1267,10 +1312,11 @@ pub fn render_available_skills_context_for_workspace_with_mode_and_plugins(
     mode: SkillDiscoveryMode,
     locale: &str,
     plugins: Option<&crate::plugins::PluginRegistry>,
+    budget_chars: usize,
 ) -> Option<String> {
     let registry =
         discover_in_workspace_with_mode_and_plugins(workspace, mode, plugins).into_enabled();
-    render_skills_block(&registry, locale, workspace)
+    render_skills_block_with_configured_root(&registry, locale, workspace, None, budget_chars)
 }
 
 /// Progressive-disclosure contract: the model sees a bounded page of skill
@@ -1293,6 +1339,7 @@ pub fn render_available_skills_context_for_workspace_and_dir_with_mode_and_plugi
     mode: SkillDiscoveryMode,
     locale: &str,
     plugins: Option<&crate::plugins::PluginRegistry>,
+    budget_chars: usize,
 ) -> Option<String> {
     let registry =
         discover_for_workspace_and_dir_with_mode_and_plugins(workspace, skills_dir, mode, plugins)
@@ -1303,7 +1350,13 @@ pub fn render_available_skills_context_for_workspace_and_dir_with_mode_and_plugi
         SkillRootKind::Configured
     )
     .then_some(skills_dir);
-    render_skills_block_with_configured_root(&registry, locale, workspace, configured_skills_root)
+    render_skills_block_with_configured_root(
+        &registry,
+        locale,
+        workspace,
+        configured_skills_root,
+        budget_chars,
+    )
 }
 
 /// Replace absolute path prefixes in free-form text (skill load warnings)
@@ -1456,19 +1509,134 @@ fn prompt_skill_path(
     Some(privacy_safe_skill_path(path, workspace))
 }
 
+#[cfg(test)]
 fn render_skills_block(registry: &SkillRegistry, locale: &str, workspace: &Path) -> Option<String> {
-    render_skills_block_with_configured_root(registry, locale, workspace, None)
+    render_skills_block_with_configured_root(
+        registry,
+        locale,
+        workspace,
+        None,
+        skills_prompt_budget_chars(None),
+    )
 }
 
+/// Joins a summary to its trigger phrase in a rendered row.
+const TRIGGER_JOIN: &str = " — Use when: ";
+
+/// One model-selectable row of the ambient index, before budget fitting.
+struct IndexRow<'a> {
+    name: &'a str,
+    /// Summary half of the description (everything before `Use when:`).
+    summary: String,
+    /// Trigger half (`Use when: …`), when the author wrote one.
+    trigger: Option<String>,
+    source: Option<String>,
+}
+
+impl IndexRow<'_> {
+    fn render(&self, summary_chars: usize, trigger_chars: usize) -> String {
+        let summary = truncate_for_prompt(&self.summary, summary_chars);
+        let trigger = self
+            .trigger
+            .as_deref()
+            .filter(|_| trigger_chars > 0)
+            .map(|trigger| truncate_for_prompt(trigger, trigger_chars))
+            .filter(|trigger| !trigger.is_empty());
+        let mut description = summary;
+        if let Some(trigger) = trigger {
+            if !description.is_empty() {
+                description.push_str(TRIGGER_JOIN);
+            } else {
+                description.push_str(TRIGGER_JOIN.trim_start_matches([' ', '—']));
+            }
+            description.push_str(&trigger);
+        }
+        match (description.is_empty(), &self.source) {
+            (true, Some(source)) => format!("- {}: ({source})\n", self.name),
+            (true, None) => format!("- {}\n", self.name),
+            (false, Some(source)) => format!("- {}: {} ({source})\n", self.name, description),
+            (false, None) => format!("- {}: {}\n", self.name, description),
+        }
+    }
+
+    fn render_name_only(&self) -> String {
+        format!("- {}\n", self.name)
+    }
+
+    fn summary_len(&self) -> usize {
+        self.summary.chars().count()
+    }
+
+    fn trigger_len(&self) -> usize {
+        self.trigger.as_deref().map_or(0, |t| t.chars().count())
+    }
+}
+
+/// Split a description into its summary and `Use when:` trigger phrase, so
+/// shortening can favour the half the model routes on.
+fn split_trigger(description: &str) -> (String, Option<String>) {
+    let single_line = description.split_whitespace().collect::<Vec<_>>().join(" ");
+    let lower = single_line.to_ascii_lowercase();
+    for marker in [
+        "use when:",
+        "use when ",
+        "use this when ",
+        "use this skill when ",
+    ] {
+        if let Some(pos) = lower.find(marker) {
+            let (head, tail) = single_line.split_at(pos);
+            let trigger = tail[marker.len()..]
+                .trim()
+                .trim_end_matches('.')
+                .to_string();
+            let summary = head
+                .trim()
+                .trim_end_matches(['.', ';', ',', '—', '-'])
+                .trim();
+            if !trigger.is_empty() {
+                return (summary.to_string(), Some(trigger));
+            }
+        }
+    }
+    (single_line, None)
+}
+
+/// Fit a row's description into `cap` chars, splitting between summary and
+/// trigger in proportion to their natural lengths but never starving the
+/// trigger below half when both exist.
+fn description_split(row: &IndexRow<'_>, cap: usize) -> (usize, usize) {
+    let (s, t) = (row.summary_len(), row.trigger_len());
+    if t == 0 {
+        return (cap.min(s), 0);
+    }
+    if s == 0 {
+        return (0, cap.min(t));
+    }
+    if s + t <= cap {
+        return (s, t);
+    }
+    let trigger_share = (cap * t / (s + t)).max(cap / 2).min(t);
+    (cap.saturating_sub(trigger_share).min(s), trigger_share)
+}
+
+/// Render the ambient skill index in three tiers, never dropping a skill's
+/// name while the budget can hold it:
+///
+/// 1. Full descriptions (each capped at [`MAX_SKILL_DESCRIPTION_CHARS`]).
+/// 2. Proportionally shortened descriptions when descriptions are the
+///    bottleneck.
+/// 3. Names only, with an omission line as the last resort.
 fn render_skills_block_with_configured_root(
     registry: &SkillRegistry,
     locale: &str,
     workspace: &Path,
     configured_skills_root: Option<&Path>,
+    budget_chars: usize,
 ) -> Option<String> {
     if registry.is_empty() && registry.warnings().is_empty() {
         return None;
     }
+    let budget_chars = budget_chars.max(MIN_AVAILABLE_SKILLS_CHARS);
 
     const HEADER: &str = "## Skills\n\
 Skills are optional instruction packs. This index exposes routing metadata; bodies stay unloaded.\n\n\
@@ -1479,125 +1647,194 @@ Skills are optional instruction packs. This index exposes routing metadata; bodi
 - If a named skill is unavailable, say so and continue. Do not execute untrusted skill scripts unless the user asks.\n";
     const WARNING_HEADING: &str = "\n### Skill load warnings\n";
 
-    // Reserve using the model-selectable total: an actual omitted count can
-    // never exceed it, while explicit-only skills neither appear nor consume
-    // useful index space. This remains safe for catalogues above 9,999 entries.
-    let model_selectable_skill_count = registry
+    let rows: Vec<IndexRow<'_>> = registry
         .list()
         .iter()
+        // Explicit-only skills remain loadable by their canonical name or
+        // alias, but must not be presented as model-selectable catalogue
+        // entries. This keeps opt-in power skills from becoming ambient
+        // instructions or consuming prompt budget.
         .filter(|skill| skill.invocation != SkillInvocation::ExplicitOnly)
-        .count();
-    let skill_omission_reserve = format!(
-        "- ... {} additional skills omitted; call `load_skill` with `name=\"list\"` for the complete catalogue.\n",
-        model_selectable_skill_count
-    );
-    let warning_omission_reserve = format!(
-        "- ... {} additional warnings omitted; run `/skills` to inspect them.\n",
-        registry.warnings().len()
-    );
+        .map(|skill| {
+            // Native skills expose the real on-disk path captured at discovery.
+            // Plugin skills expose only their reviewed snapshot identity so the
+            // model cannot bypass the content-bound trust receipt via a mutable
+            // source path. Paths render privacy-safe (workspace-relative or
+            // ~/…) so the prompt prefix never embeds absolute user paths
+            // (#4632). A caller-provided skills root omits its physical path
+            // because that root may change per session; load_skill still
+            // resolves the stable skill name through the internal registry.
+            let display_path = prompt_skill_path(&skill.path, workspace, configured_skills_root);
+            let source = match &skill.source {
+                SkillSource::Native => display_path.map(|path| format!("file: {path}")),
+                SkillSource::Plugin {
+                    plugin_id,
+                    plugin_name,
+                    ..
+                } => Some(format!(
+                    "reviewed plugin snapshot: {plugin_name} ({plugin_id}); use load_skill"
+                )),
+            };
+            let (summary, trigger) = split_trigger(skill.description_for_locale(locale));
+            IndexRow {
+                name: &skill.name,
+                summary,
+                trigger,
+                source,
+            }
+        })
+        .collect();
 
-    let mut out = String::from(HEADER);
-    let warning_reserve = if registry.warnings().is_empty() {
+    // Reserve using the model-selectable total: an actual omitted count can
+    // never exceed it. This remains safe for catalogues above 9,999 entries.
+    let skill_omission_reserve = omitted_skills_line(rows.len()).chars().count();
+    let warning_omission_reserve = if registry.warnings().is_empty() {
         0
     } else {
-        WARNING_HEADING.chars().count() + warning_omission_reserve.chars().count()
+        WARNING_HEADING.chars().count()
+            + omitted_warnings_line(registry.warnings().len())
+                .chars()
+                .count()
     };
-    let fixed_reserve =
-        USAGE.chars().count() + skill_omission_reserve.chars().count() + warning_reserve;
+    let fixed = HEADER.chars().count() + USAGE.chars().count() + warning_omission_reserve;
+    // Warnings are rendered after the index and share the budget; give them a
+    // bounded slice so a noisy install cannot erase the index, and vice versa.
+    let warning_slice = if registry.warnings().is_empty() {
+        0
+    } else {
+        (budget_chars / 5).min(8 * (MAX_SKILL_DESCRIPTION_CHARS + 4))
+    };
+    let index_budget = budget_chars.saturating_sub(fixed + warning_slice);
 
+    let mut out = String::from(HEADER);
     let mut omitted = 0usize;
-    for skill in registry.list() {
-        if skill.invocation == SkillInvocation::ExplicitOnly {
-            // Explicit-only skills remain loadable by their canonical name or
-            // alias, but must not be presented as model-selectable catalogue
-            // entries. This keeps opt-in power skills from becoming ambient
-            // instructions or consuming prompt budget.
-            continue;
-        }
-        // Native skills expose the real on-disk path captured at discovery.
-        // Plugin skills expose only their reviewed snapshot identity so the
-        // model cannot bypass the content-bound trust receipt via a mutable
-        // source path.
-        // Use the real on-disk path captured at discovery — the directory
-        // name can differ from the frontmatter `name` for community
-        // installs, in which case `<dir>/<name>/SKILL.md` would not exist
-        // and the model would fail to open it. Rendered privacy-safe
-        // (workspace-relative or ~/…) so the prompt prefix never embeds
-        // absolute user paths (#4632). A caller-provided skills root omits its
-        // physical path because that root may change per session; load_skill
-        // still resolves the stable skill name through the internal registry.
-        let display_path = prompt_skill_path(&skill.path, workspace, configured_skills_root);
-        let description = truncate_for_prompt(
-            skill.description_for_locale(locale),
-            MAX_SKILL_DESCRIPTION_CHARS,
-        );
-        let source = match &skill.source {
-            SkillSource::Native => display_path.map(|path| format!("file: {path}")),
-            SkillSource::Plugin {
-                plugin_id,
-                plugin_name,
-                ..
-            } => Some(format!(
-                "reviewed plugin snapshot: {plugin_name} ({plugin_id}); use load_skill"
-            )),
-        };
-        let line = match (description.is_empty(), source) {
-            (true, Some(source)) => format!("- {}: ({source})\n", skill.name),
-            (true, None) => format!("- {}\n", skill.name),
-            (false, Some(source)) => format!("- {}: {} ({source})\n", skill.name, description),
-            (false, None) => format!("- {}: {}\n", skill.name, description),
-        };
 
-        if out.chars().count() + line.chars().count() + fixed_reserve > MAX_AVAILABLE_SKILLS_CHARS {
-            omitted += 1;
+    // Tier 1: full descriptions.
+    let full_lines: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            let (s, t) = description_split(row, MAX_SKILL_DESCRIPTION_CHARS);
+            row.render(s, t)
+        })
+        .collect();
+    let full_total: usize = full_lines.iter().map(|l| l.chars().count()).sum();
+    if full_total <= index_budget {
+        for line in &full_lines {
+            out.push_str(line);
+        }
+    } else {
+        // Tier 2: shorten descriptions proportionally. Fixed cost per row is
+        // the name-plus-source scaffolding; whatever remains is shared among
+        // descriptions in proportion to their full length.
+        let scaffold: usize = rows
+            .iter()
+            .map(|row| row.render(0, 0).chars().count())
+            .sum();
+        let desc_full: usize = rows
+            .iter()
+            .map(|row| {
+                let (s, t) = description_split(row, MAX_SKILL_DESCRIPTION_CHARS);
+                s + t + if t > 0 { TRIGGER_JOIN.len() } else { 0 }
+            })
+            .sum();
+        let desc_avail = index_budget.saturating_sub(scaffold);
+        let shortened: Option<Vec<String>> = (desc_full > 0
+            && desc_avail >= rows.len() * MIN_SHORTENED_DESCRIPTION_CHARS)
+            .then(|| {
+                rows.iter()
+                    .map(|row| {
+                        let (s, t) = description_split(row, MAX_SKILL_DESCRIPTION_CHARS);
+                        let overhead = if t > 0 { TRIGGER_JOIN.len() } else { 0 };
+                        let natural = s + t;
+                        let cap = ((natural + overhead) * desc_avail / desc_full)
+                            .saturating_sub(overhead)
+                            .max(MIN_SHORTENED_DESCRIPTION_CHARS)
+                            .min(natural);
+                        let (s, t) = description_split(row, cap);
+                        row.render(s, t)
+                    })
+                    .collect()
+            })
+            .filter(|lines: &Vec<String>| {
+                lines.iter().map(|l| l.chars().count()).sum::<usize>() <= index_budget
+            });
+        if let Some(lines) = shortened {
+            for line in &lines {
+                out.push_str(line);
+            }
         } else {
-            out.push_str(&line);
+            // Tier 3: names only. Omission is the last resort and only when
+            // even the names overflow.
+            let names_budget = index_budget.saturating_sub(skill_omission_reserve);
+            let mut used = 0usize;
+            for row in &rows {
+                let line = row.render_name_only();
+                let len = line.chars().count();
+                if used + len > names_budget {
+                    omitted += 1;
+                } else {
+                    used += len;
+                    out.push_str(&line);
+                }
+            }
         }
     }
 
     if omitted > 0 {
-        out.push_str(&format!(
-            "- ... {omitted} additional skills omitted; call `load_skill` with `name=\"list\"` for the complete catalogue.\n"
-        ));
+        out.push_str(&omitted_skills_line(omitted));
     }
 
     if !registry.warnings().is_empty() {
         out.push_str(WARNING_HEADING);
+        let warnings_budget = budget_chars.saturating_sub(
+            out.chars().count()
+                + USAGE.chars().count()
+                + omitted_warnings_line(registry.warnings().len())
+                    .chars()
+                    .count(),
+        );
+        let mut used = 0usize;
         let mut warnings_omitted = 0usize;
         for warning in registry.warnings().iter().take(8) {
             let line = format!(
                 "- {}\n",
                 truncate_for_prompt(
-                    &sanitize_prompt_path_text(warning, workspace, configured_skills_root,),
+                    &sanitize_prompt_path_text(warning, workspace, configured_skills_root),
                     MAX_SKILL_DESCRIPTION_CHARS,
                 )
             );
-            if out.chars().count()
-                + line.chars().count()
-                + warning_omission_reserve.chars().count()
-                + USAGE.chars().count()
-                > MAX_AVAILABLE_SKILLS_CHARS
-            {
+            let len = line.chars().count();
+            if used + len > warnings_budget {
                 warnings_omitted += 1;
             } else {
+                used += len;
                 out.push_str(&line);
             }
         }
         warnings_omitted += registry.warnings().len().saturating_sub(8);
         if warnings_omitted > 0 {
-            out.push_str(&format!(
-                "- ... {warnings_omitted} additional warnings omitted; run `/skills` to inspect them.\n"
-            ));
+            out.push_str(&omitted_warnings_line(warnings_omitted));
         }
     }
 
     out.push_str(USAGE);
-    assert!(
-        out.chars().count() <= MAX_AVAILABLE_SKILLS_CHARS,
-        "ambient skill index exceeded its hard prompt budget"
+    debug_assert!(
+        out.chars().count() <= budget_chars,
+        "ambient skill index exceeded its prompt budget ({} > {budget_chars})",
+        out.chars().count()
     );
 
     Some(out)
+}
+
+fn omitted_skills_line(count: usize) -> String {
+    format!(
+        "- ... {count} additional skills omitted; call `load_skill` with `name=\"list\"` for the complete catalogue.\n"
+    )
+}
+
+fn omitted_warnings_line(count: usize) -> String {
+    format!("- ... {count} additional warnings omitted; run `/skills` to inspect them.\n")
 }
 
 fn truncate_for_prompt(value: &str, max_chars: usize) -> String {

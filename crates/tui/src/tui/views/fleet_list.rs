@@ -1,7 +1,7 @@
-//! `/pod pods` — named saved-Fleet picker (secondary surface; `/pod fleets`
+//! `/fleet fleets` — named saved-Fleet picker (secondary surface; `/fleet fleets`
 //! remains a compatibility alias).
 //!
-//! Bare `/pod` opens the roster/setup face for the selected Fleet. This view
+//! Bare `/fleet` opens the roster/setup face for the selected Fleet. This view
 //! is only for switching between named configurations. One row per saved Fleet
 //! across both scopes: user-global (`$CODEWHALE_HOME/fleets/`) and folder
 //! (`.codewhale/fleets/`). Rows show name, scope badge, and operator summary —
@@ -12,6 +12,7 @@
 //! The view reads and writes the Fleet store directly (local, atomic file
 //! operations); it never touches the live session route.
 
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
@@ -30,6 +31,7 @@ use crate::fleet::store::{
 };
 use crate::palette;
 use crate::tui::app::App;
+use crate::tui::menu_style;
 use crate::tui::views::{
     ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_footer,
 };
@@ -59,6 +61,13 @@ pub struct FleetListView {
     /// Saved scope of the row being acted on (delete/select flow through
     /// confirmation state).
     pending_delete: Option<usize>,
+    /// Exact painted cells of each entry row. Clicks and hover hit-test
+    /// these painted rects — never a hardcoded row offset — so pointer
+    /// targets stay truthful when the list scrolls or the footer wraps.
+    row_hitboxes: RefCell<Vec<(Rect, usize)>>,
+    /// Entry under the pointer, tinted with the shared hover style. Hover
+    /// never moves the keyboard row.
+    hovered_row: Cell<Option<usize>>,
     fleet_config: codewhale_config::FleetConfigToml,
     workspace: PathBuf,
 }
@@ -80,6 +89,8 @@ impl FleetListView {
             default_fleet_exists,
             row: 0,
             pending_delete: None,
+            row_hitboxes: RefCell::new(Vec::new()),
+            hovered_row: Cell::new(None),
             fleet_config: config.fleet_config(),
             workspace,
         }
@@ -99,6 +110,15 @@ impl FleetListView {
             return;
         }
         self.row = crate::tui::list_nav::wrap_index(self.row, rows, delta);
+        self.hovered_row.set(None);
+    }
+
+    fn hit_row(&self, mouse: MouseEvent) -> Option<usize> {
+        let position = ratatui::layout::Position::new(mouse.column, mouse.row);
+        self.row_hitboxes
+            .borrow()
+            .iter()
+            .find_map(|(rect, idx)| rect.contains(position).then_some(*idx))
     }
 
     fn footer_hints(&self) -> Vec<ActionHint> {
@@ -120,7 +140,7 @@ impl FleetListView {
     }
 
     /// Select the highlighted Fleet in `scope` and close with a receipt that
-    /// names the exact file written. Editing stays on `/pod setup` / roster —
+    /// names the exact file written. Editing stays on `/fleet setup` / roster —
     /// this surface is a switcher, not a file manager.
     fn select_highlighted(&self, scope: FleetScope) -> Option<FleetListOutcome> {
         let entry = self.selected_entry()?;
@@ -282,10 +302,12 @@ impl ModalView for FleetListView {
             }
             KeyCode::Home => {
                 self.row = 0;
+                self.hovered_row.set(None);
                 ViewAction::None
             }
             KeyCode::End => {
                 self.row = self.entries.len().saturating_sub(1);
+                self.hovered_row.set(None);
                 ViewAction::None
             }
             _ => ViewAction::None,
@@ -293,21 +315,23 @@ impl ModalView for FleetListView {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
-        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
-            if self.pending_delete.is_some() {
-                self.pending_delete = None;
-                return ViewAction::None;
+        match mouse.kind {
+            MouseEventKind::Moved => {
+                self.hovered_row.set(self.hit_row(mouse));
+                ViewAction::None
             }
-            let (rows_top, _) = (5u16, 0u16);
-            if mouse.row >= rows_top {
-                let idx = usize::from(mouse.row - rows_top) + self.row.saturating_sub(0);
-                if idx < self.entries.len() {
-                    self.row = idx;
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.pending_delete.is_some() {
+                    self.pending_delete = None;
                     return ViewAction::None;
                 }
+                if let Some(idx) = self.hit_row(mouse) {
+                    self.row = idx;
+                }
+                ViewAction::None
             }
+            _ => ViewAction::None,
         }
-        ViewAction::None
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -366,6 +390,7 @@ impl ModalView for FleetListView {
 
 impl FleetListView {
     fn render_rows(&self, area: Rect, buf: &mut Buffer) {
+        self.row_hitboxes.borrow_mut().clear();
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -376,8 +401,8 @@ impl FleetListView {
                     Style::default().fg(palette::TEXT_MUTED),
                 ),
                 Span::styled(
-                    "  Select a model with /model and /provider, then /pod save or \
-                     /pod save-as. Editing stays on /pod setup.",
+                    "  Select a model with /model and /provider, then /fleet save or \
+                     /fleet save-as. Editing stays on /fleet setup.",
                     Style::default().fg(palette::TEXT_DIM),
                 ),
             ]))
@@ -389,6 +414,7 @@ impl FleetListView {
         let scroll = self.row.saturating_sub(rows_visible.saturating_sub(1));
 
         let mut lines = Vec::new();
+        let mut hitboxes = Vec::new();
         for (idx, entry) in self.entries.iter().enumerate() {
             if idx < scroll || idx >= scroll + rows_visible {
                 continue;
@@ -442,6 +468,7 @@ impl FleetListView {
                 ));
             }
 
+            let start = lines.len();
             if self.pending_delete == Some(idx) {
                 lines.push(Line::from(vec![Span::styled(
                     format!("  Delete `{}` ({})? y/n", entry.name, entry.scope.label()),
@@ -456,7 +483,25 @@ impl FleetListView {
                     Style::default().fg(palette::TEXT_DIM),
                 )));
             }
+            // Hover tints the painted entry but never steals the keyboard
+            // row; the spans keep their ink, so the band cannot recolor
+            // scope badges or warning text.
+            if idx != self.row && self.hovered_row.get() == Some(idx) {
+                for line in &mut lines[start..] {
+                    line.style = line.style.patch(menu_style::hovered_row_style());
+                }
+            }
+            hitboxes.push((
+                Rect {
+                    x: area.x,
+                    y: area.y.saturating_add(start as u16),
+                    width: area.width,
+                    height: (lines.len().saturating_sub(start) as u16).max(1),
+                },
+                idx,
+            ));
         }
+        *self.row_hitboxes.borrow_mut() = hitboxes;
 
         let text = ratatui::text::Text::from(lines);
         Paragraph::new(text).render(area, buf);
@@ -834,5 +879,80 @@ provider = "deepseek"
                 None => std::env::remove_var("CODEWHALE_HOME"),
             }
         }
+    }
+
+    #[test]
+    fn pointer_click_selects_the_painted_row() {
+        let _lock = crate::test_support::lock_test_env();
+        let home = tempfile::TempDir::new().unwrap();
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let ws = tempfile::TempDir::new().unwrap();
+
+        save_in(ws.path(), FleetScope::Workspace, "First Fleet");
+        save_in(ws.path(), FleetScope::Workspace, "Second Fleet");
+        let mut view = FleetListView::new(&app_in(ws.path().to_path_buf()), &Config::default());
+        assert_eq!(view.entries.len(), 2);
+
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        let second = view
+            .row_hitboxes
+            .borrow()
+            .iter()
+            .copied()
+            .find(|(_, idx)| *idx == 1)
+            .expect("second entry hitbox")
+            .0;
+        view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: second.x.saturating_add(1),
+            row: second.y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        });
+        assert_eq!(view.row, 1, "click must select the painted row");
+    }
+
+    #[test]
+    fn hover_tints_list_entry_without_moving_row() {
+        let _lock = crate::test_support::lock_test_env();
+        let home = tempfile::TempDir::new().unwrap();
+        let _home = crate::test_support::EnvVarGuard::set("CODEWHALE_HOME", home.path());
+        let ws = tempfile::TempDir::new().unwrap();
+
+        save_in(ws.path(), FleetScope::Workspace, "First Fleet");
+        save_in(ws.path(), FleetScope::Workspace, "Second Fleet");
+        let mut view = FleetListView::new(&app_in(ws.path().to_path_buf()), &Config::default());
+
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        let second = view
+            .row_hitboxes
+            .borrow()
+            .iter()
+            .copied()
+            .find(|(_, idx)| *idx == 1)
+            .expect("second entry hitbox")
+            .0;
+        assert!(matches!(
+            view.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: second.x.saturating_add(1),
+                row: second.y,
+                modifiers: crossterm::event::KeyModifiers::NONE,
+            }),
+            ViewAction::None
+        ));
+        assert_eq!(view.hovered_row.get(), Some(1));
+        assert_eq!(view.row, 0);
+
+        let mut hovered_buf = Buffer::empty(area);
+        view.render(area, &mut hovered_buf);
+        assert_eq!(
+            hovered_buf[(second.x, second.y)].bg,
+            crate::palette::SURFACE_ELEVATED,
+            "hovered entry must show the shared hover band"
+        );
     }
 }

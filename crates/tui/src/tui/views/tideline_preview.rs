@@ -1,5 +1,5 @@
 //! Tideline settings live preview (spec §5a "Live preview"): a **real
-//! projection of the real renderers** — the receipt stream, pod ledger,
+//! projection of the real renderers** — the receipt stream, fleet ledger,
 //! composer chrome, and merged footer all render through their actual
 //! functions with a candidate theme injected. No second store, no mock
 //! markup: what the preview paints is what ships. Esc restoring the prior
@@ -139,7 +139,7 @@ pub fn render_tideline_settings_preview(
         let groups = crate::tui::work_surface::tideline::tideline_rail_groups(
             "release 0.9.12",
             "2/4 whales",
-            "launch pod",
+            "launch fleet",
             &["▸ footer band"],
             61,
         );

@@ -112,6 +112,7 @@ pub trait CommandMediaContext {
     fn attach_media(&mut self, resolved_path: &Path) -> Result<MediaAttachmentReceipt, String>;
 }
 
+// ---------------------------------------------------------------------------
 // Project (FEAT-021 D1/D2/D3/D4)
 // ---------------------------------------------------------------------------
 
@@ -204,4 +205,397 @@ pub trait CommandProjectContext {
     fn share_projection(&self) -> ProjectShareProjection;
     /// `/goal` projection: visible and effective goal state.
     fn goal_state(&self) -> ProjectGoalState;
+}
+
+// ---------------------------------------------------------------------------
+// Memory (FEAT-019 D1/D2/D8/D9)
+// ---------------------------------------------------------------------------
+
+/// Portable semantic hit for a native-memory search or get result.
+///
+/// Carries only the typed location and text the handler consumes for
+/// formatting; the TUI-owned `NativeMemoryHit` never crosses the boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryHit {
+    pub source: PathBuf,
+    pub line_start: usize,
+    pub line_end: usize,
+    pub text: String,
+}
+
+/// Portable native-memory location summary (status operation).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryStatus {
+    pub root: PathBuf,
+    pub source: PathBuf,
+    pub index: PathBuf,
+}
+
+/// Portable result of a successful remember operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryRemembered {
+    pub source: PathBuf,
+    pub line_start: usize,
+}
+
+/// Portable import outcome: imported (with destination) or skipped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryImportOutcome {
+    Imported { destination: PathBuf },
+    Skipped,
+}
+
+/// Portable get outcome: found hit or explicit not-found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryGetOutcome {
+    Found(MemoryHit),
+    NotFound,
+}
+
+/// Portable export payload — the exported memory document itself, never a
+/// preformatted command response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryExport {
+    pub content: String,
+}
+
+/// Portable reindex entry count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryReindex {
+    pub entry_count: usize,
+}
+
+/// Zero-field success value for delete operations (D2): the handler already
+/// owns the selected scope and needs no additional success data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MemoryDelete;
+
+/// Typed remember target (D9): the handler resolves workspace identity through
+/// the workspace facet and passes the resulting typed ID here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryRememberTarget {
+    Global,
+    Workspace { workspace_id: String },
+}
+
+/// Typed delete scope for the non-workspace delete method (D8/D9).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryDeleteScope {
+    /// Delete every memory entry (global and all workspace scopes).
+    All,
+    /// Delete only the global scope entries.
+    Global,
+}
+
+/// Host memory data for the memory command group (FEAT-019 D1).
+///
+/// Exposes the resolved user-memory file path, the enablement flag, and one
+/// typed method per exposed native-memory operation. All results are
+/// contract-owned portable values; implementation errors cross as safe text.
+/// Workspace-scoped operations take the borrowed workspace path as their first
+/// argument (D8); non-workspace operations never receive workspace authority
+/// and the facet never captures or retains workspace state internally.
+pub trait CommandMemoryContext {
+    /// The resolved user-memory file path.
+    fn memory_path(&self) -> PathBuf;
+    /// Whether the `[memory] enabled` / `DEEPSEEK_MEMORY=on` flag is set.
+    fn memory_enabled(&self) -> bool;
+    /// Native-memory root, global source, and index paths.
+    fn status(&self) -> Result<MemoryStatus, String>;
+    /// The native-memory root path.
+    fn path(&self) -> Result<PathBuf, String>;
+    /// Workspace identity for the given workspace path.
+    fn workspace_id(&self, workspace: &Path) -> Result<String, String>;
+    /// Workspace-scoped search over the native-memory store.
+    fn search(&self, workspace: &Path, query: &str, limit: usize)
+    -> Result<Vec<MemoryHit>, String>;
+    /// Append a reviewed note to the typed global or workspace target.
+    fn remember(
+        &self,
+        target: MemoryRememberTarget,
+        note: &str,
+    ) -> Result<MemoryRemembered, String>;
+    /// Import legacy memory; distinguishes imported from skipped.
+    fn import(&self) -> Result<MemoryImportOutcome, String>;
+    /// Workspace-scoped get by entry id; not-found is a typed outcome.
+    fn get(&self, workspace: &Path, id: i64) -> Result<MemoryGetOutcome, String>;
+    /// Export the native-memory document content.
+    fn export(&self) -> Result<MemoryExport, String>;
+    /// Reindex the native-memory store; returns the indexed entry count.
+    fn reindex(&self) -> Result<MemoryReindex, String>;
+    /// Delete all or global scope; never receives workspace authority.
+    fn delete(&self, scope: MemoryDeleteScope) -> Result<MemoryDelete, String>;
+    /// Delete the given workspace scope; workspace path is the first argument.
+    fn delete_workspace(&self, workspace: &Path) -> Result<MemoryDelete, String>;
+}
+
+// ---------------------------------------------------------------------------
+// Skill group (FEAT-022 D1)
+// ---------------------------------------------------------------------------
+
+/// Source provenance of a discovered skill (native file vs reviewed plugin snapshot).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillSourceKind {
+    Native,
+    Plugin {
+        plugin_name: String,
+        plugin_id: String,
+    },
+}
+
+/// Curated product tier for bundled (shipped) skills.
+///
+/// The canonical name→tier classification stays in the TUI host
+/// (`crate::skills::system::bundled_skill_tier`); the portable projection
+/// carries the resolved tier so the handler can render the curated listing
+/// without duplicating the canonical bundle list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillBundledTier {
+    CoreAgentic,
+    FormatTooling,
+}
+
+impl SkillBundledTier {
+    /// Product-facing tier heading used by the `/skills` listing.
+    #[must_use]
+    pub fn heading(self) -> &'static str {
+        match self {
+            Self::CoreAgentic => "Core agentic",
+            Self::FormatTooling => "Format & tooling",
+        }
+    }
+}
+
+/// One discovered skill entry (portable).
+///
+/// The body is intentionally excluded: activation and review receive body
+/// text through their own delegates (`SkillActivationOutcome`/`ReviewOutcome`);
+/// listing and inspect render name, description, source, and path only (D1
+/// exact-minimum).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillEntry {
+    pub name: String,
+    pub description: String,
+    pub source: SkillSourceKind,
+    /// Native skills carry their on-disk path (inspect output).
+    pub path: Option<String>,
+    /// Bundled catalog tier; `None` for user/compatible skills.
+    pub bundled_tier: Option<SkillBundledTier>,
+}
+
+/// Portable projection of the host skill registry (discovery, D1).
+///
+/// Carries every value the `/skills` and `/skill` handlers render: workspace
+/// and configured skills dir displays, discovery mode label, searched
+/// directories, entries, warnings, and the enabled-skill total.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillRegistryProjection {
+    pub workspace: String,
+    pub skills_dir: String,
+    pub mode_label: String,
+    pub dirs: Vec<String>,
+    pub entries: Vec<SkillEntry>,
+    pub warnings: Vec<String>,
+    pub total: usize,
+}
+
+/// Target scope for skill mutations (`/skill install|update|uninstall|trust`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillTargetScope {
+    Project,
+    Global,
+}
+
+/// Portable mutation outcome mirroring the host receipt variants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillMutationOutcome {
+    Installed,
+    Updated,
+    NoChange,
+    Removed,
+    Trusted,
+    Imported,
+    AlreadyPresent,
+    NeedsApproval(String),
+    NetworkDenied(String),
+}
+
+/// Synchronous portable receipt for a skill mutation (FEAT-020 D11 mirror):
+/// the host owns the async network bridge; the handler renders the receipt
+/// byte-identically from these values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillMutationReceipt {
+    pub name: String,
+    pub safe_target_path: String,
+    pub outcome: SkillMutationOutcome,
+}
+
+/// One curated remote registry entry (`/skills --remote`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteSkillEntry {
+    pub name: String,
+    pub description: Option<String>,
+    pub source: String,
+}
+
+/// Remote registry fetch outcome (`/skills --remote`, suggest source).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteRegistryOutcome {
+    Loaded { entries: Vec<RemoteSkillEntry> },
+    NeedsApproval(String),
+    Denied(String),
+}
+
+/// Remote recommendation for `/skills suggest <task>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillRecommendation {
+    pub name: String,
+    pub description: Option<String>,
+    pub matched_terms: Vec<String>,
+}
+
+/// Per-skill outcome of `/skills sync`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillSyncEntry {
+    Downloaded { name: String, path: String },
+    Fresh { name: String },
+    Failed { name: String, reason: String },
+    Denied { name: String, host: String },
+    NeedsApproval { name: String, host: String },
+}
+
+/// Aggregate `/skills sync` outcome.
+///
+/// Registry-level network-policy outcomes are carried as variants so the
+/// portable handler composes the exact `needs_approval` / `denied` messages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillSyncOutcome {
+    Done {
+        total: usize,
+        downloaded: usize,
+        fresh: usize,
+        failed: usize,
+        entries: Vec<SkillSyncEntry>,
+    },
+    RegistryNeedsApproval(String),
+    RegistryDenied(String),
+}
+
+/// Successful skill activation data (host performs the side effects).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillActivationOutcome {
+    pub name: String,
+    pub description: String,
+}
+
+/// Activation failures with the exact data the handler renders.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillActivationError {
+    NotFound {
+        requested: String,
+        available: Vec<String>,
+        warnings: Vec<String>,
+    },
+    PluginRejected {
+        name: String,
+        reason: String,
+    },
+}
+
+/// `/review` outcome data (host performs the side effects).
+///
+/// On success the baseline `/review` renders no message — it only emits the
+/// `SendMessage` action — so `Ready` carries no payload (D1 exact-minimum).
+/// Warnings are only rendered on the not-found path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewOutcome {
+    Ready,
+    NotFound {
+        skills_dir: String,
+        global_dir: String,
+        warnings: Vec<String>,
+    },
+}
+
+/// One snapshot entry for `/restore` listings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotEntry {
+    pub id: String,
+    pub label: String,
+    pub timestamp: i64,
+}
+
+/// Host approval posture for the `/restore` trust gate (D4: no MODE_POLICY).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandApprovalState {
+    pub yolo: bool,
+    pub trust_mode: bool,
+}
+
+/// Host skill data for the skills command group (FEAT-022 D1).
+///
+/// Exposes the typed, exact-minimum operations the live skills handlers
+/// consume: discovery (`/skills`), activation (`/skill`), synchronous
+/// mutation receipts (`/skill install|update|uninstall|trust`), remote
+/// registry + sync (`/skills --remote|sync|suggest`), review (`/review`),
+/// and snapshot list/restore plus approval state (`/restore`). The host
+/// adapter is the only place that touches `App`, `crate::plugins`,
+/// `SnapshotRepo`, `crate::skills` services, config/network policy, and the
+/// async runtime bridge. The shared FEAT-015 `CommandSkillsContext` is never
+/// widened; active-skill reads use that facet, mutations flow through the
+/// delegates here (D2). All results are contract-owned portable values;
+/// implementation errors cross as safe text. `/skill` declares this facet
+/// plus `CommandSkillsContext` for the baseline cache-refresh policy;
+/// `/skills`, `/review`, and `/restore` declare exactly this facet.
+pub trait CommandSkillGroupContext {
+    /// `/skills` discovery projection (workspace, skills dir, scan mode,
+    /// searched directories, plugin-provided skills, warnings).
+    fn skill_registry_projection(&self) -> SkillRegistryProjection;
+    /// `/skill` activation: host lookup, plugin-authority verification, and
+    /// active-skill/history side effects. `SendMessage` task composition is
+    /// handler-side.
+    fn activate_skill(
+        &mut self,
+        name: &str,
+    ) -> Result<SkillActivationOutcome, SkillActivationError>;
+    /// `/skill install` — synchronous portable receipt; host owns network/async.
+    fn install_skill(
+        &mut self,
+        scope: Option<SkillTargetScope>,
+        spec: &str,
+    ) -> Result<SkillMutationReceipt, String>;
+    /// `/skill update` — synchronous portable receipt; host owns network/async.
+    fn update_skill(
+        &mut self,
+        scope: Option<SkillTargetScope>,
+        name: &str,
+    ) -> Result<SkillMutationReceipt, String>;
+    /// `/skill uninstall` — synchronous portable receipt.
+    fn uninstall_skill(
+        &mut self,
+        scope: Option<SkillTargetScope>,
+        name: &str,
+    ) -> Result<SkillMutationReceipt, String>;
+    /// `/skill trust` — synchronous portable receipt.
+    fn trust_skill(
+        &mut self,
+        scope: Option<SkillTargetScope>,
+        name: &str,
+    ) -> Result<SkillMutationReceipt, String>;
+    /// `/skills --remote` registry fetch (network policy host-side).
+    fn fetch_remote_registry(&mut self) -> Result<RemoteRegistryOutcome, String>;
+    /// `/skills suggest <task>` — host fetch + recommendation computation.
+    fn recommend_skills(&mut self, task: &str) -> Result<Vec<SkillRecommendation>, String>;
+    /// `/skills sync` — host registry sync (async bridge host-side).
+    fn sync_registry(&mut self) -> Result<SkillSyncOutcome, String>;
+    /// `/review` activation: host discovery + side effects (empty-target
+    /// validation and `SendMessage` composition are handler-side).
+    fn run_review(&mut self) -> Result<ReviewOutcome, String>;
+    /// `/restore` snapshot listing.
+    fn snapshot_list(&mut self, limit: usize) -> Result<Vec<SnapshotEntry>, String>;
+    /// `/restore <N>`: host restores by snapshot id; handler composes the
+    /// exact success message from its list entry.
+    fn restore_snapshot(&mut self, id: &str) -> Result<(), String>;
+    /// `/restore` trust gate posture (yolo / trust_mode).
+    fn approval_state(&self) -> CommandApprovalState;
 }

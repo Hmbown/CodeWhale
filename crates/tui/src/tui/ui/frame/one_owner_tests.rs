@@ -115,9 +115,9 @@ fn composed_frame_paints_each_fact_in_exactly_one_row() {
         let (mode, permission) = crate::tui::underwater::posture_chips(&app);
         let mode = mode.expect("mode chip").0.into_owned();
         let permission = permission.expect("permission chip").0.into_owned();
-        let facts = [
-            ("context reading", format!("ctx {pct}%")),
-            ("context percent", format!("{pct}%")),
+        // The context reading stays silent below 50% fullness and paints
+        // exactly once at or above it.
+        let mut facts = vec![
             ("mode chip", format!("· {mode} (")),
             ("permission chip", format!("▶▶ {permission} (")),
             ("model", model),
@@ -130,6 +130,17 @@ fn composed_frame_paints_each_fact_in_exactly_one_row() {
             ("output rate", "40 tok/s".to_string()),
             ("ttft", "ttft 400ms".to_string()),
         ];
+        if pct >= 50 {
+            facts.push(("context reading", format!("ctx {pct}%")));
+            facts.push(("context percent", format!("{pct}%")));
+        } else {
+            assert_eq!(
+                count_rows_containing(&rows, "ctx "),
+                0,
+                "{width}x{height}: ctx stays silent below 50%:\n{}",
+                rows.join("\n")
+            );
+        }
         for (name, needle) in facts {
             if needle.is_empty() {
                 continue;
@@ -149,7 +160,7 @@ fn composed_frame_paints_each_fact_in_exactly_one_row() {
             .expect("posture bar");
         let metrics = rows
             .iter()
-            .position(|row| row.contains(&format!("ctx {pct}%")))
+            .position(|row| row.contains("tok/s"))
             .expect("metrics line");
         let composer = app
             .viewport
@@ -186,8 +197,9 @@ fn idle_frame_keeps_two_chrome_rows_and_last_turn_metrics() {
     let rows = draw(&mut app, 100, 32);
     let composer = app.viewport.last_composer_area.unwrap().bottom() as usize;
     assert!(rows[composer].starts_with("▶▶"), "{}", rows[composer]);
+    // The idle fixture sits at 0% context, so the reading stays silent.
     assert!(
-        rows[composer + 1].contains("ctx "),
+        !rows[composer + 1].contains("ctx "),
         "{}",
         rows[composer + 1]
     );

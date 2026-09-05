@@ -823,11 +823,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_yolo_selection_persists_the_mode_it_actually_installs() {
-        assert_eq!(StartupDefaults::mode(AppMode::Yolo).mode, Some("agent"));
-    }
-
-    #[test]
     fn empty_update_is_a_no_op() {
         assert!(StartupDefaults::default().is_empty());
         StartupDefaults::default()

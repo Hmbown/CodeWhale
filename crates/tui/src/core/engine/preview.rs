@@ -275,7 +275,6 @@ impl Engine {
             api_config: route.config.clone(),
             locale_tag: self.config.locale_tag.clone(),
             role_models: self.subagent_role_models(),
-            fleet_roster: self.config.fleet_roster.clone(),
             auto_model: inputs.auto_model,
             reasoning_effort: reasoning_effort.clone(),
             reasoning_effort_auto,
@@ -289,7 +288,7 @@ impl Engine {
             &hypothetical_content,
             inputs.allow_shell,
             inputs.trust_mode,
-            inputs.mode == AppMode::Yolo || inputs.auto_approve,
+            inputs.auto_approve,
             inputs.approval_mode,
         );
         let prompt_context = NextTurnPromptContext {
@@ -647,7 +646,7 @@ impl Engine {
             "",
             inputs.allow_shell,
             inputs.trust_mode,
-            inputs.mode == AppMode::Yolo || inputs.auto_approve,
+            inputs.auto_approve,
             inputs.approval_mode,
         );
         SessionFacts {

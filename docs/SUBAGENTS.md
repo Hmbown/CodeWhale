@@ -705,5 +705,5 @@ removed in v0.9.4 (remember.rs:165); see `docs/MEMORY.md` for the full layout.
   `None`; this avoids counting persisted-but-detached records
   toward the concurrency cap (#509).
 - `SharedSubAgentManager` is `Arc<RwLock<...>>` — read paths use
-  read locks so `/agents` and the sidebar projection don't block
+  read locks so `/agents` and the workbar projection don't block
   the main loop during multi-agent fan-out (#510).

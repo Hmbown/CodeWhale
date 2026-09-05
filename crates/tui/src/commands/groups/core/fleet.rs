@@ -1,18 +1,18 @@
-//! `/pod` command (`/fleet` remains a compatibility alias).
+//! `/fleet` command — the agent team behind the session.
 //!
-//! Fleet = who. Bare `/pod` (and `/pod roster`) opens the familiar roster
-//! surface for the selected Fleet; `/pod setup` opens the authoring wizard.
-//! `/pod pods` (compatibility alias: `fleets`; other aliases: `saved`, `manage`)
-//! opens the named-Fleet picker
+//! Fleet = who. Bare `/fleet` (and `/fleet roster`) opens the familiar roster
+//! surface for the selected Fleet; `/fleet setup` opens the authoring wizard.
+//! `/fleet fleets` (other aliases: `saved`, `manage`)
+//! opens the named-fleet picker
 //! for switching between saved configurations — never the primary face.
-//! `/pod list|status|interrupt|resume` are control-plane verbs that run
+//! `/fleet list|status|interrupt|resume` are control-plane verbs that run
 //! against the **durable** workspace ledger through the shared contract in
-//! `codewhale-lane`, exactly as `codewhale pod …` does (#1888, #4022).
+//! `codewhale-lane`, exactly as `codewhale fleet …` does (#1888, #4022).
 //!
-//! `/pod status` used to show the current TUI session's sub-agents. That was
+//! `/fleet status` used to show the current TUI session's sub-agents. That was
 //! a different thing wearing the same name: session sub-agents are not the
-//! durable Fleet ledger, and a run started by `codewhale pod run` never
-//! appeared. The session view is still reachable as `/pod workers` (and
+//! durable Fleet ledger, and a run started by `codewhale fleet run` never
+//! appeared. The session view is still reachable as `/fleet workers` (and
 //! `/subagents`), now labelled as what it is.
 
 use codewhale_lane::control::operations_for_domain;
@@ -28,7 +28,7 @@ use super::CommandResult;
 
 pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
     name: "fleet",
-    aliases: &["pod", "loadout", "party"],
+    aliases: &["loadout", "party"],
     usage: "/fleet [members|models|add <provider> <model> [role…]|remove <provider> <model>|setup|fleets|workers|save|save-as|list|status|runs|interrupt <worker-id>|resume <run-id>]",
     description_id: MessageId::CmdFleetDescription,
 };
@@ -40,13 +40,11 @@ fn help_text() -> String {
         "Usage: /fleet [members|setup|fleets|workers|save|save-as|list|status|runs|interrupt <worker-id>|resume <run-id>]\n\n\
          Fleet is who. /fleet (or /fleet members) opens the fleet member list and orchestration \
          state — each member's role, model, and access. /fleet setup opens the authoring wizard. \
-         /fleet fleets (or saved/manage) switches between named saved fleets; /fleet pods remains \
-         accepted as a compatibility alias.\n\n\
+         /fleet fleets (or saved/manage) switches between named saved fleets.\n\n\
          /fleet list, status, interrupt, and resume act on the durable .codewhale/fleet.jsonl \
          ledger for this workspace — the same records `codewhale fleet` reads and writes. \
          /fleet workers (and /subagents) shows sub-agents in the current TUI session only, which \
-         is a different set: it does not include durable fleet runs. /pod and `codewhale pod` \
-         remain accepted as compatibility aliases; the ledger file, saved rosters, and config \
+         is a different set: it does not include durable fleet runs. the ledger file, saved rosters, and config \
          tables keep the Fleet name.\n",
     );
     for descriptor in operations_for_domain(ControlDomain::Fleet) {
@@ -273,9 +271,7 @@ impl RegisterCommand for FleetCmd {
             "setup" | "edit" | "new" => CommandResult::action(AppAction::OpenFleetSetup),
             // Named saved fleets — secondary surface for multi-fleet pick/switch.
             // Deliberately not "list": that verb is the durable ledger (#4022).
-            "pods" | "fleets" | "saved" | "manage" => {
-                CommandResult::action(AppAction::OpenFleetList)
-            }
+            "fleets" | "saved" | "manage" => CommandResult::action(AppAction::OpenFleetList),
             // The current-session sub-agent projection, named for what it is.
             "workers" | "worker" | "agents" | "subagents" => super::core::subagents(app),
             "help" | "?" => CommandResult::message(help_text()),
@@ -283,8 +279,7 @@ impl RegisterCommand for FleetCmd {
                 Some(operation) => run_control(app, operation, target),
                 None => CommandResult::error(format!(
                     "Unknown /fleet target '{other}'. Use members, setup, fleets, list, status, \
-                     workers, interrupt <worker-id>, or resume <run-id>. /pod pods remains \
-                     accepted for compatibility."
+                     workers, interrupt <worker-id>, or resume <run-id>.."
                 )),
             },
         }
@@ -433,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn pod_command_opens_roster_view() {
+    fn fleet_command_opens_roster_view() {
         let mut app = test_app();
 
         let result = FleetCmd::execute(&mut app, None);
@@ -443,8 +438,8 @@ mod tests {
     }
 
     #[test]
-    fn pod_pods_is_canonical_and_fleets_remains_a_compatibility_alias() {
-        for arg in ["pods", "fleets", "saved", "manage"] {
+    fn fleet_saved_fleet_verbs_open_the_named_fleet_list() {
+        for arg in ["fleets", "saved", "manage"] {
             let mut app = test_app();
 
             let result = FleetCmd::execute(&mut app, Some(arg));
@@ -455,21 +450,36 @@ mod tests {
     }
 
     #[test]
-    fn pod_pods_and_legacy_fleets_invocations_dispatch_identically() {
-        let mut pod_app = test_app();
-        let mut fleet_app = test_app();
+    fn retired_pod_invocations_are_rejected() {
+        let mut app = test_app();
+        let rejected = crate::commands::execute("/pod", &mut app);
+        assert!(
+            rejected.is_error,
+            "/pod must not dispatch, got: {rejected:?}"
+        );
+        assert!(
+            rejected
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Unknown command: /pod"),
+            "got: {rejected:?}"
+        );
 
-        let pod = crate::commands::execute("/fleet fleets", &mut pod_app);
-        let fleet = crate::commands::execute("/pod pods", &mut fleet_app);
-
-        assert_eq!(pod.action, Some(AppAction::OpenFleetList));
-        assert_eq!(pod.action, fleet.action);
-        assert_eq!(pod.message, fleet.message);
-        assert_eq!(pod.is_error, fleet.is_error);
+        let mut app = test_app();
+        let retired_verb = FleetCmd::execute(&mut app, Some("pods"));
+        assert!(retired_verb.is_error);
+        assert!(
+            retired_verb
+                .message
+                .as_deref()
+                .is_some_and(|message| message.contains("Unknown /fleet target 'pods'")),
+            "got: {retired_verb:?}"
+        );
     }
 
     #[test]
-    fn pod_members_and_roster_aliases_open_roster_view() {
+    fn fleet_members_and_roster_aliases_open_roster_view() {
         for arg in [
             "members", "member", "roster", "party", "loadout", "roles", "role", "profiles",
             "profile",
@@ -520,7 +530,7 @@ mod tests {
 
         assert_eq!(
             result.action, None,
-            "/pod status must not open the session sub-agent view"
+            "/fleet status must not open the session sub-agent view"
         );
         let message = result.message.as_deref().unwrap_or_default();
         assert!(message.contains("fleet.status"), "got: {message}");
@@ -552,9 +562,9 @@ mod tests {
             let message = result.message.as_deref().unwrap_or_default();
             assert!(
                 message.contains(expected_id),
-                "/pod {arg} must report {expected_id}, got: {message}"
+                "/fleet {arg} must report {expected_id}, got: {message}"
             );
-            assert_eq!(result.action, None, "/pod {arg}");
+            assert_eq!(result.action, None, "/fleet {arg}");
         }
     }
 
@@ -576,16 +586,12 @@ mod tests {
             assert!(message.contains(surface), "help must describe {surface}");
         }
         assert!(
-            message.contains("/pod and `codewhale pod` remain accepted as compatibility aliases"),
-            "help must document the one-way compatibility boundary"
+            !message.contains("compatibility alias"),
+            "no retired alias may be documented: {message}"
         );
         assert!(
-            message.contains("/fleet pods remains accepted as a compatibility alias"),
-            "help must disclose the saved-fleet compatibility alias"
-        );
-        assert!(
-            message.contains("config tables keep the Fleet name"),
-            "help must name what keeps the Fleet serialization spelling"
+            !message.contains("codewhale pod"),
+            "no retired CLI spelling may be documented: {message}"
         );
         for truth in [
             "current TUI session",
@@ -628,7 +634,8 @@ mod tests {
     #[test]
     fn fleet_aliases_are_registered_on_command_info() {
         assert_eq!(FleetCmd::info().name, "fleet");
-        assert!(FleetCmd::info().aliases.contains(&"pod"));
+        assert!(!FleetCmd::info().aliases.contains(&"pod"));
+        assert!(!FleetCmd::info().aliases.contains(&"fleet"));
         assert!(FleetCmd::info().aliases.contains(&"loadout"));
         assert!(FleetCmd::info().usage.contains("fleets"));
         assert!(FleetCmd::info().usage.contains("workers"));
@@ -637,32 +644,21 @@ mod tests {
     }
 
     #[test]
-    fn pod_and_legacy_fleet_invocations_dispatch_identically() {
-        for invocation in ["/fleet", "/pod"] {
-            let mut app = test_app();
-            let result = crate::commands::execute(invocation, &mut app);
-            assert_eq!(
-                result.action,
-                Some(AppAction::OpenFleetRoster),
-                "{invocation}"
-            );
-            assert!(!result.is_error, "{invocation}");
-        }
+    fn fleet_dispatches_and_retired_pod_does_not() {
+        let mut app = test_app();
+        let result = crate::commands::execute("/fleet", &mut app);
+        assert_eq!(result.action, Some(AppAction::OpenFleetRoster));
+        assert!(!result.is_error);
 
-        let canonical = crate::commands::get_command_info("fleet").expect("canonical /fleet");
-        let compatibility =
-            crate::commands::get_command_info("fleet").expect("compatibility /fleet");
-        assert!(std::ptr::eq(canonical, compatibility));
-        assert_eq!(compatibility.name, "fleet");
+        assert!(crate::commands::get_command_info("pod").is_none());
 
         let workspace = tempfile::tempdir().expect("workspace");
-        let mut pod_app = app_in(workspace.path().to_path_buf());
         let mut fleet_app = app_in(workspace.path().to_path_buf());
-        let pod_status = crate::commands::execute("/fleet status", &mut pod_app);
+        let mut retired_app = app_in(workspace.path().to_path_buf());
         let fleet_status = crate::commands::execute("/fleet status", &mut fleet_app);
-        assert_eq!(pod_status.action, fleet_status.action);
-        assert_eq!(pod_status.message, fleet_status.message);
-        assert_eq!(pod_status.is_error, fleet_status.is_error);
+        let retired_status = crate::commands::execute("/pod status", &mut retired_app);
+        assert!(retired_status.is_error);
+        assert_ne!(fleet_status.message, retired_status.message);
     }
 
     #[test]

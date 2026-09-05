@@ -358,48 +358,51 @@ fn workspace_status_reports_head_and_dirty_counts() -> Result<()> {
 }
 
 #[test]
-fn session_detail_tool_use_preserves_caller_metadata() {
-    let detail = session_to_detail(saved_session_with_blocks(vec![
-        crate::models::ContentBlock::ToolUse {
-            id: "tool-1".to_string(),
-            name: "task_shell_start".to_string(),
-            input: json!({ "cmd": "cargo test" }),
-            caller: Some(crate::models::ToolCaller {
-                caller_type: "subagent".to_string(),
-                tool_id: Some("parent-tool".to_string()),
-            }),
-            thought_signature: None,
-        },
-    ]));
+fn session_detail_scenario() {
+    // Scenario consolidation of: session_detail_tool_use_preserves_caller_metadata, session_detail_tool_result_keeps_fallback_content_with_blocks
+    // from session_detail_tool_use_preserves_caller_metadata
+    {
+        let detail = session_to_detail(saved_session_with_blocks(vec![
+            crate::models::ContentBlock::ToolUse {
+                id: "tool-1".to_string(),
+                name: "task_shell_start".to_string(),
+                input: json!({ "cmd": "cargo test" }),
+                caller: Some(crate::models::ToolCaller {
+                    caller_type: "subagent".to_string(),
+                    tool_id: Some("parent-tool".to_string()),
+                }),
+                thought_signature: None,
+            },
+        ]));
 
-    let block = &detail.messages[0]["content"][0];
-    assert_eq!(block["type"].as_str(), Some("tool_use"));
-    assert_eq!(block["caller"]["type"].as_str(), Some("subagent"));
-    assert_eq!(block["caller"]["tool_id"].as_str(), Some("parent-tool"));
-}
+        let block = &detail.messages[0]["content"][0];
+        assert_eq!(block["type"].as_str(), Some("tool_use"));
+        assert_eq!(block["caller"]["type"].as_str(), Some("subagent"));
+        assert_eq!(block["caller"]["tool_id"].as_str(), Some("parent-tool"));
+    }
+    // from session_detail_tool_result_keeps_fallback_content_with_blocks
+    {
+        let detail = session_to_detail(saved_session_with_blocks(vec![
+            crate::models::ContentBlock::ToolResult {
+                tool_use_id: "tool-1".to_string(),
+                content: "fallback text".to_string(),
+                is_error: Some(false),
+                content_blocks: Some(vec![json!({
+                    "type": "text",
+                    "text": "structured text"
+                })]),
+            },
+        ]));
 
-#[test]
-fn session_detail_tool_result_keeps_fallback_content_with_blocks() {
-    let detail = session_to_detail(saved_session_with_blocks(vec![
-        crate::models::ContentBlock::ToolResult {
-            tool_use_id: "tool-1".to_string(),
-            content: "fallback text".to_string(),
-            is_error: Some(false),
-            content_blocks: Some(vec![json!({
-                "type": "text",
-                "text": "structured text"
-            })]),
-        },
-    ]));
-
-    let block = &detail.messages[0]["content"][0];
-    assert_eq!(block["type"].as_str(), Some("tool_result"));
-    assert_eq!(block["content"].as_str(), Some("fallback text"));
-    assert_eq!(
-        block["content_blocks"][0]["text"].as_str(),
-        Some("structured text")
-    );
-    assert_eq!(block["is_error"].as_bool(), Some(false));
+        let block = &detail.messages[0]["content"][0];
+        assert_eq!(block["type"].as_str(), Some("tool_result"));
+        assert_eq!(block["content"].as_str(), Some("fallback text"));
+        assert_eq!(
+            block["content_blocks"][0]["text"].as_str(),
+            Some("structured text")
+        );
+        assert_eq!(block["is_error"].as_bool(), Some(false));
+    }
 }
 
 #[test]
@@ -663,84 +666,124 @@ fn legacy_exact_thread_export_normalizes_provider_kind_and_id() {
 }
 
 #[test]
-fn runtime_auth_generates_token_by_default() {
-    let auth = resolve_runtime_auth(None, None, false);
-    assert!(auth.generated);
-    let token = auth.token.expect("generated token");
-    assert!(token.starts_with("cwrt_"));
-    assert!(token.len() > 32);
+fn runtime_auth_scenario() {
+    // Scenario consolidation of: runtime_auth_generates_token_by_default, runtime_auth_status_does_not_render_generated_token, runtime_auth_requires_explicit_insecure_for_no_token, runtime_auth_prefers_cli_token_over_env_token, runtime_auth_ignores_blank_configured_tokens
+    // from runtime_auth_generates_token_by_default
+    {
+        let auth = resolve_runtime_auth(None, None, false);
+        assert!(auth.generated);
+        let token = auth.token.expect("generated token");
+        assert!(token.starts_with("cwrt_"));
+        assert!(token.len() > 32);
+    }
+    // from runtime_auth_status_does_not_render_generated_token
+    {
+        let auth = ResolvedRuntimeAuth {
+            token: Some("cwrt_super_secret_test_token".to_string()),
+            generated: true,
+        };
+        let rendered = runtime_auth_status_lines(&auth).join("\n");
+
+        assert!(!rendered.contains("cwrt_super_secret_test_token"));
+        assert!(rendered.contains("not printed"));
+    }
+    // from runtime_auth_requires_explicit_insecure_for_no_token
+    {
+        let auth = resolve_runtime_auth(None, None, true);
+        assert_eq!(
+            auth,
+            ResolvedRuntimeAuth {
+                token: None,
+                generated: false,
+            }
+        );
+    }
+    // from runtime_auth_prefers_cli_token_over_env_token
+    {
+        let auth = resolve_runtime_auth(
+            Some(" cli-token ".to_string()),
+            Some("env-token".to_string()),
+            false,
+        );
+        assert_eq!(
+            auth,
+            ResolvedRuntimeAuth {
+                token: Some("cli-token".to_string()),
+                generated: false,
+            }
+        );
+    }
+    // from runtime_auth_ignores_blank_configured_tokens
+    {
+        let auth = resolve_runtime_auth(Some(" ".to_string()), Some("\t".to_string()), false);
+        assert!(auth.generated);
+        assert!(auth.token.is_some());
+    }
 }
 
 #[test]
-fn runtime_auth_status_does_not_render_generated_token() {
-    let auth = ResolvedRuntimeAuth {
-        token: Some("cwrt_super_secret_test_token".to_string()),
-        generated: true,
+fn runtime_token_scenario() {
+    // Scenario consolidation of: runtime_token_environment_prefers_the_codewhale_name, runtime_token_environment_falls_through_a_blank_primary_to_the_legacy_alias
+    // from runtime_token_environment_prefers_the_codewhale_name
+    {
+        let environment = runtime_token_environment(&|name| match name {
+            RUNTIME_TOKEN_ENV => Some(" canonical-token ".to_string()),
+            LEGACY_RUNTIME_TOKEN_ENV => Some("legacy-token".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(environment.token.as_deref(), Some("canonical-token"));
+        assert!(!environment.legacy_alias_used);
+        assert!(runtime_token_alias_warning(None, &environment).is_none());
+    }
+    // from runtime_token_environment_falls_through_a_blank_primary_to_the_legacy_alias
+    {
+        let environment = runtime_token_environment(&|name| match name {
+            RUNTIME_TOKEN_ENV => Some(" \t ".to_string()),
+            LEGACY_RUNTIME_TOKEN_ENV => Some(" legacy-token ".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(environment.token.as_deref(), Some("legacy-token"));
+        assert!(environment.legacy_alias_used);
+    }
+}
+
+#[test]
+fn mobile_listener_fails_closed_outside_loopback_without_verified_transport() {
+    let non_loopback = RuntimeApiOptions {
+        host: "0.0.0.0".to_string(),
+        mobile: true,
+        insecure_no_auth: true,
+        ..RuntimeApiOptions::default()
     };
-    let rendered = runtime_auth_status_lines(&auth).join("\n");
+    let err = validate_runtime_listener_security(&non_loopback).unwrap_err();
+    assert!(err.to_string().contains("mobile is loopback-only"));
 
-    assert!(!rendered.contains("cwrt_super_secret_test_token"));
-    assert!(rendered.contains("not printed"));
-}
-
-#[test]
-fn runtime_auth_requires_explicit_insecure_for_no_token() {
-    let auth = resolve_runtime_auth(None, None, true);
+    for host in ["127.0.0.1", "::1"] {
+        let loopback = RuntimeApiOptions {
+            host: host.to_string(),
+            mobile: true,
+            ..RuntimeApiOptions::default()
+        };
+        assert!(
+            validate_runtime_listener_security(&loopback).is_ok(),
+            "host={host}"
+        );
+    }
     assert_eq!(
-        auth,
-        ResolvedRuntimeAuth {
-            token: None,
-            generated: false,
-        }
+        runtime_bind_address("::1", 7878)
+            .expect("IPv6 loopback bind address")
+            .to_string(),
+        "[::1]:7878"
     );
-}
 
-#[test]
-fn runtime_auth_prefers_cli_token_over_env_token() {
-    let auth = resolve_runtime_auth(
-        Some(" cli-token ".to_string()),
-        Some("env-token".to_string()),
-        false,
-    );
-    assert_eq!(
-        auth,
-        ResolvedRuntimeAuth {
-            token: Some("cli-token".to_string()),
-            generated: false,
-        }
-    );
-}
-
-#[test]
-fn runtime_auth_ignores_blank_configured_tokens() {
-    let auth = resolve_runtime_auth(Some(" ".to_string()), Some("\t".to_string()), false);
-    assert!(auth.generated);
-    assert!(auth.token.is_some());
-}
-
-#[test]
-fn runtime_token_environment_prefers_the_codewhale_name() {
-    let environment = runtime_token_environment(&|name| match name {
-        RUNTIME_TOKEN_ENV => Some(" canonical-token ".to_string()),
-        LEGACY_RUNTIME_TOKEN_ENV => Some("legacy-token".to_string()),
-        _ => None,
-    });
-
-    assert_eq!(environment.token.as_deref(), Some("canonical-token"));
-    assert!(!environment.legacy_alias_used);
-    assert!(runtime_token_alias_warning(None, &environment).is_none());
-}
-
-#[test]
-fn runtime_token_environment_falls_through_a_blank_primary_to_the_legacy_alias() {
-    let environment = runtime_token_environment(&|name| match name {
-        RUNTIME_TOKEN_ENV => Some(" \t ".to_string()),
-        LEGACY_RUNTIME_TOKEN_ENV => Some(" legacy-token ".to_string()),
-        _ => None,
-    });
-
-    assert_eq!(environment.token.as_deref(), Some("legacy-token"));
-    assert!(environment.legacy_alias_used);
+    let ordinary_http = RuntimeApiOptions {
+        host: "0.0.0.0".to_string(),
+        mobile: false,
+        ..RuntimeApiOptions::default()
+    };
+    assert!(validate_runtime_listener_security(&ordinary_http).is_ok());
 }
 
 #[test]
@@ -766,28 +809,6 @@ fn explicit_cli_runtime_token_does_not_warn_about_an_unused_legacy_alias() {
 
     assert!(runtime_token_alias_warning(Some("cli-token"), &environment).is_none());
     assert!(runtime_token_alias_warning(Some(" \t"), &environment).is_some());
-}
-
-#[test]
-fn url_query_component_percent_encodes_token() {
-    assert_eq!(
-        url_query_component("abc ABC+/?:=&%"),
-        "abc%20ABC%2B%2F%3F%3A%3D%26%25"
-    );
-}
-
-#[test]
-fn token_from_cookie_header_decodes_percent_encoded_token() {
-    assert_eq!(
-        token_from_cookie_header(Some(
-            "theme=dark; codewhale_runtime_token=abc%20ABC%2B%2F%3F%3A%3D%26%25"
-        )),
-        Some("abc ABC+/?:=&%".to_string())
-    );
-    assert_eq!(
-        token_from_cookie_header(Some("codewhale_runtime_token=bad%ZZ")),
-        None
-    );
 }
 
 async fn spawn_test_server_with_root(
@@ -871,6 +892,7 @@ struct TestServerOverrides {
     config: Option<Config>,
     config_path: Option<PathBuf>,
     config_profile: Option<String>,
+    mobile: Option<mobile::RuntimeMobileState>,
     web: Option<web::RuntimeWebState>,
     compat_stream_test_hook: Option<mpsc::UnboundedSender<CompatStreamTestPoint>>,
     plugin_discovery: Option<Arc<crate::plugins::PluginDiscoveryContext>>,
@@ -972,6 +994,15 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
         Err(err) => return Err(err.into()),
     };
     let addr = listener.local_addr()?;
+    let mobile = if mobile_enabled && runtime_token.is_some() {
+        Some(
+            overrides
+                .mobile
+                .unwrap_or_else(|| mobile::RuntimeMobileState::new().0),
+        )
+    } else {
+        None
+    };
     let state = RuntimeApiState {
         config: Arc::new(parking_lot::RwLock::new(config)),
         workspace,
@@ -995,6 +1026,7 @@ async fn spawn_test_server_with_root_token_mobile_workspace_and_overrides(
         bind_host: "127.0.0.1".to_string(),
         bind_port: addr.port(),
         mobile_enabled,
+        mobile,
         web: overrides.web,
         fleet_codewhale_binary: overrides
             .fleet_codewhale_binary
@@ -1515,14 +1547,10 @@ async fn runtime_token_guard_protects_v1_routes() -> Result<()> {
 
     let cookie_token = client
         .get(format!("http://{addr}/v1/threads/summary"))
-        .header(
-            header::COOKIE,
-            format!("codewhale_runtime_token={}", url_query_component(&token)),
-        )
+        .header(header::COOKIE, format!("codewhale_runtime_token={token}"))
         .send()
-        .await?
-        .error_for_status()?;
-    assert_eq!(cookie_token.status(), StatusCode::OK);
+        .await?;
+    assert_eq!(cookie_token.status(), StatusCode::UNAUTHORIZED);
 
     let codewhale_header = client
         .get(format!("http://{addr}/v1/threads/summary"))
@@ -6038,7 +6066,11 @@ async fn mobile_page_is_available_only_when_enabled() -> Result<()> {
     assert!(html.contains("Codewhale Mobile"));
     assert!(html.contains("/v1/approvals/"));
     assert!(html.contains("MAX_VISIBLE_EVENTS = 100"));
-    assert!(html.contains("replay_limit="));
+    assert!(html.contains("replay_limit:"));
+    assert!(html.contains("X-Codewhale-Mobile-Request"));
+    assert!(!html.contains("localStorage.getItem"));
+    assert!(!html.contains("localStorage.setItem"));
+    assert!(!html.contains("setRuntimeTokenCookie"));
 
     handle.abort();
     Ok(())
@@ -6065,7 +6097,10 @@ async fn mobile_page_serves_shell_when_auth_enabled() -> Result<()> {
         .error_for_status()?;
     let html = shell.text().await?;
     assert!(html.contains("Codewhale Mobile"));
-    assert!(html.contains("TOKEN_COOKIE"));
+    assert!(html.contains("codewhale_mobile_session_proof"));
+    assert!(html.contains("/__codewhale/mobile/session"));
+    assert!(!html.contains("codewhale_runtime_token="));
+    assert!(!html.contains("localStorage.setItem"));
 
     let bearer = client
         .get(format!("http://{addr}/mobile"))
@@ -6074,6 +6109,230 @@ async fn mobile_page_serves_shell_when_auth_enabled() -> Result<()> {
         .await?
         .error_for_status()?;
     assert!(bearer.text().await?.contains("Codewhale Mobile"));
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn mobile_bootstrap_uses_opaque_origin_bound_session_and_single_use_stream_ticket()
+-> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().to_path_buf();
+    let sessions_dir = root.join("sessions");
+    let workspace = root.join("workspace");
+    let token = "mobile-runtime-test-token".to_string();
+    let (mobile_state, nonce) = mobile::RuntimeMobileState::new();
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_root_token_mobile_workspace_and_overrides(
+            root,
+            sessions_dir,
+            Some(token.clone()),
+            true,
+            workspace,
+            TestServerOverrides {
+                mobile: Some(mobile_state),
+                ..TestServerOverrides::default()
+            },
+        )
+        .await?
+    else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client_builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+    let origin = format!("http://{addr}");
+
+    let shell = client.get(format!("{origin}/mobile")).send().await?;
+    assert_eq!(shell.status(), StatusCode::OK);
+    assert_eq!(
+        shell
+            .headers()
+            .get(header::REFERRER_POLICY)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-referrer")
+    );
+    let shell = shell.text().await?;
+    assert!(!shell.contains(&token));
+    assert!(!shell.contains("localStorage.setItem"));
+    assert!(!shell.contains("localStorage.getItem"));
+    assert!(!shell.contains("codewhale_runtime_token="));
+
+    let unauthenticated_session = client
+        .post(format!("{origin}/__codewhale/mobile/session"))
+        .send()
+        .await?;
+    assert_eq!(unauthenticated_session.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        unauthenticated_session
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store")
+    );
+
+    let manual_session = client
+        .post(format!("{origin}/__codewhale/mobile/session"))
+        .bearer_auth(&token)
+        .send()
+        .await?;
+    assert_eq!(manual_session.status(), StatusCode::OK);
+    let manual_cookie = manual_session
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .context("manual mobile session Set-Cookie")?
+        .to_string();
+    assert!(manual_cookie.starts_with("codewhale_mobile_session=cwms_"));
+    assert!(manual_cookie.ends_with("; Max-Age=1800; HttpOnly; SameSite=Strict; Path=/"));
+    assert!(!manual_cookie.contains(&token));
+    let manual_body = manual_session.text().await?;
+    assert!(!manual_body.contains(&token));
+
+    let bootstrap = client
+        .get(format!("{origin}/__codewhale/mobile/bootstrap/{nonce}"))
+        .send()
+        .await?;
+    assert_eq!(bootstrap.status(), StatusCode::SEE_OTHER);
+    let bootstrap_cookie = bootstrap
+        .headers()
+        .get(header::SET_COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .context("bootstrap mobile session Set-Cookie")?
+        .to_string();
+    assert!(bootstrap_cookie.starts_with("codewhale_mobile_session=cwms_"));
+    assert!(!bootstrap_cookie.contains(&token));
+    let location = bootstrap
+        .headers()
+        .get(header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .context("bootstrap mobile redirect")?;
+    assert!(location.starts_with("/mobile#request_proof=cwmr_"));
+    assert!(location.contains("&stream_ticket=cwmt_"));
+    assert!(!location.contains(&token));
+
+    let bootstrap_cookie_pair = bootstrap_cookie
+        .split(';')
+        .next()
+        .context("bootstrap mobile cookie pair")?
+        .to_string();
+    let fragment = location
+        .strip_prefix("/mobile#")
+        .context("bootstrap redirect must use a fragment")?;
+    let request_proof = fragment
+        .split('&')
+        .find_map(|part| part.strip_prefix("request_proof="))
+        .context("bootstrap request proof")?
+        .to_string();
+    let stream_ticket = fragment
+        .split('&')
+        .find_map(|part| part.strip_prefix("stream_ticket="))
+        .context("bootstrap stream ticket")?
+        .to_string();
+
+    let cookie_only = client
+        .get(format!("{origin}/v1/threads/summary"))
+        .header(header::COOKIE, &bootstrap_cookie_pair)
+        .send()
+        .await?;
+    assert_eq!(cookie_only.status(), StatusCode::UNAUTHORIZED);
+
+    let sibling_port_replay = client
+        .get(format!("{origin}/v1/threads/summary"))
+        .header(header::COOKIE, &bootstrap_cookie_pair)
+        .header(mobile::MOBILE_REQUEST_HEADER, &request_proof)
+        .header(header::ORIGIN, "http://127.0.0.1:3000")
+        .header("sec-fetch-site", "same-site")
+        .send()
+        .await?;
+    assert_eq!(sibling_port_replay.status(), StatusCode::UNAUTHORIZED);
+
+    let same_origin = client
+        .get(format!("{origin}/v1/threads/summary"))
+        .header(header::COOKIE, &bootstrap_cookie_pair)
+        .header(mobile::MOBILE_REQUEST_HEADER, &request_proof)
+        .header(header::ORIGIN, &origin)
+        .header("sec-fetch-site", "same-origin")
+        .send()
+        .await?;
+    assert_eq!(same_origin.status(), StatusCode::OK);
+
+    let created: serde_json::Value = client
+        .post(format!("{origin}/v1/threads"))
+        .header(header::COOKIE, &bootstrap_cookie_pair)
+        .header(mobile::MOBILE_REQUEST_HEADER, &request_proof)
+        .header(header::ORIGIN, &origin)
+        .header("sec-fetch-site", "same-origin")
+        .json(&json!({}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let thread_id = created["id"].as_str().context("mobile-created thread id")?;
+
+    let stream_url =
+        format!("{origin}/v1/threads/{thread_id}/events?mobile_stream_ticket={stream_ticket}");
+    let stream = client
+        .get(&stream_url)
+        .header(header::COOKIE, &bootstrap_cookie_pair)
+        .header(header::ORIGIN, &origin)
+        .header("sec-fetch-site", "same-origin")
+        .send()
+        .await?;
+    assert_eq!(stream.status(), StatusCode::OK);
+    drop(stream);
+
+    let replayed_stream = client
+        .get(&stream_url)
+        .header(header::COOKIE, &bootstrap_cookie_pair)
+        .header(header::ORIGIN, &origin)
+        .header("sec-fetch-site", "same-origin")
+        .send()
+        .await?;
+    assert_eq!(replayed_stream.status(), StatusCode::UNAUTHORIZED);
+
+    let refreshed: serde_json::Value = client
+        .post(format!("{origin}/__codewhale/mobile/stream-ticket"))
+        .header(header::COOKIE, &bootstrap_cookie_pair)
+        .header(mobile::MOBILE_REQUEST_HEADER, &request_proof)
+        .header(header::ORIGIN, &origin)
+        .header("sec-fetch-site", "same-origin")
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let refreshed_ticket = refreshed["stream_ticket"]
+        .as_str()
+        .context("refreshed stream ticket")?;
+    let refreshed_stream_url =
+        format!("{origin}/v1/threads/{thread_id}/events?mobile_stream_ticket={refreshed_ticket}");
+    let sibling_stream_replay = client
+        .get(&refreshed_stream_url)
+        .header(header::COOKIE, &bootstrap_cookie_pair)
+        .header(header::ORIGIN, "http://127.0.0.1:3000")
+        .header("sec-fetch-site", "same-site")
+        .send()
+        .await?;
+    assert_eq!(sibling_stream_replay.status(), StatusCode::UNAUTHORIZED);
+
+    let same_origin_stream = client
+        .get(&refreshed_stream_url)
+        .header(header::COOKIE, &bootstrap_cookie_pair)
+        .header(header::ORIGIN, &origin)
+        .header("sec-fetch-site", "same-origin")
+        .send()
+        .await?;
+    assert_eq!(same_origin_stream.status(), StatusCode::OK);
+    drop(same_origin_stream);
+
+    let reused_bootstrap = client
+        .get(format!("{origin}/__codewhale/mobile/bootstrap/{nonce}"))
+        .send()
+        .await?;
+    assert_eq!(reused_bootstrap.status(), StatusCode::UNAUTHORIZED);
 
     handle.abort();
     Ok(())
@@ -6777,75 +7036,76 @@ async fn skill_toggle_endpoint_404s_for_unknown_skill() -> Result<()> {
 }
 
 #[test]
-fn resolve_skills_dir_finds_workspace_local_agents_skills() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let workspace = tmp.path();
-    let local_skills = workspace.join(".agents").join("skills");
-    fs::create_dir_all(&local_skills).expect("create skills dir");
+fn resolve_skills_scenario() {
+    // Scenario consolidation of: resolve_skills_dir_finds_workspace_local_agents_skills, resolve_skills_dir_finds_workspace_local_skills_fallback, resolve_skills_dir_respects_codewhale_only_scan, resolve_skills_dir_preserves_explicit_dir_in_codewhale_only_scan
+    // from resolve_skills_dir_finds_workspace_local_agents_skills
+    {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workspace = tmp.path();
+        let local_skills = workspace.join(".agents").join("skills");
+        fs::create_dir_all(&local_skills).expect("create skills dir");
 
-    let config = Config::default();
-    let resolved = resolve_skills_dir(&config, workspace);
+        let config = Config::default();
+        let resolved = resolve_skills_dir(&config, workspace);
 
-    let expected = fs::canonicalize(&local_skills).expect("canonical local skills");
-    assert_eq!(resolved, expected);
-}
+        let expected = fs::canonicalize(&local_skills).expect("canonical local skills");
+        assert_eq!(resolved, expected);
+    }
+    // from resolve_skills_dir_finds_workspace_local_skills_fallback
+    {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workspace = tmp.path();
+        let local_skills = workspace.join("skills");
+        fs::create_dir_all(&local_skills).expect("create skills dir");
 
-#[test]
-fn resolve_skills_dir_finds_workspace_local_skills_fallback() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let workspace = tmp.path();
-    let local_skills = workspace.join("skills");
-    fs::create_dir_all(&local_skills).expect("create skills dir");
+        let config = Config::default();
+        let resolved = resolve_skills_dir(&config, workspace);
 
-    let config = Config::default();
-    let resolved = resolve_skills_dir(&config, workspace);
+        let expected = fs::canonicalize(&local_skills).expect("canonical local skills");
+        assert_eq!(resolved, expected);
+    }
+    // from resolve_skills_dir_respects_codewhale_only_scan
+    {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workspace = tmp.path();
+        let agents_skills = workspace.join(".agents").join("skills");
+        let codewhale_skills = workspace.join(".codewhale").join("skills");
+        fs::create_dir_all(&agents_skills).expect("create agents skills dir");
+        fs::create_dir_all(&codewhale_skills).expect("create codewhale skills dir");
 
-    let expected = fs::canonicalize(&local_skills).expect("canonical local skills");
-    assert_eq!(resolved, expected);
-}
-
-#[test]
-fn resolve_skills_dir_respects_codewhale_only_scan() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let workspace = tmp.path();
-    let agents_skills = workspace.join(".agents").join("skills");
-    let codewhale_skills = workspace.join(".codewhale").join("skills");
-    fs::create_dir_all(&agents_skills).expect("create agents skills dir");
-    fs::create_dir_all(&codewhale_skills).expect("create codewhale skills dir");
-
-    let config = Config {
-        skills: Some(crate::config::SkillsConfig {
-            scan_codewhale_only: Some(true),
+        let config = Config {
+            skills: Some(crate::config::SkillsConfig {
+                scan_codewhale_only: Some(true),
+                ..Default::default()
+            }),
             ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let resolved = resolve_skills_dir(&config, workspace);
+        };
+        let resolved = resolve_skills_dir(&config, workspace);
 
-    let expected = fs::canonicalize(&codewhale_skills).expect("canonical codewhale skills");
-    assert_eq!(resolved, expected);
-}
+        let expected = fs::canonicalize(&codewhale_skills).expect("canonical codewhale skills");
+        assert_eq!(resolved, expected);
+    }
+    // from resolve_skills_dir_preserves_explicit_dir_in_codewhale_only_scan
+    {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workspace = tmp.path().join("workspace");
+        let codewhale_skills = workspace.join(".codewhale").join("skills");
+        let configured_skills = tmp.path().join("configured-skills");
+        fs::create_dir_all(&codewhale_skills).expect("create codewhale skills dir");
+        fs::create_dir_all(&configured_skills).expect("create configured skills dir");
 
-#[test]
-fn resolve_skills_dir_preserves_explicit_dir_in_codewhale_only_scan() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let workspace = tmp.path().join("workspace");
-    let codewhale_skills = workspace.join(".codewhale").join("skills");
-    let configured_skills = tmp.path().join("configured-skills");
-    fs::create_dir_all(&codewhale_skills).expect("create codewhale skills dir");
-    fs::create_dir_all(&configured_skills).expect("create configured skills dir");
-
-    let config = Config {
-        skills_dir: Some(configured_skills.to_string_lossy().into_owned()),
-        skills: Some(crate::config::SkillsConfig {
-            scan_codewhale_only: Some(true),
+        let config = Config {
+            skills_dir: Some(configured_skills.to_string_lossy().into_owned()),
+            skills: Some(crate::config::SkillsConfig {
+                scan_codewhale_only: Some(true),
+                ..Default::default()
+            }),
             ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let resolved = resolve_skills_dir(&config, &workspace);
+        };
+        let resolved = resolve_skills_dir(&config, &workspace);
 
-    assert_eq!(resolved, configured_skills);
+        assert_eq!(resolved, configured_skills);
+    }
 }
 
 #[test]
@@ -10554,4 +10814,413 @@ fn receipt_evidence_paths_must_stay_confined_to_the_workspace() {
     assert!(!super::receipt_evidence_path_is_confined(Path::new(
         "../escape.json"
     )));
+}
+
+// ─── Plugin management API tests ────────────────────────────────────────────
+
+/// Write a minimal but real plugin bundle: manifest plus one skill, so the
+/// bundle has a supported declarative component and can be trusted+enabled.
+fn write_plugin_source_bundle(dir: &Path, name: &str) -> Result<PathBuf> {
+    let bundle = dir.join(name);
+    fs::create_dir_all(bundle.join("skills").join("greet"))?;
+    fs::write(
+        bundle.join("plugin.toml"),
+        format!(
+            "schema_version = 1\n[plugin]\nname = \"{name}\"\nversion = \"1.0.0\"\n\
+             description = \"test bundle\"\n\n[skills]\npath = \"skills\"\n"
+        ),
+    )?;
+    fs::write(
+        bundle.join("skills").join("greet").join("SKILL.md"),
+        "---\nname: greet\ndescription: Greets a person\n---\nSay hi.\n",
+    )?;
+    Ok(bundle)
+}
+
+/// An isolated plugin discovery context: user plugins, workspace plugins,
+/// state, and marketplaces all live under the test root instead of the real
+/// `~/.codewhale`.
+fn isolated_plugin_discovery(
+    root: &Path,
+    workspace: &Path,
+) -> Arc<crate::plugins::PluginDiscoveryContext> {
+    crate::plugins::PluginDiscoveryContext::from_config_and_environment(
+        &crate::plugins::discovery::DiscoveryConfig {
+            workspace: workspace.to_path_buf(),
+            user_plugins_dir: root.join("plugins"),
+            workspace_plugins_dir: crate::plugins::discovery::default_workspace_plugins_dir(
+                workspace,
+            ),
+            builtin_plugin_dirs: Vec::new(),
+            state_path: root.join("plugins").join("state.json"),
+        },
+        crate::plugins::HostEnvironment::from_entries(Vec::new()),
+    )
+}
+
+async fn spawn_plugin_api_server(
+    root: PathBuf,
+    workspace: PathBuf,
+) -> Result<Option<(SocketAddr, tokio::task::JoinHandle<()>)>> {
+    let Some((addr, _runtime_threads, handle)) =
+        spawn_test_server_with_root_token_mobile_workspace_and_overrides(
+            root.clone(),
+            root.join("sessions"),
+            None,
+            false,
+            workspace.clone(),
+            TestServerOverrides {
+                plugin_discovery: Some(isolated_plugin_discovery(&root, &workspace)),
+                ..TestServerOverrides::default()
+            },
+        )
+        .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some((addr, handle)))
+}
+
+#[tokio::test]
+async fn runtime_info_advertises_plugin_management_capability() -> Result<()> {
+    let Some((addr, _runtime_threads, handle)) = spawn_test_server().await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let info: serde_json::Value = client
+        .get(format!("http://{addr}/v1/runtime/info"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(
+        info["capabilities"]["plugin_management"], true,
+        "runtime/info must advertise plugin_management capability"
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_lifecycle_over_http_installs_reviews_enables_and_uninstalls() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runtime");
+    let workspace = tmp.path().join("ws");
+    fs::create_dir_all(&root)?;
+    let source = write_plugin_source_bundle(tmp.path(), "demo")?;
+
+    let Some((addr, handle)) = spawn_plugin_api_server(root, workspace).await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+    let base = format!("http://{addr}/v1/apps/plugins");
+
+    // Empty inventory to start.
+    let list: serde_json::Value = client
+        .get(&base)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert!(list["plugins"].as_array().is_some_and(Vec::is_empty));
+
+    // Install from a local path: lands disabled and untrusted.
+    let install: serde_json::Value = client
+        .post(format!("{base}/install"))
+        .json(&serde_json::json!({
+            "source": format!("path:{}", source.display())
+        }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(install["outcome"], "installed");
+    assert_eq!(install["name"], "demo");
+    assert_eq!(install["plugin"]["state"], "disabled");
+    assert_eq!(install["plugin"]["trust_status"], "not-reviewed");
+    assert!(
+        install["note"]
+            .as_str()
+            .is_some_and(|n| n.contains("untrusted")),
+        "install note must route to review: {}",
+        install["note"]
+    );
+
+    // Detail carries the structured review payload and token. The summary is
+    // flattened into the detail object.
+    let detail: serde_json::Value = client
+        .get(format!("{base}/demo"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(detail["inventory"]["skills"], 1);
+    assert_eq!(detail["review"]["token"], {
+        let summary = &detail;
+        format!(
+            "{}.{}",
+            summary["content_hash"].as_str().unwrap(),
+            summary["capability_hash"].as_str().unwrap()
+        )
+    });
+    assert!(
+        detail["review"]["capabilities"]
+            .as_array()
+            .is_some_and(|c| c.iter().any(|label| label == "skills"))
+    );
+
+    // Trust requires the exact review token.
+    let wrong = client
+        .post(format!("{base}/demo/trust"))
+        .json(&serde_json::json!({"token": "not-the-token"}))
+        .send()
+        .await?;
+    assert_eq!(wrong.status(), StatusCode::BAD_REQUEST);
+
+    let token = detail["review"]["token"].as_str().unwrap().to_string();
+    let trusted: serde_json::Value = client
+        .post(format!("{base}/demo/trust"))
+        .json(&serde_json::json!({"token": token}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(trusted["action"], "trusted");
+    assert_eq!(trusted["state"], "disabled");
+
+    // Enable only works after trust; the bundle becomes active.
+    let enabled: serde_json::Value = client
+        .post(format!("{base}/demo/enable"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(enabled["action"], "enabled");
+    assert_eq!(enabled["state"], "active");
+
+    let disabled: serde_json::Value = client
+        .post(format!("{base}/demo/disable"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(disabled["action"], "disabled");
+    assert_eq!(disabled["state"], "disabled");
+
+    // Uninstall removes it.
+    let uninstalled: serde_json::Value = client
+        .delete(format!("{base}/demo"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(uninstalled["outcome"], "uninstalled");
+
+    let list: serde_json::Value = client
+        .get(&base)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert!(list["plugins"].as_array().is_some_and(Vec::is_empty));
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_api_404s_for_unknown_selector() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runtime");
+    let workspace = tmp.path().join("ws");
+    fs::create_dir_all(&root)?;
+
+    let Some((addr, handle)) = spawn_plugin_api_server(root, workspace).await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let detail = client
+        .get(format!("http://{addr}/v1/apps/plugins/ghost"))
+        .send()
+        .await?;
+    assert_eq!(detail.status(), StatusCode::NOT_FOUND);
+
+    let trust = client
+        .post(format!("http://{addr}/v1/apps/plugins/ghost/trust"))
+        .json(&serde_json::json!({"token": "x"}))
+        .send()
+        .await?;
+    assert_eq!(trust.status(), StatusCode::NOT_FOUND);
+
+    handle.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn marketplace_catalog_lifecycle_over_http_lists_installs_and_removes() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runtime");
+    let workspace = tmp.path().join("ws");
+    fs::create_dir_all(&root)?;
+
+    // The catalog directory holds both the document and the bundle it points
+    // at via a relative `./demo` source.
+    let catalog_dir = tmp.path().join("catalog");
+    fs::create_dir_all(&catalog_dir)?;
+    write_plugin_source_bundle(&catalog_dir, "demo")?;
+    let catalog_path = catalog_dir.join("catalog.json");
+    fs::write(
+        &catalog_path,
+        r#"{
+            "name": "team",
+            "description": "Team plugins",
+            "version": "1",
+            "plugins": [
+                {"name": "demo", "source": "path:./demo", "description": "Demo bundle"}
+            ]
+        }"#,
+    )?;
+
+    let Some((addr, handle)) = spawn_plugin_api_server(root, workspace).await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+    let base = format!("http://{addr}/v1/apps/marketplaces");
+
+    let add_resp = client
+        .post(&base)
+        .json(&serde_json::json!({
+            "name": "team",
+            "path": catalog_path.display().to_string()
+        }))
+        .send()
+        .await?;
+    let add: serde_json::Value = add_resp.json().await?;
+    assert!(add["action"] == "added", "marketplace add failed: {add}");
+    assert_eq!(add["candidate_count"], 1);
+
+    // Listing shows the candidate with an honest, resolved install plan.
+    let list: serde_json::Value = client
+        .get(&base)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let candidate = &list["marketplaces"][0]["candidates"][0];
+    assert_eq!(candidate["name"], "demo");
+    assert_eq!(candidate["install"]["installable"], true);
+    assert!(
+        candidate["install"]["spec"]
+            .as_str()
+            .is_some_and(|spec| spec.contains("demo")),
+        "relative ./demo must resolve against the catalog directory: {}",
+        candidate["install"]["spec"]
+    );
+
+    // Install through the marketplace routes into the reviewed installer and
+    // lands disabled + untrusted, exactly like a direct install.
+    let install: serde_json::Value = client
+        .post(format!("{base}/team/install"))
+        .json(&serde_json::json!({"candidate": "demo"}))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(install["outcome"], "installed");
+    assert_eq!(install["plugin"]["trust_status"], "not-reviewed");
+
+    // Unknown candidate and unknown catalog are honest 404s.
+    let missing = client
+        .post(format!("{base}/team/install"))
+        .json(&serde_json::json!({"candidate": "ghost"}))
+        .send()
+        .await?;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    // Removing the catalog never touches installed bundles.
+    let plugins: serde_json::Value = client
+        .get(format!("http://{addr}/v1/apps/plugins"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert!(
+        plugins["plugins"]
+            .as_array()
+            .is_some_and(|p| p.iter().any(|entry| entry["name"] == "demo"))
+    );
+
+    let removed: serde_json::Value = client
+        .delete(format!("{base}/team"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(removed["action"], "removed");
+
+    let plugins_after: serde_json::Value = client
+        .get(format!("http://{addr}/v1/apps/plugins"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert!(
+        plugins_after["plugins"]
+            .as_array()
+            .is_some_and(|p| p.iter().any(|entry| entry["name"] == "demo"))
+    );
+
+    handle.abort();
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn marketplace_add_rejects_symlink_documents_over_http() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("runtime");
+    let workspace = tmp.path().join("ws");
+    fs::create_dir_all(&root)?;
+
+    let catalog_dir = tmp.path().join("catalog");
+    fs::create_dir_all(&catalog_dir)?;
+    let real = catalog_dir.join("real.json");
+    fs::write(&real, r#"{"plugins":[]}"#)?;
+    let link = catalog_dir.join("link.json");
+    std::os::unix::fs::symlink(&real, &link)?;
+
+    let Some((addr, handle)) = spawn_plugin_api_server(root, workspace).await? else {
+        return Ok(());
+    };
+    let client = crate::tls::reqwest_client();
+
+    let resp = client
+        .post(format!("http://{addr}/v1/apps/marketplaces"))
+        .json(&serde_json::json!({
+            "name": "team",
+            "path": link.display().to_string()
+        }))
+        .send()
+        .await?;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    handle.abort();
+    Ok(())
 }

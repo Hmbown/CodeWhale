@@ -57,7 +57,25 @@ pub(crate) fn queued_session_to_ui(msg: QueuedSessionMessage) -> QueuedMessage {
         display: msg.display,
         skill_instruction: msg.skill_instruction,
         skill_provenance: msg.skill_provenance,
+        // Persistence does not carry this flag; restore may re-echo or rely on
+        // pending preview. Live Queue path sets true after painting.
+        history_echoed: false,
     }
+}
+
+/// Echo a freshly submitted turn into the transcript before it waits on the
+/// queue / offline bucket. Ops contract: every submit paints `HistoryCell::User`
+/// before the model runs (queued included).
+pub(crate) fn echo_queued_user_turn(app: &mut App, message: &mut QueuedMessage) {
+    if message.history_echoed {
+        return;
+    }
+    app.add_message(HistoryCell::User {
+        content: message.display.clone(),
+    });
+    message.history_echoed = true;
+    app.needs_redraw = true;
+    app.scroll_to_bottom();
 }
 
 pub(crate) fn enqueue_offline_message(app: &mut App, message: QueuedMessage) {
@@ -583,10 +601,24 @@ pub(crate) fn prepare_user_dispatch(
     app.needs_redraw = true;
 
     let message_index = app.api_messages.len();
-    app.add_message(HistoryCell::User {
-        content: message.display.clone(),
-    });
-    let history_cell = app.history.len().saturating_sub(1);
+    let history_cell = if message.history_echoed {
+        // Already painted at Queue time — reuse that cell for reference
+        // recording instead of duplicating the bubble.
+        app.history
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(idx, cell)| match cell {
+                HistoryCell::User { content } if content == &message.display => Some(idx),
+                _ => None,
+            })
+            .unwrap_or_else(|| app.history.len().saturating_sub(1))
+    } else {
+        app.add_message(HistoryCell::User {
+            content: message.display.clone(),
+        });
+        app.history.len().saturating_sub(1)
+    };
     app.scroll_to_bottom();
     // Anchor the tail-flash to the moment the user message appears, not to
     // the async dispatch completion (which can lag by a route plan). The
@@ -1146,6 +1178,8 @@ pub(crate) async fn attempt_steer_with_queue_fallback(
 /// Unlike a steer, the message is NOT forwarded immediately — it waits for
 /// the current turn to finish, then dispatches as a normal user message.
 pub(crate) async fn queue_follow_up(app: &mut App, message: QueuedMessage) -> Result<()> {
+    let mut message = message;
+    echo_queued_user_turn(app, &mut message);
     enqueue_offline_message(app, message);
     let toast = queued_follow_up_toast(app);
     app.status_message = Some(toast.clone());
@@ -1180,6 +1214,8 @@ pub(crate) async fn dispatch_composer_message(
     // local message in the queue until that exact turn and its terminal relay
     // receipt have settled, so one attached run never has two inference loops.
     if app.remote_control.runtime_chat_blocks_local_dispatch() {
+        let mut message = message;
+        echo_queued_user_turn(app, &mut message);
         enqueue_offline_message(app, message);
         let queued = app
             .tr(MessageId::AgentRailQueuedCount)
@@ -1239,6 +1275,8 @@ pub(crate) async fn dispatch_composer_message(
             Ok(())
         }
         SubmitDisposition::Queue => {
+            let mut message = message;
+            echo_queued_user_turn(app, &mut message);
             enqueue_offline_message(app, message);
             // A second, empty Enter inside the window sends this now.
             app.arm_double_tap_window();

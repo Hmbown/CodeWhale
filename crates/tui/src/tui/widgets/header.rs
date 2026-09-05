@@ -50,7 +50,7 @@ pub fn header_status_indicator_frame(
         // Canonical mark, legacy whale opt-ins, and unknown values all land
         // on the static wordmark so the header never reintroduces an emoji
         // chip beside the operational chrome.
-        _ => return Some("Codewhale"),
+        _ => return Some("codewhale"),
     };
     let elapsed_ms = turn_started_at
         .map(|t| t.elapsed().as_millis())
@@ -69,12 +69,12 @@ mod tests {
         for legacy in ["whale", "🐳", "🐋"] {
             assert_eq!(
                 super::header_status_indicator_frame(None, legacy),
-                Some("Codewhale"),
+                Some("codewhale"),
                 "legacy mode {legacy:?} must normalize to the cw mark"
             );
             assert_eq!(
                 super::header_status_indicator_frame(Some(std::time::Instant::now()), legacy),
-                Some("Codewhale"),
+                Some("codewhale"),
                 "legacy mode {legacy:?} must stay static mid-turn"
             );
         }
@@ -84,11 +84,11 @@ mod tests {
     fn cw_indicator_is_static_wordmark() {
         assert_eq!(
             super::header_status_indicator_frame(None, "cw"),
-            Some("Codewhale")
+            Some("codewhale")
         );
         assert_eq!(
             super::header_status_indicator_frame(Some(std::time::Instant::now()), "cw"),
-            Some("Codewhale")
+            Some("codewhale")
         );
     }
 
@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn unknown_indicator_mode_defaults_to_cw() {
         let frame = super::header_status_indicator_frame(None, "wahel-typo");
-        assert_eq!(frame, Some("Codewhale"));
+        assert_eq!(frame, Some("codewhale"));
     }
 
     #[test]

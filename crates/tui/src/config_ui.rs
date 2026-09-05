@@ -62,7 +62,6 @@ pub struct SettingsSection {
     pub calm_mode: bool,
     pub low_motion: bool,
     pub fancy_animations: bool,
-    pub ocean_treatment: OceanTreatmentValue,
     pub focus_texture: FocusTextureValue,
     pub work_surface_placement: WorkSurfacePlacementValue,
     #[schemars(range(min = 2, max = 16))]
@@ -84,13 +83,11 @@ pub struct SettingsSection {
         description = "Locale used by the TUI. Every shipped locale pack holds full English parity; nothing falls back."
     )]
     pub locale: UiLocale,
-    pub theme: UiThemeValue,
     #[schemars(
-        title = "Custom theme name",
-        description = "Theme slug from the fixed Codewhale themes directory; used only when theme is custom."
+        title = "Theme",
+        description = "Compiled theme name, or custom:<name> for a theme from the Codewhale themes directory."
     )]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub custom_theme_name: Option<String>,
+    pub theme: UiThemeValue,
     #[schemars(
         title = "Background color",
         description = "Optional Blue Stage background override as #RRGGBB. Leave empty to keep the named theme."
@@ -252,11 +249,13 @@ pub enum UiLocale {
     Uk,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum UiThemeValue {
     Terminal,
     System,
+    Underwater,
+    UnderwaterRetro,
     Dark,
     Light,
     Grayscale,
@@ -264,17 +263,13 @@ pub enum UiThemeValue {
     TokyoNight,
     Dracula,
     GruvboxDark,
+    Claude,
     Matrix,
+    SolarizedLight,
     Uwu,
-    Custom,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum OceanTreatmentValue {
-    #[serde(alias = "ombre", alias = "underwater")]
-    Deepsea,
-    Flat,
+    /// User theme carried as its full `custom:<name>` selector — the same
+    /// single string `/theme` and the persisted `theme` setting use.
+    Custom(String),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -327,8 +322,10 @@ pub enum InlineDiffValue {
 #[serde(rename_all = "snake_case")]
 pub enum WorkSurfacePlacementValue {
     Top,
+    Bottom,
     Left,
     Right,
+    Off,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -437,7 +434,6 @@ pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
             calm_mode: settings.calm_mode,
             low_motion: settings.low_motion,
             fancy_animations: settings.fancy_animations,
-            ocean_treatment: settings.ocean_treatment.as_str().into(),
             focus_texture: settings.focus_texture.as_str().into(),
             work_surface_placement: settings.work_surface_placement.as_str().into(),
             work_surface_top_height: settings.work_surface_top_height,
@@ -453,13 +449,6 @@ pub fn build_document(app: &App, config: &Config) -> Result<ConfigUiDocument> {
             inline_diffs: settings.inline_diffs.as_str().into(),
             locale: UiLocale::from_setting(&settings.locale)?,
             theme: UiThemeValue::from_setting(&settings.theme)?,
-            custom_theme_name: crate::palette::normalize_user_theme_selector(&settings.theme)
-                .map_err(anyhow::Error::msg)?
-                .map(|selector| {
-                    selector
-                        .trim_start_matches(crate::palette::USER_THEME_PREFIX)
-                        .to_string()
-                }),
             background_color: settings.background_color.clone(),
             bracketed_paste: settings.bracketed_paste,
             composer_density: settings.composer_density.as_str().into(),
@@ -630,7 +619,6 @@ pub fn apply_document(
         ("calm_mode", bool_str(doc.settings.calm_mode)),
         ("low_motion", bool_str(doc.settings.low_motion)),
         ("fancy_animations", bool_str(doc.settings.fancy_animations)),
-        ("ocean_treatment", doc.settings.ocean_treatment.as_setting()),
         ("focus_texture", doc.settings.focus_texture.as_setting()),
         (
             "work_surface_placement",
@@ -860,19 +848,7 @@ fn validate_document(doc: &ConfigUiDocument, app: &App, config: &Config) -> Resu
 }
 
 fn theme_setting_for_document(doc: &ConfigUiDocument) -> Result<String> {
-    let setting = if doc.settings.theme == UiThemeValue::Custom {
-        let name = doc
-            .settings
-            .custom_theme_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("custom theme requires custom_theme_name"))?;
-        format!("{}{}", crate::palette::USER_THEME_PREFIX, name)
-    } else {
-        doc.settings.theme.as_setting().to_string()
-    };
-    crate::palette::resolve_theme_setting(&setting, None)
+    crate::palette::resolve_theme_setting(&doc.settings.theme.as_setting(), None)
         .map(|(normalized, _, _)| normalized)
         .map_err(anyhow::Error::msg)
 }
@@ -1092,33 +1068,40 @@ impl UiLocale {
 }
 
 impl UiThemeValue {
-    fn as_setting(self) -> &'static str {
+    /// Canonical settings string. `Custom` carries its own full
+    /// `custom:<name>` selector, so it round-trips without a sibling field.
+    fn as_setting(&self) -> std::borrow::Cow<'static, str> {
         match self {
-            Self::Terminal => "terminal",
-            Self::System => "system",
-            Self::Dark => "dark",
-            Self::Light => "light",
-            Self::Grayscale => "grayscale",
-            Self::CatppuccinMocha => "catppuccin-mocha",
-            Self::TokyoNight => "tokyo-night",
-            Self::Dracula => "dracula",
-            Self::GruvboxDark => "gruvbox-dark",
-            Self::Matrix => "matrix",
-            Self::Uwu => "uwu",
-            Self::Custom => "custom",
+            Self::Terminal => "terminal".into(),
+            Self::System => "system".into(),
+            Self::Underwater => "underwater".into(),
+            Self::UnderwaterRetro => "underwater-retro".into(),
+            Self::Dark => "dark".into(),
+            Self::Light => "light".into(),
+            Self::Grayscale => "grayscale".into(),
+            Self::CatppuccinMocha => "catppuccin-mocha".into(),
+            Self::TokyoNight => "tokyo-night".into(),
+            Self::Dracula => "dracula".into(),
+            Self::GruvboxDark => "gruvbox-dark".into(),
+            Self::Claude => "claude".into(),
+            Self::Matrix => "matrix".into(),
+            Self::SolarizedLight => "solarized-light".into(),
+            Self::Uwu => "uwu".into(),
+            Self::Custom(selector) => std::borrow::Cow::Owned(selector.clone()),
         }
     }
 
     fn from_setting(value: &str) -> Result<Self> {
-        if crate::palette::normalize_user_theme_selector(value)
-            .map_err(anyhow::Error::msg)?
-            .is_some()
+        if let Some(selector) =
+            crate::palette::normalize_user_theme_selector(value).map_err(anyhow::Error::msg)?
         {
-            return Ok(Self::Custom);
+            return Ok(Self::Custom(selector));
         }
         match crate::palette::normalize_theme_name(value) {
             Some("terminal") => Ok(Self::Terminal),
             Some("system") => Ok(Self::System),
+            Some("underwater") => Ok(Self::Underwater),
+            Some("underwater-retro") => Ok(Self::UnderwaterRetro),
             Some("dark") => Ok(Self::Dark),
             Some("light") => Ok(Self::Light),
             Some("grayscale") => Ok(Self::Grayscale),
@@ -1126,28 +1109,12 @@ impl UiThemeValue {
             Some("tokyo-night") => Ok(Self::TokyoNight),
             Some("dracula") => Ok(Self::Dracula),
             Some("gruvbox-dark") => Ok(Self::GruvboxDark),
+            Some("claude") => Ok(Self::Claude),
             Some("matrix") => Ok(Self::Matrix),
+            Some("solarized-light") => Ok(Self::SolarizedLight),
             Some("uwu") => Ok(Self::Uwu),
             Some(other) => bail!("unsupported theme '{other}'"),
             None => bail!("invalid theme '{value}'"),
-        }
-    }
-}
-
-impl OceanTreatmentValue {
-    fn as_setting(self) -> &'static str {
-        match self {
-            Self::Deepsea => "deepsea",
-            Self::Flat => "flat",
-        }
-    }
-}
-
-impl From<&str> for OceanTreatmentValue {
-    fn from(value: &str) -> Self {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "deepsea" | "ombre" | "gradient" | "classic" => Self::Deepsea,
-            _ => Self::Flat,
         }
     }
 }
@@ -1252,8 +1219,10 @@ impl WorkSurfacePlacementValue {
     fn as_setting(self) -> &'static str {
         match self {
             Self::Top => "top",
+            Self::Bottom => "bottom",
             Self::Left => "left",
             Self::Right => "right",
+            Self::Off => "off",
         }
     }
 }
@@ -1261,9 +1230,14 @@ impl WorkSurfacePlacementValue {
 impl From<&str> for WorkSurfacePlacementValue {
     fn from(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
+            "top" => Self::Top,
+            "bottom" => Self::Bottom,
             "left" => Self::Left,
             "right" => Self::Right,
-            _ => Self::Top,
+            "off" => Self::Off,
+            // Mirror `normalize_work_surface_placement`: the bar's home is
+            // under the composer.
+            _ => Self::Bottom,
         }
     }
 }
@@ -1401,7 +1375,7 @@ impl From<&str> for DefaultModeValue {
             other => match AppMode::from_setting(other) {
                 AppMode::Plan => Self::Plan,
                 AppMode::Operate => Self::Operate,
-                AppMode::Agent | AppMode::Yolo | AppMode::Auto => Self::Agent,
+                AppMode::Agent => Self::Agent,
             },
         }
     }
@@ -1760,8 +1734,20 @@ background_color = "#1A1B26"
         let mut app = app();
         let mut config = Config::default();
         let doc = build_document(&app, &config).expect("document");
-        assert_eq!(doc.settings.theme, UiThemeValue::Custom);
-        assert_eq!(doc.settings.custom_theme_name.as_deref(), Some("ocean"));
+        assert_eq!(
+            doc.settings.theme,
+            UiThemeValue::Custom("custom:ocean".to_string())
+        );
+
+        // The typed document must survive its wire form untouched: the custom
+        // selector lives inside `theme` itself, with no sibling field and no
+        // disk migration.
+        let doc = parse_document(serde_json::to_value(&doc).expect("serialize document"))
+            .expect("parse document");
+        assert_eq!(
+            doc.settings.theme,
+            UiThemeValue::Custom("custom:ocean".to_string())
+        );
 
         apply_document(doc, &mut app, &mut config, false).expect("apply custom theme");
         assert_eq!(
@@ -1839,12 +1825,22 @@ background_color = "#1A1B26"
             &serde_json::json!(expected_locales),
             "UiLocale schema must match Locale::shipped()"
         );
-        let theme = &schema["$defs"]["UiThemeValue"]["enum"];
+        let theme = &schema["$defs"]["UiThemeValue"];
+        // `Custom` carries its `custom:<name>` selector inline, so schemars
+        // renders oneOf: the named themes stay a string enum and the custom
+        // variant becomes a single-key object.
+        let theme_variants = theme
+            .get("oneOf")
+            .and_then(|ones| ones.as_array())
+            .expect("UiThemeValue oneOf");
+        let named = &theme_variants[0]["enum"];
         assert_eq!(
-            theme,
+            named,
             &serde_json::json!([
                 "terminal",
                 "system",
+                "underwater",
+                "underwater-retro",
                 "dark",
                 "light",
                 "grayscale",
@@ -1852,11 +1848,92 @@ background_color = "#1A1B26"
                 "tokyo-night",
                 "dracula",
                 "gruvbox-dark",
+                "claude",
                 "matrix",
-                "uwu",
-                "custom"
+                "solarized-light",
+                "uwu"
             ])
         );
+        assert_eq!(
+            theme_variants[1]["properties"]["custom"],
+            serde_json::json!({"type": "string"}),
+            "custom theme selector must ride inside the theme value"
+        );
+    }
+
+    #[test]
+    fn ui_theme_value_covers_every_selectable_theme() {
+        // The typed /config document must round-trip every theme the /theme
+        // picker can persist, so the typed value space tracks
+        // `SELECTABLE_THEMES`. Drift here silently rewrote a saved theme on
+        // save (claude and solarized-light used to fall out).
+        for theme in crate::palette::SELECTABLE_THEMES {
+            let name = theme.name();
+            let value = UiThemeValue::from_setting(name)
+                .unwrap_or_else(|err| panic!("UiThemeValue must accept theme {name}: {err}"));
+            assert_eq!(
+                value.as_setting(),
+                name,
+                "UiThemeValue must round-trip theme {name}"
+            );
+            let serialized = serde_json::to_value(&value)
+                .unwrap_or_else(|err| panic!("serialize theme {name}: {err}"));
+            assert_eq!(serialized, serde_json::json!(name));
+        }
+    }
+
+    #[test]
+    fn work_surface_placement_round_trips_bottom_and_off_through_typed_document() {
+        // A persisted `bottom` used to deserialize as `Top` — saving the
+        // typed document silently moved the work surface. Every placement
+        // `Settings::set` accepts must survive the typed document.
+        assert_eq!(
+            WorkSurfacePlacementValue::from("bottom"),
+            WorkSurfacePlacementValue::Bottom
+        );
+        assert_eq!(
+            WorkSurfacePlacementValue::from("off"),
+            WorkSurfacePlacementValue::Off
+        );
+        for placement in ["bottom", "top", "left", "right", "off"] {
+            let value = WorkSurfacePlacementValue::from(placement);
+            assert_eq!(value.as_setting(), placement);
+            let serialized = serde_json::to_value(value)
+                .unwrap_or_else(|err| panic!("serialize placement {placement}: {err}"));
+            assert_eq!(
+                serde_json::from_value::<WorkSurfacePlacementValue>(serialized)
+                    .unwrap_or_else(|err| panic!("deserialize placement {placement}: {err}")),
+                value
+            );
+        }
+
+        let _lock = lock_test_env();
+        let temp_root = tempfile::tempdir().expect("isolated Codewhale home");
+        let codewhale_home = temp_root.path().join(".codewhale");
+        fs::create_dir_all(&codewhale_home).expect("settings dir");
+        let settings_path = codewhale_home.join("settings.toml");
+        fs::write(&settings_path, "work_surface_placement = \"bottom\"\n").expect("settings");
+        let _home = EnvVarGuard::set("CODEWHALE_HOME", &codewhale_home);
+        let _codewhale_config = EnvVarGuard::remove("CODEWHALE_CONFIG_PATH");
+        let _deepseek_config = EnvVarGuard::remove("DEEPSEEK_CONFIG_PATH");
+
+        let mut app = app();
+        let mut config = Config::default();
+        let doc = build_document(&app, &config).expect("document");
+        assert_eq!(
+            doc.settings.work_surface_placement,
+            WorkSurfacePlacementValue::Bottom,
+            "the live bottom default must not degrade to top in the typed document"
+        );
+        let doc = parse_document(serde_json::to_value(&doc).expect("serialize document"))
+            .expect("parse document");
+        assert_eq!(
+            doc.settings.work_surface_placement,
+            WorkSurfacePlacementValue::Bottom
+        );
+        // Applying session-only must validate: `Settings::set` accepts
+        // bottom, so the typed document never corrupts it.
+        apply_document(doc, &mut app, &mut config, false).expect("apply placement");
     }
 
     #[test]

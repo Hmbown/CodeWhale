@@ -845,7 +845,7 @@ pub fn export_bundle(
     metadata: BundleMetadata,
 ) -> Result<PortableBundle> {
     let mut preferences = BundleTable::default();
-    let mut profiles = BundleTable::default();
+    let profiles = BundleTable::default();
     let mut global = BundleTable::default();
     let mut project = BundleTable::default();
 
@@ -854,9 +854,6 @@ pub fn export_bundle(
             match export_section_for(&key, scope) {
                 ExportSection::Preferences => {
                     preferences.entries.insert(key, value);
-                }
-                ExportSection::Profiles => {
-                    profiles.entries.insert(key, value);
                 }
                 ExportSection::Global => {
                     global.entries.insert(key, value);
@@ -918,16 +915,12 @@ const MACHINE_SPECIFIC_KEYS: [&str; 14] = [
 
 enum ExportSection {
     Preferences,
-    Profiles,
     Global,
     Project,
     Drop,
 }
 
 fn export_section_for(key: &str, scope: BundleScope) -> ExportSection {
-    if key.starts_with("harness") || key.contains("harness_profiles") {
-        return ExportSection::Profiles;
-    }
     if key.starts_with("skills") || key.starts_with("tools") || key.starts_with("snapshots") {
         return ExportSection::Preferences;
     }
@@ -2231,28 +2224,12 @@ max_age_days = 11
 [portable_table]
 enabled = true
 count = 4
-
-[[harness_profiles]]
-provider_route = "deepseek"
-model_pattern = "deepseek-v4-*"
-
-[harness_profiles.posture]
-kind = "custom"
-max_subagents = 3
-prefer_codebase_search = true
-compaction_strategy = "prefix-cache"
-tool_surface = "read-only"
-safety_posture = "strict"
 "#,
         )
         .expect("typed config parses");
 
         let bundle = export_bundle(&config, BundleScope::Global, BundleMetadata::default())
             .expect("typed export");
-        assert!(matches!(
-            bundle.profiles.entries.get("harness_profiles"),
-            Some(toml::Value::Array(_))
-        ));
         assert!(matches!(
             bundle.preferences.entries.get("skills"),
             Some(toml::Value::Table(_))

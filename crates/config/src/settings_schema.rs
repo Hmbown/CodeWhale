@@ -221,11 +221,6 @@ const DEFAULT_MODE: &[SettingOption] = &[
     ),
 ];
 
-const OCEAN_TREATMENT: &[SettingOption] = &[
-    SettingOption::new("deepsea", "", "ConfigChoiceDetailOceanDeepsea"),
-    SettingOption::new("flat", "", "ConfigChoiceDetailOceanFlat"),
-];
-
 const FOCUS_TEXTURE: &[SettingOption] = &[
     SettingOption::new("off", "ConfigValueOff", ""),
     SettingOption::new("scrim", "", ""),
@@ -239,8 +234,9 @@ const INLINE_DIFFS: &[SettingOption] = &[
 ];
 
 const STATUS_INDICATOR: &[SettingOption] = &[
+    // `whale` is retired: load migrates whale | 🐳 | 🐋 to the typographic
+    // mark, so the editor no longer offers it.
     SettingOption::new("cw", "ConfigChoiceStatusCw", ""),
-    SettingOption::new("whale", "ConfigChoiceStatusWhale", ""),
     SettingOption::new("dots", "ConfigChoiceStatusDots", ""),
     SettingOption::new("off", "ConfigValueOff", ""),
 ];
@@ -285,6 +281,11 @@ const WORK_SURFACE_PLACEMENT: &[SettingOption] = &[
         "ConfigChoiceDetailPlacementTop",
     ),
     SettingOption::new(
+        "bottom",
+        "ConfigChoicePlacementBottom",
+        "ConfigChoiceDetailPlacementBottom",
+    ),
+    SettingOption::new(
         "left",
         "ConfigChoicePlacementLeft",
         "ConfigChoiceDetailPlacementLeft",
@@ -298,6 +299,8 @@ const WORK_SURFACE_PLACEMENT: &[SettingOption] = &[
 ];
 
 const RAIL_PANEL: &[SettingOption] = &[
+    // The dock's own grammar is lowercase nouns, so the panels the classic
+    // sidebar never named ride on their raw value (`RailPanel::title`).
     SettingOption::new(
         "tasks",
         "ConfigChoiceRailTasks",
@@ -308,22 +311,21 @@ const RAIL_PANEL: &[SettingOption] = &[
         "ConfigChoiceRailAgents",
         "ConfigChoiceDetailRailAgents",
     ),
+    SettingOption::new("background", "", ""),
+    SettingOption::new("files", "", ""),
+    SettingOption::new("notepad", "", ""),
     SettingOption::new(
         "context",
         "ConfigChoiceRailContext",
         "ConfigChoiceDetailRailContext",
     ),
-    SettingOption::new(
-        "pinned",
-        "ConfigChoiceRailPinned",
-        "ConfigChoiceDetailRailPinned",
-    ),
+    SettingOption::new("git", "", ""),
+    SettingOption::new("price", "", ""),
 ];
 
 /// Rail tab ids.
 pub const TAB_APPEARANCE: &str = "appearance";
 pub const TAB_MODELS: &str = "models";
-pub const TAB_POD: &str = "pod";
 pub const TAB_WORK: &str = "work";
 pub const TAB_TOOLS: &str = "tools";
 pub const TAB_TRUST: &str = "trust";
@@ -364,7 +366,7 @@ pub const SETTINGS_SCHEMA: &[SettingDef] = &[
     def(
         "theme",
         SettingKind::String,
-        "terminal",
+        "underwater",
         ui(
             TAB_APPEARANCE,
             "display",
@@ -394,17 +396,6 @@ pub const SETTINGS_SCHEMA: &[SettingDef] = &[
             "display",
             "ConfigLabelBackground",
             "ConfigHintBackgroundColor",
-        ),
-    ),
-    def(
-        "ocean_treatment",
-        SettingKind::Enum(OCEAN_TREATMENT),
-        "flat",
-        ui(
-            TAB_APPEARANCE,
-            "display",
-            "ConfigLabelOceanTreatment",
-            "ConfigHintOceanTreatment",
         ),
     ),
     // No sentence anywhere justifies this prototype toggle, so it keeps its
@@ -595,14 +586,16 @@ pub const SETTINGS_SCHEMA: &[SettingDef] = &[
             "ConfigHintReasoningEffort",
         ),
     ),
-    // ── pod ─────────────────────────────────────────────────────────────
+    // Sub-agent fan-out depth, next to the model rows that drive it. Fleet
+    // membership itself lives in the /fleet menu, so a one-row Fleet tab
+    // would only restate this table.
     def(
         "fleet.exec.max_spawn_depth",
         SettingKind::Int,
         "3",
         ui(
-            TAB_POD,
-            "fleet",
+            TAB_MODELS,
+            "model",
             "ConfigLabelFleetSpawnDepth",
             "ConfigHintFleetMaxSpawnDepth",
         ),
@@ -681,10 +674,10 @@ pub const SETTINGS_SCHEMA: &[SettingDef] = &[
     def(
         "work_surface_placement",
         SettingKind::Enum(WORK_SURFACE_PLACEMENT),
-        "left",
+        "bottom",
         ui(
             TAB_WORK,
-            "sidebar",
+            "workbar",
             "ConfigLabelWorkSurfacePlacement",
             "ConfigHintWorkSurfacePlacement",
         ),
@@ -695,7 +688,7 @@ pub const SETTINGS_SCHEMA: &[SettingDef] = &[
         "8",
         ui(
             TAB_WORK,
-            "sidebar",
+            "workbar",
             "ConfigLabelTopHeight",
             "ConfigHintWorkSurfaceTopHeight",
         ),
@@ -706,7 +699,7 @@ pub const SETTINGS_SCHEMA: &[SettingDef] = &[
         "30",
         ui(
             TAB_WORK,
-            "sidebar",
+            "workbar",
             "ConfigLabelSideWidth",
             "ConfigHintWorkSurfaceSideWidth",
         ),
@@ -715,7 +708,7 @@ pub const SETTINGS_SCHEMA: &[SettingDef] = &[
         "rail_panel",
         SettingKind::Enum(RAIL_PANEL),
         "tasks",
-        ui(TAB_WORK, "sidebar", "", "ConfigHintRailPanel"),
+        ui(TAB_WORK, "workbar", "", "ConfigHintRailPanel"),
     ),
     // Sidebar panel toggles; driven by view actions and startup flags, not rows.
     def("context_panel", SettingKind::Bool(ON_OFF), "false", None),
@@ -1010,41 +1003,18 @@ pub const SETTINGS_SCHEMA: &[SettingDef] = &[
             "ConfigHintExternalCredentials",
         ),
     ),
-    def(
-        "fast_model",
-        SettingKind::String,
-        "",
-        ui(
-            TAB_ADVANCED,
-            "model",
-            "ConfigLabelFastModel",
-            "ConfigHintFastModel",
-        ),
-    ),
+    // Derived fast-sibling receipt, retired from the table: the /model picker
+    // already names the fast sibling where a choice actually happens, and no
+    // backend reads `fast_model` as a persisted key.
+    def("fast_model", SettingKind::String, "", None),
     // A transport timeout; advanced networking, available through `/set` only.
     def("stream_chunk_timeout_secs", SettingKind::Int, "900", None),
-    def(
-        "default_model",
-        SettingKind::String,
-        "",
-        ui(
-            TAB_ADVANCED,
-            "legacy",
-            "ConfigLabelDefaultModel",
-            "ConfigHintDefaultModel",
-        ),
-    ),
-    def(
-        "features.vision_model",
-        SettingKind::String,
-        "",
-        ui(
-            TAB_ADVANCED,
-            "experimental",
-            "",
-            "ConfigHintFeatureVisionModel",
-        ),
-    ),
+    // DeepSeek-only legacy fallback: the runtime still reads it, but it is
+    // not a live choice, so it stays settable through `/set` without a row.
+    def("default_model", SettingKind::String, "", None),
+    // Beta vision flag: the feature backend stays live, but the row goes —
+    // feature state is diagnosed where vision runs, not in Advanced.
+    def("features.vision_model", SettingKind::String, "", None),
     def(
         "features.subagents",
         SettingKind::String,

@@ -16,7 +16,7 @@
 
 #![allow(dead_code)] // foundation: consumers are wired in a follow-up (#3217).
 
-use crate::tools::subagent::FleetRole;
+use crate::fleet::role::FleetRole;
 use serde::{Deserialize, Serialize};
 
 /// Coarse capability classes a worker may exercise, beyond read access (reads

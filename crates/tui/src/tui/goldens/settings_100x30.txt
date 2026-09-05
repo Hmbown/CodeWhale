@@ -1,11 +1,13 @@
 ▸ Appearance          System                                  PREVIEW · Blue Stage
   Models & providers  Terminal                                ▎ restyle the work stage
-  Fleet               Blue Stage                               ├── whale-1 · footer band
-  Work              [ ✓ Blue Stage Light ]                     └── whale-2 · goldens
-  Tools & MCP         Grayscale                               ● working whale-1 editing · 14:41:02 ×
-  Trust               Catppuccin Mocha                        ✓ done whale-2 surfaced ✓ · 14:39:02 ×
-  Motion              Tokyo Night                                done: stage restyled
-  Advanced            Dracula
+  Work                Underwater                               ├── whale-1 · footer band
+  Tools & MCP         Underwater Retro                         └── whale-2 · goldens
+  Trust             [ ✓ Blue Stage ]                          ● working whale-1 editing · 14:41:02 ×
+  Motion              Blue Stage Light                        ✓ done whale-2 surfaced ✓ · 14:39:02 ×
+  Advanced            Grayscale                                  done: stage restyled
+                      Catppuccin Mocha
+                      Tokyo Night
+                      Dracula
                       Gruvbox Dark
                       Claude
                       Matrix
@@ -16,10 +18,8 @@
                      ◉ ambient life
 
 
-
-
                                                               ● working   ○ ready   ✓ done   ! cauti
-                                                              POD LEDGER
+                                                              FLEET LEDGER
                                                                 WHALE     │ASSIGNMENT │STATE
                                                               ▶ whale-1   │restyle th…│● working
                                                                 whale-2   │golden buf…│✓ done

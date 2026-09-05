@@ -129,9 +129,9 @@ impl ChatWidget {
         let content_area = area;
         let background = app.ui_theme.surface_bg;
         // The ordinary shell inherits its host/theme surface. Underwater life
-        // is earned by the explicit Deepsea treatment, never painted over a
-        // user's terminal simply because the app happens to be active.
-        let underwater_atmosphere = app.ocean_treatment.is_deepsea();
+        // is earned by the underwater theme, never painted over a user's
+        // terminal simply because the app happens to be active.
+        let underwater_atmosphere = app.theme_id == crate::palette::ThemeId::Underwater;
         let ocean_ramp = underwater_atmosphere
             .then(|| crate::tui::ocean::OceanRamp::for_theme(&app.ui_theme))
             .flatten();
@@ -186,6 +186,7 @@ impl ChatWidget {
         );
         let life_presence_fixed = (life_presence * 1000.0).round().clamp(0.0, 1000.0) as u16;
         let ocean_column = ocean_ramp.map(|ramp| {
+            let context_percent = crate::tui::phase_strip::context_percent_from_app(app);
             crate::tui::ocean::OceanColumn::new(
                 ramp,
                 content_area,
@@ -194,6 +195,7 @@ impl ChatWidget {
                 phase,
                 ocean_animated,
                 life_presence_fixed,
+                context_percent,
             )
         });
         let fish_flee_elapsed_ms = underwater_motion_enabled
@@ -1342,7 +1344,7 @@ impl<'a> ComposerWidget<'a> {
 
     fn mode_color(&self) -> Color {
         match self.app.mode {
-            AppMode::Agent | AppMode::Auto | AppMode::Yolo => self.app.ui_theme.mode_agent,
+            AppMode::Agent => self.app.ui_theme.mode_agent,
             AppMode::Plan => self.app.ui_theme.mode_plan,
             AppMode::Operate => self.app.ui_theme.mode_operate,
         }
@@ -1355,6 +1357,13 @@ impl<'a> ComposerWidget<'a> {
 
 impl Renderable for ComposerWidget<'_> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        // Slash rows are re-recorded below; clear first so a closed or
+        // resized menu cannot keep stale hitboxes from the prior frame.
+        self.app
+            .viewport
+            .last_slash_menu_hitboxes
+            .borrow_mut()
+            .clear();
         let background = Style::default().bg(self.app.ui_theme.composer_bg);
         let has_panel = self.has_panel(area);
         let inner_area = self.inner_area(area);
@@ -1813,15 +1822,23 @@ impl Renderable for ComposerWidget<'_> {
                     Span::styled(desc_display, desc_style),
                 ]));
 
+                let row_y = inner_area
+                    .y
+                    .saturating_add(u16::try_from(row_line_index).unwrap_or(u16::MAX));
+                if row_y < inner_area.bottom() && inner_area.width > 0 {
+                    self.app
+                        .viewport
+                        .last_slash_menu_hitboxes
+                        .borrow_mut()
+                        .push((idx, Rect::new(inner_area.x, row_y, inner_area.width, 1)));
+                }
+
                 if name_was_truncated || description_was_truncated {
                     let full_text = if entry.description.trim().is_empty() {
                         display_name
                     } else {
                         format!("{display_name}  {}", entry.description)
                     };
-                    let row_y = inner_area
-                        .y
-                        .saturating_add(u16::try_from(row_line_index).unwrap_or(u16::MAX));
                     if row_y < inner_area.bottom() {
                         crate::tui::hover_layer::register_rect(
                             crate::tui::hover_hit::HoverTargetKind::TruncatedText,
@@ -4474,11 +4491,11 @@ mod tests {
         app.launch.visible = false;
         app.ui_locale = Locale::En;
         app.composer.vim_enabled = false;
-        // Most widget fixtures exercise the explicitly selected underwater
-        // scene. Production defaults to Flat/terminal-owned; keep tests that
-        // inspect fish and caustics intentional rather than coupled to that
-        // startup preference.
-        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Deepsea;
+        // Most widget fixtures exercise the underwater theme's field. Other
+        // themes keep the terminal-owned shell; keep tests that inspect fish
+        // and caustics intentional rather than coupled to that choice.
+        app.theme_id = crate::palette::ThemeId::Underwater;
+        app.ui_theme = palette::UNDERWATER_UI_THEME;
         app
     }
 
@@ -5316,7 +5333,7 @@ mod tests {
         let root = slash_completion_hints("/", 128, &[], Locale::En, None, ApiProvider::Deepseek);
         assert!(root.iter().any(|hint| hint.name == "/model"));
         assert!(!root.iter().any(|hint| hint.name == "/provider"));
-        assert!(!root.iter().any(|hint| hint.name == "/pod"));
+        assert!(!root.iter().any(|hint| hint.name == "/fleet"));
         assert!(!root.iter().any(|hint| hint.name == "/fleet"));
         assert!(!root.iter().any(|hint| hint.name == "/config"));
         assert!(!root.iter().any(|hint| hint.name == "/statusline"));
@@ -5524,16 +5541,19 @@ mod tests {
     }
 
     #[test]
-    fn slash_completion_migrates_legacy_pod_to_canonical_fleet() {
+    fn slash_completion_offers_no_retired_pod_entry() {
         let hints =
             slash_completion_hints("/pod", 128, &[], Locale::En, None, ApiProvider::Deepseek);
-        let entry = hints
-            .iter()
-            .find(|hint| hint.name == "/fleet")
-            .expect("legacy /pod should discover canonical /fleet");
-
-        assert_eq!(entry.alias_hint.as_deref(), Some("pod"));
-        assert!(!hints.iter().any(|hint| hint.name == "/pod"));
+        assert!(
+            !hints.iter().any(|hint| hint.name == "/pod"),
+            "the retired /pod spelling must not complete"
+        );
+        for entry in hints.iter().filter(|hint| hint.name == "/fleet") {
+            assert_eq!(
+                entry.alias_hint, None,
+                "no alias may point at the retired spelling"
+            );
+        }
     }
 
     #[test]
@@ -6941,7 +6961,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("Codewhale"));
+        assert!(rendered.contains("codewhale"));
         assert!(rendered.contains("/tmp/codewhale-test-workspace · no git · mcp 2"));
         assert!(rendered.contains("What do you want to accomplish?"));
         assert!(!rendered.contains("/workflow /goal /auto"));
@@ -6978,10 +6998,10 @@ mod tests {
         let mut app = create_test_app();
         // App::new reads persisted presentation settings. Other tests swap the
         // isolated settings home in parallel, so this visual contract must pin
-        // the treatment it is actually asserting instead of inheriting a
-        // transient Flat/Terminal choice from the process.
-        app.ui_theme = palette::UI_THEME;
-        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Deepsea;
+        // the theme it is actually asserting instead of inheriting a transient
+        // non-underwater choice from the process.
+        app.theme_id = crate::palette::ThemeId::Underwater;
+        app.ui_theme = palette::UNDERWATER_UI_THEME;
         app.low_motion = false;
         app.fancy_animations = true;
         app.workspace = PathBuf::from("codewhale-test-workspace");
@@ -7030,9 +7050,10 @@ mod tests {
     }
 
     #[test]
-    fn flat_treatment_keeps_theme_surface_without_ambient_life() {
+    fn terminal_owned_theme_keeps_theme_surface_without_ambient_life() {
         let mut app = create_test_app();
-        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Flat;
+        app.theme_id = crate::palette::ThemeId::Whale;
+        app.ui_theme = palette::UI_THEME;
         app.low_motion = false;
         app.fancy_animations = true;
         let area = Rect::new(0, 0, 100, 20);
@@ -7047,15 +7068,15 @@ mod tests {
         let rendered = buffer_text(&buf, area);
         assert!(
             !rendered.contains("><>") && !rendered.contains("<><"),
-            "flat must preserve a normal host-owned shell without decorative fish:\n{rendered}"
+            "terminal-owned themes must keep a normal shell without decorative fish:\n{rendered}"
         );
     }
 
     #[test]
-    fn solarized_light_deepsea_keeps_canonical_surface_and_ambient_life() {
+    fn solarized_light_keeps_canonical_surface_without_a_field() {
         let mut app = create_test_app();
+        app.theme_id = crate::palette::ThemeId::SolarizedLight;
         app.ui_theme = crate::palette::SOLARIZED_LIGHT_UI_THEME;
-        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Deepsea;
         app.low_motion = false;
         app.fancy_animations = true;
         // The old cyan-tinted ramp produced the reported #e1e9da at row 16
@@ -7078,17 +7099,17 @@ mod tests {
         );
         let rendered = buffer_text(&buf, area);
         assert!(
-            rendered.contains("><>") || rendered.contains("<><"),
-            "preserving the background must not remove ambient life:\n{rendered}"
+            !rendered.contains("><>") && !rendered.contains("<><"),
+            "a theme with no painted field earns no ambient life:\n{rendered}"
         );
     }
 
     #[test]
-    fn solarized_light_custom_background_keeps_deepsea() {
+    fn underwater_custom_background_keeps_field_depth() {
         let mut app = create_test_app();
         let custom = Color::Rgb(0x1a, 0x1b, 0x26);
-        app.ui_theme = crate::palette::SOLARIZED_LIGHT_UI_THEME.with_background_color(custom);
-        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Deepsea;
+        app.theme_id = crate::palette::ThemeId::Underwater;
+        app.ui_theme = palette::UNDERWATER_UI_THEME.with_background_color(custom);
 
         let area = Rect::new(0, 0, 100, 30);
         let mut buf = Buffer::empty(area);
@@ -7098,15 +7119,15 @@ mod tests {
         assert_ne!(
             buf[(0, 0)].bg,
             buf[(0, 29)].bg,
-            "custom Solarized Light backgrounds must retain Deepsea depth"
+            "custom backgrounds must not flatten the underwater field"
         );
     }
 
     #[test]
     fn terminal_owned_background_stays_visually_quiet_without_deepsea() {
         let mut app = create_test_app();
+        app.theme_id = crate::palette::ThemeId::Terminal;
         app.ui_theme = crate::palette::TERMINAL_UI_THEME;
-        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Flat;
         app.low_motion = false;
         app.fancy_animations = true;
         let area = Rect::new(0, 0, 100, 20);
@@ -7186,8 +7207,8 @@ mod tests {
     #[test]
     fn reduced_motion_freezes_the_ocean_without_removing_depth() {
         let mut app = create_test_app();
-        app.ui_theme = palette::UI_THEME;
-        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Deepsea;
+        app.theme_id = crate::palette::ThemeId::Underwater;
+        app.ui_theme = palette::UNDERWATER_UI_THEME;
         app.low_motion = true;
         app.fancy_animations = true;
         let area = Rect::new(0, 0, 100, 20);
@@ -7579,8 +7600,8 @@ mod tests {
     fn chat_widget_uses_configured_surface_background() {
         let mut app = create_test_app();
         let custom = ratatui::style::Color::Rgb(26, 27, 38);
-        app.ui_theme = app.ui_theme.with_background_color(custom);
-        app.ocean_treatment = crate::tui::ocean::OceanTreatment::Flat;
+        app.theme_id = crate::palette::ThemeId::Whale;
+        app.ui_theme = palette::UI_THEME.with_background_color(custom);
         app.add_message(HistoryCell::Assistant {
             content: "ready".to_string(),
             streaming: false,

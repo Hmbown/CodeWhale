@@ -1,9 +1,9 @@
 //! Effective Fleet roster loading and deterministic member identity.
 //!
 //! A selected v2 Fleet is the runtime source of truth. Legacy profile layers
-//! are consulted only when no Fleet is selected. The same selector resolver
-//! feeds Agent spawn and model-visible roster discovery so a label cannot
-//! resolve to one member in the UI and another at dispatch.
+//! are consulted only when no Fleet is selected. The selector resolver feeds
+//! durable Fleet task dispatch; in-process agent spawns resolve roles only
+//! and never consult the roster.
 
 use std::path::Path;
 
@@ -16,16 +16,12 @@ use codewhale_config::{
 };
 
 use super::profile::AgentProfile;
+use super::role::public_role_label;
 use super::roster::{FleetRoster, ProfileOrigin};
 use super::store::{
     FleetFile, FleetScope, MemberCapability, load_fleet_at, resolve_selected_fleet,
 };
-use crate::tools::subagent::public_role_label;
 
-/// Maximum member rows one model-visible roster query returns. The total and
-/// truncation flag stay visible so a large local roster is never mistaken for
-/// a complete list.
-pub const MAX_ROSTER_DISCOVERY_MEMBERS: usize = 64;
 const MAX_IDENTITY_FIELD_CHARS: usize = 160;
 
 /// Load the one roster the session must display and dispatch against.
@@ -43,7 +39,7 @@ pub fn load_effective_roster(
         Ok(selected) => selected,
         Err(_) => {
             return FleetRoster::failed(
-                "Selected Fleet is missing or unreadable; inspect /pod and repair or clear the selection.",
+                "Selected Fleet is missing or unreadable; inspect /fleet and repair or clear the selection.",
             );
         }
     };
@@ -58,7 +54,7 @@ pub fn load_effective_roster(
         Err(_) => {
             let name = bounded_fleet_label(&selected.name);
             return FleetRoster::failed(format!(
-                "Selected {} Fleet `{name}` is invalid or unreadable; inspect /pod and repair or clear the selection.",
+                "Selected {} Fleet `{name}` is invalid or unreadable; inspect /fleet and repair or clear the selection.",
                 selected.scope.label()
             ));
         }
@@ -197,16 +193,6 @@ impl FleetMemberIdentity {
     }
 }
 
-#[must_use]
-pub fn roster_identities(roster: &FleetRoster) -> Vec<FleetMemberIdentity> {
-    roster
-        .members()
-        .iter()
-        .take(MAX_ROSTER_DISCOVERY_MEMBERS)
-        .map(FleetMemberIdentity::from_member)
-        .collect()
-}
-
 pub(crate) fn bounded_identity_field(value: &str) -> String {
     bounded_visible_text(value, MAX_IDENTITY_FIELD_CHARS)
 }
@@ -299,21 +285,12 @@ pub enum FleetSelectorError {
     },
 }
 
-/// Resolve a member selector deterministically.
+/// Resolve a member selector deterministically against an already-loaded
+/// profile slice.
 ///
 /// Unqualified exact ids win for compatibility. Every other identity class is
 /// resolved as a set and succeeds only when it names one distinct member.
-pub fn resolve_member<'a>(
-    roster: &'a FleetRoster,
-    selector: &str,
-) -> Result<Option<&'a AgentProfile>, FleetSelectorError> {
-    resolve_member_in_profiles(roster.members(), selector)
-}
-
-/// Resolve a member selector against an already-loaded profile slice.
-///
-/// Fleet task dispatch uses this entry point so CLI task specs and interactive
-/// `agent` calls share one deterministic identity resolver.
+/// Fleet task dispatch uses this entry point.
 pub fn resolve_member_in_profiles<'a>(
     profiles: &'a [AgentProfile],
     selector: &str,
@@ -558,10 +535,6 @@ mod tests {
             Some("Inspect only.")
         );
         assert_eq!(projected.requires, vec!["vision".to_string()]);
-        assert_eq!(
-            roster_identities(&roster)[0].requires,
-            vec!["vision".to_string()]
-        );
     }
 
     #[test]
@@ -640,7 +613,7 @@ mod tests {
             "route:deepseek/deepseek-v4-flash",
         ] {
             assert_eq!(
-                resolve_member(&roster, selector)
+                resolve_member_in_profiles(roster.members(), selector)
                     .expect("valid selector")
                     .map(|member| member.id.as_str()),
                 Some("flash-scout"),
@@ -654,13 +627,13 @@ mod tests {
         let roster = FleetRoster::built_ins_only();
 
         assert_eq!(
-            resolve_member(&roster, "explore")
+            resolve_member_in_profiles(roster.members(), "explore")
                 .expect("canonical role selector")
                 .map(|member| member.id.as_str()),
             Some("scout")
         );
         assert_eq!(
-            resolve_member(&roster, "advisor")
+            resolve_member_in_profiles(roster.members(), "advisor")
                 .expect("canonical role selector")
                 .map(|member| member.id.as_str()),
             Some("consultant")
@@ -689,14 +662,14 @@ mod tests {
 
         for selector in ["Release Lead", "name:Release Lead"] {
             assert_eq!(
-                resolve_member(&roster, selector)
+                resolve_member_in_profiles(roster.members(), selector)
                     .expect("unique friendly name")
                     .map(|member| member.id.as_str()),
                 Some("release-lead"),
                 "selector {selector}"
             );
         }
-        let error = resolve_member(&roster, "name:Flash Scout")
+        let error = resolve_member_in_profiles(roster.members(), "name:Flash Scout")
             .expect_err("duplicate friendly name must be ambiguous");
         let FleetSelectorError::Ambiguous { candidates, .. } = error else {
             panic!("expected ambiguity");
@@ -704,8 +677,10 @@ mod tests {
         assert!(candidates.contains("scout-a"), "{candidates}");
         assert!(candidates.contains("scout-b"), "{candidates}");
 
-        let identities = roster_identities(&roster);
-        assert_eq!(identities[0].display_name.as_deref(), Some("Release Lead"));
+        assert_eq!(
+            roster.members()[0].display_name.as_deref(),
+            Some("Release Lead")
+        );
     }
 
     #[test]
@@ -727,11 +702,11 @@ mod tests {
             ),
         ]);
         assert!(matches!(
-            resolve_member(&roster, "DeepSeek V4 Flash"),
+            resolve_member_in_profiles(roster.members(), "DeepSeek V4 Flash"),
             Err(FleetSelectorError::Ambiguous { .. })
         ));
         assert_eq!(
-            resolve_member(&roster, "SCOUT-A")
+            resolve_member_in_profiles(roster.members(), "SCOUT-A")
                 .expect("id")
                 .map(|member| member.id.as_str()),
             Some("scout-a")
@@ -773,21 +748,10 @@ mod tests {
     }
 
     #[test]
-    fn model_visible_roster_is_bounded() {
-        let mut members = (0..(MAX_ROSTER_DISCOVERY_MEMBERS + 5))
-            .map(|index| member(&format!("member-{index}"), None, "worker", None, None))
-            .collect::<Vec<_>>();
-        members[0].id = format!("member\nzero-{}", "x".repeat(MAX_IDENTITY_FIELD_CHARS + 20));
-        members[0].requires = vec!["vision".to_string(); 100];
-        let roster = FleetRoster::from_members(members);
-        let identities = roster_identities(&roster);
-        assert_eq!(identities.len(), MAX_ROSTER_DISCOVERY_MEMBERS);
-        assert_eq!(roster.members().len(), MAX_ROSTER_DISCOVERY_MEMBERS + 5);
-        assert_eq!(
-            identities[0].requires.len(),
-            MemberCapability::VOCABULARY.len()
-        );
-        assert!(!identities[0].member_id.contains('\n'));
-        assert!(identities[0].member_id.chars().count() <= MAX_IDENTITY_FIELD_CHARS);
+    fn member_identity_fields_stay_bounded() {
+        let live = member("member-zero", None, "worker", None, None);
+        let identity = FleetMemberIdentity::from_member(&live);
+        assert_eq!(identity.member_id, "member-zero");
+        assert_eq!(identity.route, "inherit");
     }
 }

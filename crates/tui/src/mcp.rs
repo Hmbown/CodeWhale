@@ -4371,6 +4371,28 @@ pub fn mcp_name_is_command_safe(name: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
 }
 
+/// Display target for an MCP server row: stdio servers show the command
+/// name only — no `./…` relative-path prefix, no directories, no args —
+/// while URL servers keep their full URL, which is the identity. The
+/// snapshot's `command_or_url` keeps full fidelity for the engine and the
+/// wire; this is presentation only.
+#[must_use]
+pub fn mcp_display_target(transport: &str, command_or_url: &str) -> String {
+    if transport != "stdio" {
+        return command_or_url.to_string();
+    }
+    let command = command_or_url
+        .split_whitespace()
+        .next()
+        .unwrap_or(command_or_url);
+    let name = command.rsplit(['/', '\\']).next().unwrap_or(command);
+    if name.is_empty() {
+        command_or_url.to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 #[must_use]
 pub fn mcp_server_oauth_capable(config: &McpServerConfig) -> bool {
     config.url.is_some()

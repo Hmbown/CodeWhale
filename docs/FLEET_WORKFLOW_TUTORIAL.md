@@ -22,9 +22,8 @@ one-sentence request should still not silently generate `tasks.json`; worker
 cards and permission posture make dispatch visible without exposing authoring
 mechanics.
 
-The examples use the canonical `codewhale fleet` and `/fleet` spellings.
-`/pod` and `codewhale pod` remain accepted as compatibility aliases. On-disk
-paths, config keys, and the Workflow `--fleet` flag use the Fleet name.
+The examples use `codewhale fleet` and `/fleet`.
+On-disk paths, config keys, and the Workflow `--fleet` flag use the Fleet name.
 
 ## 1. Prepare The Workspace
 

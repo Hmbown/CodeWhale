@@ -608,15 +608,17 @@ pub fn screen(app: &mut App, target: ScreenMode, arg: Option<&str>) -> CommandRe
     CommandResult::action(AppAction::SetScreenMode(target))
 }
 
-/// Place the work rail or pick its panel.
+/// Place the workbar or pick its panel.
 ///
-/// `/rail top|left|right|off` sets placement; `/rail tasks|agents|context|
-/// pinned` picks the panel. The two are orthogonal: where the rail sits and
-/// what it shows. `/sidebar` remains registered as the alias users know.
-/// Bare `/rail` reports the rail's *actual* rendered state — never a claim
-/// about a surface that cannot render.
+/// `/workbar bottom|top|left|right|off` sets placement; `/workbar
+/// tasks|agents|context|pinned` picks the panel. The two are orthogonal:
+/// where the workbar sits and what it shows. `/rail` and `/sidebar` remain
+/// registered as the aliases users know.
+/// Bare `/workbar` reports the workbar's *actual* rendered state — never a
+/// claim about a surface that cannot render.
 pub fn sidebar(app: &mut App, arg: Option<&str>) -> CommandResult {
-    const USAGE: &str = "Usage: /rail [top|left|right|off|tasks|agents|context|pinned] [--save]";
+    const USAGE: &str =
+        "Usage: /workbar [bottom|top|left|right|off|tasks|agents|context|pinned] [--save]";
     let raw = arg.map(str::trim).unwrap_or("");
     let mut tokens = raw.split_whitespace().collect::<Vec<_>>();
     let persist = matches!(tokens.last(), Some(&"--save" | &"-s"));
@@ -628,8 +630,8 @@ pub fn sidebar(app: &mut App, arg: Option<&str>) -> CommandResult {
         [] => return CommandResult::message(rail_status_message(app)),
         [value] => {
             let value = value.to_ascii_lowercase();
-            // Legacy focus words map onto the closest rail concept so muscle
-            // memory keeps working: "on" restores the default bottom rail,
+            // Legacy focus words map onto the closest workbar concept so muscle
+            // memory keeps working: "on" restores the default bottom workbar,
             // "off" hides it, panel names select panels.
             let placement = match value.as_str() {
                 "top" => Some(crate::tui::work_surface::WorkSurfacePlacement::Top),
@@ -694,26 +696,26 @@ pub fn sidebar(app: &mut App, arg: Option<&str>) -> CommandResult {
     CommandResult::message(rail_status_message(app))
 }
 
-/// Truthful rail readout: the placement and panel that actually render, with
-/// the narrow-terminal fallback and an empty-Tasks collapse spelled out.
-/// Never claims a panel is visible when no rail area was produced.
+/// Truthful workbar readout: the placement and panel that actually render,
+/// with the narrow-terminal fallback and an empty-Tasks collapse spelled out.
+/// Never claims a panel is visible when no workbar area was produced.
 fn rail_status_message(app: &App) -> String {
     use crate::tui::work_surface::{RailPanel, WorkSurfacePlacement};
 
     let placement = app.work_surface.placement;
     if placement == WorkSurfacePlacement::Off {
-        return "Rail is off — no panel renders (/rail bottom|top|left|right to show it)"
+        return "Workbar is off — no panel renders (/workbar bottom|top|left|right to show it)"
             .to_string();
     }
     let panel = app.work_surface.panel;
     let mut message = format!(
-        "Rail: {} placement, {} panel",
+        "Workbar: {} placement, {} panel",
         placement.as_setting(),
         panel.title()
     );
     let effective = app.work_surface.effective_placement();
     if effective != placement && effective == WorkSurfacePlacement::Top {
-        message.push_str(" — side rails need a wider terminal, showing top for now");
+        message.push_str(" — side placements need a wider terminal, showing top for now");
     }
     if app.work_surface.last_area.is_none() {
         if panel == RailPanel::Tasks {
@@ -1939,72 +1941,6 @@ fn live_route_setting_subject(key: &str) -> Option<MessageId> {
     }
 }
 
-/// Apply the canonical theme picker's compound theme + ocean-treatment state.
-///
-/// Preview and rollback update both live fields through the same per-setting
-/// owner used by `/config`. A save validates the pair before any live mutation,
-/// then persists both fields inside one [`Settings::transact`] critical section
-/// so Deepsea cannot survive on disk with only half of its selection.
-pub fn set_theme_selection(
-    app: &mut App,
-    theme: &str,
-    ocean_treatment: &str,
-    persist: bool,
-) -> CommandResult {
-    let mut candidate = match Settings::load_persisted() {
-        Ok(settings) => settings,
-        Err(error) if !persist => {
-            app.status_message = Some(format!(
-                "Settings unavailable; applying session-only theme override ({error})"
-            ));
-            Settings::default()
-        }
-        Err(error) => return CommandResult::error(format!("Failed to load settings: {error}")),
-    };
-    if let Err(error) = candidate.set("theme", theme) {
-        return CommandResult::error(error.to_string());
-    }
-    if let Err(error) = candidate.set("ocean_treatment", ocean_treatment) {
-        return CommandResult::error(error.to_string());
-    }
-    let normalized_theme = candidate.theme.clone();
-    let normalized_treatment = candidate.ocean_treatment.clone();
-
-    // Resolve/apply the theme first: custom themes can fail resolution even
-    // after their selector syntax validates, and treatment must not change in
-    // that case. The treatment value has already passed Settings validation.
-    let theme_result = set_config_value(app, "theme", &normalized_theme, false);
-    if theme_result.is_error {
-        return theme_result;
-    }
-    let treatment_result = set_config_value(app, "ocean_treatment", &normalized_treatment, false);
-    if treatment_result.is_error {
-        return treatment_result;
-    }
-
-    if persist
-        && let Err(error) = Settings::transact(|settings| {
-            settings.set("theme", &normalized_theme)?;
-            settings.set("ocean_treatment", &normalized_treatment)
-        })
-    {
-        return CommandResult::error(format!("Failed to save: {error}"));
-    }
-
-    CommandResult {
-        message: Some(format!(
-            "theme = {normalized_theme}, ocean_treatment = {normalized_treatment} ({})",
-            if persist {
-                "saved"
-            } else {
-                "session only, add --save to persist"
-            }
-        )),
-        action: theme_result.action.or(treatment_result.action),
-        is_error: false,
-    }
-}
-
 /// Modify a setting at runtime
 pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) -> CommandResult {
     let key = key.to_lowercase();
@@ -2553,11 +2489,6 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
             app.fancy_animations = effective_settings.fancy_animations;
             app.needs_redraw = true;
         }
-        "ocean_treatment" | "treatment" | "background_treatment" => {
-            app.ocean_treatment =
-                crate::tui::ocean::OceanTreatment::parse(&settings.ocean_treatment);
-            app.needs_redraw = true;
-        }
         "focus_texture" | "texture" => {
             app.focus_texture =
                 crate::tui::focus_texture::FocusTextureMode::parse(&settings.focus_texture)
@@ -2915,6 +2846,26 @@ pub fn mode(app: &mut App, arg: Option<&str>) -> CommandResult {
     let Some(arg) = arg.filter(|value| !value.trim().is_empty()) else {
         return CommandResult::action(AppAction::OpenModePicker);
     };
+    // The legacy YOLO spellings are a one-way permission shorthand, not a
+    // mode: route them to the full-access compat path before parse folds
+    // them to Act.
+    if matches!(
+        arg.trim().to_ascii_lowercase().as_str(),
+        "yolo" | "4" | "bypass" | "bypass-permissions" | "bypasspermissions"
+    ) {
+        let (message, changed) = switch_yolo_compat_with_status(app);
+        if changed {
+            CommandResult::with_message_and_action(message, AppAction::ModeChanged(app.mode))
+        } else {
+            CommandResult::message(message)
+        }
+    } else {
+        mode_selection(app, arg)
+    }
+}
+
+/// `/mode <mode>` for the real modes (Plan/Act/Operate).
+fn mode_selection(app: &mut App, arg: &str) -> CommandResult {
     match AppMode::parse(arg) {
         Some(mode) => {
             let (message, changed) = switch_mode_with_status(app, mode);
@@ -2951,6 +2902,24 @@ fn switch_mode_with_status(app: &mut App, mode: AppMode) -> (String, bool) {
     }
 }
 
+/// Status for the legacy YOLO alias: user-facing copy says Act, because the
+/// alias is invisible Act + Full Access.
+fn switch_yolo_compat_with_status(app: &mut App) -> (String, bool) {
+    match app.select_yolo_compat() {
+        SettingSelection::Changed => (
+            format!("Switched to {} mode.", AppMode::Agent.display_name()),
+            true,
+        ),
+        SettingSelection::PersistedSame => {
+            (app.mode_startup_default_receipt(AppMode::Agent), false)
+        }
+        SettingSelection::Refused => (
+            app.setting_locked_message(MessageId::SettingSubjectMode),
+            false,
+        ),
+    }
+}
+
 /// `/theme [name]` — with no argument, open the interactive picker (arrow
 /// keys, live preview, Enter to persist, Esc to revert). With an argument,
 /// route through `set_config_value("theme", ...)` so the apply + save flow is
@@ -2966,6 +2935,9 @@ pub fn theme(app: &mut App, arg: Option<&str>) -> CommandResult {
             )),
             Err(error) => CommandResult::error(error),
         },
+        // `underwater` is an ordinary theme (aliases `deepsea`/`deep-sea`/
+        // `ombre` fold through the same normalizer); the painted ocean field
+        // is the theme itself, not a treatment beside it.
         Some(name) => set_config_value(app, "theme", name, true),
     }
 }
@@ -3613,7 +3585,7 @@ mod tests {
         app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Left;
         // A 60-column host is below the side-rail floor, so the effective
         // placement falls back to top; the status must say so rather than
-        // claim a left rail renders.
+        // claim a left workbar renders.
         let _ = crate::tui::work_surface::height(&mut app, 60, 24, u16::MAX);
 
         let result = sidebar(&mut app, None);
@@ -3636,10 +3608,10 @@ mod tests {
             crate::tui::work_surface::WorkSurfacePlacement::Off
         );
         let message = result.message.unwrap_or_default();
-        assert!(message.contains("Rail is off"), "got: {message}");
+        assert!(message.contains("Workbar is off"), "got: {message}");
         assert!(
-            !message.contains("Sidebar is visible"),
-            "the readout must never claim a dead surface renders: {message}"
+            !message.contains("Workbar is visible"),
+            "the readout must never claim a hidden surface renders: {message}"
         );
     }
 
@@ -3655,7 +3627,7 @@ mod tests {
                 .message
                 .as_deref()
                 .unwrap_or_default()
-                .contains("Usage: /rail")
+                .contains("Usage: /workbar")
         );
     }
 
@@ -3668,7 +3640,7 @@ mod tests {
         let result = mode(&mut app, Some("yolo"));
         // YOLO is invisible Act+Bypass shorthand — user-facing copy says Act.
         assert!(result.message.unwrap().contains("Switched to Act mode"));
-        assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Yolo)));
+        assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Agent)));
         assert!(app.allow_shell);
         assert!(app.trust_mode);
         assert!(app.yolo);
@@ -3703,9 +3675,9 @@ mod tests {
         assert!(result.is_error);
         assert_eq!(app.mode, AppMode::Operate);
         let result = mode(&mut app, Some("4"));
-        assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Yolo)));
-        // "4" still parses as the deprecated YOLO alias, which lands in Agent
+        // "4" still routes to the deprecated YOLO alias, which lands in Agent
         // mode with bypass approvals (M6 compat shim).
+        assert_eq!(result.action, Some(AppAction::ModeChanged(AppMode::Agent)));
         assert_eq!(app.mode, AppMode::Agent);
         assert!(app.yolo);
     }
@@ -4956,9 +4928,41 @@ context_window = 262144
     }
 
     #[test]
-    fn compound_theme_selection_updates_live_state_and_persists_one_pair_transaction() {
+    fn theme_command_underwater_alias_selects_the_underwater_theme() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let temp_root = env::temp_dir().join(format!(
-            "codewhale-tui-deepsea-selection-test-{}-{}",
+            "codewhale-tui-theme-underwater-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root).unwrap();
+        let _guard = EnvGuard::new(&temp_root);
+
+        let mut app = create_test_app();
+        for alias in ["underwater", "Deepsea", "deep-sea", "ombre"] {
+            let result = theme(&mut app, Some(alias));
+            assert!(!result.is_error, "{alias}: {:?}", result.message);
+            assert_eq!(
+                result.message.as_deref(),
+                Some("theme = underwater (saved)"),
+                "{alias}"
+            );
+            assert_eq!(app.theme_id, crate::palette::ThemeId::Underwater, "{alias}");
+            assert_eq!(app.ui_theme.name, "underwater", "{alias}");
+            assert!(
+                crate::tui::ocean::OceanRamp::for_theme(&app.ui_theme).is_some(),
+                "{alias}: the underwater theme owns the painted field"
+            );
+        }
+    }
+
+    #[test]
+    fn underwater_theme_selection_updates_live_state_and_persists_one_field() {
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-underwater-selection-test-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -4969,32 +4973,27 @@ context_window = 262144
         let _guard = EnvGuard::new(&temp_root);
         fs::write(
             temp_root.join(".deepseek").join("settings.toml"),
-            "theme = \"light\"\nocean_treatment = \"flat\"\nmax_input_history = 77\n",
+            "theme = \"light\"\nmax_input_history = 77\n",
         )
         .expect("seed settings");
 
         let mut app = create_test_app();
-        let result = set_theme_selection(&mut app, "dark", "deepsea", true);
+        let result = set_config_value(&mut app, "theme", "underwater", true);
 
         assert!(!result.is_error, "{:?}", result.message);
-        assert_eq!(app.theme_id, crate::palette::ThemeId::Whale);
-        assert_eq!(
-            app.ocean_treatment,
-            crate::tui::ocean::OceanTreatment::Deepsea
-        );
-        let persisted = Settings::load_persisted().expect("persisted compound selection");
-        assert_eq!(persisted.theme, "dark");
-        assert_eq!(persisted.ocean_treatment, "deepsea");
+        assert_eq!(app.theme_id, crate::palette::ThemeId::Underwater);
+        let persisted = Settings::load_persisted().expect("persisted selection");
+        assert_eq!(persisted.theme, "underwater");
         assert_eq!(
             persisted.max_input_history, 77,
-            "the compound transaction must not overwrite unrelated settings"
+            "the theme save must not overwrite unrelated settings"
         );
     }
 
     #[test]
-    fn compound_theme_selection_preflights_both_fields_before_live_mutation() {
+    fn invalid_theme_name_changes_nothing() {
         let temp_root = env::temp_dir().join(format!(
-            "codewhale-tui-deepsea-preflight-test-{}-{}",
+            "codewhale-tui-theme-preflight-test-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -5005,21 +5004,18 @@ context_window = 262144
         let _guard = EnvGuard::new(&temp_root);
         fs::write(
             temp_root.join(".deepseek").join("settings.toml"),
-            "theme = \"light\"\nocean_treatment = \"flat\"\n",
+            "theme = \"light\"\n",
         )
         .expect("seed settings");
 
         let mut app = create_test_app();
         let original_theme = app.theme_id;
-        let original_treatment = app.ocean_treatment;
-        let result = set_theme_selection(&mut app, "dark", "kelp", true);
+        let result = set_config_value(&mut app, "theme", "kelp", true);
 
         assert!(result.is_error);
         assert_eq!(app.theme_id, original_theme);
-        assert_eq!(app.ocean_treatment, original_treatment);
         let persisted = Settings::load_persisted().expect("unchanged persisted settings");
         assert_eq!(persisted.theme, "light");
-        assert_eq!(persisted.ocean_treatment, "flat");
     }
 
     #[test]
@@ -5051,8 +5047,37 @@ context_window = 262144
         assert_eq!(app.background_color_override, Some(explicit_base3));
         assert_eq!(app.ui_theme.surface_bg, explicit_base3);
         assert!(
+            crate::tui::ocean::OceanRamp::for_theme(&app.ui_theme).is_none(),
+            "only the underwater theme owns a painted field"
+        );
+    }
+
+    #[test]
+    fn underwater_theme_keeps_its_field_under_a_background_override() {
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-underwater-override-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(temp_root.join(".deepseek")).expect("settings dir");
+        let _guard = EnvGuard::new(&temp_root);
+
+        let mut app = create_test_app();
+        let custom = ratatui::style::Color::Rgb(0x1a, 0x1b, 0x26);
+        let background = set_config_value(&mut app, "background_color", "#1a1b26", false);
+        assert!(!background.is_error, "{:?}", background.message);
+
+        let preview = set_config_value(&mut app, "theme", "underwater", false);
+        assert!(!preview.is_error, "{:?}", preview.message);
+        assert_eq!(app.theme_id, crate::palette::ThemeId::Underwater);
+        assert_eq!(app.background_color_override, Some(custom));
+        assert_eq!(app.ui_theme.surface_bg, custom);
+        assert!(
             crate::tui::ocean::OceanRamp::for_theme(&app.ui_theme).is_some(),
-            "the explicit surface must retain Deepsea when previewing another theme"
+            "the underwater theme's field survives a background override"
         );
     }
 
@@ -5093,7 +5118,7 @@ context_window = 262144
         );
         assert_eq!(app.background_color_override, Some(custom));
         assert_eq!(app.ui_theme.surface_bg, custom);
-        assert!(crate::tui::ocean::OceanRamp::for_theme(&app.ui_theme).is_some());
+        assert!(crate::tui::ocean::OceanRamp::for_theme(&app.ui_theme).is_none());
 
         let saved_theme = set_config_value(&mut app, "theme", "dark", true);
         assert!(!saved_theme.is_error, "{:?}", saved_theme.message);

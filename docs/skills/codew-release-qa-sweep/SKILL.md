@@ -69,7 +69,7 @@ inputs, visible state, and side effects. Do not substitute a full-screen
 assertion harness for looking at and using the product.
 
 1. **Six-worker fanout liveness (#3216/#2211).** Spawn 6 sub-agents. Confirm
-   typing, render, cancel, and the sidebar stay live throughout, and that **Esc
+   typing, render, cancel, and the workbar stay live throughout, and that **Esc
    cancels mid-fanout** (prompt interrupt, not a wedged ~24s burst or freeze).
    For the Windows Terminal retest path from #3289, start in plan mode, add
    follow-up input to the plan, press Esc, switch to yolo/accept flow, trigger

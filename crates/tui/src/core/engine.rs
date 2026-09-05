@@ -2916,7 +2916,7 @@ impl Engine {
                         let _ = self
                             .tx_event
                             .send(Event::status(
-                                "Pod roster refreshed for subsequent turns".to_string(),
+                                "Fleet roster refreshed for subsequent turns".to_string(),
                             ))
                             .await;
                     }
@@ -2965,7 +2965,7 @@ impl Engine {
                                 tracing::info!(
                                     target: "subagent",
                                     finalized,
-                                    "finalized sub-agent pod for closed session"
+                                    "finalized sub-agent fleet for closed session"
                                 );
                             }
                         }
@@ -4436,7 +4436,6 @@ impl Engine {
                 .with_locale_tag(route.locale_tag.clone())
                 .with_role_models(route.role_models.clone())
                 .with_api_config((*route.api_config).clone())
-                .with_fleet_roster(route.fleet_roster.clone())
                 .with_auto_model(route.auto_model)
                 .with_reasoning_effort(route.reasoning_effort.clone(), route.reasoning_effort_auto)
                 .with_agent_tool_surface_options(
@@ -4450,6 +4449,7 @@ impl Engine {
                 .with_parent_completion_tx(self.tx_subagent_completion.clone())
                 .with_runtime_cost_owner(self.config.compaction.runtime_cost_owner.as_deref())
                 .with_parent_mode(input_policy.mode)
+                .with_approval_receipt_store(self.approval_receipt_store.clone())
                 .with_permission_posture(
                     self.session.approval_mode,
                     Arc::clone(&self.shared_auto_review_policy),
@@ -4521,17 +4521,10 @@ impl Engine {
         // which is not necessarily the installed one under auto routing.
         let capability = route.capability_profile();
         let always_load = self.config.tools_always_load.clone();
-        let bypass = input_policy.auto_approve
-            || input_policy.approval_mode == crate::tui::approval::ApprovalMode::Bypass;
-        let catalog_mode = if bypass {
-            AppMode::Yolo
-        } else {
-            input_policy.mode
-        };
         let mut catalog = build_model_tool_catalog_with_surface(
             tool_registry.to_api_tools_with_cache(true),
             mcp_tools,
-            catalog_mode,
+            input_policy.mode,
             &always_load,
             capability.tool_surface_budget,
         );
@@ -4747,7 +4740,7 @@ impl Engine {
             &content,
             allow_shell,
             trust_mode,
-            mode == AppMode::Yolo || auto_approve,
+            auto_approve,
             approval_mode,
         );
         let prompt_context = NextTurnPromptContext::for_planned_turn(
@@ -5067,7 +5060,6 @@ impl Engine {
                     api_config: route_api_config,
                     locale_tag: self.config.locale_tag.clone(),
                     role_models: self.subagent_role_models(),
-                    fleet_roster: self.config.fleet_roster.clone(),
                     auto_model,
                     reasoning_effort: self.session.reasoning_effort.clone(),
                     reasoning_effort_auto: self.session.reasoning_effort_auto,
@@ -5847,7 +5839,7 @@ impl Engine {
             mode,
             self.session.allow_shell,
             self.session.trust_mode,
-            mode == AppMode::Yolo || auto_approve,
+            auto_approve,
             self.session.approval_mode,
         );
         let route = TurnRouteContext {
@@ -5859,7 +5851,6 @@ impl Engine {
             api_config: Box::new(self.api_config.clone()),
             locale_tag: self.config.locale_tag.clone(),
             role_models: self.subagent_role_models(),
-            fleet_roster: self.config.fleet_roster.clone(),
             auto_model: self.session.auto_model,
             reasoning_effort: self.session.reasoning_effort.clone(),
             reasoning_effort_auto: self.session.reasoning_effort_auto,
@@ -5889,7 +5880,6 @@ impl Engine {
         .with_locale_tag(self.config.locale_tag.clone())
         .with_role_models(self.subagent_role_models())
         .with_api_config(self.api_config.clone())
-        .with_fleet_roster(self.config.fleet_roster.clone())
         .with_auto_model(self.session.auto_model)
         .with_reasoning_effort(
             self.session.reasoning_effort.clone(),
@@ -5904,6 +5894,7 @@ impl Engine {
         .with_parent_completion_tx(self.tx_subagent_completion.clone())
         .with_runtime_cost_owner(self.config.compaction.runtime_cost_owner.as_deref())
         .with_parent_mode(mode)
+        .with_approval_receipt_store(self.approval_receipt_store.clone())
         .with_permission_posture(
             self.session.approval_mode,
             Arc::clone(&self.shared_auto_review_policy),
@@ -7543,7 +7534,6 @@ pub(crate) struct TurnRouteContext {
     pub(crate) api_config: Box<crate::config::Config>,
     pub(crate) locale_tag: String,
     pub(crate) role_models: HashMap<String, String>,
-    pub(crate) fleet_roster: Arc<crate::fleet::roster::FleetRoster>,
     pub(crate) auto_model: bool,
     pub(crate) reasoning_effort: Option<String>,
     pub(crate) reasoning_effort_auto: bool,

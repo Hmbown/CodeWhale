@@ -4780,7 +4780,7 @@ impl ToolSpec for BashTool {
             }
             if !persistent_services_enabled_for(context) {
                 return Err(ToolError::not_available(
-                    "persistent background services (persist:true) are only available on Unix in the real headless `codewhale exec` host under an explicit danger-full-access / full shell authority. They are rejected in interactive sessions, desktop/app-server hosts, Pod/sub-agents, restricted or external sandboxes, and TTY/interactive/stdin modes.",
+                    "persistent background services (persist:true) are only available on Unix in the real headless `codewhale exec` host under an explicit danger-full-access / full shell authority. They are rejected in interactive sessions, desktop/app-server hosts, Fleet/sub-agents, restricted or external sandboxes, and TTY/interactive/stdin modes.",
                 ));
             }
         }

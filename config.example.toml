@@ -126,7 +126,7 @@ check_interval_hours = 24
 # ─────────────────────────────────────────────────────────────────────────────────
 # Hotbar slots (#2061 / #2064)
 # ─────────────────────────────────────────────────────────────────────────────────
-# Optional 1-8 sidebar hotbar bindings. Since #3807 a missing `hotbar` key
+# Optional 1-8 workbar hotbar bindings. Since #3807 a missing `hotbar` key
 # renders NO bar — the Hotbar is hidden until you configure [[hotbar]]
 # tables here (or via `/hotbar`). An explicit `hotbar = []` also disables it.
 #
@@ -134,7 +134,7 @@ check_interval_hours = 24
 # and unknown actions are preserved so the UI can show a disabled entry.
 # Slash commands can be bound as slash.<name>, for example slash.workflow.
 # `/hotbar on` writes the default slots: slash.workflow, slash.goal, slash.auto,
-# then Plan/Work/Operate, palette, and sidebar. Commands that require arguments
+# then Plan/Work/Operate, palette, and workbar toggle. Commands that require arguments
 # pre-fill the composer instead of running incomplete.
 #
 # [[hotbar]]
@@ -994,11 +994,9 @@ max_subagents = 10 # optional (default 64, clamped to 1-128)
 # ─────────────────────────────────────────────────────────────────────────────────
 # Enables automatic claim-of-done verifier preview once the runtime trigger is
 # active. Manual `run_verifiers` remains available even when this is false.
-# The shipped policy maps pass/partial/fail to hunted/wounded/escaped.
 #
 # [verifier]
 # enabled = false
-# verdict_policy = "hunt"
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Advisor / Watcher (#3982)
@@ -1188,26 +1186,6 @@ exponential_base = 2.0
 # [workshop.per_tool_thresholds]
 # Bash = 2048          # shell output synthesised aggressively
 # Web  = 8192          # web results can be large; give them more room
-
-# ─────────────────────────────────────────────────────────────────────────────────
-# Harness Profiles (preview schema; runtime consumption follows later)
-# ─────────────────────────────────────────────────────────────────────────────────
-# Harness profiles let future Codewhale runtime slices select model-specific
-# prompt, context, tool, and subagent posture. v0.9 parses, validates, and can
-# resolve profiles for tests/status plumbing, but normal Agent and Workflow
-# runs do not silently promote or mutate behavior from these profiles yet.
-#
-# [[harness_profiles]]
-# provider_route = "deepseek"
-# model_pattern = "deepseek-v4.*"
-#
-# [harness_profiles.posture]
-# kind = "cache-heavy"          # standard | cache-heavy | lean | custom
-# max_subagents = 10            # 0 means runtime default
-# prefer_codebase_search = false
-# compaction_strategy = "prefix-cache" # default | prefix-cache | aggressive
-# tool_surface = "full"              # full | read-only | auto
-# safety_posture = "standard"        # standard | strict | permissive
 
 # ─────────────────────────────────────────────────────────────────────────────────
 # Profile Example (for multiple environments)

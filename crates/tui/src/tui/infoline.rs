@@ -72,6 +72,8 @@ pub enum InfoSegmentId {
     Ttft,
     /// Output rate (`38 tok/s`).
     Rate,
+    /// Prompt cache hit percent (`cache 85%`).
+    Cache,
 }
 
 impl InfoSegmentId {
@@ -83,6 +85,7 @@ impl InfoSegmentId {
     pub fn shed_priority(self) -> u8 {
         match self {
             Self::Rate => 9,
+            Self::Cache => 8,
             Self::Ttft => 8,
             Self::OutputTokens => 7,
             Self::Cost => 6,
@@ -137,8 +140,9 @@ pub struct InfoLine<'a> {
     pub help_hint: &'a str,
     /// Segments in display order.
     pub segments: &'a [InfoSegment],
-    /// Actionable segment under the mouse. Only [`InfoSegmentId::Model`]
-    /// currently advertises hover feedback in the live shell.
+    /// Actionable segment under the mouse. [`InfoSegmentId::Model`] and
+    /// [`InfoSegmentId::Context`] advertise hover feedback in the live
+    /// shell; both own a click action (picker / inspector).
     pub hovered: Option<InfoSegmentId>,
     /// ASCII-safe / NO_COLOR mode: every glyph goes through
     /// [`glyphs::ascii_fallback`].
@@ -284,8 +288,11 @@ impl Widget for InfoLine<'_> {
                 );
                 x += join.width();
             }
-            let hovered =
-                segment.id == InfoSegmentId::Model && self.hovered == Some(InfoSegmentId::Model);
+            // Slice G global rule: every actionable segment brightens on
+            // hover. Model and Context own click actions; status-only
+            // facts never do.
+            let hovered = matches!(segment.id, InfoSegmentId::Model | InfoSegmentId::Context)
+                && self.hovered == Some(segment.id);
             let mut style = chrome(theme, segment.ink);
             if hovered {
                 style = style

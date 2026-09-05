@@ -372,6 +372,9 @@ pub(crate) fn switch_screen_mode(
 
     // Either way the screen changed underneath the app: repaint.
     app.needs_redraw = true;
+    // A rebuilt terminal drops sixel pixels with the old screen; forget the
+    // live image so the reconciler re-emits it onto the new one.
+    app.launch.sixel_emitted = None;
     if outcome.is_ok() {
         app.screen_mode = target;
         // Mouse capture is a per-screen answer (inline leaves selection to

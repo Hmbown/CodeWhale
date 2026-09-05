@@ -55,11 +55,15 @@ the legacy directory automatically.
 Anything that targets the DeepSeek provider API stays exactly as it was:
 
 - **Environment variables**: `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`,
-  `DEEPSEEK_MODEL`, `DEEPSEEK_PROVIDER`, `DEEPSEEK_PROFILE`, `DEEPSEEK_YOLO`,
+  `DEEPSEEK_MODEL`, `DEEPSEEK_PROVIDER`, `DEEPSEEK_PROFILE`,
   `DEEPSEEK_LOG_LEVEL`, plus the existing `DEEPSEEK_TUI_*` runtime knobs
   (`DEEPSEEK_TUI_BIN`, `DEEPSEEK_TUI_RELEASE_BASE_URL`, etc.). They're kept
   for backward compatibility; renaming them would break every shell rc on
   the planet.
+- **`DEEPSEEK_YOLO`**: now deprecated, but still read as an alias of
+  `CODEWHALE_YOLO` through 0.9.x so existing scripts keep working (when both
+  are set, `CODEWHALE_YOLO` wins). It is removed in 0.10 (#5443); use
+  `CODEWHALE_YOLO` in new scripts.
 - **Model IDs**: `deepseek-v4-pro`, `deepseek-v4-flash`, and the legacy
   aliases `deepseek-chat` and `deepseek-reasoner`.
 - **Hosts**: `api.deepseek.com` (global). The legacy typo host

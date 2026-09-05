@@ -1,4 +1,4 @@
-//! Operate: always-on pod operation matching landed CWC `OperateRecord`
+//! Operate: always-on fleet operation matching landed CWC `OperateRecord`
 //! (`Hmbown/cwc` `20de981`, PR #284).
 //!
 //! One schema for `cw · operate` and CWC `/operate`. Burn rate is optional

@@ -10,29 +10,28 @@ mod skills;
 
 pub(in crate::commands) use self::skills::run_skill_by_name;
 
-use crate::commands::traits::{Command, CommandGroup, FunctionCommand, RegisterCommand};
+use crate::commands::traits::{Command, CommandGroup, ContextualCommand};
 
 pub struct SkillsCommands;
 
 impl CommandGroup for SkillsCommands {
     fn commands(&self) -> &'static [Box<dyn Command>] {
         cached_command_list!(vec![
-            Box::new(FunctionCommand::new(
-                skills::SkillsCmd::info(),
-                skills::SkillsCmd::execute,
-            )),
-            Box::new(FunctionCommand::new(
-                skills::SkillCmd::info(),
-                skills::SkillCmd::execute,
-            )),
-            Box::new(FunctionCommand::new(
-                review::ReviewCmd::info(),
-                review::ReviewCmd::execute,
-            )),
-            Box::new(FunctionCommand::new(
-                restore::RestoreCmd::info(),
-                restore::RestoreCmd::execute,
-            )),
+            Box::new(
+                ContextualCommand::from_contract::<skills::SkillsCmd>()
+                    .expect("skills registration")
+            ),
+            Box::new(
+                ContextualCommand::from_contract::<skills::SkillCmd>().expect("skill registration")
+            ),
+            Box::new(
+                ContextualCommand::from_contract::<review::ReviewCmd>()
+                    .expect("review registration")
+            ),
+            Box::new(
+                ContextualCommand::from_contract::<restore::RestoreCmd>()
+                    .expect("restore registration")
+            ),
         ])
     }
 }

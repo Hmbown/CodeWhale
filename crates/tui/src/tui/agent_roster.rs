@@ -259,7 +259,7 @@ pub fn render_agent_roster(rows: &[AgentRosterRow], parent_label: &str) -> Strin
     if rows.is_empty() {
         return format!(
             "● {parent_label}\n\nNo agents have run in this session yet. \
-             Spawn one with the `agent` tool, or `/pod` to set up roles."
+             Spawn one with the `agent` tool, or `/fleet` to set up roles."
         );
     }
 

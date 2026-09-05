@@ -1,4 +1,5 @@
 import { DOC_TOPICS, REPO_DOCS_BASE, docTopicHref } from "./docs-map";
+import { PUBLIC_MEMBERSHIP_COPY } from "./content/membership";
 import { DISCORD_URL, REPO_URL } from "./i18n/links";
 import { IDENTITY_PHRASE, SITE_NAME, SITE_URL } from "./page-meta";
 
@@ -59,7 +60,7 @@ const EXTRA_PAGES: readonly { path: string; title: string; description: string }
   {
     path: "/pricing",
     title: "Pricing",
-    description: "The open-source runtime is free. Hosted membership billing is built but not for sale yet.",
+    description: PUBLIC_MEMBERSHIP_COPY.metadata.description.en,
   },
   {
     path: "/legal/terms",

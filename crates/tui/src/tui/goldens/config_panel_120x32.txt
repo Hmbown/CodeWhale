@@ -1,30 +1,30 @@
                                                                                                                         
    Config  ──────────────────────────────────────────────────────────────────────────────────────────────────────────── 
                                                                                                                         
-   Appearance   Models & providers   Fleet   Work   Tools & MCP   Trust   Motion   Advanced                             
-   Search: type to filter  (17/55)                                                                                      
+   Appearance   Models & providers   Work   Tools & MCP   Trust   Motion   Advanced                                     
+   Search: type to filter  (16/51)                                                                                      
   ❯ Display         │  Display                                                │Theme                                    
-                    │❯Theme                                 terminal    ‹ ›   │theme                                    
-                    │ Language                              auto        ‹ ›   │                                         
-                    │ Background                            (default)   ✎     │current   terminal                       
-                    │ Ocean treatment                       flat        ‹ ›   │saved     terminal                       
-                    │ Quiet transcript                      On          [x]   │startup   terminal                       
-                    │ Model reasoning in chat               Off         [ ]   │source    settings.toml                  
-                    │ Thinking Default Expanded             Off         [ ]   │scope     SAVED                          
-                    │ Thinking Preview Lines                2           ✎     │apply     applies on save                
-                    │ Reasoning background highlight        On          [x]   │kind      choice                         
-                    │ Help Expand Groups                    Off         [ ]   │available not observed this session      
-                    │ Pin Last Prompt                       On          [x]   │                                         
-                    │ Tool detail level                     Off         [ ]   │system | terminal | dark | light |       
-                    │ Inline file changes                   Full diff   ‹ ›   │grayscale | catppuccin-mocha |           
-                    │ Output pacing                         auto        ‹ ›   │tokyo-night | dracula | gruvbox-dark |   
-                    │ Cost currency                         usd         ‹ ›   │claude | matrix | solarized-light | uwu  
-                    │ Transcript spacing                    comfort...  ‹ ›   │Enter or click again: Enter opens        
-                    │ Tool cards                            compact     ‹ ›   │choices                                  
+                    │❯Theme                              terminal       ‹ ›   │theme                                    
+                    │ Language                           auto           ‹ ›   │                                         
+                    │ Background                         (default)      ✎     │current   terminal                       
+                    │ Quiet transcript                   On             [x]   │saved     terminal                       
+                    │ Model reasoning in chat            Off            [ ]   │startup   terminal                       
+                    │ Thinking Default Expanded          Off            [ ]   │source    settings.toml                  
+                    │ Thinking Preview Lines             2              ✎     │scope     SAVED                          
+                    │ Reasoning background highlight     On             [x]   │apply     applies on save                
+                    │ Help Expand Groups                 Off            [ ]   │kind      choice                         
+                    │ Pin Last Prompt                    On             [x]   │available not observed this session      
+                    │ Tool detail level                  Off            [ ]   │                                         
+                    │ Inline file changes                Full diff      ‹ ›   │system | terminal | underwater |         
+                    │ Output pacing                      auto           ‹ ›   │underwater-retro | dark | light |        
+                    │ Cost currency                      usd            ‹ ›   │grayscale | catppuccin-mocha |           
+                    │ Transcript spacing                 comfortable    ‹ ›   │tokyo-night | dracula | gruvbox-dark |   
+                    │ Tool cards                         compact        ‹ ›   │claude | matrix | solarized-light | uwu  
+                    │                                                         │Enter or click again: Enter opens        
+                    │                                                         │choices                                  
                     │                                                         │                                         
                     │                                                         │                                         
-                    │                                                         │                                         
-  system | terminal | dark | light | grayscale | catppuccin-mocha | tokyo-night | dracula | gruvbox-dark | claude |…    
+  system | terminal | underwater | underwater-retro | dark | light | grayscale | catppuccin-mocha | tokyo-night |…      
   Preview: ▶▶ ask · agent                                                                                               
   type=filter, Up/Down=select, Enter/e=edit, Esc/q=close                                                                
                                                                                                                         

@@ -15,20 +15,20 @@ prose > the recovered motion sketch (motion language) > `tideline-redesign.html`
 
 ## 1. What the three approved screens actually contain
 
-Cell-inventory read of the references (startup, work+pod, settings/appearance):
+Cell-inventory read of the references (startup, work+fleet, settings/appearance):
 
 - **Topbar (all three).** One row: `CODEWHALE` wordmark; contextual
-  segments (`run …`, `pod …`, `3/4 whales`, `model …`, `theme …`,
+  segments (`run …`, `fleet …`, `3/4 whales`, `model …`, `theme …`,
   `Settings / Appearance`, `folder …`); pinned right = `context NN% ▰▰▱▱▱` +
   full clock. Segment set varies per screen; brand/meter/clock never move.
 - **Startup.** Centered hero: "What are we working on?", one dim
   subtitle; `QUICK ACTIONS` band with 3 rows (icon · label · description ·
   command + `›`); a 4-column option strip (New worktree / Chat only / Theme /
   Help); whale-outline composer; footer with route · cost · keys.
-- **Work + Pod.** Left rail (RUNS / WHALES / POD / WORK / CONTEXT, then
+- **Work + Fleet.** Left rail (RUNS / WHALES / FLEET / WORK / CONTEXT, then
   help/settings, `«` collapse); receipt stream (user + assistant turns, a
   `├──/└──` pod-formation tree, state-marked receipt rows with timestamps and
-  receipt counts, an indented conclusion block, a legend row); `POD LEDGER`
+  receipt counts, an indented conclusion block, a legend row); `FLEET LEDGER`
   table (WHALE/ASSIGNMENT/STATE/ELAPSED/RECEIPTS/LAST UPDATE, selected row
   marker `▶`); composer; footer with cost and keys.
 - **Settings.** 3 panes: category rail (Appearance → Advanced + help/file/
@@ -59,17 +59,17 @@ constraints ~:928). The references collapse the bottom into one footer:
 |---|---|
 | header (`underwater::render_header`) | **Replaced** by `topbar::Topbar` (implemented here). Facts survive: mode/permission chips move to the footer activity segment; route/model stays a topbar segment. |
 | 0 work strip (`work_surface::render`) | **Extends** — becomes the rail's WORK group (owned by #5699; do not fight their files). |
-| 1 chat (+rail via `split_chat`) | **Extends** — receipt stream + pod ledger attach to the transcript column; rail reuses `work_surface::split_chat`. |
+| 1 chat (+rail via `split_chat`) | **Extends** — receipt stream + fleet ledger attach to the transcript column; rail reuses `work_surface::split_chat`. |
 | 2 workflow panel | **Kept unchanged** (drill-in above composer). |
 | 3 pending input preview | **Merged into the composer** as a one-row crumb above the input line — the reference shows queued messages as composer content, not a band. |
-| 4 background-work chip | **Deleted as a band**; the fact moves to the topbar `pod n/m` segment and the rail WORK group (one surface owns each fact). |
+| 4 background-work chip | **Deleted as a band**; the fact moves to the topbar `fleet n/m` segment and the rail WORK group (one surface owns each fact). |
 | 5 session boot receipt | **Deleted as a band**; boot lines become ordinary transcript receipts. |
 | 6 activity band | **Merged into the footer** (left half: phase chip + echolocation + cost). |
 | 7 composer | **Extends** — rounded border + `[↑]` hitbox; composer authority logic untouched. |
 | 8 identity band | **Merged into the footer** (right half: depth line + key legend). `phase_strip::render_identity` is the merge target; `render_footer` delegates today already. |
 
 Orphaned facts, each with exactly one home: cost/token ledger → footer;
-boot receipts → transcript; background-work → topbar pod segment + WORK rail;
+boot receipts → transcript; background-work → topbar fleet segment + WORK rail;
 permission/mode chips → footer activity segment; session metrics detail →
 `/cost` (the sketch's rule: the ledger row moves behind `/cost`).
 
@@ -108,13 +108,13 @@ where the `Rect` is stored for `mouse_ui` (existing pattern:
 
 | Component | What it does | States | Data source | Replaces | Owning file | Keys | Mouse hitbox | Golden name |
 |---|---|---|---|---|---|---|---|---|
-| Topbar | One-row status surface | per-screen segment set; hover; shed | `effective_route_identity_display()`, run/pod summaries, `context_budget` pct, injected clock | `underwater::render_header` | `tui/topbar.rs` ✅ | Tab⇄, Enter activate | brand/menu + per-segment rects → `viewport.last_topbar_hitboxes` | `topbar_{startup,work,settings}_{w}x{h}` ✅ |
+| Topbar | One-row status surface | per-screen segment set; hover; shed | `effective_route_identity_display()`, run/fleet summaries, `context_budget` pct, injected clock | `underwater::render_header` | `tui/topbar.rs` ✅ | Tab⇄, Enter activate | brand/menu + per-segment rects → `viewport.last_topbar_hitboxes` | `topbar_{startup,work,settings}_{w}x{h}` ✅ |
 | Hero (startup) | Centered prompt + subtitle | first-run vs returning | `LaunchState`, `workspace_session_count` | `render_launch_screen` | `tui/underwater.rs` | — | none | `startup_{w}x{h}` |
 | Quick actions | 3 command rows | selected/hover/disabled (no model) | `LaunchAction`, provider state | launch menu rows | `tui/underwater.rs` + `mouse_ui.rs:441` | ↑/↓, Enter, Esc | row rects (exists) | `startup_*` |
 | Option strip | 4 columns (worktree/chat/theme/help) | hover/selected | `LaunchState` | launch options row | same | Tab, Enter | 4 col rects | `startup_*` |
 | Rail | Left column, 5 groups + collapse | expanded/collapsed/focused | `WorkSurfaceState`, `subagent_cache`, run list, git status | work strip + `sidebar` remnants | `tui/work_surface/` (#5699 territory) | Tab, ↑/↓, Enter, `«` | `WorkHitbox{WorkRowId,row_y}` (exists) | `work_{w}x{h}` |
 | Receipt stream | Turn + receipt rows, pod tree | streaming/settled; selected | `history` cells, pod formation receipt | transcript rail | `tui/history.rs`, `work_surface/render` | ↑/↓, Enter inspect | row rects (transcript click path) | `work_*` |
-| Pod ledger | Whale table | row selected; state per whale | `subagent_cache` + worker runtime states | workflow-panel duplicate | `tui/work_surface/panels.rs` | ↑/↓, Enter/click inspect | row rects → inspector | `ledger_{w}x{h}` |
+| Fleet ledger | Whale table | row selected; state per whale | `subagent_cache` + worker runtime states | workflow-panel duplicate | `tui/work_surface/panels.rs` | ↑/↓, Enter/click inspect | row rects → inspector | `ledger_{w}x{h}` |
 | Theme list | 13 themes + motion toggles | selected/preview/applying | `ThemeId`, `ocean_treatment`, `low_motion`, `fancy_animations` | `theme_picker.rs` | `tui/theme_picker.rs`, `views/` | ↑/↓, Enter preview/apply | row rects | `settings_{w}x{h}` |
 | Live preview | Projection of a real screen in chosen theme | mirrors screen state; never a second store | same render fns, `TestBackend`-style projection into the pane | settings preview | `tui/views/` settings | — | none (passive) | `settings_*` |
 | Settings rail | 8 categories + meta rows | selected | `ConfigView` | `ConfigView` nav | `tui/views/mod.rs` | ↑/↓, Tab | category rects | `settings_*` |

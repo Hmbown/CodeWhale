@@ -1,0 +1,31 @@
+
+  theme · live preview ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+     1. System                            Follow terminal background (COLORFGBG / macOS appearance)
+     2. Terminal                          Inherit terminal colors fully (transparent surfaces, ANSI accents)
+   ▸ 3. Underwater                        The painted ocean field: ombre water, ambient life, the whale
+     4. Underwater Retro                  Flat phosphor-teal ocean: the legacy deepsea look, no ombre
+     5. Blue Stage                        Stage black, action blue, and one Signal Gold human beacon
+     6. Blue Stage Light                  Paper, cobalt action, and one Signal Gold human beacon
+     7. Grayscale                         Color-minimal high contrast
+     8. Catppuccin Mocha                  Soft pastels on warm dark
+     9. Tokyo Night                       Deep blue/violet night palette
+     10. Dracula                           Classic high-contrast purple
+     11. Gruvbox Dark                      Vintage warm earth tones
+     12. Claude                            Warm navy & coral
+     13. Matrix                            The Matrix films inspired theme
+     14. Solarized Light                   Solarized light — Light, calming palette on warm ivory — easy on the eyes
+     15. Uwu                               Soft kawaii night — sakura, mint, and peach
+
+
+
+
+
+
+
+
+
+   ↑/↓ preview  Enter save  Esc revert
+
+ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

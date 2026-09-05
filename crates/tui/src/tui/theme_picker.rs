@@ -2,16 +2,19 @@
 //!
 //! Built on [`crate::tui::settings_picker`]: navigation, filtering ownership,
 //! and transactional preview/commit/rollback live in the shared controller.
-//! Ocean-specific chrome (swatches, underwater surface, treatment copy) stays
-//! here so the framework contract does not flatten visual character.
+//! Theme-specific chrome (swatches, underwater surface) stays here so the
+//! framework contract does not flatten visual character.
 //!
 //! Semantics preserved from the pre-framework picker:
 //! - Up/Down emit a `ThemeSelectionUpdated{persist:false}` so the host swaps
-//!   `app.ui_theme` and the ocean treatment immediately and the whole TUI
-//!   re-paints under the modal.
+//!   `app.ui_theme` immediately and the whole TUI re-paints under the modal.
 //! - Enter persists (`persist:true`); Esc emits one more
-//!   `ThemeSelectionUpdated{persist:false}` to restore the exact theme +
-//!   treatment pair that was active when the picker opened.
+//!   `ThemeSelectionUpdated{persist:false}` to restore the exact theme that
+//!   was active when the picker opened.
+//!
+//! The option list is 1:1 with [`SELECTABLE_THEMES`] — one row per theme, no
+//! modifier rows. `underwater` is an ordinary row: the painted ocean field is
+//! the theme, not a treatment beside it.
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -28,7 +31,6 @@ use ratatui::{
 use crate::localization::{Locale, MessageId, tr};
 use crate::palette::{SELECTABLE_THEMES, ThemeId, UiTheme};
 use crate::tui::menu_style;
-use crate::tui::ocean::OceanTreatment;
 use crate::tui::settings_picker::{
     PickerNavResult, SettingAvailability, SettingOption, SettingValues, SettingsPickerController,
     SettingsPickerLayout, handle_nav_key,
@@ -40,18 +42,17 @@ use crate::tui::views::{
 
 pub struct ThemePickerView {
     controller: SettingsPickerController,
-    /// Exact opening state. The controller's option id is only a cursor; the
-    /// rollback owner needs both persisted fields because Deepsea is a compound
-    /// theme + treatment choice.
+    /// Exact opening state for Esc rollback.
     original_theme_name: String,
-    original_ocean_treatment: OceanTreatment,
+    /// Cursor index the controller settled on at open time (row 0 when the
+    /// persisted selector is not a compiled theme row). Enter without any
+    /// navigation commits the original name, never this fallback row.
+    opening_cursor: Option<usize>,
     /// Cached UiTheme for `ThemeId::System`, captured once at construction
     /// so the per-frame render doesn't re-invoke `UiTheme::detect()` (which
     /// reads `COLORFGBG`) on every keystroke.
     system_ui_theme: UiTheme,
     /// User-configured background applied on top of every named-theme preview.
-    /// Without carrying this into the picker, a customized Solarized Light
-    /// session would render Deepsea behind the modal but report Flat inside it.
     background_override: Option<Color>,
     row_hitboxes: RefCell<Vec<(Rect, usize)>>,
     last_mouse_selected: Option<usize>,
@@ -59,126 +60,26 @@ pub struct ThemePickerView {
     locale: Locale,
 }
 
-const DEEPSEA_OPTION_ID: &str = "deepsea";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ThemeSelection {
-    theme: ThemeId,
-    ocean_treatment: OceanTreatment,
-}
-
-impl ThemeSelection {
-    fn for_option_id(option_id: &str) -> Option<Self> {
-        if option_id == DEEPSEA_OPTION_ID {
-            return Some(Self {
-                theme: ThemeId::Whale,
-                ocean_treatment: OceanTreatment::Deepsea,
-            });
-        }
-        ThemeId::from_name(option_id).map(|theme| Self {
-            theme,
-            // Deepsea is explicit consent. Every ordinary theme selection,
-            // including Match Terminal, Dark, Light, and retained presets,
-            // returns to the ordinary terminal/theme-owned shell.
-            ocean_treatment: OceanTreatment::Flat,
-        })
-    }
-
-    const fn treatment_setting(self) -> &'static str {
-        match self.ocean_treatment {
-            OceanTreatment::Deepsea => "deepsea",
-            OceanTreatment::Flat => "flat",
-        }
-    }
-}
-
-fn initial_option_id(original_name: &str, original_treatment: OceanTreatment) -> String {
-    let normalized = original_name.trim().to_ascii_lowercase();
-    if original_treatment.is_deepsea() && ThemeId::from_name(&normalized) == Some(ThemeId::Whale) {
-        DEEPSEA_OPTION_ID.to_string()
-    } else {
-        normalized
-    }
-}
-
-fn theme_options(original_name: &str, original_treatment: OceanTreatment) -> Vec<SettingOption> {
-    let current = original_name.trim().to_ascii_lowercase();
-    let current_option = initial_option_id(original_name, original_treatment);
-    let mut options = Vec::with_capacity(SELECTABLE_THEMES.len() + 1);
-    for id in SELECTABLE_THEMES.iter().copied() {
-        let name = id.name();
-        options.push(
-            SettingOption::builder(name, id.display_name())
-                .summary(id.tagline())
-                .detail(id.tagline())
-                .help("Pick a theme with live preview")
-                .values(SettingValues::new(
-                    Cow::Owned(current.clone()),
-                    // A reset returns to the host-owned terminal surface,
-                    // not a detected palette that can repaint it.
-                    Cow::Borrowed("terminal"),
-                    Cow::Borrowed(name),
-                ))
-                .availability(SettingAvailability::Available)
-                .tab("themes")
-                .prefer_list_when_narrow(true)
-                .build(),
-        );
-        if id == ThemeId::WhaleLight {
-            options.push(
-                SettingOption::builder(DEEPSEA_OPTION_ID, "Deepsea")
-                    .summary("Ocean field + ambient life, opt-in")
-                    .detail("Paint the authored deep-blue water column behind the Dark palette")
-                    .help("Explicitly opt into the Deepsea surface")
-                    .values(SettingValues::new(
-                        Cow::Owned(current_option.clone()),
-                        Cow::Borrowed("terminal"),
-                        Cow::Borrowed(DEEPSEA_OPTION_ID),
-                    ))
-                    .availability(SettingAvailability::Available)
-                    .tab("themes")
-                    .prefer_list_when_narrow(true)
-                    .build(),
-            );
-        }
-    }
-    options
-}
-
 impl ThemePickerView {
     #[cfg(test)]
     #[must_use]
     pub fn new(original_name: String) -> Self {
-        Self::new_with_treatment(
-            original_name,
-            crate::tui::ocean::OceanTreatment::Deepsea,
-            Locale::En,
-        )
+        Self::new_with_background(original_name, Locale::En, None)
     }
 
-    #[cfg(test)]
-    #[must_use]
-    pub fn new_with_treatment(
+    fn new_with_background(
         original_name: String,
-        ocean_treatment: OceanTreatment,
-        locale: Locale,
-    ) -> Self {
-        Self::new_with_treatment_and_background(original_name, ocean_treatment, locale, None)
-    }
-
-    fn new_with_treatment_and_background(
-        original_name: String,
-        ocean_treatment: OceanTreatment,
         locale: Locale,
         background_override: Option<Color>,
     ) -> Self {
-        let original_option_id = initial_option_id(&original_name, ocean_treatment);
-        let options = theme_options(&original_name, ocean_treatment);
-        let controller = SettingsPickerController::new(options, original_option_id);
+        let normalized = original_name.trim().to_ascii_lowercase();
+        let options = theme_options(&normalized);
+        let controller = SettingsPickerController::new(options, normalized.clone());
+        let opening_cursor = controller.selected_source_index();
         Self {
             controller,
-            original_theme_name: original_name,
-            original_ocean_treatment: ocean_treatment,
+            original_theme_name: normalized,
+            opening_cursor,
             system_ui_theme: UiTheme::detect(),
             background_override,
             row_hitboxes: RefCell::new(Vec::new()),
@@ -191,28 +92,23 @@ impl ThemePickerView {
     /// Keeping the concrete picker out of that already-large future prevents
     /// transient modal values from inflating the main-thread stack frame.
     #[must_use]
-    pub fn boxed_with_treatment(
+    pub fn boxed(
         original_name: String,
-        ocean_treatment: OceanTreatment,
         locale: Locale,
         background_override: Option<Color>,
     ) -> Box<dyn ModalView> {
-        Box::new(Self::new_with_treatment_and_background(
+        Box::new(Self::new_with_background(
             original_name,
-            ocean_treatment,
             locale,
             background_override,
         ))
     }
 
-    fn current(&self) -> ThemeSelection {
+    fn current(&self) -> ThemeId {
         self.controller
             .selected_id()
-            .and_then(ThemeSelection::for_option_id)
-            .unwrap_or(ThemeSelection {
-                theme: ThemeId::System,
-                ocean_treatment: OceanTreatment::Flat,
-            })
+            .and_then(ThemeId::from_name)
+            .unwrap_or(ThemeId::System)
     }
 
     #[cfg(test)]
@@ -233,54 +129,32 @@ impl ThemePickerView {
     }
 
     fn preview_event(&self) -> ViewAction {
-        let selection = self.current();
         ViewAction::Emit(ViewEvent::ThemeSelectionUpdated {
-            theme: selection.theme.name().to_string(),
-            ocean_treatment: selection.treatment_setting().to_string(),
+            theme: self.current().name().to_string(),
             persist: false,
         })
     }
 
     fn commit_event(&self) -> ViewAction {
-        // A commit that never moved the cursor must not rewrite settings.
-        //
-        // `ocean_treatment` is independent of `theme` — `normalize_ocean_treatment`
-        // (settings.rs) accepts `deepsea` beside ANY theme name — but this picker's
-        // option list can only express `(theme, Flat)` per theme plus the single
-        // `(Whale, Deepsea)` row. So a persisted pair like `theme = "system"` +
-        // `ocean_treatment = "deepsea"` opens on the plain `system` row, whose
-        // option maps to Flat, and pressing Enter without navigating silently
-        // discarded the user's Deepsea. Treating an unmoved cursor as "nothing
-        // changed" keeps the unrepresentable pair intact; any real navigation
-        // still commits the selected option exactly as before.
-        let opened_on = initial_option_id(&self.original_theme_name, self.original_ocean_treatment);
-        if self.controller.selected_id() == Some(opened_on.as_str()) {
-            let ocean_treatment = match self.original_ocean_treatment {
-                OceanTreatment::Deepsea => "deepsea",
-                OceanTreatment::Flat => "flat",
-            };
+        // A commit that never moved the cursor must not rewrite settings:
+        // the persisted theme may be a custom:<name> selector this list
+        // cannot express as a row, and re-committing the cursor row would
+        // silently replace it.
+        if self.controller.selected_source_index() == self.opening_cursor {
             return ViewAction::EmitAndClose(ViewEvent::ThemeSelectionUpdated {
                 theme: self.original_theme_name.clone(),
-                ocean_treatment: ocean_treatment.to_string(),
                 persist: true,
             });
         }
-        let selection = self.current();
         ViewAction::EmitAndClose(ViewEvent::ThemeSelectionUpdated {
-            theme: selection.theme.name().to_string(),
-            ocean_treatment: selection.treatment_setting().to_string(),
+            theme: self.current().name().to_string(),
             persist: true,
         })
     }
 
     fn revert_event(&self) -> ViewAction {
-        let ocean_treatment = match self.original_ocean_treatment {
-            OceanTreatment::Deepsea => "deepsea",
-            OceanTreatment::Flat => "flat",
-        };
         ViewAction::EmitAndClose(ViewEvent::ThemeSelectionUpdated {
             theme: self.original_theme_name.clone(),
-            ocean_treatment: ocean_treatment.to_string(),
             persist: false,
         })
     }
@@ -305,6 +179,32 @@ impl ThemePickerView {
     }
 }
 
+fn theme_options(current_name: &str) -> Vec<SettingOption> {
+    let current = current_name.trim().to_ascii_lowercase();
+    SELECTABLE_THEMES
+        .iter()
+        .copied()
+        .map(|id| {
+            let name = id.name();
+            SettingOption::builder(name, id.display_name())
+                .summary(id.tagline())
+                .detail(id.tagline())
+                .help("Pick a theme with live preview")
+                .values(SettingValues::new(
+                    Cow::Owned(current.clone()),
+                    // A reset returns to the underwater default, not a
+                    // detected palette that can repaint it.
+                    Cow::Borrowed("underwater"),
+                    Cow::Borrowed(name),
+                ))
+                .availability(SettingAvailability::Available)
+                .tab("themes")
+                .prefer_list_when_narrow(true)
+                .build()
+        })
+        .collect()
+}
+
 impl ModalView for ThemePickerView {
     fn kind(&self) -> ModalKind {
         ModalKind::ThemePicker
@@ -316,6 +216,24 @@ impl ModalView for ThemePickerView {
 
     fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
         match mouse.kind {
+            MouseEventKind::Moved => {
+                // Hover-follow with live preview: the pointer highlights a
+                // row exactly like ↑/↓ does, so the surface behind the modal
+                // repaints on hover and a later Enter persists the hovered
+                // theme. Returning the preview event (not None) is what makes
+                // the highlight repaint immediately.
+                let hovered = self.row_hitboxes.borrow().iter().find_map(|(rect, idx)| {
+                    rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                        .then_some(*idx)
+                });
+                match hovered {
+                    Some(idx) if self.controller.selected_source_index() != Some(idx) => {
+                        let nav = self.controller.select_source_index(idx);
+                        self.action_from_nav(nav)
+                    }
+                    _ => ViewAction::None,
+                }
+            }
             MouseEventKind::ScrollUp => {
                 self.last_mouse_selected = None;
                 self.move_up()
@@ -364,7 +282,7 @@ impl ModalView for ThemePickerView {
         // after Enter. We keep the live `surface_bg` (not the shared ink) and
         // the bare `Clear` so the preview backdrop reads as intended.
         let current = self.current();
-        let live = self.ui_theme_for(current.theme);
+        let live = self.ui_theme_for(current);
         let inner =
             render_underwater_surface(area, buf, tr(self.locale, MessageId::ThemeSurfaceTitle));
 
@@ -381,20 +299,7 @@ impl ModalView for ThemePickerView {
         // Theme rows prefer list-when-narrow; layout still drives scroll math.
         let _layout = SettingsPickerLayout::resolve(content, 34, self.controller.selected_option());
 
-        let mut lines: Vec<Line> = Vec::with_capacity(self.controller.visible().len() + 3);
-        let treatment = if matches!(current.theme, ThemeId::Terminal) {
-            tr(self.locale, MessageId::ThemeTreatmentDeepseaUnavailable)
-        } else if current.ocean_treatment.is_flat()
-            || crate::tui::ocean::OceanRamp::for_theme(&live).is_none()
-        {
-            tr(self.locale, MessageId::ThemeTreatmentFlatActive)
-        } else {
-            tr(self.locale, MessageId::ThemeTreatmentDeepseaActive)
-        };
-        lines.push(Line::from(Span::styled(
-            treatment,
-            Style::default().fg(live.text_hint),
-        )));
+        let mut lines: Vec<Line> = Vec::with_capacity(self.controller.visible().len() + 2);
         lines.push(Line::from(""));
 
         let header_rows = lines.len();
@@ -433,11 +338,7 @@ impl ModalView for ThemePickerView {
                 .options()
                 .get(source_idx)
                 .expect("visible source index must reference an option");
-            let selection =
-                ThemeSelection::for_option_id(option.id.as_ref()).unwrap_or(ThemeSelection {
-                    theme: ThemeId::System,
-                    ocean_treatment: OceanTreatment::Flat,
-                });
+            let selection = ThemeId::from_name(option.id.as_ref()).unwrap_or(ThemeId::System);
             let is_selected = visible_idx == selected_visible;
             let row_style = if is_selected {
                 menu_style::theme_selected_row_style(&live)
@@ -461,36 +362,24 @@ impl ModalView for ThemePickerView {
 
             // 3-cell color swatch per row using the candidate theme's own
             // accent + panel + border colors so the picker doubles as a
-            // legend. Use the cached resolver so `System` doesn't repeat
-            // `UiTheme::detect()`.
-            let row_theme = self.ui_theme_for(selection.theme);
-            let swatch_colors = if selection.ocean_treatment.is_deepsea() {
-                crate::tui::ocean::OceanRamp::for_theme(&row_theme).map_or(
-                    [
-                        row_theme.surface_bg,
-                        row_theme.panel_bg,
-                        row_theme.status_working,
-                        row_theme.mode_yolo,
-                        row_theme.mode_plan,
-                    ],
-                    |ramp| {
-                        [
-                            ramp.surface,
-                            ramp.middle,
-                            ramp.deep,
-                            ramp.ambient,
-                            row_theme.status_working,
-                        ]
-                    },
-                )
-            } else {
-                [
+            // legend. The underwater row shows its water column; use the
+            // cached resolver so `System` doesn't repeat `UiTheme::detect()`.
+            let row_theme = self.ui_theme_for(selection);
+            let swatch_colors = match crate::tui::ocean::OceanRamp::for_theme(&row_theme) {
+                Some(ramp) => [
+                    ramp.surface,
+                    ramp.middle,
+                    ramp.deep,
+                    ramp.ambient,
+                    row_theme.status_working,
+                ],
+                None => [
                     row_theme.surface_bg,
                     row_theme.panel_bg,
                     row_theme.status_working,
                     row_theme.mode_yolo,
                     row_theme.mode_plan,
-                ]
+                ],
             };
             let swatch = swatch_colors
                 .into_iter()
@@ -526,49 +415,31 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    fn selected_values(action: &ViewAction) -> Option<(&str, &str, bool)> {
+    fn selected_values(action: &ViewAction) -> Option<(&str, bool)> {
         match action {
-            ViewAction::Emit(ViewEvent::ThemeSelectionUpdated {
-                theme,
-                ocean_treatment,
-                persist,
-            })
-            | ViewAction::EmitAndClose(ViewEvent::ThemeSelectionUpdated {
-                theme,
-                ocean_treatment,
-                persist,
-            }) => Some((theme.as_str(), ocean_treatment.as_str(), *persist)),
+            ViewAction::Emit(ViewEvent::ThemeSelectionUpdated { theme, persist })
+            | ViewAction::EmitAndClose(ViewEvent::ThemeSelectionUpdated { theme, persist }) => {
+                Some((theme.as_str(), *persist))
+            }
             _ => None,
         }
     }
 
     fn selected_name(action: &ViewAction) -> Option<&str> {
-        selected_values(action).map(|(theme, _, _)| theme)
+        selected_values(action).map(|(theme, _)| theme)
     }
 
     #[test]
     fn opens_at_persisted_theme() {
         let v = ThemePickerView::new("tokyo-night".to_string());
-        assert_eq!(
-            v.current(),
-            ThemeSelection {
-                theme: ThemeId::TokyoNight,
-                ocean_treatment: OceanTreatment::Flat,
-            }
-        );
+        assert_eq!(v.current(), ThemeId::TokyoNight);
     }
 
     #[test]
     fn unknown_persisted_name_falls_back_to_first_row() {
         let v = ThemePickerView::new("not-a-real-theme".to_string());
         assert_eq!(v.selected(), 0);
-        assert_eq!(
-            v.current(),
-            ThemeSelection {
-                theme: ThemeId::System,
-                ocean_treatment: OceanTreatment::Flat,
-            }
-        );
+        assert_eq!(v.current(), ThemeId::System);
     }
 
     #[test]
@@ -577,11 +448,11 @@ mod tests {
         let action = v.handle_key(key(KeyCode::Down));
         assert!(matches!(action, ViewAction::Emit(_)));
         assert_eq!(selected_name(&action), Some(ThemeId::Terminal.name()));
-        assert_eq!(selected_values(&action), Some(("terminal", "flat", false)));
+        assert_eq!(selected_values(&action), Some(("terminal", false)));
     }
 
     #[test]
-    fn mouse_wheel_previews_and_second_deepsea_click_commits_compound_choice() {
+    fn mouse_wheel_previews_and_second_underwater_click_commits() {
         let mut v = ThemePickerView::new("system".to_string());
         let wheel = v.handle_mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
@@ -595,19 +466,19 @@ mod tests {
         let area = Rect::new(0, 0, 100, 30);
         let mut buf = Buffer::empty(area);
         v.render(area, &mut buf);
-        let deepsea_source = v
+        let underwater_source = v
             .controller
             .options()
             .iter()
-            .position(|option| option.id.as_ref() == DEEPSEA_OPTION_ID)
-            .expect("Deepsea row");
+            .position(|option| option.id.as_ref() == ThemeId::Underwater.name())
+            .expect("Underwater row");
         let (rect, idx) = v
             .row_hitboxes
             .borrow()
             .iter()
             .copied()
-            .find(|(_, source)| *source == deepsea_source)
-            .expect("rendered Deepsea hitbox");
+            .find(|(_, source)| *source == underwater_source)
+            .expect("rendered Underwater hitbox");
         let click = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: rect.x,
@@ -617,10 +488,53 @@ mod tests {
         let preview = v.handle_mouse(click);
         assert!(matches!(preview, ViewAction::Emit(_)));
         assert_eq!(v.selected(), idx);
-        assert_eq!(selected_values(&preview), Some(("dark", "deepsea", false)));
+        assert_eq!(selected_values(&preview), Some(("underwater", false)));
         let commit = v.handle_mouse(click);
         assert!(matches!(commit, ViewAction::EmitAndClose(_)));
-        assert_eq!(selected_values(&commit), Some(("dark", "deepsea", true)));
+        assert_eq!(selected_values(&commit), Some(("underwater", true)));
+    }
+
+    #[test]
+    fn hover_moves_highlight_and_previews_without_persisting() {
+        let mut v = ThemePickerView::new("system".to_string());
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buf = Buffer::empty(area);
+        v.render(area, &mut buf);
+        let underwater_source = v
+            .controller
+            .options()
+            .iter()
+            .position(|option| option.id.as_ref() == ThemeId::Underwater.name())
+            .expect("Underwater row");
+        let (rect, idx) = v
+            .row_hitboxes
+            .borrow()
+            .iter()
+            .copied()
+            .find(|(_, source)| *source == underwater_source)
+            .expect("rendered Underwater hitbox");
+        let hover = MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        };
+        // Hovering a new row highlights it and previews (persist:false),
+        // exactly like keyboard navigation.
+        let action = v.handle_mouse(hover);
+        assert!(matches!(action, ViewAction::Emit(_)));
+        assert_eq!(selected_values(&action), Some(("underwater", false)));
+        assert_eq!(v.selected(), idx);
+        // Hovering the already-highlighted row is a no-op.
+        assert!(matches!(v.handle_mouse(hover), ViewAction::None));
+        // Hovering outside every row is a no-op.
+        let outside = MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 99,
+            row: 29,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(matches!(v.handle_mouse(outside), ViewAction::None));
     }
 
     #[test]
@@ -638,16 +552,11 @@ mod tests {
     #[test]
     fn enter_commits_with_persist_true() {
         let mut v = ThemePickerView::new("system".to_string());
-        v.handle_key(key(KeyCode::Char('7'))); // -> CatppuccinMocha
+        v.handle_key(key(KeyCode::Char('8'))); // -> CatppuccinMocha
         let action = v.handle_key(key(KeyCode::Enter));
         match action {
-            ViewAction::EmitAndClose(ViewEvent::ThemeSelectionUpdated {
-                theme,
-                ocean_treatment,
-                persist,
-            }) => {
+            ViewAction::EmitAndClose(ViewEvent::ThemeSelectionUpdated { theme, persist }) => {
                 assert_eq!(theme, ThemeId::CatppuccinMocha.name());
-                assert_eq!(ocean_treatment, "flat");
                 assert!(persist);
             }
             other => panic!("expected commit, got {other:?}"),
@@ -655,66 +564,41 @@ mod tests {
     }
 
     #[test]
-    fn enter_without_navigating_preserves_a_non_whale_deepsea_pair() {
-        // `ocean_treatment` is independent of `theme` (settings.rs
-        // normalize_ocean_treatment accepts deepsea beside any theme), and
-        // esc_reverts_to_exact_original_theme_and_treatment_pair already pins
-        // that Esc keeps such a pair. Enter used to destroy it: the picker can
-        // only express Deepsea paired with Whale, so (dracula, deepsea) opened
-        // on the plain `dracula` row and committing without navigating wrote
-        // flat, silently discarding a persisted preference. #5698 review
-        // finding 3.
-        let mut v = ThemePickerView::new_with_treatment(
-            "dracula".to_string(),
-            OceanTreatment::Deepsea,
-            Locale::En,
-        );
+    fn enter_without_navigating_preserves_a_custom_theme_selector() {
+        // The picker's rows are compiled themes only; a persisted
+        // custom:<name> selector opens on no row, and Enter without
+        // navigation must not replace it with a compiled row.
+        let mut v = ThemePickerView::new("custom:midnight".to_string());
         let action = v.handle_key(key(KeyCode::Enter));
         assert_eq!(
             selected_values(&action),
-            Some(("dracula", "deepsea", true)),
-            "committing without moving the cursor must not downgrade the treatment"
+            Some(("custom:midnight", true)),
+            "committing without moving the cursor must not replace the persisted selector"
         );
     }
 
     #[test]
     fn enter_after_navigating_away_still_commits_the_chosen_option() {
-        // The preservation above must not freeze the picker: a real move still
-        // commits the selected option's own pair.
-        let mut v = ThemePickerView::new_with_treatment(
-            "dracula".to_string(),
-            OceanTreatment::Deepsea,
-            Locale::En,
-        );
+        let mut v = ThemePickerView::new("dracula".to_string());
         v.handle_key(key(KeyCode::Down));
         let action = v.handle_key(key(KeyCode::Enter));
-        let (theme, treatment, persist) = selected_values(&action).expect("expected a commit");
+        let (theme, persist) = selected_values(&action).expect("expected a commit");
         assert_ne!(
             theme, "dracula",
             "navigation should have moved off the opening row"
         );
-        assert_eq!(treatment, "flat");
         assert!(persist);
     }
 
     #[test]
-    fn esc_reverts_to_exact_original_theme_and_treatment_pair() {
-        let mut v = ThemePickerView::new_with_treatment(
-            "dracula".to_string(),
-            OceanTreatment::Deepsea,
-            Locale::En,
-        );
+    fn esc_reverts_to_exact_original_theme() {
+        let mut v = ThemePickerView::new("dracula".to_string());
         v.handle_key(key(KeyCode::Up));
         v.handle_key(key(KeyCode::Up));
         let action = v.handle_key(key(KeyCode::Esc));
         match action {
-            ViewAction::EmitAndClose(ViewEvent::ThemeSelectionUpdated {
-                theme,
-                ocean_treatment,
-                persist,
-            }) => {
+            ViewAction::EmitAndClose(ViewEvent::ThemeSelectionUpdated { theme, persist }) => {
                 assert_eq!(theme, "dracula");
-                assert_eq!(ocean_treatment, "deepsea");
                 assert!(!persist);
             }
             other => panic!("expected revert, got {other:?}"),
@@ -722,11 +606,11 @@ mod tests {
     }
 
     #[test]
-    fn digit_jumps_to_deepsea_and_previews_compound_choice() {
+    fn digit_jumps_to_underwater_and_previews() {
         let mut v = ThemePickerView::new("system".to_string());
-        let action = v.handle_key(key(KeyCode::Char('5')));
-        // Deepsea follows System, Terminal, Dark, and Light.
-        assert_eq!(selected_values(&action), Some(("dark", "deepsea", false)));
+        let action = v.handle_key(key(KeyCode::Char('3')));
+        // Underwater follows System and Terminal.
+        assert_eq!(selected_values(&action), Some(("underwater", false)));
     }
 
     #[test]
@@ -760,71 +644,6 @@ mod tests {
     }
 
     #[test]
-    fn treatment_report_names_effective_appearance() {
-        let area = ratatui::layout::Rect::new(0, 0, 100, 30);
-
-        let flat = ThemePickerView::new_with_treatment(
-            "dark".to_string(),
-            crate::tui::ocean::OceanTreatment::Flat,
-            Locale::En,
-        );
-        let mut flat_buf = ratatui::buffer::Buffer::empty(area);
-        flat.render(area, &mut flat_buf);
-        let flat_text = flat_buf
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(flat_text.contains("Treatment  Flat — active"));
-
-        let terminal = ThemePickerView::new_with_treatment(
-            "terminal".to_string(),
-            crate::tui::ocean::OceanTreatment::Deepsea,
-            Locale::En,
-        );
-        let mut terminal_buf = ratatui::buffer::Buffer::empty(area);
-        terminal.render(area, &mut terminal_buf);
-        let terminal_text = terminal_buf
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(terminal_text.contains("Deepsea unavailable"));
-        assert!(terminal_text.contains("Terminal owns the background"));
-
-        let solarized = ThemePickerView::new_with_treatment(
-            "solarized-light".to_string(),
-            crate::tui::ocean::OceanTreatment::Deepsea,
-            Locale::En,
-        );
-        let mut solarized_buf = ratatui::buffer::Buffer::empty(area);
-        solarized.render(area, &mut solarized_buf);
-        let solarized_text = solarized_buf
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(solarized_text.contains("Treatment  Flat — active"));
-        assert!(!solarized_text.contains("Treatment  Deepsea — active"));
-
-        let deepsea = ThemePickerView::new_with_treatment(
-            "dark".to_string(),
-            OceanTreatment::Deepsea,
-            Locale::En,
-        );
-        let mut deepsea_buf = ratatui::buffer::Buffer::empty(area);
-        deepsea.render(area, &mut deepsea_buf);
-        let deepsea_text = deepsea_buf
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(deepsea_text.contains("Treatment  Deepsea — active"));
-        assert!(!deepsea_text.contains("Treatment  Flat — active"));
-        assert!(deepsea_text.contains("Deepsea"));
-    }
-
-    #[test]
     fn every_selectable_theme_previews_and_renders_through_the_same_surface() {
         let area = ratatui::layout::Rect::new(0, 0, 100, 32);
         let mut view = ThemePickerView::new("system".to_string());
@@ -837,16 +656,10 @@ mod tests {
                 .position(|option| option.id.as_ref() == expected.name())
                 .expect("selectable theme option");
             let _ = view.controller.select_source_index(index);
-            assert_eq!(
-                view.current(),
-                ThemeSelection {
-                    theme: expected,
-                    ocean_treatment: OceanTreatment::Flat,
-                }
-            );
+            assert_eq!(view.current(), expected);
             assert_eq!(
                 selected_values(&view.preview_event()),
-                Some((expected.name(), "flat", false))
+                Some((expected.name(), false))
             );
 
             let mut buf = ratatui::buffer::Buffer::empty(area);
@@ -861,7 +674,6 @@ mod tests {
                 "{} was not represented in its live preview surface",
                 expected.name()
             );
-            assert!(text.contains("Treatment"));
             assert!(text.contains("Enter save"));
         }
     }
@@ -950,21 +762,53 @@ mod tests {
         let v = ThemePickerView::new("dracula".to_string());
         assert_eq!(v.controller.original_id(), "dracula");
         assert_eq!(v.controller.selected_id(), Some("dracula"));
-        assert_eq!(v.controller.visible().len(), SELECTABLE_THEMES.len() + 1);
+        // One row per selectable theme: no modifier rows beside them.
+        assert_eq!(v.controller.visible().len(), SELECTABLE_THEMES.len());
+    }
+
+    /// Goldens are stored without cell padding: every row is right-trimmed
+    /// and trailing empty rows are dropped, so `git diff --check` stays
+    /// clean.
+    fn trim_golden_rows(text: &str) -> String {
+        let mut rows: Vec<&str> = text.lines().map(str::trim_end).collect();
+        while rows.last().is_some_and(|row| row.is_empty()) {
+            rows.pop();
+        }
+        let mut out = rows.join("\n");
+        out.push('\n');
+        out
+    }
+
+    /// Slice C: cell-exact goldens for the picker surface with the default
+    /// theme selected — 14 rows plus the preview footer. A visual change
+    /// that cannot show as a golden diff did not happen. Re-bless with
+    /// `CODEWHALE_BLESS_GOLDENS=1`.
+    #[test]
+    fn theme_picker_matches_goldens_at_blocker_sizes() {
+        use crate::tui::golden_harness::{assert_matches_golden, render_golden_text};
+        for (w, h) in [(80u16, 24u16), (120u16, 32u16)] {
+            let rendered = render_golden_text(w, h, |buf| {
+                ThemePickerView::new("underwater".to_string()).render(Rect::new(0, 0, w, h), buf);
+            });
+            assert_matches_golden(
+                &format!("theme_picker_{w}x{h}"),
+                &trim_golden_rows(&rendered),
+            );
+        }
     }
 }
 
 use unicode_width::UnicodeWidthStr as _TidelineWidth;
 
 // ---------------------------------------------------------------------------
-// Tideline theme list (spec §5a "Theme list"): the 13 selectable themes
+// Tideline theme list (spec §5a "Theme list"): the 14 selectable themes
 // (4 mode rows + 9 presets), the selected row boxed with ✓, and the MOTION
 // (OPTIONAL) toggles. Translation scaffolding in the topbar mold: pure,
 // deterministic, injected selection — Up/Down preview and Enter apply stay
 // the shared settings-picker controller's job at the landing slice; not
 // wired into `ui/frame.rs` (#5698 gate).
 
-/// The 13 themes in display order: 4 mode rows then 9 presets.
+/// The 14 themes in display order: 4 mode rows then 10 presets.
 #[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub fn tideline_theme_rows() -> Vec<crate::palette::ThemeId> {
     crate::palette::SELECTABLE_THEMES.to_vec()
@@ -974,7 +818,7 @@ pub fn tideline_theme_rows() -> Vec<crate::palette::ThemeId> {
 #[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub struct TidelineThemeList<'a> {
     pub theme: &'a UiTheme,
-    /// Selected row index into the 13-theme display order.
+    /// Selected row index into the 14-theme display order.
     pub selected: usize,
     /// `low_motion` setting (MOTION OPTIONAL toggle 1).
     pub low_motion: bool,
@@ -1036,7 +880,7 @@ fn tchrome(theme: &UiTheme, ink: crate::palette::ChromeInk) -> Style {
     crate::palette::chrome_style(theme, ink)
 }
 
-/// Paint the theme list: 13 rows (4 modes + 9 presets) with the selected
+/// Paint the theme list: 14 rows (4 modes + 10 presets) with the selected
 /// row boxed `[ ✓ Name ]`, then the MOTION (OPTIONAL) toggle rows.
 #[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub fn render_tideline_theme_list(area: Rect, buf: &mut Buffer, list: &TidelineThemeList<'_>) {

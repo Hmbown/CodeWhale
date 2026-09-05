@@ -125,10 +125,10 @@ pub(crate) fn apply_alt_0_shortcut(app: &mut App, modifiers: KeyModifiers) {
     if modifiers.contains(KeyModifiers::CONTROL) {
         if app.work_surface.placement == crate::tui::work_surface::WorkSurfacePlacement::Off {
             app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Bottom;
-            app.status_message = Some("Rail: bottom placement".to_string());
+            app.status_message = Some("Workbar: bottom placement".to_string());
         } else {
             app.work_surface.placement = crate::tui::work_surface::WorkSurfacePlacement::Off;
-            app.status_message = Some("Rail is off".to_string());
+            app.status_message = Some("Workbar is off".to_string());
         }
         app.needs_redraw = true;
     }
@@ -608,6 +608,24 @@ pub(crate) async fn apply_mode_update(
     if mode == AppMode::Operate {
         present_operate_board(app, config).await;
     }
+    if outcome.changed_live_state() {
+        sync_mode_update(app, engine_handle).await;
+        true
+    } else {
+        false
+    }
+}
+
+/// Apply the legacy YOLO shortcut (Alt+Y): a permission change, not a mode
+/// change. Same persist/report/sync contract as [`apply_mode_update`]; the
+/// startup default written is the mode actually installed (Act).
+pub(crate) async fn apply_yolo_compat_update(
+    app: &mut App,
+    engine_handle: &EngineHandle,
+    _config: &Config,
+) -> bool {
+    let outcome = app.select_yolo_compat();
+    app.report_mode_selection(AppMode::Agent, outcome);
     if outcome.changed_live_state() {
         sync_mode_update(app, engine_handle).await;
         true
@@ -1505,6 +1523,63 @@ pub(crate) async fn apply_command_result(
                     app.status_message = Some(format!("Could not cancel {agent_id}"));
                 }
             }
+            AppAction::FetchBalance => {
+                let provider = app.api_provider;
+                if !crate::config::provider_has_balance_api(provider) {
+                    app.add_message(HistoryCell::System {
+                        content: format!(
+                            "Balance check is not supported for {} yet. Check the provider dashboard for account balance details.",
+                            provider.display_name()
+                        ),
+                    });
+                } else {
+                    let api_key = config.deepseek_api_key().unwrap_or_default();
+                    if api_key.trim().is_empty() {
+                        app.add_message(HistoryCell::System {
+                            content: format!(
+                                "No API key configured for {}.",
+                                provider.display_name()
+                            ),
+                        });
+                    } else {
+                        let base_url = config.deepseek_base_url();
+                        match fetch_provider_balance(provider, &api_key, &base_url).await {
+                            Some(info) => {
+                                if let Ok(mut guard) = app.balance_cell.lock() {
+                                    *guard = Some(info.clone());
+                                }
+                                app.last_balance_fetch = Some(Instant::now());
+                                app.add_message(HistoryCell::System {
+                                    content: info.report(provider.display_name()),
+                                });
+                            }
+                            None => {
+                                let fallback = app
+                                    .balance_cell
+                                    .lock()
+                                    .ok()
+                                    .and_then(|guard| guard.clone())
+                                    .and_then(|info| {
+                                        info.chip_label().map(|amount| {
+                                            format!(
+                                                "Could not refresh {} balance; last known: {amount}",
+                                                provider.display_name()
+                                            )
+                                        })
+                                    });
+                                app.add_message(HistoryCell::System {
+                                    content: fallback.unwrap_or_else(|| {
+                                        format!(
+                                            "Could not fetch {} account balance. Check the provider dashboard.",
+                                            provider.display_name()
+                                        )
+                                    }),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
             AppAction::FetchModels => {
                 app.status_message = Some("Fetching models...".to_string());
                 match fetch_available_models(config).await {
@@ -1603,30 +1678,9 @@ pub(crate) async fn apply_command_result(
             }
             AppAction::SwitchProvider { provider, model } => {
                 switch_provider(app, engine_handle, config, provider, model).await;
-                // Refresh balance after provider switch.
-                let balance_cooldown_expired = app
-                    .last_balance_fetch
-                    .is_none_or(|t| t.elapsed() >= BALANCE_FETCH_COOLDOWN);
-                if balance_cooldown_expired && should_fetch_deepseek_balance(app) {
-                    let cell = app.balance_cell.clone();
-                    let api_key = config.deepseek_api_key().unwrap_or_default();
-                    let base_url = config.deepseek_base_url();
-                    if !api_key.is_empty() {
-                        app.last_balance_fetch = Some(Instant::now());
-                        tokio::spawn(async move {
-                            if let Some(info) = fetch_deepseek_balance(&api_key, &base_url).await
-                                && let Ok(mut guard) = cell.lock()
-                            {
-                                *guard = Some(info);
-                            }
-                        });
-                    }
-                } else {
-                    // Clear balance when switching to a non-DeepSeek provider.
-                    if let Ok(mut guard) = app.balance_cell.lock() {
-                        *guard = None;
-                    }
-                }
+                let api_key = config.deepseek_api_key().unwrap_or_default();
+                let base_url = config.deepseek_base_url();
+                schedule_balance_fetch(app, &api_key, &base_url, false);
             }
             AppAction::SwitchModelRoute { provider, model } => {
                 let previous_model = if app.auto_model {
@@ -1808,6 +1862,11 @@ pub(crate) async fn apply_command_result(
             }
             AppAction::OpenModelPicker => {
                 if app.view_stack.top_kind() != Some(ModalKind::ModelPicker) {
+                    // Slash `/model` and the picker share one grammar: the
+                    // composer must not keep a leftover `/model` buffer
+                    // (or a held paste-burst) under the picker query.
+                    app.clear_input();
+                    app.paste_burst.clear_after_explicit_paste();
                     app.view_stack
                         .push(crate::tui::model_picker::ModelPickerView::new(app, config));
                 }
@@ -1983,14 +2042,12 @@ pub(crate) async fn apply_command_result(
                     // Avoids re-reading settings.toml from disk on every
                     // `/theme` invocation.
                     let original = app.theme_id.name().to_string();
-                    app.view_stack.push_boxed(
-                        crate::tui::theme_picker::ThemePickerView::boxed_with_treatment(
+                    app.view_stack
+                        .push_boxed(crate::tui::theme_picker::ThemePickerView::boxed(
                             original,
-                            app.ocean_treatment,
                             app.ui_locale,
                             app.background_color_override,
-                        ),
-                    );
+                        ));
                 }
             }
             AppAction::OpenSkillsManager => {

@@ -40,21 +40,24 @@ header_items = ["tokens", "future_item"]
 }
 
 #[test]
-fn header_items_round_trip() {
-    let original = HeaderItemsTestConfig {
-        header_items: Some(vec![HeaderItem::Tokens]),
-    };
+fn header_items_scenario() {
+    // Scenario consolidation of: header_items_round_trip, header_items_are_opt_in_by_default
+    // from header_items_round_trip
+    {
+        let original = HeaderItemsTestConfig {
+            header_items: Some(vec![HeaderItem::Tokens]),
+        };
 
-    let serialized = toml::to_string(&original).expect("config should serialize");
-    let decoded: HeaderItemsTestConfig =
-        toml::from_str(&serialized).expect("serialized config should parse");
+        let serialized = toml::to_string(&original).expect("config should serialize");
+        let decoded: HeaderItemsTestConfig =
+            toml::from_str(&serialized).expect("serialized config should parse");
 
-    assert_eq!(decoded, original);
-}
-
-#[test]
-fn header_items_are_opt_in_by_default() {
-    assert!(HeaderItem::default_header().is_empty());
+        assert_eq!(decoded, original);
+    }
+    // from header_items_are_opt_in_by_default
+    {
+        assert!(HeaderItem::default_header().is_empty());
+    }
 }
 
 #[test]
@@ -278,40 +281,42 @@ mode = "coding-plan"
 }
 
 #[test]
-fn provider_context_window_loads_from_provider_table() -> Result<()> {
-    let config: Config = toml::from_str(
-        r#"
-provider = "openai"
+fn provider_context_scenario() -> Result<()> {
+    // Scenario consolidation of: provider_context_window_loads_from_provider_table, provider_context_window_zero_is_invalid
+    // from provider_context_window_loads_from_provider_table
+    {
+        let config: Config = toml::from_str(
+            r#"
+    provider = "openai"
 
-[providers.openai]
-model = "qwen3.7"
-context_window = 1000000
-"#,
-    )?;
+    [providers.openai]
+    model = "qwen3.7"
+    context_window = 1000000
+    "#,
+        )?;
 
-    config.validate()?;
-    assert_eq!(
-        config.context_window_for_provider_config(ApiProvider::Openai),
-        Some(1_000_000)
-    );
+        config.validate()?;
+        assert_eq!(
+            config.context_window_for_provider_config(ApiProvider::Openai),
+            Some(1_000_000)
+        );
+    }
+    // from provider_context_window_zero_is_invalid
+    {
+        let config: Config = toml::from_str(
+            r#"
+    [providers.openai]
+    context_window = 0
+    "#,
+        )
+        .expect("zero is syntactically valid TOML");
 
+        let err = config
+            .validate()
+            .expect_err("zero context_window should be rejected");
+        assert!(err.to_string().contains("providers.openai.context_window"));
+    }
     Ok(())
-}
-
-#[test]
-fn provider_context_window_zero_is_invalid() {
-    let config: Config = toml::from_str(
-        r#"
-[providers.openai]
-context_window = 0
-"#,
-    )
-    .expect("zero is syntactically valid TOML");
-
-    let err = config
-        .validate()
-        .expect_err("zero context_window should be rejected");
-    assert!(err.to_string().contains("providers.openai.context_window"));
 }
 
 #[test]
@@ -398,25 +403,28 @@ fn interactive_allow_shell_defaults_to_true_but_honors_explicit_opt_out() {
 }
 
 #[test]
-fn prompt_suggestion_defaults_to_false() {
-    let config = Config::default();
-    assert_eq!(
-        config.prompt_suggestion, None,
-        "default Config must not opt in"
-    );
-    assert!(
-        !config.prompt_suggestion_enabled(),
-        "prompt_suggestion must be opt-in (default off)"
-    );
-}
-
-#[test]
-fn prompt_suggestion_enabled_when_set_true() {
-    let config = Config {
-        prompt_suggestion: Some(true),
-        ..Default::default()
-    };
-    assert!(config.prompt_suggestion_enabled());
+fn prompt_suggestion_scenario() {
+    // Scenario consolidation of: prompt_suggestion_defaults_to_false, prompt_suggestion_enabled_when_set_true
+    // from prompt_suggestion_defaults_to_false
+    {
+        let config = Config::default();
+        assert_eq!(
+            config.prompt_suggestion, None,
+            "default Config must not opt in"
+        );
+        assert!(
+            !config.prompt_suggestion_enabled(),
+            "prompt_suggestion must be opt-in (default off)"
+        );
+    }
+    // from prompt_suggestion_enabled_when_set_true
+    {
+        let config = Config {
+            prompt_suggestion: Some(true),
+            ..Default::default()
+        };
+        assert!(config.prompt_suggestion_enabled());
+    }
 }
 
 #[test]
@@ -474,88 +482,88 @@ reason = "read_file is allowed"
 }
 
 #[test]
-fn auto_review_profile_overrides_base_policy() -> Result<()> {
-    let parsed: ConfigFile = toml::from_str(
-        r#"
-[[auto_review.block]]
-action_kind = "shell"
+fn auto_review_scenario() -> Result<()> {
+    // Scenario consolidation of: auto_review_profile_overrides_base_policy, auto_review_text_contains_fails_closed_instead_of_broadening_a_rule, auto_review_legacy_allow_kind_fails_closed_instead_of_widening, auto_review_config_rejects_invalid_rule_shapes
+    // from auto_review_profile_overrides_base_policy
+    {
+        let parsed: ConfigFile = toml::from_str(
+            r#"
+    [[auto_review.block]]
+    action_kind = "shell"
 
-[[profiles.strict.auto_review.block]]
-action_kind = "network"
-"#,
-    )?;
+    [[profiles.strict.auto_review.block]]
+    action_kind = "network"
+    "#,
+        )?;
 
-    let merged = apply_profile(parsed, Some("strict"))?;
-    let policy = merged.auto_review_policy();
+        let merged = apply_profile(parsed, Some("strict"))?;
+        let policy = merged.auto_review_policy();
 
-    assert_eq!(policy.block_rules.len(), 1);
-    assert_eq!(
-        policy.block_rules[0].action_kind,
-        Some(crate::tui::auto_review::ToolActionKind::External)
-    );
+        assert_eq!(policy.block_rules.len(), 1);
+        assert_eq!(
+            policy.block_rules[0].action_kind,
+            Some(crate::tui::auto_review::ToolActionKind::External)
+        );
+    }
+    // from auto_review_text_contains_fails_closed_instead_of_broadening_a_rule
+    {
+        let error = toml::from_str::<Config>(
+            r#"
+    [[auto_review.allow]]
+    tool = "exec_shell"
+    text_contains = "run tests"
+    "#,
+        )
+        .expect("shape parses")
+        .validate()
+        .expect_err("retired user-intent matcher must not disappear");
 
+        assert!(
+            error
+                .to_string()
+                .contains("user-intent matching was retired")
+        );
+    }
+    // from auto_review_legacy_allow_kind_fails_closed_instead_of_widening
+    {
+        let error = toml::from_str::<Config>(
+            r#"
+    [[auto_review.allow]]
+    action_kind = "git"
+    "#,
+        )
+        .expect("shape parses")
+        .validate()
+        .expect_err("narrow legacy allow kind must not widen to external");
+
+        assert!(error.to_string().contains("cannot safely widen"));
+    }
+    // from auto_review_config_rejects_invalid_rule_shapes
+    {
+        let invalid_kind: Config = toml::from_str(
+            r#"
+    [[auto_review.block]]
+    action_kind = "teleport"
+    "#,
+        )
+        .expect("parse config");
+        let err = invalid_kind.validate().expect_err("invalid kind");
+        assert!(
+            err.to_string()
+                .contains("Invalid auto_review.block[0].action_kind")
+        );
+
+        let global_allow: Config = toml::from_str(
+            r#"
+    [[auto_review.allow]]
+    reason = "too broad"
+    "#,
+        )
+        .expect("parse config");
+        let err = global_allow.validate().expect_err("missing matcher");
+        assert!(err.to_string().contains("set at least one of tool"));
+    }
     Ok(())
-}
-
-#[test]
-fn auto_review_text_contains_fails_closed_instead_of_broadening_a_rule() {
-    let error = toml::from_str::<Config>(
-        r#"
-[[auto_review.allow]]
-tool = "exec_shell"
-text_contains = "run tests"
-"#,
-    )
-    .expect("shape parses")
-    .validate()
-    .expect_err("retired user-intent matcher must not disappear");
-
-    assert!(
-        error
-            .to_string()
-            .contains("user-intent matching was retired")
-    );
-}
-
-#[test]
-fn auto_review_legacy_allow_kind_fails_closed_instead_of_widening() {
-    let error = toml::from_str::<Config>(
-        r#"
-[[auto_review.allow]]
-action_kind = "git"
-"#,
-    )
-    .expect("shape parses")
-    .validate()
-    .expect_err("narrow legacy allow kind must not widen to external");
-
-    assert!(error.to_string().contains("cannot safely widen"));
-}
-
-#[test]
-fn auto_review_config_rejects_invalid_rule_shapes() {
-    let invalid_kind: Config = toml::from_str(
-        r#"
-[[auto_review.block]]
-action_kind = "teleport"
-"#,
-    )
-    .expect("parse config");
-    let err = invalid_kind.validate().expect_err("invalid kind");
-    assert!(
-        err.to_string()
-            .contains("Invalid auto_review.block[0].action_kind")
-    );
-
-    let global_allow: Config = toml::from_str(
-        r#"
-[[auto_review.allow]]
-reason = "too broad"
-"#,
-    )
-    .expect("parse config");
-    let err = global_allow.validate().expect_err("missing matcher");
-    assert!(err.to_string().contains("set at least one of tool"));
 }
 
 #[test]
@@ -775,6 +783,38 @@ webhook_token = "secret-token"
 }
 
 #[test]
+fn tui_config_parses_control_socket_table() {
+    let raw = r#"
+[control_socket]
+enabled = true
+"#;
+    let parsed: ConfigFile = toml::from_str(raw).expect("parse control_socket config");
+
+    let socket = parsed
+        .base
+        .control_socket
+        .expect("control_socket table should parse");
+    assert!(socket.enabled);
+
+    // Off by default: a config without the table leaves the feature off.
+    let absent: ConfigFile =
+        toml::from_str("model = \"demo\"").expect("parse config without control_socket table");
+    assert!(absent.base.control_socket.is_none());
+
+    // An empty table stays off.
+    let empty: ConfigFile =
+        toml::from_str("[control_socket]").expect("parse empty control_socket table");
+    assert!(
+        !empty
+            .base
+            .control_socket
+            .expect("table should parse")
+            .enabled,
+        "empty table must leave the socket off"
+    );
+}
+
+#[test]
 fn tui_config_parses_hotbar_bindings() {
     let raw = r#"
 [[hotbar]]
@@ -858,59 +898,84 @@ fn profile_hotbar_override_replaces_entire_user_list() {
 }
 
 #[test]
-fn profile_without_hotbar_keeps_base_hotbar() {
-    let mut profiles = HashMap::new();
-    profiles.insert("work".to_string(), Config::default());
-    let config = ConfigFile {
-        base: Config {
-            hotbar: Some(vec![codewhale_config::HotbarBindingToml {
+fn profile_without_scenario() {
+    // Scenario consolidation of: profile_without_hotbar_keeps_base_hotbar, profile_without_context_does_not_disable_base_context
+    // from profile_without_hotbar_keeps_base_hotbar
+    {
+        let mut profiles = HashMap::new();
+        profiles.insert("work".to_string(), Config::default());
+        let config = ConfigFile {
+            base: Config {
+                hotbar: Some(vec![codewhale_config::HotbarBindingToml {
+                    slot: 1,
+                    action: "mode.plan".to_string(),
+                    label: None,
+                }]),
+                ..Config::default()
+            },
+            profiles: Some(profiles),
+        };
+
+        let merged = apply_profile(config, Some("work")).expect("profile");
+
+        assert_eq!(
+            merged.hotbar,
+            Some(vec![codewhale_config::HotbarBindingToml {
                 slot: 1,
                 action: "mode.plan".to_string(),
                 label: None,
-            }]),
-            ..Config::default()
-        },
-        profiles: Some(profiles),
-    };
+            }])
+        );
+    }
+    // from profile_without_context_does_not_disable_base_context
+    {
+        let mut profiles = HashMap::new();
+        profiles.insert("work".to_string(), Config::default());
+        let config = ConfigFile {
+            base: Config {
+                context: ContextConfig {
+                    enabled: Some(true),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            profiles: Some(profiles),
+        };
 
-    let merged = apply_profile(config, Some("work")).expect("profile");
-
-    assert_eq!(
-        merged.hotbar,
-        Some(vec![codewhale_config::HotbarBindingToml {
-            slot: 1,
-            action: "mode.plan".to_string(),
-            label: None,
-        }])
-    );
+        let merged = apply_profile(config, Some("work")).expect("profile");
+        assert_eq!(merged.context.enabled, Some(true));
+    }
 }
 
 #[test]
-fn update_config_defaults_to_enabled_without_uri() {
-    let config = Config::default();
-    assert_eq!(config.update, None);
-    assert_eq!(config.update_config(), UpdateConfig::default());
-    assert!(config.update_config().check_for_updates);
-    assert_eq!(config.update_config().update_uri(), None);
-}
+fn update_config_scenario() {
+    // Scenario consolidation of: update_config_defaults_to_enabled_without_uri, update_config_deserializes_disable_and_custom_uri
+    // from update_config_defaults_to_enabled_without_uri
+    {
+        let config = Config::default();
+        assert_eq!(config.update, None);
+        assert_eq!(config.update_config(), UpdateConfig::default());
+        assert!(config.update_config().check_for_updates);
+        assert_eq!(config.update_config().update_uri(), None);
+    }
+    // from update_config_deserializes_disable_and_custom_uri
+    {
+        let config: Config = toml::from_str(
+            r#"
+            [update]
+            check_for_updates = false
+            update_uri = "https://mirror.example/releases/latest"
+            "#,
+        )
+        .expect("update config");
 
-#[test]
-fn update_config_deserializes_disable_and_custom_uri() {
-    let config: Config = toml::from_str(
-        r#"
-        [update]
-        check_for_updates = false
-        update_uri = "https://mirror.example/releases/latest"
-        "#,
-    )
-    .expect("update config");
-
-    let update = config.update_config();
-    assert!(!update.check_for_updates);
-    assert_eq!(
-        update.update_uri(),
-        Some("https://mirror.example/releases/latest")
-    );
+        let update = config.update_config();
+        assert!(!update.check_for_updates);
+        assert_eq!(
+            update.update_uri(),
+            Some("https://mirror.example/releases/latest")
+        );
+    }
 }
 
 #[test]
@@ -933,36 +998,25 @@ fn network_policy_toml_maps_proxy_hosts_to_runtime_policy() {
 }
 
 #[test]
-fn verifier_config_parses_hunt_policy_and_merges_overrides() {
+fn verifier_config_parses_and_merges_overrides() {
     let config: Config = toml::from_str(
         r#"
         [verifier]
         enabled = true
-        verdict_policy = "hunt"
         "#,
     )
     .expect("parse verifier config");
 
     let verifier = config.verifier.expect("verifier table");
     assert!(verifier.enabled);
-    assert_eq!(
-        verifier.verdict_policy,
-        codewhale_config::VerifierVerdictPolicy::Hunt
-    );
 
     let merged = merge_config(
         Config {
-            verifier: Some(codewhale_config::VerifierConfigToml {
-                enabled: false,
-                verdict_policy: codewhale_config::VerifierVerdictPolicy::Hunt,
-            }),
+            verifier: Some(codewhale_config::VerifierConfigToml { enabled: false }),
             ..Config::default()
         },
         Config {
-            verifier: Some(codewhale_config::VerifierConfigToml {
-                enabled: true,
-                verdict_policy: codewhale_config::VerifierVerdictPolicy::Hunt,
-            }),
+            verifier: Some(codewhale_config::VerifierConfigToml { enabled: true }),
             ..Config::default()
         },
     );
@@ -1064,13 +1118,105 @@ fn window_title_config_parses_and_overlays() {
 }
 
 #[test]
-fn search_provider_defaults_to_firecrawl() {
-    assert_eq!(SearchProvider::default(), SearchProvider::Firecrawl);
-    assert_eq!(
-        SearchProvider::parse("fire-crawl"),
-        Some(SearchProvider::Firecrawl)
-    );
-    assert_eq!(SearchProvider::Firecrawl.as_str(), "firecrawl");
+fn search_provider_scenario() {
+    // Scenario consolidation of: search_provider_defaults_to_firecrawl, search_provider_resolution_reports_default_source, search_provider_resolution_reports_config_source, search_provider_resolution_reports_env_override_source, search_provider_env_override_accepts_baidu, search_provider_resolution_ignores_invalid_env_override
+    // from search_provider_defaults_to_firecrawl
+    {
+        assert_eq!(SearchProvider::default(), SearchProvider::Firecrawl);
+        assert_eq!(
+            SearchProvider::parse("fire-crawl"),
+            Some(SearchProvider::Firecrawl)
+        );
+        assert_eq!(SearchProvider::Firecrawl.as_str(), "firecrawl");
+    }
+    // from search_provider_resolution_reports_default_source
+    {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
+
+        let resolution = Config::default().search_provider_resolution();
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
+        assert_eq!(resolution.provider, SearchProvider::Firecrawl);
+        assert_eq!(resolution.source, SearchProviderSource::Default);
+    }
+    // from search_provider_resolution_reports_config_source
+    {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "tavily"
+            "#,
+        )
+        .expect("search config");
+
+        let resolution = config.search_provider_resolution();
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
+        assert_eq!(resolution.provider, SearchProvider::Tavily);
+        assert_eq!(resolution.source, SearchProviderSource::Config);
+    }
+    // from search_provider_resolution_reports_env_override_source
+    {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { env::set_var("DEEPSEEK_SEARCH_PROVIDER", "bocha") };
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "duckduckgo"
+            "#,
+        )
+        .expect("search config");
+
+        let resolution = config.search_provider_resolution();
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
+        assert_eq!(resolution.provider, SearchProvider::Bocha);
+        assert_eq!(resolution.source, SearchProviderSource::EnvOverride);
+    }
+    // from search_provider_env_override_accepts_baidu
+    {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { env::set_var("DEEPSEEK_SEARCH_PROVIDER", "baidu") };
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "duckduckgo"
+            "#,
+        )
+        .expect("search config");
+
+        let resolution = config.search_provider_resolution();
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
+        assert_eq!(resolution.provider, SearchProvider::Baidu);
+        assert_eq!(resolution.source, SearchProviderSource::EnvOverride);
+    }
+    // from search_provider_resolution_ignores_invalid_env_override
+    {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
+        unsafe { env::set_var("DEEPSEEK_SEARCH_PROVIDER", "not-a-provider") };
+        let config: Config = toml::from_str(
+            r#"
+            [search]
+            provider = "tavily"
+            "#,
+        )
+        .expect("search config");
+
+        let resolution = config.search_provider_resolution();
+
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
+        assert_eq!(resolution.provider, SearchProvider::Tavily);
+        assert_eq!(resolution.source, SearchProviderSource::Config);
+    }
 }
 
 #[test]
@@ -1243,59 +1389,6 @@ fn sofya_search_provider_parses_and_round_trips() {
 }
 
 #[test]
-fn search_provider_resolution_reports_default_source() {
-    let _guard = lock_test_env();
-    let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
-    unsafe { env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
-
-    let resolution = Config::default().search_provider_resolution();
-
-    unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
-    assert_eq!(resolution.provider, SearchProvider::Firecrawl);
-    assert_eq!(resolution.source, SearchProviderSource::Default);
-}
-
-#[test]
-fn search_provider_resolution_reports_config_source() {
-    let _guard = lock_test_env();
-    let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
-    unsafe { env::remove_var("DEEPSEEK_SEARCH_PROVIDER") };
-    let config: Config = toml::from_str(
-        r#"
-        [search]
-        provider = "tavily"
-        "#,
-    )
-    .expect("search config");
-
-    let resolution = config.search_provider_resolution();
-
-    unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
-    assert_eq!(resolution.provider, SearchProvider::Tavily);
-    assert_eq!(resolution.source, SearchProviderSource::Config);
-}
-
-#[test]
-fn search_provider_resolution_reports_env_override_source() {
-    let _guard = lock_test_env();
-    let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
-    unsafe { env::set_var("DEEPSEEK_SEARCH_PROVIDER", "bocha") };
-    let config: Config = toml::from_str(
-        r#"
-        [search]
-        provider = "duckduckgo"
-        "#,
-    )
-    .expect("search config");
-
-    let resolution = config.search_provider_resolution();
-
-    unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
-    assert_eq!(resolution.provider, SearchProvider::Bocha);
-    assert_eq!(resolution.source, SearchProviderSource::EnvOverride);
-}
-
-#[test]
 fn live_search_provider_update_preserves_environment_precedence() {
     let _guard = lock_test_env();
     let previous_codewhale = env::var_os("CODEWHALE_SEARCH_PROVIDER");
@@ -1363,39 +1456,94 @@ fn notification_condition_accepts_background_only_policy() {
 }
 
 #[test]
-fn search_provider_env_override_accepts_baidu() {
-    let _guard = lock_test_env();
-    let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
-    unsafe { env::set_var("DEEPSEEK_SEARCH_PROVIDER", "baidu") };
-    let config: Config = toml::from_str(
-        r#"
-        [search]
-        provider = "duckduckgo"
-        "#,
-    )
-    .expect("search config");
+fn apply_env_scenario() {
+    // Scenario consolidation of: apply_env_overrides_sets_search_api_key, apply_env_overrides_sets_search_base_url
+    // from apply_env_overrides_sets_search_api_key
+    {
+        let _guard = lock_test_env();
+        let prev = env::var_os("DEEPSEEK_SEARCH_API_KEY");
+        unsafe { env::set_var("DEEPSEEK_SEARCH_API_KEY", "search-env-key") };
+        let mut config = Config::default();
 
-    let resolution = config.search_provider_resolution();
+        apply_env_overrides(&mut config, ConfigEnvironmentPolicy::Runtime);
 
-    unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
-    assert_eq!(resolution.provider, SearchProvider::Baidu);
-    assert_eq!(resolution.source, SearchProviderSource::EnvOverride);
+        unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_API_KEY", prev) };
+        assert_eq!(
+            config.search.and_then(|search| search.api_key),
+            Some("search-env-key".to_string())
+        );
+    }
+    // from apply_env_overrides_sets_search_base_url
+    {
+        let _guard = lock_test_env();
+        let prev_codewhale = env::var_os("CODEWHALE_SEARCH_BASE_URL");
+        let prev_deepseek = env::var_os("DEEPSEEK_SEARCH_BASE_URL");
+        unsafe {
+            env::remove_var("CODEWHALE_SEARCH_BASE_URL");
+            env::set_var(
+                "DEEPSEEK_SEARCH_BASE_URL",
+                "https://search.internal.example/html/",
+            )
+        };
+        let mut config = Config::default();
+
+        apply_env_overrides(&mut config, ConfigEnvironmentPolicy::Runtime);
+
+        unsafe {
+            EnvGuard::restore_var("CODEWHALE_SEARCH_BASE_URL", prev_codewhale);
+            EnvGuard::restore_var("DEEPSEEK_SEARCH_BASE_URL", prev_deepseek);
+        }
+        assert_eq!(
+            config.search.and_then(|search| search.base_url),
+            Some("https://search.internal.example/html/".to_string())
+        );
+    }
 }
 
 #[test]
-fn apply_env_overrides_sets_search_api_key() {
+fn apply_env_overrides_yolo_prefers_codewhale_and_keeps_deepseek_alias() {
     let _guard = lock_test_env();
-    let prev = env::var_os("DEEPSEEK_SEARCH_API_KEY");
-    unsafe { env::set_var("DEEPSEEK_SEARCH_API_KEY", "search-env-key") };
+    let codewhale_prev = env::var_os("CODEWHALE_YOLO");
+    let deepseek_prev = env::var_os("DEEPSEEK_YOLO");
     let mut config = Config::default();
 
+    // Only the canonical name is set.
+    unsafe {
+        env::set_var("CODEWHALE_YOLO", "true");
+        env::remove_var("DEEPSEEK_YOLO");
+    }
     apply_env_overrides(&mut config, ConfigEnvironmentPolicy::Runtime);
-
-    unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_API_KEY", prev) };
     assert_eq!(
-        config.search.and_then(|search| search.api_key),
-        Some("search-env-key".to_string())
+        config.yolo,
+        Some(true),
+        "CODEWHALE_YOLO=true must enable the yolo posture"
     );
+
+    // Only the deprecated alias is set: it must keep working through 0.9.x.
+    unsafe {
+        env::remove_var("CODEWHALE_YOLO");
+        env::set_var("DEEPSEEK_YOLO", "true");
+    }
+    apply_env_overrides(&mut config, ConfigEnvironmentPolicy::Runtime);
+    assert_eq!(
+        config.yolo,
+        Some(true),
+        "DEEPSEEK_YOLO remains a read-only deprecated alias until 0.10 (#5443)"
+    );
+
+    // Both set: the canonical name wins.
+    unsafe { env::set_var("CODEWHALE_YOLO", "false") };
+    apply_env_overrides(&mut config, ConfigEnvironmentPolicy::Runtime);
+    assert_eq!(
+        config.yolo,
+        Some(false),
+        "CODEWHALE_YOLO must win over the deprecated DEEPSEEK_YOLO alias"
+    );
+
+    unsafe {
+        EnvGuard::restore_var("CODEWHALE_YOLO", codewhale_prev);
+        EnvGuard::restore_var("DEEPSEEK_YOLO", deepseek_prev);
+    }
 }
 
 #[test]
@@ -1477,32 +1625,6 @@ fn structural_config_load_keeps_safe_environment_overrides_but_omits_secret_valu
 }
 
 #[test]
-fn apply_env_overrides_sets_search_base_url() {
-    let _guard = lock_test_env();
-    let prev_codewhale = env::var_os("CODEWHALE_SEARCH_BASE_URL");
-    let prev_deepseek = env::var_os("DEEPSEEK_SEARCH_BASE_URL");
-    unsafe {
-        env::remove_var("CODEWHALE_SEARCH_BASE_URL");
-        env::set_var(
-            "DEEPSEEK_SEARCH_BASE_URL",
-            "https://search.internal.example/html/",
-        )
-    };
-    let mut config = Config::default();
-
-    apply_env_overrides(&mut config, ConfigEnvironmentPolicy::Runtime);
-
-    unsafe {
-        EnvGuard::restore_var("CODEWHALE_SEARCH_BASE_URL", prev_codewhale);
-        EnvGuard::restore_var("DEEPSEEK_SEARCH_BASE_URL", prev_deepseek);
-    }
-    assert_eq!(
-        config.search.and_then(|search| search.base_url),
-        Some("https://search.internal.example/html/".to_string())
-    );
-}
-
-#[test]
 fn codewhale_search_base_url_env_wins_over_legacy_alias() {
     let _guard = lock_test_env();
     let prev_codewhale = env::var_os("CODEWHALE_SEARCH_BASE_URL");
@@ -1556,26 +1678,6 @@ fn legacy_prefer_bwrap_env_remains_a_compatible_alias() {
     apply_env_overrides(&mut config, ConfigEnvironmentPolicy::Runtime);
 
     assert_eq!(config.prefer_bwrap, Some(true));
-}
-
-#[test]
-fn search_provider_resolution_ignores_invalid_env_override() {
-    let _guard = lock_test_env();
-    let prev = env::var_os("DEEPSEEK_SEARCH_PROVIDER");
-    unsafe { env::set_var("DEEPSEEK_SEARCH_PROVIDER", "not-a-provider") };
-    let config: Config = toml::from_str(
-        r#"
-        [search]
-        provider = "tavily"
-        "#,
-    )
-    .expect("search config");
-
-    let resolution = config.search_provider_resolution();
-
-    unsafe { EnvGuard::restore_var("DEEPSEEK_SEARCH_PROVIDER", prev) };
-    assert_eq!(resolution.provider, SearchProvider::Tavily);
-    assert_eq!(resolution.source, SearchProviderSource::Config);
 }
 
 struct EnvGuard {
@@ -2137,9 +2239,33 @@ impl EnvGuard {
 }
 
 #[test]
-fn max_subagents_defaults_to_default_limit() {
-    assert_eq!(Config::default().max_subagents(), DEFAULT_MAX_SUBAGENTS);
-    assert_eq!(DEFAULT_MAX_SUBAGENTS, 64);
+fn max_subagents_scenario() {
+    // Scenario consolidation of: max_subagents_defaults_to_default_limit, max_subagents_clamps_subagents_max_concurrent
+    // from max_subagents_defaults_to_default_limit
+    {
+        assert_eq!(Config::default().max_subagents(), DEFAULT_MAX_SUBAGENTS);
+        assert_eq!(DEFAULT_MAX_SUBAGENTS, 64);
+    }
+    // from max_subagents_clamps_subagents_max_concurrent
+    {
+        let low = Config {
+            subagents: Some(SubagentsConfig {
+                max_concurrent: Some(0),
+                ..SubagentsConfig::default()
+            }),
+            ..Config::default()
+        };
+        assert_eq!(low.max_subagents(), 1);
+
+        let high = Config {
+            subagents: Some(SubagentsConfig {
+                max_concurrent: Some(MAX_SUBAGENTS + 10),
+                ..SubagentsConfig::default()
+            }),
+            ..Config::default()
+        };
+        assert_eq!(high.max_subagents(), MAX_SUBAGENTS);
+    }
 }
 
 #[test]
@@ -2213,36 +2339,40 @@ fn subagent_budget_defaults_read_the_subagents_table() {
 }
 
 #[test]
-fn launch_concurrency_honors_deprecated_interactive_max_launch_alias() {
-    // The old TOML key `interactive_max_launch` still deserializes, via
-    // #[serde(rename)], into the hidden legacy field, and the resolver
-    // honors it when the new key is unset.
-    let cfg: SubagentsConfig =
-        toml::from_str("interactive_max_launch = 5").expect("parse legacy key");
-    assert_eq!(cfg.interactive_max_launch_legacy, Some(5));
-    assert_eq!(cfg.launch_concurrency, None);
+fn launch_concurrency_scenario() {
+    // Scenario consolidation of: launch_concurrency_honors_deprecated_interactive_max_launch_alias, launch_concurrency_new_key_wins_over_deprecated_alias
+    // from launch_concurrency_honors_deprecated_interactive_max_launch_alias
+    {
+        // The old TOML key `interactive_max_launch` still deserializes, via
+        // #[serde(rename)], into the hidden legacy field, and the resolver
+        // honors it when the new key is unset.
+        let cfg: SubagentsConfig =
+            toml::from_str("interactive_max_launch = 5").expect("parse legacy key");
+        assert_eq!(cfg.interactive_max_launch_legacy, Some(5));
+        assert_eq!(cfg.launch_concurrency, None);
 
-    let config = Config {
-        subagents: Some(cfg),
-        ..Config::default()
-    };
-    assert_eq!(config.launch_concurrency(), 5);
-}
+        let config = Config {
+            subagents: Some(cfg),
+            ..Config::default()
+        };
+        assert_eq!(config.launch_concurrency(), 5);
+    }
+    // from launch_concurrency_new_key_wins_over_deprecated_alias
+    {
+        // When both keys are present the new `launch_concurrency` wins
+        // deterministically, regardless of document order.
+        let cfg: SubagentsConfig =
+            toml::from_str("launch_concurrency = 3\ninteractive_max_launch = 7")
+                .expect("parse both keys");
+        assert_eq!(cfg.launch_concurrency, Some(3));
+        assert_eq!(cfg.interactive_max_launch_legacy, Some(7));
 
-#[test]
-fn launch_concurrency_new_key_wins_over_deprecated_alias() {
-    // When both keys are present the new `launch_concurrency` wins
-    // deterministically, regardless of document order.
-    let cfg: SubagentsConfig = toml::from_str("launch_concurrency = 3\ninteractive_max_launch = 7")
-        .expect("parse both keys");
-    assert_eq!(cfg.launch_concurrency, Some(3));
-    assert_eq!(cfg.interactive_max_launch_legacy, Some(7));
-
-    let config = Config {
-        subagents: Some(cfg),
-        ..Config::default()
-    };
-    assert_eq!(config.launch_concurrency(), 3);
+        let config = Config {
+            subagents: Some(cfg),
+            ..Config::default()
+        };
+        assert_eq!(config.launch_concurrency(), 3);
+    }
 }
 
 #[test]
@@ -2526,27 +2656,6 @@ fn subagents_max_concurrent_overrides_top_level_cap() {
     };
 
     assert_eq!(config.max_subagents(), 12);
-}
-
-#[test]
-fn max_subagents_clamps_subagents_max_concurrent() {
-    let low = Config {
-        subagents: Some(SubagentsConfig {
-            max_concurrent: Some(0),
-            ..SubagentsConfig::default()
-        }),
-        ..Config::default()
-    };
-    assert_eq!(low.max_subagents(), 1);
-
-    let high = Config {
-        subagents: Some(SubagentsConfig {
-            max_concurrent: Some(MAX_SUBAGENTS + 10),
-            ..SubagentsConfig::default()
-        }),
-        ..Config::default()
-    };
-    assert_eq!(high.max_subagents(), MAX_SUBAGENTS);
 }
 
 #[test]
@@ -3020,27 +3129,49 @@ fn base_url_reads_wait_for_foreign_test_env_overrides_to_restore() {
 }
 
 #[test]
-fn save_api_key_onboarding_routes_openrouter_key_to_provider_table() -> Result<()> {
-    let _lock = lock_test_env();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let temp_root = env::temp_dir().join(format!(
-        "codewhale-tui-onboarding-provider-{}-{}",
-        std::process::id(),
-        nanos
-    ));
-    fs::create_dir_all(&temp_root)?;
-    let _guard = EnvGuard::new(&temp_root);
+fn save_api_scenario() -> Result<()> {
+    // Scenario consolidation of: save_api_key_onboarding_routes_openrouter_key_to_provider_table, save_api_key_rejects_empty_input, save_api_key_for_openai_codex_refuses_config_storage
+    // from save_api_key_onboarding_routes_openrouter_key_to_provider_table
+    {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-onboarding-provider-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
 
-    let path = save_api_key_for(ApiProvider::Openrouter, "onboarding-openrouter-key")?;
-    let contents = fs::read_to_string(&path)?;
-    assert!(
-        contents.contains("openrouter"),
-        "expected OpenRouter provider table, got: {contents}"
-    );
-    assert!(contents.contains("onboarding-openrouter-key"));
+        let path = save_api_key_for(ApiProvider::Openrouter, "onboarding-openrouter-key")?;
+        let contents = fs::read_to_string(&path)?;
+        assert!(
+            contents.contains("openrouter"),
+            "expected OpenRouter provider table, got: {contents}"
+        );
+        assert!(contents.contains("onboarding-openrouter-key"));
+    }
+    // from save_api_key_rejects_empty_input
+    {
+        let _lock = lock_test_env();
+        let err = save_api_key("   ").expect_err("empty should bail");
+        assert!(
+            err.to_string().contains("empty"),
+            "expected error to mention empty, got: {err}"
+        );
+    }
+    // from save_api_key_for_openai_codex_refuses_config_storage
+    {
+        let err = save_api_key_for(ApiProvider::OpenaiCodex, "codex-token")
+            .expect_err("Codex OAuth tokens must not be persisted as provider API keys");
+
+        let message = err.to_string();
+        assert!(message.contains("OpenAI Codex uses OAuth"), "{message}");
+        assert!(message.contains("codex login"), "{message}");
+    }
     Ok(())
 }
 
@@ -3137,16 +3268,6 @@ fn workspace_trust_reads_existing_projects_table() -> Result<()> {
     assert!(is_workspace_trusted(&workspace));
     assert!(!crate::tui::onboarding::needs_trust(&workspace));
     Ok(())
-}
-
-#[test]
-fn save_api_key_rejects_empty_input() {
-    let _lock = lock_test_env();
-    let err = save_api_key("   ").expect_err("empty should bail");
-    assert!(
-        err.to_string().contains("empty"),
-        "expected error to mention empty, got: {err}"
-    );
 }
 
 #[test]
@@ -3862,41 +3983,43 @@ fn deepseek_dispatcher_env_key_overrides_config_key() -> Result<()> {
 }
 
 #[test]
-fn provider_neutral_cli_key_wins_after_profile_provider_switch() -> Result<()> {
-    let _lock = lock_test_env();
-    let _source = EnvVarGuard::set(codewhale_config::CLI_API_KEY_SOURCE_ENV, "cli");
-    let _cli_key = EnvVarGuard::set(codewhale_config::CLI_API_KEY_ENV, "explicit-profile-key");
-    let _anthropic_env = EnvVarGuard::remove("ANTHROPIC_API_KEY");
-    let mut providers = ProvidersConfig::default();
-    providers.anthropic.api_key = Some("saved-anthropic-key".to_string());
-    let config = Config {
-        provider: Some("anthropic".to_string()),
-        providers: Some(providers),
-        ..Default::default()
-    };
+fn provider_neutral_scenario() -> Result<()> {
+    // Scenario consolidation of: provider_neutral_cli_key_wins_after_profile_provider_switch, provider_neutral_cli_key_requires_dispatcher_source_marker
+    // from provider_neutral_cli_key_wins_after_profile_provider_switch
+    {
+        let _lock = lock_test_env();
+        let _source = EnvVarGuard::set(codewhale_config::CLI_API_KEY_SOURCE_ENV, "cli");
+        let _cli_key = EnvVarGuard::set(codewhale_config::CLI_API_KEY_ENV, "explicit-profile-key");
+        let _anthropic_env = EnvVarGuard::remove("ANTHROPIC_API_KEY");
+        let mut providers = ProvidersConfig::default();
+        providers.anthropic.api_key = Some("saved-anthropic-key".to_string());
+        let config = Config {
+            provider: Some("anthropic".to_string()),
+            providers: Some(providers),
+            ..Default::default()
+        };
 
-    assert_eq!(config.deepseek_api_key()?, "explicit-profile-key");
-    assert!(has_api_key(&config));
-    assert!(active_provider_has_env_api_key(&config));
-    Ok(())
-}
+        assert_eq!(config.deepseek_api_key()?, "explicit-profile-key");
+        assert!(has_api_key(&config));
+        assert!(active_provider_has_env_api_key(&config));
+    }
+    // from provider_neutral_cli_key_requires_dispatcher_source_marker
+    {
+        let _lock = lock_test_env();
+        let _source = EnvVarGuard::remove(codewhale_config::CLI_API_KEY_SOURCE_ENV);
+        let _legacy_source = EnvVarGuard::remove(codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV);
+        let _cli_key = EnvVarGuard::set(codewhale_config::CLI_API_KEY_ENV, "untrusted-generic-key");
+        let _anthropic_env = EnvVarGuard::remove("ANTHROPIC_API_KEY");
+        let mut providers = ProvidersConfig::default();
+        providers.anthropic.api_key = Some("saved-anthropic-key".to_string());
+        let config = Config {
+            provider: Some("anthropic".to_string()),
+            providers: Some(providers),
+            ..Default::default()
+        };
 
-#[test]
-fn provider_neutral_cli_key_requires_dispatcher_source_marker() -> Result<()> {
-    let _lock = lock_test_env();
-    let _source = EnvVarGuard::remove(codewhale_config::CLI_API_KEY_SOURCE_ENV);
-    let _legacy_source = EnvVarGuard::remove(codewhale_config::LEGACY_CLI_API_KEY_SOURCE_ENV);
-    let _cli_key = EnvVarGuard::set(codewhale_config::CLI_API_KEY_ENV, "untrusted-generic-key");
-    let _anthropic_env = EnvVarGuard::remove("ANTHROPIC_API_KEY");
-    let mut providers = ProvidersConfig::default();
-    providers.anthropic.api_key = Some("saved-anthropic-key".to_string());
-    let config = Config {
-        provider: Some("anthropic".to_string()),
-        providers: Some(providers),
-        ..Default::default()
-    };
-
-    assert_eq!(config.deepseek_api_key()?, "saved-anthropic-key");
+        assert_eq!(config.deepseek_api_key()?, "saved-anthropic-key");
+    }
     Ok(())
 }
 
@@ -3953,27 +4076,86 @@ fn config_with_provider_scoped_key(provider: &str, api_key: &str) -> Config {
 }
 
 #[test]
-fn has_api_key_uses_active_provider_scoped_config_key() {
-    // `has_api_key` intentionally consults live endpoint env overrides. Keep
-    // this config-only assertion out of the windows where another test owns a
-    // process-global custom endpoint.
-    let _lock = lock_test_env();
-    for provider in [
-        "openai",
-        "wanjie-ark",
-        "openrouter",
-        "novita",
-        "fireworks",
-        "siliconflow",
-        "qianfan",
-    ] {
-        let config = config_with_provider_scoped_key(provider, "provider-config-key");
+fn has_api_scenario() -> Result<()> {
+    // Scenario consolidation of: has_api_key_uses_active_provider_scoped_config_key, has_api_key_uses_root_config_key_for_deepseek_variants, has_api_key_for_uses_deepseek_cn_provider_table, has_api_key_for_uses_root_config_key_for_deepseek_variants
+    // from has_api_key_uses_active_provider_scoped_config_key
+    {
+        // `has_api_key` intentionally consults live endpoint env overrides. Keep
+        // this config-only assertion out of the windows where another test owns a
+        // process-global custom endpoint.
+        let _lock = lock_test_env();
+        for provider in [
+            "openai",
+            "wanjie-ark",
+            "openrouter",
+            "novita",
+            "fireworks",
+            "siliconflow",
+            "qianfan",
+        ] {
+            let config = config_with_provider_scoped_key(provider, "provider-config-key");
 
-        assert!(
-            has_api_key(&config),
-            "active provider config key must satisfy onboarding auth check for {provider}"
-        );
+            assert!(
+                has_api_key(&config),
+                "active provider config key must satisfy onboarding auth check for {provider}"
+            );
+        }
     }
+    // from has_api_key_uses_root_config_key_for_deepseek_variants
+    {
+        // A concurrent CODEWHALE_BASE_URL override deliberately unbinds the saved
+        // root key from the active endpoint. Serialize this assertion with the
+        // tests that install those process-global overrides.
+        let _lock = lock_test_env();
+        for provider in ["deepseek", "deepseek-cn"] {
+            let config = Config {
+                provider: Some(provider.to_string()),
+                api_key: Some("root-config-key".to_string()),
+                ..Config::default()
+            };
+
+            assert!(
+                has_api_key(&config),
+                "root config api_key must satisfy onboarding auth check for {provider}"
+            );
+        }
+    }
+    // from has_api_key_for_uses_deepseek_cn_provider_table
+    {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-has-key-cn-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let mut providers = ProvidersConfig::default();
+        providers.deepseek_cn.api_key = Some("cn-file-key".to_string());
+        let config = Config {
+            providers: Some(providers),
+            ..Config::default()
+        };
+
+        assert!(has_api_key_for(&config, ApiProvider::DeepseekCN));
+    }
+    // from has_api_key_for_uses_root_config_key_for_deepseek_variants
+    {
+        let _lock = lock_test_env();
+        let config = Config {
+            api_key: Some("root-config-key".to_string()),
+            ..Config::default()
+        };
+
+        assert!(has_api_key_for(&config, ApiProvider::Deepseek));
+        assert!(has_api_key_for(&config, ApiProvider::DeepseekCN));
+    }
+    Ok(())
 }
 
 #[test]
@@ -4007,26 +4189,6 @@ fn has_api_key_uses_active_provider_env_key() -> Result<()> {
         }
     }
     Ok(())
-}
-
-#[test]
-fn has_api_key_uses_root_config_key_for_deepseek_variants() {
-    // A concurrent CODEWHALE_BASE_URL override deliberately unbinds the saved
-    // root key from the active endpoint. Serialize this assertion with the
-    // tests that install those process-global overrides.
-    let _lock = lock_test_env();
-    for provider in ["deepseek", "deepseek-cn"] {
-        let config = Config {
-            provider: Some(provider.to_string()),
-            api_key: Some("root-config-key".to_string()),
-            ..Config::default()
-        };
-
-        assert!(
-            has_api_key(&config),
-            "root config api_key must satisfy onboarding auth check for {provider}"
-        );
-    }
 }
 
 /// Regression for #343: clear_api_key strips both the root `api_key`
@@ -4227,16 +4389,6 @@ base_url = "https://openrouter.ai/api/v1" # pinned
         "{after}"
     );
     Ok(())
-}
-
-#[test]
-fn save_api_key_for_openai_codex_refuses_config_storage() {
-    let err = save_api_key_for(ApiProvider::OpenaiCodex, "codex-token")
-        .expect_err("Codex OAuth tokens must not be persisted as provider API keys");
-
-    let message = err.to_string();
-    assert!(message.contains("OpenAI Codex uses OAuth"), "{message}");
-    assert!(message.contains("codex login"), "{message}");
 }
 
 /// Clearing credentials must not disturb comments, `api_key_env`, or
@@ -6064,15 +6216,91 @@ fn normalize_model_name_preserves_v_series_snapshots() {
 }
 
 #[test]
-fn normalize_model_for_provider_keeps_provider_remaps_when_case_is_preserved() {
-    assert_eq!(
-        normalize_model_for_provider(ApiProvider::Deepseek, "DeepSeek-V4-Pro").as_deref(),
-        Some("DeepSeek-V4-Pro")
-    );
-    assert_eq!(
-        normalize_model_for_provider(ApiProvider::NvidiaNim, "DeepSeek-V4-Pro").as_deref(),
-        Some(DEFAULT_NVIDIA_NIM_MODEL)
-    );
+fn normalize_model_scenario() {
+    // Scenario consolidation of: normalize_model_for_provider_keeps_provider_remaps_when_case_is_preserved, normalize_model_name_for_provider_maps_moonshot_aliases, normalize_model_name_for_provider_maps_minimax_direct_aliases, normalize_model_name_for_provider_maps_arcee_direct_aliases, normalize_model_name_rejects_invalid_or_non_deepseek_ids, normalize_model_name_accepts_provider_prefixed_deepseek_ids
+    // from normalize_model_for_provider_keeps_provider_remaps_when_case_is_preserved
+    {
+        assert_eq!(
+            normalize_model_for_provider(ApiProvider::Deepseek, "DeepSeek-V4-Pro").as_deref(),
+            Some("DeepSeek-V4-Pro")
+        );
+        assert_eq!(
+            normalize_model_for_provider(ApiProvider::NvidiaNim, "DeepSeek-V4-Pro").as_deref(),
+            Some(DEFAULT_NVIDIA_NIM_MODEL)
+        );
+    }
+    // from normalize_model_name_for_provider_maps_moonshot_aliases
+    {
+        for (alias, expected) in [
+            ("kimi", DEFAULT_MOONSHOT_MODEL),
+            ("kimi-k2.7", DEFAULT_MOONSHOT_MODEL),
+            ("kimi-k2.7-code", DEFAULT_MOONSHOT_MODEL),
+            ("kimi-code", DEFAULT_MOONSHOT_MODEL),
+            ("kimi-k2.6", MOONSHOT_KIMI_K2_6_MODEL),
+        ] {
+            assert_eq!(
+                normalize_model_name_for_provider(ApiProvider::Moonshot, alias).as_deref(),
+                Some(expected)
+            );
+        }
+    }
+    // from normalize_model_name_for_provider_maps_minimax_direct_aliases
+    {
+        for (alias, expected) in [
+            ("minimax", DEFAULT_MINIMAX_MODEL),
+            ("minimax-m3", DEFAULT_MINIMAX_MODEL),
+            ("minimax-m2.7", MINIMAX_M2_7_MODEL),
+            ("minimax-m2-7-highspeed", MINIMAX_M2_7_HIGHSPEED_MODEL),
+            ("minimax-m2.5", MINIMAX_M2_5_MODEL),
+            ("minimax-m2-5-highspeed", MINIMAX_M2_5_HIGHSPEED_MODEL),
+            ("minimax-m2.1", MINIMAX_M2_1_MODEL),
+            ("minimax-m2-1-highspeed", MINIMAX_M2_1_HIGHSPEED_MODEL),
+            ("minimax-m2", MINIMAX_M2_MODEL),
+        ] {
+            assert_eq!(
+                normalize_model_name_for_provider(ApiProvider::Minimax, alias).as_deref(),
+                Some(expected)
+            );
+        }
+    }
+    // from normalize_model_name_for_provider_maps_arcee_direct_aliases
+    {
+        for (alias, expected) in [
+            ("trinity", DEFAULT_ARCEE_MODEL),
+            ("arcee-trinity", DEFAULT_ARCEE_MODEL),
+            ("trinity-large-thinking", DEFAULT_ARCEE_MODEL),
+            ("arcee-trinity-large-thinking", DEFAULT_ARCEE_MODEL),
+            ("arcee-trinity-mini", ARCEE_TRINITY_MINI_MODEL),
+            ("trinity-mini", ARCEE_TRINITY_MINI_MODEL),
+            (
+                "arcee-trinity-large-preview",
+                ARCEE_TRINITY_LARGE_PREVIEW_MODEL,
+            ),
+            ("TRINITY_LARGE_PREVIEW", ARCEE_TRINITY_LARGE_PREVIEW_MODEL),
+        ] {
+            assert_eq!(
+                normalize_model_name_for_provider(ApiProvider::Arcee, alias).as_deref(),
+                Some(expected)
+            );
+        }
+    }
+    // from normalize_model_name_rejects_invalid_or_non_deepseek_ids
+    {
+        assert!(normalize_model_name("qwen3-coder").is_none());
+        assert!(normalize_model_name("codewhale v4").is_none());
+        assert!(normalize_model_name("").is_none());
+    }
+    // from normalize_model_name_accepts_provider_prefixed_deepseek_ids
+    {
+        assert_eq!(
+            normalize_model_name("accounts/fireworks/models/deepseek-v4-flash").as_deref(),
+            Some("accounts/fireworks/models/deepseek-v4-flash")
+        );
+        assert_eq!(
+            normalize_model_name("provider/deepseek-ai/deepseek-v4-pro").as_deref(),
+            Some("provider/deepseek-ai/deepseek-v4-pro")
+        );
+    }
 }
 
 #[test]
@@ -6510,64 +6738,6 @@ fn normalize_model_name_for_provider_maps_recent_openrouter_aliases() {
 }
 
 #[test]
-fn normalize_model_name_for_provider_maps_moonshot_aliases() {
-    for (alias, expected) in [
-        ("kimi", DEFAULT_MOONSHOT_MODEL),
-        ("kimi-k2.7", DEFAULT_MOONSHOT_MODEL),
-        ("kimi-k2.7-code", DEFAULT_MOONSHOT_MODEL),
-        ("kimi-code", DEFAULT_MOONSHOT_MODEL),
-        ("kimi-k2.6", MOONSHOT_KIMI_K2_6_MODEL),
-    ] {
-        assert_eq!(
-            normalize_model_name_for_provider(ApiProvider::Moonshot, alias).as_deref(),
-            Some(expected)
-        );
-    }
-}
-
-#[test]
-fn normalize_model_name_for_provider_maps_minimax_direct_aliases() {
-    for (alias, expected) in [
-        ("minimax", DEFAULT_MINIMAX_MODEL),
-        ("minimax-m3", DEFAULT_MINIMAX_MODEL),
-        ("minimax-m2.7", MINIMAX_M2_7_MODEL),
-        ("minimax-m2-7-highspeed", MINIMAX_M2_7_HIGHSPEED_MODEL),
-        ("minimax-m2.5", MINIMAX_M2_5_MODEL),
-        ("minimax-m2-5-highspeed", MINIMAX_M2_5_HIGHSPEED_MODEL),
-        ("minimax-m2.1", MINIMAX_M2_1_MODEL),
-        ("minimax-m2-1-highspeed", MINIMAX_M2_1_HIGHSPEED_MODEL),
-        ("minimax-m2", MINIMAX_M2_MODEL),
-    ] {
-        assert_eq!(
-            normalize_model_name_for_provider(ApiProvider::Minimax, alias).as_deref(),
-            Some(expected)
-        );
-    }
-}
-
-#[test]
-fn normalize_model_name_for_provider_maps_arcee_direct_aliases() {
-    for (alias, expected) in [
-        ("trinity", DEFAULT_ARCEE_MODEL),
-        ("arcee-trinity", DEFAULT_ARCEE_MODEL),
-        ("trinity-large-thinking", DEFAULT_ARCEE_MODEL),
-        ("arcee-trinity-large-thinking", DEFAULT_ARCEE_MODEL),
-        ("arcee-trinity-mini", ARCEE_TRINITY_MINI_MODEL),
-        ("trinity-mini", ARCEE_TRINITY_MINI_MODEL),
-        (
-            "arcee-trinity-large-preview",
-            ARCEE_TRINITY_LARGE_PREVIEW_MODEL,
-        ),
-        ("TRINITY_LARGE_PREVIEW", ARCEE_TRINITY_LARGE_PREVIEW_MODEL),
-    ] {
-        assert_eq!(
-            normalize_model_name_for_provider(ApiProvider::Arcee, alias).as_deref(),
-            Some(expected)
-        );
-    }
-}
-
-#[test]
 fn normalize_xiaomi_mimo_aliases_for_provider() {
     assert_eq!(
         normalize_model_name_for_provider(ApiProvider::XiaomiMimo, "omni").as_deref(),
@@ -6588,152 +6758,187 @@ fn normalize_xiaomi_mimo_aliases_for_provider() {
 }
 
 #[test]
-fn model_completion_names_for_xiaomi_mimo_include_chat_models() {
-    let models = model_completion_names_for_provider(ApiProvider::XiaomiMimo);
-    for expected in ["mimo-v2.5-pro", "mimo-v2.5"] {
-        assert!(models.contains(&expected), "missing {expected}");
+fn model_completion_scenario() {
+    // Scenario consolidation of: model_completion_names_for_xiaomi_mimo_include_chat_models, model_completion_names_for_deepseek_api_are_deduplicated_bare_ids, model_completion_names_for_openai_are_native_to_its_default_endpoint, model_completion_names_for_atlascloud_keep_its_provider_owned_default, model_completion_names_for_together_include_provider_owned_models, model_completion_names_for_wanjie_keep_legacy_default_and_v4_ids, model_completion_names_for_ollama_do_not_promote_static_remote_models, model_completion_names_for_openrouter_include_recent_large_models
+    // from model_completion_names_for_xiaomi_mimo_include_chat_models
+    {
+        let models = model_completion_names_for_provider(ApiProvider::XiaomiMimo);
+        for expected in ["mimo-v2.5-pro", "mimo-v2.5"] {
+            assert!(models.contains(&expected), "missing {expected}");
+        }
+        for deprecated in ["mimo-v2-pro", "mimo-v2-omni", "mimo-v2-flash"] {
+            assert!(
+                !models.contains(&deprecated),
+                "{deprecated} is deprecated and should not be promoted"
+            );
+        }
+        for speech_model in [
+            "mimo-v2.5-tts",
+            "mimo-v2.5-tts-voicedesign",
+            "mimo-v2.5-tts-voiceclone",
+            "mimo-v2-tts",
+        ] {
+            assert!(
+                !models.contains(&speech_model),
+                "{speech_model} belongs in speech/TTS selection, not /model"
+            );
+        }
     }
-    for deprecated in ["mimo-v2-pro", "mimo-v2-omni", "mimo-v2-flash"] {
-        assert!(
-            !models.contains(&deprecated),
-            "{deprecated} is deprecated and should not be promoted"
+    // from model_completion_names_for_deepseek_api_are_deduplicated_bare_ids
+    {
+        assert_eq!(
+            model_completion_names_for_provider(ApiProvider::Deepseek),
+            vec![
+                "deepseek-v4-pro",
+                "deepseek-v4-flash",
+                "deepseek-v4-flash-vision-exp"
+            ]
         );
     }
-    for speech_model in [
-        "mimo-v2.5-tts",
-        "mimo-v2.5-tts-voicedesign",
-        "mimo-v2.5-tts-voiceclone",
-        "mimo-v2-tts",
-    ] {
-        assert!(
-            !models.contains(&speech_model),
-            "{speech_model} belongs in speech/TTS selection, not /model"
+    // from model_completion_names_for_openai_are_native_to_its_default_endpoint
+    {
+        let models = model_completion_names_for_provider(ApiProvider::Openai);
+
+        assert_eq!(models.first().copied(), Some("gpt-5.6"));
+        assert!(models.iter().all(|model| !model.contains("deepseek")));
+    }
+    // from model_completion_names_for_atlascloud_keep_its_provider_owned_default
+    {
+        assert_eq!(
+            model_completion_names_for_provider(ApiProvider::Atlascloud),
+            vec![DEFAULT_ATLASCLOUD_MODEL]
         );
     }
-}
+    // from model_completion_names_for_together_include_provider_owned_models
+    {
+        assert_eq!(
+            model_completion_names_for_provider(ApiProvider::Together),
+            vec![DEFAULT_TOGETHER_MODEL, DEFAULT_TOGETHER_FLASH_MODEL]
+        );
+    }
+    // from model_completion_names_for_wanjie_keep_legacy_default_and_v4_ids
+    {
+        let models = model_completion_names_for_provider(ApiProvider::WanjieArk);
 
-#[test]
-fn model_completion_names_for_deepseek_api_are_deduplicated_bare_ids() {
-    assert_eq!(
-        model_completion_names_for_provider(ApiProvider::Deepseek),
-        vec![
-            "deepseek-v4-pro",
-            "deepseek-v4-flash",
-            "deepseek-v4-flash-vision-exp"
-        ]
-    );
-}
+        assert_eq!(models.first().copied(), Some(DEFAULT_WANJIE_ARK_MODEL));
+        assert!(models.contains(&"deepseek-v4-pro"));
+        assert!(models.contains(&"deepseek-v4-flash"));
+    }
+    // from model_completion_names_for_ollama_do_not_promote_static_remote_models
+    {
+        let models = model_completion_names_for_provider(ApiProvider::Ollama);
 
-#[test]
-fn model_completion_names_for_openai_are_native_to_its_default_endpoint() {
-    let models = model_completion_names_for_provider(ApiProvider::Openai);
+        assert!(models.is_empty());
+    }
+    // from model_completion_names_for_openrouter_include_recent_large_models
+    {
+        let models = model_completion_names_for_provider(ApiProvider::Openrouter);
 
-    assert_eq!(models.first().copied(), Some("gpt-5.6"));
-    assert!(models.iter().all(|model| !model.contains("deepseek")));
-}
-
-#[test]
-fn model_completion_names_for_atlascloud_keep_its_provider_owned_default() {
-    assert_eq!(
-        model_completion_names_for_provider(ApiProvider::Atlascloud),
-        vec![DEFAULT_ATLASCLOUD_MODEL]
-    );
-}
-
-#[test]
-fn model_completion_names_for_together_include_provider_owned_models() {
-    assert_eq!(
-        model_completion_names_for_provider(ApiProvider::Together),
-        vec![DEFAULT_TOGETHER_MODEL, DEFAULT_TOGETHER_FLASH_MODEL]
-    );
-}
-
-#[test]
-fn model_completion_names_for_wanjie_keep_legacy_default_and_v4_ids() {
-    let models = model_completion_names_for_provider(ApiProvider::WanjieArk);
-
-    assert_eq!(models.first().copied(), Some(DEFAULT_WANJIE_ARK_MODEL));
-    assert!(models.contains(&"deepseek-v4-pro"));
-    assert!(models.contains(&"deepseek-v4-flash"));
-}
-
-#[test]
-fn model_completion_names_for_ollama_do_not_promote_static_remote_models() {
-    let models = model_completion_names_for_provider(ApiProvider::Ollama);
-
-    assert!(models.is_empty());
-}
-
-#[test]
-fn model_completion_names_for_openrouter_include_recent_large_models() {
-    let models = model_completion_names_for_provider(ApiProvider::Openrouter);
-
-    for expected in [
-        DEFAULT_OPENROUTER_MODEL,
-        DEFAULT_OPENROUTER_FLASH_MODEL,
-        OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL,
-        OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL,
-        OPENROUTER_MINIMAX_M3_MODEL,
-        OPENROUTER_MINIMAX_M2_7_MODEL,
-        OPENROUTER_QWEN_3_6_FLASH_MODEL,
-        OPENROUTER_QWEN_3_6_35B_A3B_MODEL,
-        OPENROUTER_QWEN_3_6_MAX_PREVIEW_MODEL,
-        OPENROUTER_QWEN_3_6_27B_MODEL,
-        OPENROUTER_QWEN_3_6_PLUS_MODEL,
-        OPENROUTER_GLM_5_1_MODEL,
-        OPENROUTER_GLM_5_2_MODEL,
-        OPENROUTER_GEMMA_4_31B_MODEL,
-    ] {
-        assert!(models.contains(&expected), "missing {expected}");
+        for expected in [
+            DEFAULT_OPENROUTER_MODEL,
+            DEFAULT_OPENROUTER_FLASH_MODEL,
+            OPENROUTER_ARCEE_TRINITY_LARGE_THINKING_MODEL,
+            OPENROUTER_XIAOMI_MIMO_V2_5_PRO_MODEL,
+            OPENROUTER_MINIMAX_M3_MODEL,
+            OPENROUTER_MINIMAX_M2_7_MODEL,
+            OPENROUTER_QWEN_3_6_FLASH_MODEL,
+            OPENROUTER_QWEN_3_6_35B_A3B_MODEL,
+            OPENROUTER_QWEN_3_6_MAX_PREVIEW_MODEL,
+            OPENROUTER_QWEN_3_6_27B_MODEL,
+            OPENROUTER_QWEN_3_6_PLUS_MODEL,
+            OPENROUTER_GLM_5_1_MODEL,
+            OPENROUTER_GLM_5_2_MODEL,
+            OPENROUTER_GEMMA_4_31B_MODEL,
+        ] {
+            assert!(models.contains(&expected), "missing {expected}");
+        }
     }
 }
 
 #[test]
-fn model_completion_names_for_moonshot_uses_latest_platform_model() {
-    let models = model_completion_names_for_provider(ApiProvider::Moonshot);
+fn model_completion_scenario_2() {
+    // Scenario consolidation of: model_completion_names_for_moonshot_uses_latest_platform_model, model_completion_names_for_zai_lists_default_5_1_and_turbo, model_completion_names_for_minimax_include_direct_chat_models, model_completion_names_for_minimax_anthropic_include_target_models, model_completion_names_for_sakana_include_fugu_models
+    // from model_completion_names_for_moonshot_uses_latest_platform_model
+    {
+        let models = model_completion_names_for_provider(ApiProvider::Moonshot);
 
-    assert_eq!(models.first().copied(), Some(DEFAULT_MOONSHOT_MODEL));
-    // `kimi-k3` is served by this provider's default (direct platform) route
-    // and must be offerable — a dogfood user on v0.9.1 could not find it.
-    assert!(models.contains(&MOONSHOT_KIMI_K3_MODEL), "{models:?}");
-    // The Kimi Code coding-plan ids belong to api.kimi.com/coding/v1, which
-    // this base-URL-less list cannot express. Offering them here would
-    // advertise a pairing `validate_kimi_code_api_model_id` rejects.
-    assert!(!models.contains(&KIMI_CODE_K3_MODEL), "{models:?}");
-    assert!(!models.contains(&DEFAULT_KIMI_CODE_MODEL), "{models:?}");
-    for model in &models {
-        let config = Config {
-            provider: Some(ApiProvider::Moonshot.as_str().to_string()),
-            default_text_model: Some((*model).to_string()),
-            ..Default::default()
-        };
-        config
-            .validate()
-            .expect("every advertised Moonshot model must be valid on its default route");
+        assert_eq!(models.first().copied(), Some(DEFAULT_MOONSHOT_MODEL));
+        // `kimi-k3` is served by this provider's default (direct platform) route
+        // and must be offerable — a dogfood user on v0.9.1 could not find it.
+        assert!(models.contains(&MOONSHOT_KIMI_K3_MODEL), "{models:?}");
+        // The Kimi Code coding-plan ids belong to api.kimi.com/coding/v1, which
+        // this base-URL-less list cannot express. Offering them here would
+        // advertise a pairing `validate_kimi_code_api_model_id` rejects.
+        assert!(!models.contains(&KIMI_CODE_K3_MODEL), "{models:?}");
+        assert!(!models.contains(&DEFAULT_KIMI_CODE_MODEL), "{models:?}");
+        for model in &models {
+            let config = Config {
+                provider: Some(ApiProvider::Moonshot.as_str().to_string()),
+                default_text_model: Some((*model).to_string()),
+                ..Default::default()
+            };
+            config
+                .validate()
+                .expect("every advertised Moonshot model must be valid on its default route");
+        }
     }
-}
+    // from model_completion_names_for_zai_lists_default_5_1_and_turbo
+    {
+        let models = model_completion_names_for_provider(ApiProvider::Zai);
 
-#[test]
-fn model_completion_names_for_zai_lists_default_5_1_and_turbo() {
-    let models = model_completion_names_for_provider(ApiProvider::Zai);
+        // GLM-5.3 is the default and must be first; GLM-5.2 and GLM-5.1 stay
+        // available, and GLM-5-Turbo is the faster sub-agent sibling.
+        assert_eq!(models.first().copied(), Some(DEFAULT_ZAI_MODEL));
+        assert_eq!(DEFAULT_ZAI_MODEL, ZAI_GLM_5_3_MODEL);
+        assert!(models.contains(&ZAI_GLM_5_1_MODEL));
+        assert!(models.contains(&ZAI_GLM_5_3_FLASH_MODEL));
+        assert!(models.contains(&ZAI_GLM_5_TURBO_MODEL));
+        // GLM-5.2 is still offered alongside the others but no longer takes the
+        // default slot; explicit 5.2 routes are untouched.
+        assert!(models.contains(&ZAI_GLM_5_2_MODEL));
+        assert_ne!(models.first().copied(), Some(ZAI_GLM_5_2_MODEL));
+        // No accidental duplicate entries.
+        let mut sorted = models.to_vec();
+        sorted.sort_unstable();
+        let mut deduped = sorted.clone();
+        deduped.dedup();
+        assert_eq!(sorted, deduped);
+    }
+    // from model_completion_names_for_minimax_include_direct_chat_models
+    {
+        let models = model_completion_names_for_provider(ApiProvider::Minimax);
 
-    // GLM-5.3 is the default and must be first; GLM-5.2 and GLM-5.1 stay
-    // available, and GLM-5-Turbo is the faster sub-agent sibling.
-    assert_eq!(models.first().copied(), Some(DEFAULT_ZAI_MODEL));
-    assert_eq!(DEFAULT_ZAI_MODEL, ZAI_GLM_5_3_MODEL);
-    assert!(models.contains(&ZAI_GLM_5_1_MODEL));
-    assert!(models.contains(&ZAI_GLM_5_3_FLASH_MODEL));
-    assert!(models.contains(&ZAI_GLM_5_TURBO_MODEL));
-    // GLM-5.2 is still offered alongside the others but no longer takes the
-    // default slot; explicit 5.2 routes are untouched.
-    assert!(models.contains(&ZAI_GLM_5_2_MODEL));
-    assert_ne!(models.first().copied(), Some(ZAI_GLM_5_2_MODEL));
-    // No accidental duplicate entries.
-    let mut sorted = models.to_vec();
-    sorted.sort_unstable();
-    let mut deduped = sorted.clone();
-    deduped.dedup();
-    assert_eq!(sorted, deduped);
+        for expected in [
+            DEFAULT_MINIMAX_MODEL,
+            MINIMAX_M2_7_MODEL,
+            MINIMAX_M2_7_HIGHSPEED_MODEL,
+            MINIMAX_M2_5_MODEL,
+            MINIMAX_M2_5_HIGHSPEED_MODEL,
+            MINIMAX_M2_1_MODEL,
+            MINIMAX_M2_1_HIGHSPEED_MODEL,
+            MINIMAX_M2_MODEL,
+        ] {
+            assert!(models.contains(&expected), "missing {expected}");
+        }
+        assert!(
+            !models.contains(&OPENROUTER_MINIMAX_M3_MODEL),
+            "direct MiniMax picker must not expose OpenRouter namespaced IDs"
+        );
+    }
+    // from model_completion_names_for_minimax_anthropic_include_target_models
+    {
+        let models = model_completion_names_for_provider(ApiProvider::MinimaxAnthropic);
+
+        assert!(models.contains(&DEFAULT_MINIMAX_MODEL));
+        assert!(models.contains(&MINIMAX_M2_7_MODEL));
+    }
+    // from model_completion_names_for_sakana_include_fugu_models
+    {
+        assert_eq!(
+            model_completion_names_for_provider(ApiProvider::Sakana),
+            vec![DEFAULT_SAKANA_MODEL, SAKANA_FUGU_ULTRA_MODEL]
+        );
+    }
 }
 
 #[test]
@@ -6767,44 +6972,6 @@ fn normalize_model_name_for_zai_canonicalizes_current_glm_models() {
     assert_eq!(
         normalize_model_name_for_provider(ApiProvider::Zai, "glm-next-preview").as_deref(),
         Some("glm-next-preview")
-    );
-}
-
-#[test]
-fn model_completion_names_for_minimax_include_direct_chat_models() {
-    let models = model_completion_names_for_provider(ApiProvider::Minimax);
-
-    for expected in [
-        DEFAULT_MINIMAX_MODEL,
-        MINIMAX_M2_7_MODEL,
-        MINIMAX_M2_7_HIGHSPEED_MODEL,
-        MINIMAX_M2_5_MODEL,
-        MINIMAX_M2_5_HIGHSPEED_MODEL,
-        MINIMAX_M2_1_MODEL,
-        MINIMAX_M2_1_HIGHSPEED_MODEL,
-        MINIMAX_M2_MODEL,
-    ] {
-        assert!(models.contains(&expected), "missing {expected}");
-    }
-    assert!(
-        !models.contains(&OPENROUTER_MINIMAX_M3_MODEL),
-        "direct MiniMax picker must not expose OpenRouter namespaced IDs"
-    );
-}
-
-#[test]
-fn model_completion_names_for_minimax_anthropic_include_target_models() {
-    let models = model_completion_names_for_provider(ApiProvider::MinimaxAnthropic);
-
-    assert!(models.contains(&DEFAULT_MINIMAX_MODEL));
-    assert!(models.contains(&MINIMAX_M2_7_MODEL));
-}
-
-#[test]
-fn model_completion_names_for_sakana_include_fugu_models() {
-    assert_eq!(
-        model_completion_names_for_provider(ApiProvider::Sakana),
-        vec![DEFAULT_SAKANA_MODEL, SAKANA_FUGU_ULTRA_MODEL]
     );
 }
 
@@ -6888,25 +7055,6 @@ model = "opencode-go/glm-5.2"
 }
 
 #[test]
-fn normalize_model_name_rejects_invalid_or_non_deepseek_ids() {
-    assert!(normalize_model_name("qwen3-coder").is_none());
-    assert!(normalize_model_name("codewhale v4").is_none());
-    assert!(normalize_model_name("").is_none());
-}
-
-#[test]
-fn normalize_model_name_accepts_provider_prefixed_deepseek_ids() {
-    assert_eq!(
-        normalize_model_name("accounts/fireworks/models/deepseek-v4-flash").as_deref(),
-        Some("accounts/fireworks/models/deepseek-v4-flash")
-    );
-    assert_eq!(
-        normalize_model_name("provider/deepseek-ai/deepseek-v4-pro").as_deref(),
-        Some("provider/deepseek-ai/deepseek-v4-pro")
-    );
-}
-
-#[test]
 fn default_context_seams_are_opt_in() {
     let config = Config::default();
     assert!(!config.context.enabled.unwrap_or(false));
@@ -6919,25 +7067,6 @@ fn default_context_seams_are_opt_in() {
             .unwrap_or("deepseek-v4-flash"),
         "deepseek-v4-flash"
     );
-}
-
-#[test]
-fn profile_without_context_does_not_disable_base_context() {
-    let mut profiles = HashMap::new();
-    profiles.insert("work".to_string(), Config::default());
-    let config = ConfigFile {
-        base: Config {
-            context: ContextConfig {
-                enabled: Some(true),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        profiles: Some(profiles),
-    };
-
-    let merged = apply_profile(config, Some("work")).expect("profile");
-    assert_eq!(merged.context.enabled, Some(true));
 }
 
 #[test]
@@ -7007,23 +7136,25 @@ fn project_context_pack_defaults_off_and_can_be_enabled() {
 }
 
 #[test]
-fn validate_accepts_future_deepseek_model_id() -> Result<()> {
-    let config = Config {
-        default_text_model: Some("deepseek-v4".to_string()),
-        ..Default::default()
-    };
-    config.validate()?;
-    Ok(())
-}
-
-#[test]
-fn validate_accepts_auto_default_text_model() -> Result<()> {
-    let config = Config {
-        default_text_model: Some("auto".to_string()),
-        ..Default::default()
-    };
-    config.validate()?;
-    assert_eq!(config.default_model(), "auto");
+fn validate_accepts_scenario() -> Result<()> {
+    // Scenario consolidation of: validate_accepts_future_deepseek_model_id, validate_accepts_auto_default_text_model
+    // from validate_accepts_future_deepseek_model_id
+    {
+        let config = Config {
+            default_text_model: Some("deepseek-v4".to_string()),
+            ..Default::default()
+        };
+        config.validate()?;
+    }
+    // from validate_accepts_auto_default_text_model
+    {
+        let config = Config {
+            default_text_model: Some("auto".to_string()),
+            ..Default::default()
+        };
+        config.validate()?;
+        assert_eq!(config.default_model(), "auto");
+    }
     Ok(())
 }
 
@@ -7243,16 +7374,69 @@ http_headers = { "X-Model-Provider-Id" = "from-file" }
 }
 
 #[test]
-fn nvidia_nim_provider_uses_nim_defaults() -> Result<()> {
-    let config = Config {
-        provider: Some("nvidia-nim".to_string()),
-        ..Default::default()
-    };
+fn nvidia_nim_scenario() -> Result<()> {
+    // Scenario consolidation of: nvidia_nim_provider_uses_nim_defaults, nvidia_nim_provider_normalizes_deepseek_v4_flash_alias, nvidia_nim_env_accepts_short_nim_base_url_alias
+    // from nvidia_nim_provider_uses_nim_defaults
+    {
+        let config = Config {
+            provider: Some("nvidia-nim".to_string()),
+            ..Default::default()
+        };
 
-    config.validate()?;
-    assert_eq!(config.api_provider(), ApiProvider::NvidiaNim);
-    assert_eq!(config.default_model(), DEFAULT_NVIDIA_NIM_MODEL);
-    assert_eq!(config.deepseek_base_url(), DEFAULT_NVIDIA_NIM_BASE_URL);
+        config.validate()?;
+        assert_eq!(config.api_provider(), ApiProvider::NvidiaNim);
+        assert_eq!(config.default_model(), DEFAULT_NVIDIA_NIM_MODEL);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_NVIDIA_NIM_BASE_URL);
+    }
+    // from nvidia_nim_provider_normalizes_deepseek_v4_flash_alias
+    {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-nim-flash-model-alias-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        let config = Config {
+            provider: Some("nvidia-nim".to_string()),
+            default_text_model: Some("deepseek-v4-flash".to_string()),
+            ..Default::default()
+        };
+
+        config.validate()?;
+        assert_eq!(config.default_model(), DEFAULT_NVIDIA_NIM_FLASH_MODEL);
+    }
+    // from nvidia_nim_env_accepts_short_nim_base_url_alias
+    {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-nim-base-url-alias-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
+
+        // Safety: test-only environment mutation guarded by a global mutex.
+        unsafe {
+            env::set_var("DEEPSEEK_PROVIDER", "nvidia-nim");
+            env::set_var("NIM_BASE_URL", "https://short-nim.example/v1");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::NvidiaNim);
+        assert_eq!(config.deepseek_base_url(), "https://short-nim.example/v1");
+    }
     Ok(())
 }
 
@@ -7284,32 +7468,6 @@ fn nvidia_nim_provider_normalizes_deepseek_v4_pro_alias() -> Result<()> {
         config.default_text_model.as_deref(),
         Some(DEFAULT_NVIDIA_NIM_MODEL)
     );
-    Ok(())
-}
-
-#[test]
-fn nvidia_nim_provider_normalizes_deepseek_v4_flash_alias() -> Result<()> {
-    let _lock = lock_test_env();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let temp_root = env::temp_dir().join(format!(
-        "codewhale-tui-nim-flash-model-alias-test-{}-{}",
-        std::process::id(),
-        nanos
-    ));
-    fs::create_dir_all(&temp_root)?;
-    let _guard = EnvGuard::new(&temp_root);
-
-    let config = Config {
-        provider: Some("nvidia-nim".to_string()),
-        default_text_model: Some("deepseek-v4-flash".to_string()),
-        ..Default::default()
-    };
-
-    config.validate()?;
-    assert_eq!(config.default_model(), DEFAULT_NVIDIA_NIM_FLASH_MODEL);
     Ok(())
 }
 
@@ -7430,33 +7588,6 @@ fn nvidia_nim_env_overrides_provider_and_credentials() -> Result<()> {
 }
 
 #[test]
-fn nvidia_nim_env_accepts_short_nim_base_url_alias() -> Result<()> {
-    let _lock = lock_test_env();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let temp_root = env::temp_dir().join(format!(
-        "codewhale-tui-nim-base-url-alias-test-{}-{}",
-        std::process::id(),
-        nanos
-    ));
-    fs::create_dir_all(&temp_root)?;
-    let _guard = EnvGuard::new(&temp_root);
-
-    // Safety: test-only environment mutation guarded by a global mutex.
-    unsafe {
-        env::set_var("DEEPSEEK_PROVIDER", "nvidia-nim");
-        env::set_var("NIM_BASE_URL", "https://short-nim.example/v1");
-    }
-
-    let config = Config::load(None, None)?;
-    assert_eq!(config.api_provider(), ApiProvider::NvidiaNim);
-    assert_eq!(config.deepseek_base_url(), "https://short-nim.example/v1");
-    Ok(())
-}
-
-#[test]
 fn nvidia_nim_env_accepts_facade_base_url_forwarding() -> Result<()> {
     let _lock = lock_test_env();
     let nanos = SystemTime::now()
@@ -7565,93 +7696,129 @@ fn direct_provider_ignores_foreign_deepseek_root_default_model() {
 }
 
 #[test]
-fn insecure_skip_tls_verify_is_scoped_to_active_provider() {
-    let mut providers = ProvidersConfig::default();
-    providers.deepseek.insecure_skip_tls_verify = Some(true);
-    providers.openai.insecure_skip_tls_verify = Some(false);
-    let config = Config {
-        provider: Some("openai".to_string()),
-        providers: Some(providers),
-        ..Default::default()
-    };
+fn insecure_skip_scenario() {
+    // Scenario consolidation of: insecure_skip_tls_verify_is_scoped_to_active_provider, insecure_skip_tls_verify_reads_active_provider_table
+    // from insecure_skip_tls_verify_is_scoped_to_active_provider
+    {
+        let mut providers = ProvidersConfig::default();
+        providers.deepseek.insecure_skip_tls_verify = Some(true);
+        providers.openai.insecure_skip_tls_verify = Some(false);
+        let config = Config {
+            provider: Some("openai".to_string()),
+            providers: Some(providers),
+            ..Default::default()
+        };
 
-    assert_eq!(config.api_provider(), ApiProvider::Openai);
-    assert!(!config.insecure_skip_tls_verify());
+        assert_eq!(config.api_provider(), ApiProvider::Openai);
+        assert!(!config.insecure_skip_tls_verify());
+    }
+    // from insecure_skip_tls_verify_reads_active_provider_table
+    {
+        let mut providers = ProvidersConfig::default();
+        providers.openai.insecure_skip_tls_verify = Some(true);
+        let config = Config {
+            provider: Some("openai".to_string()),
+            providers: Some(providers),
+            ..Default::default()
+        };
+
+        assert!(config.insecure_skip_tls_verify());
+    }
 }
 
 #[test]
-fn insecure_skip_tls_verify_reads_active_provider_table() {
-    let mut providers = ProvidersConfig::default();
-    providers.openai.insecure_skip_tls_verify = Some(true);
-    let config = Config {
-        provider: Some("openai".to_string()),
-        providers: Some(providers),
-        ..Default::default()
-    };
+fn xiaomi_mimo_scenario() -> Result<()> {
+    // Scenario consolidation of: xiaomi_mimo_provider_uses_documented_defaults, xiaomi_mimo_provider_honours_root_default_model_and_base_url, xiaomi_mimo_provider_drops_stale_deepseek_root_default_model, xiaomi_mimo_token_plan_mode_accepts_region_aliases, xiaomi_mimo_unknown_mode_stays_on_token_plan_endpoint
+    // from xiaomi_mimo_provider_uses_documented_defaults
+    {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-xiaomi-mimo-defaults-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
 
-    assert!(config.insecure_skip_tls_verify());
-}
+        let config = Config {
+            provider: Some("xiaomi-mimo".to_string()),
+            ..Default::default()
+        };
 
-#[test]
-fn xiaomi_mimo_provider_uses_documented_defaults() -> Result<()> {
-    let _lock = lock_test_env();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let temp_root = env::temp_dir().join(format!(
-        "codewhale-tui-xiaomi-mimo-defaults-{}-{}",
-        std::process::id(),
-        nanos
-    ));
-    fs::create_dir_all(&temp_root)?;
-    let _guard = EnvGuard::new(&temp_root);
+        config.validate()?;
+        assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
+        assert_eq!(config.default_model(), DEFAULT_XIAOMI_MIMO_MODEL);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_XIAOMI_MIMO_BASE_URL);
+    }
+    // from xiaomi_mimo_provider_honours_root_default_model_and_base_url
+    {
+        let config = Config {
+            provider: Some("xiaomi-mimo".to_string()),
+            base_url: Some("https://token-plan-cn.xiaomimimo.com/v1".to_string()),
+            default_text_model: Some("mimo-v2.5".to_string()),
+            ..Default::default()
+        };
 
-    let config = Config {
-        provider: Some("xiaomi-mimo".to_string()),
-        ..Default::default()
-    };
+        config.validate()?;
+        assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
+        assert_eq!(config.default_model(), "mimo-v2.5");
+        assert_eq!(
+            config.deepseek_base_url(),
+            "https://token-plan-cn.xiaomimimo.com/v1"
+        );
+    }
+    // from xiaomi_mimo_provider_drops_stale_deepseek_root_default_model
+    {
+        // A leftover DeepSeek id after a provider switch must not be forwarded to
+        // Xiaomi. Fall back to the MiMo seed default instead of substituting a
+        // different *configured* model.
+        let config = Config {
+            provider: Some("xiaomi-mimo".to_string()),
+            default_text_model: Some(DEFAULT_OPENROUTER_MODEL.to_string()),
+            ..Default::default()
+        };
 
-    config.validate()?;
-    assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
-    assert_eq!(config.default_model(), DEFAULT_XIAOMI_MIMO_MODEL);
-    assert_eq!(config.deepseek_base_url(), DEFAULT_XIAOMI_MIMO_BASE_URL);
-    Ok(())
-}
+        config.validate()?;
+        assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
+        assert_eq!(config.default_model(), DEFAULT_XIAOMI_MIMO_MODEL);
+    }
+    // from xiaomi_mimo_token_plan_mode_accepts_region_aliases
+    {
+        let config: Config = toml::from_str(
+            r#"
+    provider = "mimo"
 
-#[test]
-fn xiaomi_mimo_provider_honours_root_default_model_and_base_url() -> Result<()> {
-    let config = Config {
-        provider: Some("xiaomi-mimo".to_string()),
-        base_url: Some("https://token-plan-cn.xiaomimimo.com/v1".to_string()),
-        default_text_model: Some("mimo-v2.5".to_string()),
-        ..Default::default()
-    };
+    [providers.mimo]
+    mode = "token-plan-ams"
+    "#,
+        )?;
 
-    config.validate()?;
-    assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
-    assert_eq!(config.default_model(), "mimo-v2.5");
-    assert_eq!(
-        config.deepseek_base_url(),
-        "https://token-plan-cn.xiaomimimo.com/v1"
-    );
-    Ok(())
-}
+        config.validate()?;
+        assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
+        assert_eq!(
+            config.deepseek_base_url(),
+            XIAOMI_MIMO_TOKEN_PLAN_AMS_BASE_URL
+        );
+    }
+    // from xiaomi_mimo_unknown_mode_stays_on_token_plan_endpoint
+    {
+        let config: Config = toml::from_str(
+            r#"
+    provider = "mimo"
 
-#[test]
-fn xiaomi_mimo_provider_drops_stale_deepseek_root_default_model() -> Result<()> {
-    // A leftover DeepSeek id after a provider switch must not be forwarded to
-    // Xiaomi. Fall back to the MiMo seed default instead of substituting a
-    // different *configured* model.
-    let config = Config {
-        provider: Some("xiaomi-mimo".to_string()),
-        default_text_model: Some(DEFAULT_OPENROUTER_MODEL.to_string()),
-        ..Default::default()
-    };
+    [providers.mimo]
+    mode = "token-plan-usa"
+    "#,
+        )?;
 
-    config.validate()?;
-    assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
-    assert_eq!(config.default_model(), DEFAULT_XIAOMI_MIMO_MODEL);
+        config.validate()?;
+        assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
+        assert_eq!(config.deepseek_base_url(), DEFAULT_XIAOMI_MIMO_BASE_URL);
+    }
     Ok(())
 }
 
@@ -7717,43 +7884,6 @@ model = "mimo-v2.5-pro"
     assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
     assert_eq!(config.deepseek_base_url(), DEFAULT_XIAOMI_MIMO_BASE_URL);
     assert_eq!(config.default_model(), DEFAULT_XIAOMI_MIMO_MODEL);
-    Ok(())
-}
-
-#[test]
-fn xiaomi_mimo_token_plan_mode_accepts_region_aliases() -> Result<()> {
-    let config: Config = toml::from_str(
-        r#"
-provider = "mimo"
-
-[providers.mimo]
-mode = "token-plan-ams"
-"#,
-    )?;
-
-    config.validate()?;
-    assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
-    assert_eq!(
-        config.deepseek_base_url(),
-        XIAOMI_MIMO_TOKEN_PLAN_AMS_BASE_URL
-    );
-    Ok(())
-}
-
-#[test]
-fn xiaomi_mimo_unknown_mode_stays_on_token_plan_endpoint() -> Result<()> {
-    let config: Config = toml::from_str(
-        r#"
-provider = "mimo"
-
-[providers.mimo]
-mode = "token-plan-usa"
-"#,
-    )?;
-
-    config.validate()?;
-    assert_eq!(config.api_provider(), ApiProvider::XiaomiMimo);
-    assert_eq!(config.deepseek_base_url(), DEFAULT_XIAOMI_MIMO_BASE_URL);
     Ok(())
 }
 
@@ -10160,32 +10290,6 @@ fn has_api_key_for_detects_env_and_config_per_provider() -> Result<()> {
 }
 
 #[test]
-fn has_api_key_for_uses_deepseek_cn_provider_table() -> Result<()> {
-    let _lock = lock_test_env();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let temp_root = env::temp_dir().join(format!(
-        "codewhale-tui-has-key-cn-{}-{}",
-        std::process::id(),
-        nanos
-    ));
-    fs::create_dir_all(&temp_root)?;
-    let _guard = EnvGuard::new(&temp_root);
-
-    let mut providers = ProvidersConfig::default();
-    providers.deepseek_cn.api_key = Some("cn-file-key".to_string());
-    let config = Config {
-        providers: Some(providers),
-        ..Config::default()
-    };
-
-    assert!(has_api_key_for(&config, ApiProvider::DeepseekCN));
-    Ok(())
-}
-
-#[test]
 fn provider_auth_source_metadata_is_not_a_runtime_credential() -> Result<()> {
     let _lock = lock_test_env();
     let temp_root = tempfile::tempdir()?;
@@ -10289,18 +10393,6 @@ fn xai_invalid_owned_generation_blocks_external_and_uses_api_key_fallback() -> R
     );
     assert_eq!(fs::read_to_string(external_path)?, external_raw);
     Ok(())
-}
-
-#[test]
-fn has_api_key_for_uses_root_config_key_for_deepseek_variants() {
-    let _lock = lock_test_env();
-    let config = Config {
-        api_key: Some("root-config-key".to_string()),
-        ..Config::default()
-    };
-
-    assert!(has_api_key_for(&config, ApiProvider::Deepseek));
-    assert!(has_api_key_for(&config, ApiProvider::DeepseekCN));
 }
 
 #[test]
@@ -10623,145 +10715,242 @@ model = "deepseek-ai/deepseek-v4-pro"
 // ========================================================================
 
 #[test]
-fn provider_capability_deepseek_v4_pro_has_1m_window_and_thinking() {
-    let cap = provider_capability(ApiProvider::Deepseek, "deepseek-v4-pro");
-    assert_eq!(
-        cap.context_window,
-        crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, Some(384_000));
-    assert!(cap.thinking_supported);
-    assert!(cap.cache_telemetry_supported);
-    assert_eq!(
-        cap.request_payload_mode,
-        RequestPayloadMode::ChatCompletions
-    );
+fn provider_capability_scenario() {
+    // Scenario consolidation of: provider_capability_deepseek_v4_pro_has_1m_window_and_thinking, provider_capability_deepseek_anthropic_uses_messages_payload, provider_capability_openmodel_uses_messages_payload, provider_capability_deepseek_v4_flash_has_1m_window_and_thinking, provider_capability_deepseek_chat_alias_has_v4_flash_caps_and_metadata, provider_capability_deepseek_reasoner_alias_has_v4_flash_caps_and_metadata, provider_capability_deepseek_v4_flash_has_no_alias_deprecation, provider_capability_nvidia_nim_v4_pro_maps_correctly
+    // from provider_capability_deepseek_v4_pro_has_1m_window_and_thinking
+    {
+        let cap = provider_capability(ApiProvider::Deepseek, "deepseek-v4-pro");
+        assert_eq!(
+            cap.context_window,
+            crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, Some(384_000));
+        assert!(cap.thinking_supported);
+        assert!(cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
+    }
+    // from provider_capability_deepseek_anthropic_uses_messages_payload
+    {
+        let cap = provider_capability(
+            ApiProvider::DeepseekAnthropic,
+            DEFAULT_DEEPSEEK_ANTHROPIC_MODEL,
+        );
+        assert_eq!(
+            cap.context_window,
+            crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, Some(384_000));
+        assert!(cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::AnthropicMessages
+        );
+        assert!(cap.alias_deprecation.is_none());
+    }
+    // from provider_capability_openmodel_uses_messages_payload
+    {
+        let cap = provider_capability(ApiProvider::Openmodel, DEFAULT_OPENMODEL_MODEL);
+        assert_eq!(cap.resolved_model, DEFAULT_OPENMODEL_MODEL);
+        assert_eq!(
+            cap.context_window,
+            crate::models::context_window_for_model(DEFAULT_OPENMODEL_MODEL).unwrap_or(200_000)
+        );
+        assert_eq!(
+            cap.max_output,
+            Some(
+                crate::models::max_output_tokens_for_model(DEFAULT_OPENMODEL_MODEL)
+                    .unwrap_or(64_000)
+            )
+        );
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::AnthropicMessages
+        );
+        assert!(provider_passes_model_through(ApiProvider::Openmodel));
+    }
+    // from provider_capability_deepseek_v4_flash_has_1m_window_and_thinking
+    {
+        let cap = provider_capability(ApiProvider::Deepseek, "deepseek-v4-flash");
+        assert_eq!(
+            cap.context_window,
+            crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, Some(384_000));
+        assert!(cap.thinking_supported);
+        assert!(cap.cache_telemetry_supported);
+    }
+    // from provider_capability_deepseek_chat_alias_has_v4_flash_caps_and_metadata
+    {
+        let cap = provider_capability(ApiProvider::Deepseek, "deepseek-chat");
+        assert_eq!(
+            cap.context_window,
+            crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, Some(384_000));
+        assert!(cap.thinking_supported);
+        assert!(cap.cache_telemetry_supported);
+
+        let deprecation = cap
+            .alias_deprecation
+            .as_ref()
+            .expect("alias deprecation metadata");
+        assert_eq!(deprecation.alias, "deepseek-chat");
+        assert_eq!(deprecation.replacement, "deepseek-v4-flash");
+        assert_eq!(deprecation.retirement_date, "2026-07-24");
+        assert_eq!(deprecation.retirement_utc, "2026-07-24T15:59:00Z");
+    }
+    // from provider_capability_deepseek_reasoner_alias_has_v4_flash_caps_and_metadata
+    {
+        let cap = provider_capability(ApiProvider::Deepseek, "deepseek-reasoner");
+        assert_eq!(
+            cap.context_window,
+            crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, Some(384_000));
+        assert!(cap.thinking_supported);
+        assert!(cap.cache_telemetry_supported);
+
+        let deprecation = cap
+            .alias_deprecation
+            .as_ref()
+            .expect("alias deprecation metadata");
+        assert_eq!(deprecation.alias, "deepseek-reasoner");
+        assert_eq!(deprecation.replacement, "deepseek-v4-flash");
+    }
+    // from provider_capability_deepseek_v4_flash_has_no_alias_deprecation
+    {
+        let cap = provider_capability(ApiProvider::Deepseek, "deepseek-v4-flash");
+        assert!(cap.alias_deprecation.is_none());
+    }
+    // from provider_capability_nvidia_nim_v4_pro_maps_correctly
+    {
+        let cap = provider_capability(ApiProvider::NvidiaNim, DEFAULT_NVIDIA_NIM_MODEL);
+        assert_eq!(
+            cap.context_window,
+            crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, Some(384_000));
+        assert!(cap.thinking_supported);
+        assert!(cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
+    }
 }
 
 #[test]
-fn provider_capability_deepseek_anthropic_uses_messages_payload() {
-    let cap = provider_capability(
-        ApiProvider::DeepseekAnthropic,
-        DEFAULT_DEEPSEEK_ANTHROPIC_MODEL,
-    );
-    assert_eq!(
-        cap.context_window,
-        crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, Some(384_000));
-    assert!(cap.thinking_supported);
-    assert!(!cap.cache_telemetry_supported);
-    assert_eq!(
-        cap.request_payload_mode,
-        RequestPayloadMode::AnthropicMessages
-    );
-    assert!(cap.alias_deprecation.is_none());
-}
+fn provider_capability_scenario_2() {
+    // Scenario consolidation of: provider_capability_nvidia_nim_v4_flash_maps_correctly, provider_capability_openai_codex_uses_responses_payload, provider_capability_marks_exact_inkling_route_as_reasoning, provider_capability_xiaomi_mimo_has_thinking_no_cache, provider_capability_novita_v4_pro_has_thinking_no_cache, provider_capability_fireworks_v4_pro_has_thinking_no_cache, provider_capability_siliconflow_v4_pro_has_thinking_no_cache, provider_capability_sglang_v4_pro_has_thinking_no_cache
+    // from provider_capability_nvidia_nim_v4_flash_maps_correctly
+    {
+        let cap = provider_capability(ApiProvider::NvidiaNim, DEFAULT_NVIDIA_NIM_FLASH_MODEL);
+        assert_eq!(
+            cap.context_window,
+            crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, Some(384_000));
+        assert!(cap.thinking_supported);
+        assert!(cap.cache_telemetry_supported);
+    }
+    // from provider_capability_openai_codex_uses_responses_payload
+    {
+        let cap = provider_capability(ApiProvider::OpenaiCodex, DEFAULT_OPENAI_CODEX_MODEL);
+        assert_eq!(cap.provider, ApiProvider::OpenaiCodex);
+        assert_eq!(cap.resolved_model, DEFAULT_OPENAI_CODEX_MODEL);
+        assert_eq!(
+            cap.context_window,
+            OPENAI_CODEX_EFFECTIVE_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, Some(4096));
+        assert!(cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(cap.request_payload_mode, RequestPayloadMode::Responses);
+    }
+    // from provider_capability_marks_exact_inkling_route_as_reasoning
+    {
+        let cap = provider_capability(ApiProvider::Together, TOGETHER_INKLING_MODEL);
+        assert!(cap.thinking_supported);
+        assert_eq!(
+            crate::models::context_window_for_model(TOGETHER_INKLING_MODEL),
+            None
+        );
+        assert_eq!(
+            crate::models::max_output_tokens_for_model(TOGETHER_INKLING_MODEL),
+            None
+        );
+    }
+    // from provider_capability_xiaomi_mimo_has_thinking_no_cache
+    {
+        let cap = provider_capability(ApiProvider::XiaomiMimo, DEFAULT_XIAOMI_MIMO_MODEL);
+        assert_eq!(cap.context_window, 1_000_000);
+        assert_eq!(cap.max_output, Some(131_072));
+        assert!(cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
 
-#[test]
-fn provider_capability_openmodel_uses_messages_payload() {
-    let cap = provider_capability(ApiProvider::Openmodel, DEFAULT_OPENMODEL_MODEL);
-    assert_eq!(cap.resolved_model, DEFAULT_OPENMODEL_MODEL);
-    assert_eq!(
-        cap.context_window,
-        crate::models::context_window_for_model(DEFAULT_OPENMODEL_MODEL).unwrap_or(200_000)
-    );
-    assert_eq!(
-        cap.max_output,
-        Some(crate::models::max_output_tokens_for_model(DEFAULT_OPENMODEL_MODEL).unwrap_or(64_000))
-    );
-    assert!(!cap.cache_telemetry_supported);
-    assert_eq!(
-        cap.request_payload_mode,
-        RequestPayloadMode::AnthropicMessages
-    );
-    assert!(provider_passes_model_through(ApiProvider::Openmodel));
-}
-
-#[test]
-fn provider_capability_deepseek_v4_flash_has_1m_window_and_thinking() {
-    let cap = provider_capability(ApiProvider::Deepseek, "deepseek-v4-flash");
-    assert_eq!(
-        cap.context_window,
-        crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, Some(384_000));
-    assert!(cap.thinking_supported);
-    assert!(cap.cache_telemetry_supported);
-}
-
-#[test]
-fn provider_capability_deepseek_chat_alias_has_v4_flash_caps_and_metadata() {
-    let cap = provider_capability(ApiProvider::Deepseek, "deepseek-chat");
-    assert_eq!(
-        cap.context_window,
-        crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, Some(384_000));
-    assert!(cap.thinking_supported);
-    assert!(cap.cache_telemetry_supported);
-
-    let deprecation = cap
-        .alias_deprecation
-        .as_ref()
-        .expect("alias deprecation metadata");
-    assert_eq!(deprecation.alias, "deepseek-chat");
-    assert_eq!(deprecation.replacement, "deepseek-v4-flash");
-    assert_eq!(deprecation.retirement_date, "2026-07-24");
-    assert_eq!(deprecation.retirement_utc, "2026-07-24T15:59:00Z");
-}
-
-#[test]
-fn provider_capability_deepseek_reasoner_alias_has_v4_flash_caps_and_metadata() {
-    let cap = provider_capability(ApiProvider::Deepseek, "deepseek-reasoner");
-    assert_eq!(
-        cap.context_window,
-        crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, Some(384_000));
-    assert!(cap.thinking_supported);
-    assert!(cap.cache_telemetry_supported);
-
-    let deprecation = cap
-        .alias_deprecation
-        .as_ref()
-        .expect("alias deprecation metadata");
-    assert_eq!(deprecation.alias, "deepseek-reasoner");
-    assert_eq!(deprecation.replacement, "deepseek-v4-flash");
-}
-
-#[test]
-fn provider_capability_deepseek_v4_flash_has_no_alias_deprecation() {
-    let cap = provider_capability(ApiProvider::Deepseek, "deepseek-v4-flash");
-    assert!(cap.alias_deprecation.is_none());
-}
-
-#[test]
-fn provider_capability_nvidia_nim_v4_pro_maps_correctly() {
-    let cap = provider_capability(ApiProvider::NvidiaNim, DEFAULT_NVIDIA_NIM_MODEL);
-    assert_eq!(
-        cap.context_window,
-        crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, Some(384_000));
-    assert!(cap.thinking_supported);
-    assert!(cap.cache_telemetry_supported);
-    assert_eq!(
-        cap.request_payload_mode,
-        RequestPayloadMode::ChatCompletions
-    );
-}
-
-#[test]
-fn provider_capability_nvidia_nim_v4_flash_maps_correctly() {
-    let cap = provider_capability(ApiProvider::NvidiaNim, DEFAULT_NVIDIA_NIM_FLASH_MODEL);
-    assert_eq!(
-        cap.context_window,
-        crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, Some(384_000));
-    assert!(cap.thinking_supported);
-    assert!(cap.cache_telemetry_supported);
+        let omni = provider_capability(ApiProvider::XiaomiMimo, XIAOMI_MIMO_V2_5_OMNI_MODEL);
+        assert_eq!(omni.context_window, 1_000_000);
+        assert_eq!(omni.max_output, Some(131_072));
+        assert!(omni.thinking_supported);
+        assert!(!omni.cache_telemetry_supported);
+    }
+    // from provider_capability_novita_v4_pro_has_thinking_no_cache
+    {
+        let cap = provider_capability(ApiProvider::Novita, DEFAULT_NOVITA_MODEL);
+        assert_eq!(
+            cap.context_window,
+            crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, Some(384_000));
+        assert!(cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+    }
+    // from provider_capability_fireworks_v4_pro_has_thinking_no_cache
+    {
+        let cap = provider_capability(ApiProvider::Fireworks, DEFAULT_FIREWORKS_MODEL);
+        assert_eq!(
+            cap.context_window,
+            crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, Some(384_000));
+        assert!(cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+    }
+    // from provider_capability_siliconflow_v4_pro_has_thinking_no_cache
+    {
+        let cap = provider_capability(ApiProvider::Siliconflow, DEFAULT_SILICONFLOW_MODEL);
+        assert_eq!(
+            cap.context_window,
+            crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, Some(384_000));
+        assert!(cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
+    }
+    // from provider_capability_sglang_v4_pro_has_thinking_no_cache
+    {
+        let cap = provider_capability(ApiProvider::Sglang, DEFAULT_SGLANG_MODEL);
+        assert_eq!(
+            cap.context_window,
+            crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, Some(384_000));
+        assert!(cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+    }
 }
 
 #[test]
@@ -10782,33 +10971,33 @@ fn provider_capability_openrouter_v4_pro_has_thinking_no_cache() {
 }
 
 #[test]
-fn provider_capability_openai_codex_uses_responses_payload() {
-    let cap = provider_capability(ApiProvider::OpenaiCodex, DEFAULT_OPENAI_CODEX_MODEL);
-    assert_eq!(cap.provider, ApiProvider::OpenaiCodex);
-    assert_eq!(cap.resolved_model, DEFAULT_OPENAI_CODEX_MODEL);
-    assert_eq!(
-        cap.context_window,
-        OPENAI_CODEX_EFFECTIVE_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, Some(4096));
-    assert!(cap.thinking_supported);
-    assert!(!cap.cache_telemetry_supported);
-    assert_eq!(cap.request_payload_mode, RequestPayloadMode::Responses);
-}
+fn invalid_provider_scenario() {
+    // Scenario consolidation of: invalid_provider_auth_source_is_not_explicit_configuration, invalid_provider_error_lists_huggingface
+    // from invalid_provider_auth_source_is_not_explicit_configuration
+    {
+        let entry = ProviderConfig {
+            auth: Some(codewhale_config::ProviderAuthSourceToml {
+                source: codewhale_config::AuthSourceKind::Command,
+                command: Vec::new(),
+                timeout_ms: None,
+                secret_id: None,
+            }),
+            ..ProviderConfig::default()
+        };
 
-#[test]
-fn invalid_provider_auth_source_is_not_explicit_configuration() {
-    let entry = ProviderConfig {
-        auth: Some(codewhale_config::ProviderAuthSourceToml {
-            source: codewhale_config::AuthSourceKind::Command,
-            command: Vec::new(),
-            timeout_ms: None,
-            secret_id: None,
-        }),
-        ..ProviderConfig::default()
-    };
-
-    assert!(!provider_config_is_explicit(&entry));
+        assert!(!provider_config_is_explicit(&entry));
+    }
+    // from invalid_provider_error_lists_huggingface
+    {
+        let config = Config {
+            provider: Some("not-a-provider".to_string()),
+            ..Default::default()
+        };
+        let err = config.validate().expect_err("unknown provider should fail");
+        let message = err.to_string();
+        assert!(message.contains("Invalid provider 'not-a-provider'"));
+        assert!(message.contains("huggingface"));
+    }
 }
 
 #[test]
@@ -10900,136 +11089,125 @@ fn provider_capability_arcee_direct_models_use_api_docs_shape() {
 }
 
 #[test]
-fn provider_capability_marks_exact_inkling_route_as_reasoning() {
-    let cap = provider_capability(ApiProvider::Together, TOGETHER_INKLING_MODEL);
-    assert!(cap.thinking_supported);
-    assert_eq!(
-        crate::models::context_window_for_model(TOGETHER_INKLING_MODEL),
-        None
-    );
-    assert_eq!(
-        crate::models::max_output_tokens_for_model(TOGETHER_INKLING_MODEL),
-        None
-    );
-}
-
-#[test]
-fn provider_capability_xiaomi_mimo_has_thinking_no_cache() {
-    let cap = provider_capability(ApiProvider::XiaomiMimo, DEFAULT_XIAOMI_MIMO_MODEL);
-    assert_eq!(cap.context_window, 1_000_000);
-    assert_eq!(cap.max_output, Some(131_072));
-    assert!(cap.thinking_supported);
-    assert!(!cap.cache_telemetry_supported);
-    assert_eq!(
-        cap.request_payload_mode,
-        RequestPayloadMode::ChatCompletions
-    );
-
-    let omni = provider_capability(ApiProvider::XiaomiMimo, XIAOMI_MIMO_V2_5_OMNI_MODEL);
-    assert_eq!(omni.context_window, 1_000_000);
-    assert_eq!(omni.max_output, Some(131_072));
-    assert!(omni.thinking_supported);
-    assert!(!omni.cache_telemetry_supported);
-}
-
-#[test]
-fn provider_capability_novita_v4_pro_has_thinking_no_cache() {
-    let cap = provider_capability(ApiProvider::Novita, DEFAULT_NOVITA_MODEL);
-    assert_eq!(
-        cap.context_window,
-        crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, Some(384_000));
-    assert!(cap.thinking_supported);
-    assert!(!cap.cache_telemetry_supported);
-}
-
-#[test]
-fn provider_capability_fireworks_v4_pro_has_thinking_no_cache() {
-    let cap = provider_capability(ApiProvider::Fireworks, DEFAULT_FIREWORKS_MODEL);
-    assert_eq!(
-        cap.context_window,
-        crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, Some(384_000));
-    assert!(cap.thinking_supported);
-    assert!(!cap.cache_telemetry_supported);
-}
-
-#[test]
-fn provider_capability_siliconflow_v4_pro_has_thinking_no_cache() {
-    let cap = provider_capability(ApiProvider::Siliconflow, DEFAULT_SILICONFLOW_MODEL);
-    assert_eq!(
-        cap.context_window,
-        crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, Some(384_000));
-    assert!(cap.thinking_supported);
-    assert!(!cap.cache_telemetry_supported);
-    assert_eq!(
-        cap.request_payload_mode,
-        RequestPayloadMode::ChatCompletions
-    );
-}
-
-#[test]
-fn provider_capability_sglang_v4_pro_has_thinking_no_cache() {
-    let cap = provider_capability(ApiProvider::Sglang, DEFAULT_SGLANG_MODEL);
-    assert_eq!(
-        cap.context_window,
-        crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, Some(384_000));
-    assert!(cap.thinking_supported);
-    assert!(!cap.cache_telemetry_supported);
-}
-
-#[test]
-fn provider_capability_openai_custom_model_is_chat_completions_without_thinking() {
-    let cap = provider_capability(ApiProvider::Openai, "glm-5");
-    assert_eq!(
-        cap.context_window,
-        crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, None);
-    assert!(!cap.thinking_supported);
-    assert!(!cap.cache_telemetry_supported);
-    assert_eq!(
-        cap.request_payload_mode,
-        RequestPayloadMode::ChatCompletions
-    );
-}
-
-#[test]
-fn provider_capability_atlascloud_v4_model_resolves_model_metadata() {
-    // #3023: Atlascloud uses the generic model-based path, so its default
-    // DeepSeek V4 model resolves the real V4 metadata instead of the old
-    // hardcoded legacy floor.
-    let cap = provider_capability(ApiProvider::Atlascloud, "deepseek-ai/deepseek-v4-flash");
-    assert_eq!(
-        cap.context_window,
-        crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, Some(384_000));
-    assert!(cap.thinking_supported);
-    assert!(!cap.cache_telemetry_supported);
-    assert_eq!(
-        cap.request_payload_mode,
-        RequestPayloadMode::ChatCompletions
-    );
-}
-
-#[test]
-fn provider_capability_moonshot_default_model_resolves_kimi_metadata() {
-    let cap = provider_capability(ApiProvider::Moonshot, DEFAULT_MOONSHOT_MODEL);
-    assert_eq!(cap.context_window, 262_144);
-    assert_eq!(cap.max_output, Some(32_768));
-    assert!(cap.thinking_supported);
-    assert!(!cap.cache_telemetry_supported);
-    assert_eq!(
-        cap.request_payload_mode,
-        RequestPayloadMode::ChatCompletions
-    );
+fn provider_capability_scenario_3() {
+    // Scenario consolidation of: provider_capability_openai_custom_model_is_chat_completions_without_thinking, provider_capability_atlascloud_v4_model_resolves_model_metadata, provider_capability_moonshot_default_model_resolves_kimi_metadata, provider_capability_minimax_anthropic_uses_messages_shape, provider_capability_wanjie_ark_reasoner_has_thinking_no_cache, provider_capability_mistral_matches_reasoning_model_contract, provider_capability_ollama_deepseek_tag_uses_deepseek_heuristic, provider_capability_ollama_unknown_model_falls_back_to_8192
+    // from provider_capability_openai_custom_model_is_chat_completions_without_thinking
+    {
+        let cap = provider_capability(ApiProvider::Openai, "glm-5");
+        assert_eq!(
+            cap.context_window,
+            crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, None);
+        assert!(!cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
+    }
+    // from provider_capability_atlascloud_v4_model_resolves_model_metadata
+    {
+        // #3023: Atlascloud uses the generic model-based path, so its default
+        // DeepSeek V4 model resolves the real V4 metadata instead of the old
+        // hardcoded legacy floor.
+        let cap = provider_capability(ApiProvider::Atlascloud, "deepseek-ai/deepseek-v4-flash");
+        assert_eq!(
+            cap.context_window,
+            crate::models::DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, Some(384_000));
+        assert!(cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
+    }
+    // from provider_capability_moonshot_default_model_resolves_kimi_metadata
+    {
+        let cap = provider_capability(ApiProvider::Moonshot, DEFAULT_MOONSHOT_MODEL);
+        assert_eq!(cap.context_window, 262_144);
+        assert_eq!(cap.max_output, Some(32_768));
+        assert!(cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
+    }
+    // from provider_capability_minimax_anthropic_uses_messages_shape
+    {
+        for model in [DEFAULT_MINIMAX_MODEL, MINIMAX_M2_7_MODEL] {
+            let cap = provider_capability(ApiProvider::MinimaxAnthropic, model);
+            assert!(cap.thinking_supported, "{model}");
+            assert!(!cap.cache_telemetry_supported, "{model}");
+            assert_eq!(
+                cap.request_payload_mode,
+                RequestPayloadMode::AnthropicMessages
+            );
+        }
+    }
+    // from provider_capability_wanjie_ark_reasoner_has_thinking_no_cache
+    {
+        let cap = provider_capability(ApiProvider::WanjieArk, DEFAULT_WANJIE_ARK_MODEL);
+        assert_eq!(
+            cap.context_window,
+            crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, None);
+        assert!(cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
+    }
+    // from provider_capability_mistral_matches_reasoning_model_contract
+    {
+        for model in ["mistral-medium-latest", "mistral-small-latest"] {
+            let cap = provider_capability(ApiProvider::Mistral, model);
+            assert_eq!(cap.context_window, 262_144, "{model}");
+            assert!(cap.thinking_supported, "{model}");
+            assert_eq!(
+                cap.request_payload_mode,
+                RequestPayloadMode::ChatCompletions
+            );
+        }
+        for model in ["mistral-code-latest", "mistral-large-latest"] {
+            let cap = provider_capability(ApiProvider::Mistral, model);
+            assert!(!cap.thinking_supported, "{model}");
+        }
+    }
+    // from provider_capability_ollama_deepseek_tag_uses_deepseek_heuristic
+    {
+        // #3023: known model families resolve through models.rs lookups even
+        // on Ollama — a legacy DeepSeek tag gets the 128K heuristic window.
+        let cap = provider_capability(ApiProvider::Ollama, "deepseek-v3.1:671b");
+        assert_eq!(
+            cap.context_window,
+            crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS
+        );
+        assert_eq!(cap.max_output, None);
+        assert!(!cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
+    }
+    // from provider_capability_ollama_unknown_model_falls_back_to_8192
+    {
+        let cap = provider_capability(ApiProvider::Ollama, "llama3.2:3b");
+        assert_eq!(cap.context_window, 8192);
+        assert_eq!(cap.max_output, None);
+        assert!(!cap.thinking_supported);
+        assert!(!cap.cache_telemetry_supported);
+        assert_eq!(
+            cap.request_payload_mode,
+            RequestPayloadMode::ChatCompletions
+        );
+    }
 }
 
 #[test]
@@ -11130,108 +11308,35 @@ fn provider_capability_minimax_direct_models_use_api_docs_shape() {
 }
 
 #[test]
-fn provider_capability_minimax_anthropic_uses_messages_shape() {
-    for model in [DEFAULT_MINIMAX_MODEL, MINIMAX_M2_7_MODEL] {
-        let cap = provider_capability(ApiProvider::MinimaxAnthropic, model);
-        assert!(cap.thinking_supported, "{model}");
-        assert!(!cap.cache_telemetry_supported, "{model}");
+fn provider_capability_scenario_4() {
+    // Scenario consolidation of: provider_capability_non_v4_model_has_smaller_window, provider_capability_roundtrip_serialization
+    // from provider_capability_non_v4_model_has_smaller_window
+    {
+        let cap = provider_capability(ApiProvider::Deepseek, "deepseek-coder");
         assert_eq!(
-            cap.request_payload_mode,
-            RequestPayloadMode::AnthropicMessages
+            cap.context_window,
+            crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS
         );
+        assert_eq!(cap.max_output, None);
+        assert!(!cap.thinking_supported);
+    }
+    // from provider_capability_roundtrip_serialization
+    {
+        let cap = provider_capability(ApiProvider::Deepseek, "deepseek-v4-pro");
+        let json = serde_json::to_value(&cap).unwrap();
+        let deserialized: ProviderCapability = serde_json::from_value(json).unwrap();
+        assert_eq!(cap, deserialized);
     }
 }
 
 #[test]
-fn provider_capability_wanjie_ark_reasoner_has_thinking_no_cache() {
-    let cap = provider_capability(ApiProvider::WanjieArk, DEFAULT_WANJIE_ARK_MODEL);
-    assert_eq!(
-        cap.context_window,
-        crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, None);
-    assert!(cap.thinking_supported);
-    assert!(!cap.cache_telemetry_supported);
-    assert_eq!(
-        cap.request_payload_mode,
-        RequestPayloadMode::ChatCompletions
-    );
-}
-
-#[test]
-fn provider_capability_mistral_matches_reasoning_model_contract() {
-    for model in ["mistral-medium-latest", "mistral-small-latest"] {
-        let cap = provider_capability(ApiProvider::Mistral, model);
-        assert_eq!(cap.context_window, 262_144, "{model}");
-        assert!(cap.thinking_supported, "{model}");
-        assert_eq!(
-            cap.request_payload_mode,
-            RequestPayloadMode::ChatCompletions
-        );
-    }
-    for model in ["mistral-code-latest", "mistral-large-latest"] {
-        let cap = provider_capability(ApiProvider::Mistral, model);
-        assert!(!cap.thinking_supported, "{model}");
-    }
-}
-
-#[test]
-fn provider_capability_ollama_deepseek_tag_uses_deepseek_heuristic() {
-    // #3023: known model families resolve through models.rs lookups even
-    // on Ollama — a legacy DeepSeek tag gets the 128K heuristic window.
-    let cap = provider_capability(ApiProvider::Ollama, "deepseek-v3.1:671b");
-    assert_eq!(
-        cap.context_window,
-        crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, None);
-    assert!(!cap.thinking_supported);
-    assert!(!cap.cache_telemetry_supported);
-    assert_eq!(
-        cap.request_payload_mode,
-        RequestPayloadMode::ChatCompletions
-    );
-}
-
-#[test]
-fn provider_capability_ollama_unknown_model_falls_back_to_8192() {
-    let cap = provider_capability(ApiProvider::Ollama, "llama3.2:3b");
-    assert_eq!(cap.context_window, 8192);
-    assert_eq!(cap.max_output, None);
-    assert!(!cap.thinking_supported);
-    assert!(!cap.cache_telemetry_supported);
-    assert_eq!(
-        cap.request_payload_mode,
-        RequestPayloadMode::ChatCompletions
-    );
-}
-
-#[test]
-fn provider_capability_non_v4_model_has_smaller_window() {
-    let cap = provider_capability(ApiProvider::Deepseek, "deepseek-coder");
-    assert_eq!(
-        cap.context_window,
-        crate::models::LEGACY_DEEPSEEK_CONTEXT_WINDOW_TOKENS
-    );
-    assert_eq!(cap.max_output, None);
-    assert!(!cap.thinking_supported);
-}
-
-#[test]
-fn provider_capability_roundtrip_serialization() {
-    let cap = provider_capability(ApiProvider::Deepseek, "deepseek-v4-pro");
-    let json = serde_json::to_value(&cap).unwrap();
-    let deserialized: ProviderCapability = serde_json::from_value(json).unwrap();
-    assert_eq!(cap, deserialized);
-}
-
-#[test]
-fn status_item_balance_available_only_for_deepseek_providers() {
-    // Balance item should only be offered for DeepSeek / DeepSeekCN.
+fn status_item_balance_available_for_prepaid_providers() {
     assert!(StatusItem::Balance.is_available_for(ApiProvider::Deepseek));
     assert!(StatusItem::Balance.is_available_for(ApiProvider::DeepseekCN));
-    // Sanity: all other known providers should hide the Balance toggle.
-    assert!(!StatusItem::Balance.is_available_for(ApiProvider::Openrouter));
+    assert!(StatusItem::Balance.is_available_for(ApiProvider::Openrouter));
+    assert!(StatusItem::Balance.is_available_for(ApiProvider::Siliconflow));
+    assert!(StatusItem::Balance.is_available_for(ApiProvider::SiliconflowCn));
+    // Invoice-only, local, and unimplemented prepaid vendors stay hidden.
     assert!(!StatusItem::Balance.is_available_for(ApiProvider::Novita));
     assert!(!StatusItem::Balance.is_available_for(ApiProvider::NvidiaNim));
     assert!(!StatusItem::Balance.is_available_for(ApiProvider::Fireworks));
@@ -11245,159 +11350,155 @@ fn status_item_balance_available_only_for_deepseek_providers() {
 }
 
 #[test]
-fn status_items_deser_ignores_unknown_variants() {
-    // Simulate a stable build reading config written by a dev build that
-    // knows about items the stable build doesn't (e.g. "balance" or a
-    // future "cost_saving" chip).
-    let toml_str = r#"
-        alternate_screen = "auto"
-        status_items = ["mode", "model", "unknown_future_item", "cost", "another_unknown", "status"]
-    "#;
-    let tui: TuiConfig = toml::from_str(toml_str).expect("should parse without error");
-    let items = tui.status_items.expect("status_items should be Some");
-    assert_eq!(items.len(), 4, "unknown items should be silently dropped");
-    assert_eq!(items[0], StatusItem::Mode);
-    assert_eq!(items[1], StatusItem::Model);
-    assert_eq!(items[2], StatusItem::Cost);
-    assert_eq!(items[3], StatusItem::Status);
+fn status_items_scenario() {
+    // Scenario consolidation of: status_items_deser_ignores_unknown_variants, status_items_deser_allows_missing_field
+    // from status_items_deser_ignores_unknown_variants
+    {
+        // Simulate a stable build reading config written by a dev build that
+        // knows about items the stable build doesn't (e.g. "balance" or a
+        // future "cost_saving" chip).
+        let toml_str = r#"
+            alternate_screen = "auto"
+            status_items = ["mode", "model", "unknown_future_item", "cost", "another_unknown", "status"]
+        "#;
+        let tui: TuiConfig = toml::from_str(toml_str).expect("should parse without error");
+        let items = tui.status_items.expect("status_items should be Some");
+        assert_eq!(items.len(), 4, "unknown items should be silently dropped");
+        assert_eq!(items[0], StatusItem::Mode);
+        assert_eq!(items[1], StatusItem::Model);
+        assert_eq!(items[2], StatusItem::Cost);
+        assert_eq!(items[3], StatusItem::Status);
+    }
+    // from status_items_deser_allows_missing_field
+    {
+        let toml_str = r#"
+            locale = "zh-Hans"
+            mouse_capture = false
+        "#;
+        let tui: TuiConfig = toml::from_str(toml_str).expect("missing status_items should parse");
+        assert_eq!(tui.status_items, None);
+    }
 }
 
 #[test]
-fn status_items_deser_allows_missing_field() {
-    let toml_str = r#"
-        locale = "zh-Hans"
-        mouse_capture = false
-    "#;
-    let tui: TuiConfig = toml::from_str(toml_str).expect("missing status_items should parse");
-    assert_eq!(tui.status_items, None);
-}
+fn transcript_prose_scenario() -> Result<()> {
+    // Scenario consolidation of: transcript_prose_measure_loads_and_resolves, transcript_prose_measure_rejects_negative_with_clear_error, transcript_prose_measure_rejects_non_integers_with_clear_error
+    // from transcript_prose_measure_loads_and_resolves
+    {
+        // #5436: absent = full width; 0 also means full width; a positive
+        // integer caps prose wrap at that many columns.
+        let absent: Config = toml::from_str("provider = \"openai\"\n")?;
+        absent.validate()?;
+        assert_eq!(absent.prose_measure(), None);
 
-#[test]
-fn transcript_prose_measure_loads_and_resolves() -> Result<()> {
-    // #5436: absent = full width; 0 also means full width; a positive
-    // integer caps prose wrap at that many columns.
-    let absent: Config = toml::from_str("provider = \"openai\"\n")?;
-    absent.validate()?;
-    assert_eq!(absent.prose_measure(), None);
+        let zero: Config = toml::from_str(
+            "
+    [transcript]
+    prose_measure = 0
+    ",
+        )?;
+        zero.validate()?;
+        assert_eq!(zero.prose_measure(), None, "0 must mean full width");
 
-    let zero: Config = toml::from_str(
-        "
-[transcript]
-prose_measure = 0
-",
-    )?;
-    zero.validate()?;
-    assert_eq!(zero.prose_measure(), None, "0 must mean full width");
+        let capped: Config = toml::from_str(
+            "
+    [transcript]
+    prose_measure = 120
+    ",
+        )?;
+        capped.validate()?;
+        assert_eq!(capped.prose_measure(), Some(120));
+    }
+    // from transcript_prose_measure_rejects_negative_with_clear_error
+    {
+        let config: Config = toml::from_str(
+            "
+    [transcript]
+    prose_measure = -5
+    ",
+        )
+        .expect("negative integers must parse so validate can name the key");
 
-    let capped: Config = toml::from_str(
-        "
-[transcript]
-prose_measure = 120
-",
-    )?;
-    capped.validate()?;
-    assert_eq!(capped.prose_measure(), Some(120));
+        let error = config
+            .validate()
+            .expect_err("negative prose_measure should be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("transcript.prose_measure"),
+            "error should name the key: {message}"
+        );
+        assert!(
+            message.contains("-5"),
+            "error should echo the value: {message}"
+        );
+        assert!(
+            message.contains("positive whole number"),
+            "error should say what is expected: {message}"
+        );
+    }
+    // from transcript_prose_measure_rejects_non_integers_with_clear_error
+    {
+        for raw in ["\"fill\"", "12.5", "true"] {
+            let config: Config = toml::from_str(&format!(
+                "
+    [transcript]
+    prose_measure = {raw}
+    "
+            ))
+            .unwrap_or_else(|_| panic!("{raw} must parse so validate can name the key"));
+
+            let error = config
+                .validate()
+                .expect_err(&format!("{raw} should be rejected"));
+            let message = error.to_string();
+            assert!(
+                message.contains("transcript.prose_measure"),
+                "error should name the key for {raw}: {message}"
+            );
+            assert!(
+                message.contains("positive whole number"),
+                "error should say what is expected for {raw}: {message}"
+            );
+        }
+    }
     Ok(())
 }
 
 #[test]
-fn transcript_prose_measure_rejects_negative_with_clear_error() {
-    let config: Config = toml::from_str(
-        "
-[transcript]
-prose_measure = -5
-",
-    )
-    .expect("negative integers must parse so validate can name the key");
-
-    let error = config
-        .validate()
-        .expect_err("negative prose_measure should be rejected");
-    let message = error.to_string();
-    assert!(
-        message.contains("transcript.prose_measure"),
-        "error should name the key: {message}"
-    );
-    assert!(
-        message.contains("-5"),
-        "error should echo the value: {message}"
-    );
-    assert!(
-        message.contains("positive whole number"),
-        "error should say what is expected: {message}"
-    );
-}
-
-#[test]
-fn transcript_prose_measure_rejects_non_integers_with_clear_error() {
-    for raw in ["\"fill\"", "12.5", "true"] {
-        let config: Config = toml::from_str(&format!(
-            "
-[transcript]
-prose_measure = {raw}
-"
-        ))
-        .unwrap_or_else(|_| panic!("{raw} must parse so validate can name the key"));
-
-        let error = config
-            .validate()
-            .expect_err(&format!("{raw} should be rejected"));
-        let message = error.to_string();
-        assert!(
-            message.contains("transcript.prose_measure"),
-            "error should name the key for {raw}: {message}"
-        );
-        assert!(
-            message.contains("positive whole number"),
-            "error should say what is expected for {raw}: {message}"
-        );
+fn huggingface_provider_scenario() -> Result<()> {
+    // Scenario consolidation of: huggingface_provider_aliases_parse, huggingface_provider_uses_direct_defaults
+    // from huggingface_provider_aliases_parse
+    {
+        for alias in ["huggingface", "hugging-face", "hugging_face", "hf"] {
+            assert_eq!(ApiProvider::parse(alias), Some(ApiProvider::Huggingface));
+        }
     }
-}
+    // from huggingface_provider_uses_direct_defaults
+    {
+        let _lock = lock_test_env();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_root = env::temp_dir().join(format!(
+            "codewhale-tui-huggingface-defaults-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir_all(&temp_root)?;
+        let _guard = EnvGuard::new(&temp_root);
 
-#[test]
-fn huggingface_provider_aliases_parse() {
-    for alias in ["huggingface", "hugging-face", "hugging_face", "hf"] {
-        assert_eq!(ApiProvider::parse(alias), Some(ApiProvider::Huggingface));
+        unsafe {
+            env::set_var("CODEWHALE_PROVIDER", "huggingface");
+            env::set_var("HUGGINGFACE_API_KEY", "hf-env-key");
+        }
+
+        let config = Config::load(None, None)?;
+        assert_eq!(config.api_provider(), ApiProvider::Huggingface);
+        assert_eq!(config.deepseek_api_key()?, "hf-env-key");
+        assert_eq!(config.deepseek_base_url(), DEFAULT_HUGGINGFACE_BASE_URL);
+        assert_eq!(config.default_model(), DEFAULT_HUGGINGFACE_MODEL);
     }
-}
-
-#[test]
-fn invalid_provider_error_lists_huggingface() {
-    let config = Config {
-        provider: Some("not-a-provider".to_string()),
-        ..Default::default()
-    };
-    let err = config.validate().expect_err("unknown provider should fail");
-    let message = err.to_string();
-    assert!(message.contains("Invalid provider 'not-a-provider'"));
-    assert!(message.contains("huggingface"));
-}
-
-#[test]
-fn huggingface_provider_uses_direct_defaults() -> Result<()> {
-    let _lock = lock_test_env();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let temp_root = env::temp_dir().join(format!(
-        "codewhale-tui-huggingface-defaults-test-{}-{}",
-        std::process::id(),
-        nanos
-    ));
-    fs::create_dir_all(&temp_root)?;
-    let _guard = EnvGuard::new(&temp_root);
-
-    unsafe {
-        env::set_var("CODEWHALE_PROVIDER", "huggingface");
-        env::set_var("HUGGINGFACE_API_KEY", "hf-env-key");
-    }
-
-    let config = Config::load(None, None)?;
-    assert_eq!(config.api_provider(), ApiProvider::Huggingface);
-    assert_eq!(config.deepseek_api_key()?, "hf-env-key");
-    assert_eq!(config.deepseek_base_url(), DEFAULT_HUGGINGFACE_BASE_URL);
-    assert_eq!(config.default_model(), DEFAULT_HUGGINGFACE_MODEL);
     Ok(())
 }
 
@@ -11522,22 +11623,51 @@ fn huggingface_custom_env_urls_do_not_inherit_ambient_keys() -> Result<()> {
 }
 
 #[test]
-fn notifications_parse_custom_completion_sound_file() {
-    let config: Config = toml::from_str(
-        r#"
-        [notifications]
-        completion_sound = "file"
-        sound_file = "E:\\google\\downloads\\xm4114.wav"
-        "#,
-    )
-    .expect("custom completion sound config should parse");
+fn notifications_parse_scenario() {
+    // Scenario consolidation of: notifications_parse_custom_completion_sound_file, notifications_parse_quiet_and_event_categories
+    // from notifications_parse_custom_completion_sound_file
+    {
+        let config: Config = toml::from_str(
+            r#"
+            [notifications]
+            completion_sound = "file"
+            sound_file = "E:\\google\\downloads\\xm4114.wav"
+            "#,
+        )
+        .expect("custom completion sound config should parse");
 
-    let notifications = config.notifications_config();
-    assert_eq!(notifications.completion_sound, CompletionSound::File);
-    assert_eq!(
-        notifications.sound_file.as_deref(),
-        Some(std::path::Path::new("E:\\google\\downloads\\xm4114.wav"))
-    );
+        let notifications = config.notifications_config();
+        assert_eq!(notifications.completion_sound, CompletionSound::File);
+        assert_eq!(
+            notifications.sound_file.as_deref(),
+            Some(std::path::Path::new("E:\\google\\downloads\\xm4114.wav"))
+        );
+    }
+    // from notifications_parse_quiet_and_event_categories
+    {
+        let config: Config = toml::from_str(
+            r#"
+            [notifications]
+            quiet = true
+
+            [notifications.events]
+            approval-needed = false
+            model-notify = false
+            "#,
+        )
+        .expect("quiet + events config should parse");
+
+        let notifications = config.notifications_config();
+        assert!(notifications.quiet);
+        let events = notifications.events;
+        assert!(!events.approval_needed);
+        assert!(!events.model_notify);
+        // Unlisted categories keep their enabled default.
+        assert!(events.turn_complete);
+        assert!(events.subagent_terminal);
+        assert!(events.input_needed);
+        assert!(events.elevation_needed);
+    }
 }
 
 #[test]
@@ -11583,32 +11713,6 @@ fn notifications_event_sound_defaults_when_table_absent() {
     );
     assert_eq!(event_sound.min_interval_ms, 2000);
     assert!(!event_sound.quiet);
-}
-
-#[test]
-fn notifications_parse_quiet_and_event_categories() {
-    let config: Config = toml::from_str(
-        r#"
-        [notifications]
-        quiet = true
-
-        [notifications.events]
-        approval-needed = false
-        model-notify = false
-        "#,
-    )
-    .expect("quiet + events config should parse");
-
-    let notifications = config.notifications_config();
-    assert!(notifications.quiet);
-    let events = notifications.events;
-    assert!(!events.approval_needed);
-    assert!(!events.model_notify);
-    // Unlisted categories keep their enabled default.
-    assert!(events.turn_complete);
-    assert!(events.subagent_terminal);
-    assert!(events.input_needed);
-    assert!(events.elevation_needed);
 }
 
 #[test]
@@ -11737,56 +11841,59 @@ fn api_provider_returns_custom_for_custom_name_and_deepseek_for_junk() {
 }
 
 #[test]
-fn custom_provider_kind_only_accepts_openai_compatible() {
-    let ok = ProviderConfig {
-        kind: Some("openai-compatible".to_string()),
-        ..Default::default()
-    };
-    assert!(ok.is_openai_compatible_custom());
-
-    // Underscore spelling and case are tolerated.
-    let underscore = ProviderConfig {
-        kind: Some("OpenAI_Compatible".to_string()),
-        ..Default::default()
-    };
-    assert!(underscore.is_openai_compatible_custom());
-
-    // Any other declared wire format is rejected (callers error on these).
-    let other = ProviderConfig {
-        kind: Some("anthropic-messages".to_string()),
-        ..Default::default()
-    };
-    assert!(!other.is_openai_compatible_custom());
-
-    // Built-in providers leave `kind` unset.
-    assert!(!ProviderConfig::default().is_openai_compatible_custom());
-}
-
-#[test]
-fn custom_provider_base_url_and_model_resolve_from_named_table() {
-    let mut custom = HashMap::new();
-    custom.insert(
-        "my_thing".to_string(),
-        ProviderConfig {
+fn custom_provider_scenario() {
+    // Scenario consolidation of: custom_provider_kind_only_accepts_openai_compatible, custom_provider_base_url_and_model_resolve_from_named_table
+    // from custom_provider_kind_only_accepts_openai_compatible
+    {
+        let ok = ProviderConfig {
             kind: Some("openai-compatible".to_string()),
-            base_url: Some("https://api.example.com/v1".to_string()),
-            model: Some("custom-model-v1".to_string()),
             ..Default::default()
-        },
-    );
-    let config = Config {
-        provider: Some("my_thing".to_string()),
-        providers: Some(ProvidersConfig {
-            custom,
-            ..Default::default()
-        }),
-        ..Config::default()
-    };
+        };
+        assert!(ok.is_openai_compatible_custom());
 
-    // Resolution reads the named table, not a DeepSeek default.
-    assert_eq!(config.api_provider(), ApiProvider::Custom);
-    assert_eq!(config.deepseek_base_url(), "https://api.example.com/v1");
-    assert_eq!(config.default_model(), "custom-model-v1");
+        // Underscore spelling and case are tolerated.
+        let underscore = ProviderConfig {
+            kind: Some("OpenAI_Compatible".to_string()),
+            ..Default::default()
+        };
+        assert!(underscore.is_openai_compatible_custom());
+
+        // Any other declared wire format is rejected (callers error on these).
+        let other = ProviderConfig {
+            kind: Some("anthropic-messages".to_string()),
+            ..Default::default()
+        };
+        assert!(!other.is_openai_compatible_custom());
+
+        // Built-in providers leave `kind` unset.
+        assert!(!ProviderConfig::default().is_openai_compatible_custom());
+    }
+    // from custom_provider_base_url_and_model_resolve_from_named_table
+    {
+        let mut custom = HashMap::new();
+        custom.insert(
+            "my_thing".to_string(),
+            ProviderConfig {
+                kind: Some("openai-compatible".to_string()),
+                base_url: Some("https://api.example.com/v1".to_string()),
+                model: Some("custom-model-v1".to_string()),
+                ..Default::default()
+            },
+        );
+        let config = Config {
+            provider: Some("my_thing".to_string()),
+            providers: Some(ProvidersConfig {
+                custom,
+                ..Default::default()
+            }),
+            ..Config::default()
+        };
+
+        // Resolution reads the named table, not a DeepSeek default.
+        assert_eq!(config.api_provider(), ApiProvider::Custom);
+        assert_eq!(config.deepseek_base_url(), "https://api.example.com/v1");
+        assert_eq!(config.default_model(), "custom-model-v1");
+    }
 }
 
 fn session_custom_provider_config(name: &str, kind: &str, base_url: &str) -> Config {
@@ -12466,23 +12573,49 @@ fn validate_still_rejects_unknown_model_on_official_deepseek() {
 }
 
 #[test]
-fn native_memory_backend_owns_explicit_path() {
-    let tmp = tempfile::tempdir().unwrap();
-    let legacy = tmp.path().join("legacy-memory.md");
-    let config = Config {
-        memory_path: Some(legacy.to_string_lossy().into_owned()),
-        memory: Some(MemoryConfig {
-            backend: Some(MemoryBackend::Native),
+fn native_memory_scenario() {
+    // Scenario consolidation of: native_memory_backend_owns_explicit_path, native_memory_path_honours_an_already_native_setting
+    // from native_memory_backend_owns_explicit_path
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let legacy = tmp.path().join("legacy-memory.md");
+        let config = Config {
+            memory_path: Some(legacy.to_string_lossy().into_owned()),
+            memory: Some(MemoryConfig {
+                backend: Some(MemoryBackend::Native),
+                ..Default::default()
+            }),
             ..Default::default()
-        }),
-        ..Default::default()
-    };
-    assert_eq!(config.memory_backend(), MemoryBackend::Native);
-    assert!(config.memory_enabled());
-    assert_eq!(
-        config.memory_path(),
-        tmp.path().join("memory/global/MEMORY.md")
-    );
+        };
+        assert_eq!(config.memory_backend(), MemoryBackend::Native);
+        assert!(config.memory_enabled());
+        assert_eq!(
+            config.memory_path(),
+            tmp.path().join("memory/global/MEMORY.md")
+        );
+    }
+    // from native_memory_path_honours_an_already_native_setting
+    {
+        // Pointing `memory_path` at a native store is the obvious reading of the
+        // name; it used to nest a second store inside and write to the wrong file.
+        let mut config = Config::default();
+        config.memory = Some(crate::config::MemoryConfig {
+            enabled: Some(true),
+            ..Default::default()
+        });
+        config.memory_path = Some("/tmp/cw-test/memory/global/MEMORY.md".to_string());
+        assert_eq!(
+            config.memory_path(),
+            std::path::PathBuf::from("/tmp/cw-test/memory/global/MEMORY.md")
+        );
+
+        // A legacy single-file setting still anchors the store beside it.
+        config.memory_path = Some("/tmp/cw-test/memory.md".to_string());
+        assert_eq!(
+            config.memory_path(),
+            std::path::PathBuf::from("/tmp/cw-test/memory/global/MEMORY.md")
+        );
+    }
 }
 
 /// Pins the v0.9.4 memory consolidation: with `[memory] enabled = true`
@@ -13244,29 +13377,6 @@ fn remembered_model_pick_defers_to_the_configured_spelling() {
     assert_eq!(
         prefer_configured_model_spelling("DeepSeek-V4-Flash", "DeepSeek-V4-Flash".to_string()),
         "DeepSeek-V4-Flash"
-    );
-}
-
-#[test]
-fn native_memory_path_honours_an_already_native_setting() {
-    // Pointing `memory_path` at a native store is the obvious reading of the
-    // name; it used to nest a second store inside and write to the wrong file.
-    let mut config = Config::default();
-    config.memory = Some(crate::config::MemoryConfig {
-        enabled: Some(true),
-        ..Default::default()
-    });
-    config.memory_path = Some("/tmp/cw-test/memory/global/MEMORY.md".to_string());
-    assert_eq!(
-        config.memory_path(),
-        std::path::PathBuf::from("/tmp/cw-test/memory/global/MEMORY.md")
-    );
-
-    // A legacy single-file setting still anchors the store beside it.
-    config.memory_path = Some("/tmp/cw-test/memory.md".to_string());
-    assert_eq!(
-        config.memory_path(),
-        std::path::PathBuf::from("/tmp/cw-test/memory/global/MEMORY.md")
     );
 }
 

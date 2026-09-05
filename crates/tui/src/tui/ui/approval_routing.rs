@@ -3,7 +3,7 @@
 use crate::audit::log_sensitive_event;
 use crate::core::engine::EngineHandle;
 use crate::localization::MessageId;
-use crate::tui::app::{App, AppMode, StatusToastLevel};
+use crate::tui::app::{App, StatusToastLevel};
 use crate::tui::approval::ApprovalMode;
 use crate::tui::history::HistoryCell;
 
@@ -80,13 +80,13 @@ pub(super) async fn auto_deny_session_approval(
 }
 
 pub(super) fn app_auto_approve_enabled(app: &App) -> bool {
-    app.mode == AppMode::Yolo || app.approval_mode == ApprovalMode::Bypass
+    app.approval_mode == ApprovalMode::Bypass
 }
 
 /// Build the UI-side TurnAuthority for approval disposition (#4412).
 ///
 /// Shell/trust bits do not affect disposition; mode + approval_mode + the
-/// full-access shape (Yolo/Bypass) are what the shared resolver consults.
+/// full-access shape (Bypass) are what the shared resolver consults.
 fn app_turn_authority_for_approvals(app: &App) -> crate::core::authority::TurnAuthority {
     crate::core::authority::TurnAuthority::from_effective_fields(
         app.mode,

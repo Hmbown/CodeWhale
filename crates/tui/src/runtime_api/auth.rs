@@ -5,9 +5,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
-use super::RuntimeApiState;
-
-const RUNTIME_TOKEN_COOKIE: &str = "codewhale_runtime_token";
+use super::{RuntimeApiState, mobile};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ResolvedRuntimeAuth {
@@ -82,19 +80,25 @@ pub(super) fn runtime_request_is_authorized(req: &Request, state: &RuntimeApiSta
     let Some(expected) = state.runtime_token.as_deref() else {
         return true;
     };
-    let cookie_authorized = request_has_runtime_cookie(req, expected)
-        || state.web.as_ref().is_some_and(|web| {
-            web.matches_session_cookie(
-                req.headers()
-                    .get(header::COOKIE)
-                    .and_then(|value| value.to_str().ok()),
-            )
-        });
-    request_has_header_runtime_token(req, expected)
-        || (cookie_authorized && web_cookie_request_is_same_origin(req, state))
+    if request_has_header_runtime_token(req, expected) {
+        return true;
+    }
+    if state.web.as_ref().is_some_and(|web| {
+        web.matches_session_cookie(
+            req.headers()
+                .get(header::COOKIE)
+                .and_then(|value| value.to_str().ok()),
+        ) && web_cookie_request_is_same_origin(req, state)
+    }) {
+        return true;
+    }
+    state
+        .mobile
+        .as_ref()
+        .is_some_and(|mobile| mobile_session_request_is_authorized(req, state, mobile))
 }
 
-fn request_has_header_runtime_token(req: &Request, expected: &str) -> bool {
+pub(super) fn request_has_header_runtime_token(req: &Request, expected: &str) -> bool {
     req.headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -112,15 +116,6 @@ fn request_has_header_runtime_token(req: &Request, expected: &str) -> bool {
             .is_some_and(|token| token == expected)
 }
 
-fn request_has_runtime_cookie(req: &Request, expected: &str) -> bool {
-    token_from_cookie_header(
-        req.headers()
-            .get(header::COOKIE)
-            .and_then(|value| value.to_str().ok()),
-    )
-    .is_some_and(|token| token == expected)
-}
-
 /// The web bootstrap adds cookie authentication to the existing bearer/header
 /// boundary. SameSite is site-scoped rather than origin-scoped, so a sibling
 /// loopback port can still receive the cookie. Require browser-origin evidence
@@ -128,10 +123,6 @@ fn request_has_runtime_cookie(req: &Request, expected: &str) -> bool {
 /// cross-origin cookie request. Bearer and explicit runtime-token headers keep
 /// their existing behavior.
 fn web_cookie_request_is_same_origin(req: &Request, state: &RuntimeApiState) -> bool {
-    if state.web.is_none() {
-        return true;
-    }
-
     if req
         .headers()
         .get("sec-fetch-site")
@@ -141,11 +132,7 @@ fn web_cookie_request_is_same_origin(req: &Request, state: &RuntimeApiState) -> 
         return false;
     }
 
-    let expected_origin = if state.bind_port == 80 {
-        format!("http://{}", state.bind_host)
-    } else {
-        format!("http://{}:{}", state.bind_host, state.bind_port)
-    };
+    let expected_origin = runtime_http_origin(state);
     if let Some(origin) = req
         .headers()
         .get(header::ORIGIN)
@@ -157,7 +144,94 @@ fn web_cookie_request_is_same_origin(req: &Request, state: &RuntimeApiState) -> 
     matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
-fn runtime_token_required_response() -> Response {
+/// Mobile cookies are host-scoped and can be attached to a sibling loopback
+/// port. A cookie alone is therefore never Runtime authority: normal fetches
+/// must also present an origin-scoped proof and EventSource requests must
+/// consume a short-lived stream ticket. The origin/Fetch Metadata check keeps
+/// a sibling port from replaying a captured value.
+pub(super) fn mobile_session_request_is_authorized(
+    req: &Request,
+    state: &RuntimeApiState,
+    mobile_state: &mobile::RuntimeMobileState,
+) -> bool {
+    if !mobile_cookie_request_is_same_origin(req, state) {
+        return false;
+    }
+    let cookie_header = req
+        .headers()
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok());
+    if is_mobile_stream_request(req) {
+        return mobile_state.consume_stream_ticket(cookie_header, mobile_stream_ticket(req));
+    }
+    mobile_state.matches_request(
+        cookie_header,
+        req.headers()
+            .get(mobile::MOBILE_REQUEST_HEADER)
+            .and_then(|value| value.to_str().ok()),
+    )
+}
+
+fn mobile_cookie_request_is_same_origin(req: &Request, state: &RuntimeApiState) -> bool {
+    let fetch_metadata_is_same_origin = req
+        .headers()
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|site| site.eq_ignore_ascii_case("same-origin"));
+    if req
+        .headers()
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|site| !site.eq_ignore_ascii_case("same-origin"))
+    {
+        return false;
+    }
+
+    match req
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(origin) => origin == runtime_http_origin(state),
+        None => fetch_metadata_is_same_origin,
+    }
+}
+
+fn runtime_http_origin(state: &RuntimeApiState) -> String {
+    runtime_http_origin_for_bind(&state.bind_host, state.bind_port)
+}
+
+fn runtime_http_origin_for_bind(bind_host: &str, bind_port: u16) -> String {
+    let host = match bind_host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(address)) => address.to_string(),
+        Ok(std::net::IpAddr::V6(address)) => format!("[{address}]"),
+        Err(_) => bind_host.to_string(),
+    };
+    if bind_port == 80 {
+        format!("http://{host}")
+    } else {
+        format!("http://{host}:{bind_port}")
+    }
+}
+
+fn is_mobile_stream_request(req: &Request) -> bool {
+    req.method() == Method::GET
+        && req.uri().path().starts_with("/v1/threads/")
+        && req.uri().path().ends_with("/events")
+}
+
+fn mobile_stream_ticket(req: &Request) -> Option<&str> {
+    let mut tickets = req
+        .uri()
+        .query()?
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .filter_map(|(key, value)| (key == mobile::MOBILE_STREAM_TICKET_QUERY).then_some(value));
+    let ticket = tickets.next()?;
+    tickets.next().is_none().then_some(ticket)
+}
+
+pub(super) fn runtime_token_required_response() -> Response {
     (
         StatusCode::UNAUTHORIZED,
         Json(json!({
@@ -170,41 +244,16 @@ fn runtime_token_required_response() -> Response {
         .into_response()
 }
 
-pub(super) fn token_from_cookie_header(cookie: Option<&str>) -> Option<String> {
-    cookie.and_then(|cookie| {
-        cookie.split(';').find_map(|pair| {
-            let pair = pair.trim();
-            let (key, value) = pair.split_once('=')?;
-            (key == RUNTIME_TOKEN_COOKIE)
-                .then(|| percent_decode_query_component(value.trim()))
-                .flatten()
-        })
-    })
-}
+#[cfg(test)]
+mod tests {
+    use super::runtime_http_origin_for_bind;
 
-fn percent_decode_query_component(value: &str) -> Option<String> {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'%' => {
-                let hi = *bytes.get(index + 1)?;
-                let lo = *bytes.get(index + 2)?;
-                let hi = (hi as char).to_digit(16)? as u8;
-                let lo = (lo as char).to_digit(16)? as u8;
-                decoded.push((hi << 4) | lo);
-                index += 3;
-            }
-            b'+' => {
-                decoded.push(b' ');
-                index += 1;
-            }
-            byte => {
-                decoded.push(byte);
-                index += 1;
-            }
-        }
+    #[test]
+    fn expected_origin_canonicalizes_ipv6_loopback_literals() {
+        assert_eq!(
+            runtime_http_origin_for_bind("0:0:0:0:0:0:0:1", 7878),
+            "http://[::1]:7878"
+        );
+        assert_eq!(runtime_http_origin_for_bind("::1", 80), "http://[::1]");
     }
-    String::from_utf8(decoded).ok()
 }

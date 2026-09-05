@@ -2,36 +2,33 @@
 //!
 //! `add` reads a LOCAL catalog document (no network here, ever), parses it
 //! with the strict per-format parsers, and persists the parsed result next to
-//! the plugin registry state. `list`/`show` render candidates with their
-//! honest install plans and per-entry diagnostics. `install` routes a
-//! candidate through the EXISTING reviewed installer — the same code path as
-//! `/plugin install`, so installed bundles still enter disabled and untrusted.
+//! the plugin registry state; the shared loader in
+//! `plugins::marketplace::document` is the same one the Runtime API serves.
+//! `list`/`show` render candidates with their honest install plans and
+//! per-entry diagnostics. `install` routes a candidate through the EXISTING
+//! reviewed installer — the same code path as `/plugin install`, so installed
+//! bundles still enter disabled and untrusted.
 //!
 //! Catalog-declared tiers and provenance are display-only: nothing in this
 //! module grants trust, enables anything, or auto-installs (Codex
 //! `INSTALLED_BY_DEFAULT` is visibly ignored).
 
 use std::fmt::Write as _;
-use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::render::{escape_review_path, escape_review_text};
 use crate::commands::CommandResult;
 use crate::localization::{Locale, MessageId, tr};
-use crate::plugins::marketplace::parsers::MarketplaceDocument;
+use crate::plugins::marketplace::document::{
+    CatalogInstallResolution, load_catalog_document, resolve_candidate_install,
+};
 use crate::plugins::marketplace::parsers::kimi::{
     KIMI_GZIP_TARBALL_SOURCE_KIND, KIMI_REMOTE_UNSUPPORTED_REASON, KIMI_ZIP_UNSUPPORTED_REASON,
 };
-use crate::plugins::marketplace::store::{MarketplaceStore, StoredMarketplaceCatalog};
-use crate::plugins::marketplace::types::{
-    MarketplaceCatalog, MarketplaceFormat, MarketplaceInstallPlan, MarketplaceSourceSpec,
-};
+use crate::plugins::marketplace::store::MarketplaceStore;
+use crate::plugins::marketplace::types::{MarketplaceCatalog, MarketplaceInstallPlan};
 use crate::plugins::types::PluginDiagnosticLevel;
 use crate::tui::app::App;
-
-/// Catalog documents are JSON text; four megabytes is far beyond any real
-/// published catalog and caps the parse cost of a user-supplied file.
-const MAX_CATALOG_BYTES: u64 = 4 * 1024 * 1024;
 
 const USAGE: &str = "Usage: /plugin marketplace add|list|show|remove|install\n\
      \x20 add <name> <path>    read a local catalog file (kimi/claude/codex/codewhale)\n\
@@ -59,78 +56,20 @@ fn open_store(app: &App) -> Result<MarketplaceStore, Box<CommandResult>> {
     })
 }
 
-/// Conservative catalog name: it becomes a key, appears in candidate IDs,
-/// and is rendered back to the operator.
-fn valid_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 64
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
-}
-
 fn add(app: &mut App, name: &str, raw_path: &str) -> CommandResult {
-    if !valid_name(name) {
-        return CommandResult::error(
-            "Marketplace name must be 1-64 characters of letters, digits, `-`, `_`, or `.`",
-        );
-    }
     let store = match open_store(app) {
         Ok(store) => store,
         Err(result) => return *result,
     };
-    let path = PathBuf::from(raw_path.trim());
-    let path = if path.is_absolute() {
-        path
-    } else {
-        app.workspace.join(path)
-    };
-    let path = match canonical_document(&path) {
-        Ok(path) => path,
+    let loaded = match load_catalog_document(name, &app.workspace, raw_path) {
+        Ok(loaded) => loaded,
         Err(error) => return CommandResult::error(error),
     };
 
-    let body = match read_bounded(&path) {
-        Ok(text) => text,
-        Err(error) => return CommandResult::error(error),
-    };
-    let root = match serde_json::from_str::<serde_json::Value>(&body) {
-        Ok(root) => root,
-        Err(error) => {
-            return CommandResult::error(format!(
-                "Catalog at {} is not valid JSON: {error}",
-                escape_review_path(&path)
-            ));
-        }
-    };
-
-    let document = MarketplaceDocument {
-        catalog_id: crate::plugins::marketplace::types::MarketplaceCatalogId::new(name),
-        format: MarketplaceFormat::Auto,
-        root,
-        base: Some(path.display().to_string()),
-    };
-    let catalog = crate::plugins::marketplace::parsers::parse_catalog(document);
-
-    // A document-level error (unknown/ambiguous format, not-an-object) means
-    // nothing useful was parsed; do not persist it.
-    if catalog.candidates.is_empty() && catalog.error_count() > 0 {
-        return CommandResult::error(format!(
-            "Catalog `{}` could not be parsed as any known marketplace format (kimi, claude, codex, codewhale):\n{}",
-            escape_review_text(name),
-            render_diagnostics_inline(&catalog.diagnostics)
-        ));
-    }
-
-    let entry = StoredMarketplaceCatalog {
-        added_at: chrono::Utc::now().to_rfc3339(),
-        source_path: path.display().to_string(),
-        catalog,
-    };
-    let candidate_count = entry.catalog.total_candidates();
-    let warning_count = entry.catalog.warning_count();
-    let summary = render_catalog_summary(name, &entry.catalog);
-    match store.add(&entry.catalog.id.clone(), entry) {
+    let summary = render_catalog_summary(name, &loaded.entry.catalog);
+    let candidate_count = loaded.candidate_count;
+    let warning_count = loaded.warning_count;
+    match store.add(&loaded.entry.catalog.id.clone(), loaded.entry) {
         Ok(()) => CommandResult::message(format!(
             "Added marketplace `{}` ({} candidate(s), {} warning(s)).\n{summary}\n\
              Tiers and provenance are display-only. Nothing was installed, trusted, or enabled.",
@@ -249,76 +188,19 @@ fn install(app: &mut App, catalog_name: &str, candidate_name: &str) -> CommandRe
             escape_review_text(catalog_name)
         ));
     };
-    if candidate.has_errors() {
-        return CommandResult::error(format!(
-            "Candidate `{}` has parse errors and cannot be installed:\n{}",
-            escape_review_text(candidate_name),
-            render_diagnostics_inline(&candidate.diagnostics)
-        ));
-    }
-    let MarketplaceInstallPlan::Supported { spec, .. } = &candidate.install_plan else {
-        let MarketplaceInstallPlan::Unsupported { reason, .. } = &candidate.install_plan else {
-            unreachable!("is_supported and this match agree");
-        };
-        return CommandResult::error(format!(
+    match resolve_candidate_install(entry, candidate) {
+        CatalogInstallResolution::Supported { spec, .. } => super::install_bundle(app, &spec),
+        CatalogInstallResolution::Unsupported { reason } => CommandResult::error(format!(
             "Candidate `{}` cannot be installed by Codewhale: {}",
             escape_review_text(candidate_name),
-            escape_review_text(&localized_marketplace_plan_text(app.ui_locale, reason))
-        ));
-    };
-    let spec = spec.as_str();
-    // Relative local paths resolve against the catalog document's own
-    // directory, not the TUI's working directory.
-    let spec = resolve_spec(&entry.source_path, &candidate.source, spec);
-    super::install_bundle(app, &spec)
-}
-
-fn resolve_spec(source_path: &str, source: &MarketplaceSourceSpec, spec: &str) -> String {
-    if let MarketplaceSourceSpec::LocalPath { path } = source
-        && path.is_relative()
-        && let Some(dir) = Path::new(source_path).parent()
-    {
-        return format!("path:{}", dir.join(path).display());
+            escape_review_text(&localized_marketplace_plan_text(app.ui_locale, &reason))
+        )),
+        CatalogInstallResolution::HasErrors { diagnostics } => CommandResult::error(format!(
+            "Candidate `{}` has parse errors and cannot be installed:\n{}",
+            escape_review_text(candidate_name),
+            escape_review_text(&diagnostics)
+        )),
     }
-    spec.to_string()
-}
-
-/// Resolve a user-supplied document path to an existing regular file without
-/// following a final symlink (the document is untrusted input).
-fn canonical_document(path: &Path) -> Result<PathBuf, String> {
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|e| format!("Cannot read catalog at {}: {e}", path.display()))?;
-    if metadata.is_symlink() {
-        return Err(format!(
-            "Catalog path {} is a symlink; marketplace documents must be regular files",
-            path.display()
-        ));
-    }
-    if !metadata.is_file() {
-        return Err(format!(
-            "Catalog path {} is not a regular file",
-            path.display()
-        ));
-    }
-    Ok(path.to_path_buf())
-}
-
-fn read_bounded(path: &Path) -> Result<String, String> {
-    let file = std::fs::File::open(path)
-        .map_err(|e| format!("Cannot read catalog at {}: {e}", path.display()))?;
-    if file.metadata().map_err(|e| e.to_string())?.len() > MAX_CATALOG_BYTES {
-        return Err(format!(
-            "Catalog at {} exceeds the {} byte limit",
-            path.display(),
-            MAX_CATALOG_BYTES
-        ));
-    }
-    let mut text = String::new();
-    let mut limited = file.take(MAX_CATALOG_BYTES + 1);
-    limited
-        .read_to_string(&mut text)
-        .map_err(|e| format!("Cannot read catalog at {}: {e}", path.display()))?;
-    Ok(text)
 }
 
 fn render_catalog_summary(name: &str, catalog: &MarketplaceCatalog) -> String {

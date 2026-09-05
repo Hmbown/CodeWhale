@@ -276,7 +276,7 @@ impl Default for SetupRuntimeFacts {
             operate_runtime_ready: false,
             operate_runtime_result: "worker runtime not loaded".to_string(),
             fleet_roster_ready: false,
-            fleet_roster_result: "Pod roster not loaded".to_string(),
+            fleet_roster_result: "Fleet roster not loaded".to_string(),
             operate_concurrency_result: "concurrency not loaded".to_string(),
             operate_result: "operate readiness not loaded".to_string(),
             hotbar_bindings_result: "Hotbar config not loaded".to_string(),

@@ -1,8 +1,8 @@
 ⑂ Hmbown/CodeWhale · main               
     ╭──────────────────────────────╮    
-    │ ⢠⡞⠛⢂⣀ Codewhale              │    
-    │ ⠘⢿⣻⣟⠝ ● 2 MCP servers connec…│    
-    │       ▸ New worktree  ctrl+n │    
+    │ ⢠⡞⠛⢂⣀ codewhale              │    
+    │ ⠘⠿⣿⠍⠉ ● 2 MCP servers connec…│    
+    │         New session          │    
     ╰──────────────────────────────╯    
 ╭──────────────────────────────────────╮
 │ ❯ ▌                                  │

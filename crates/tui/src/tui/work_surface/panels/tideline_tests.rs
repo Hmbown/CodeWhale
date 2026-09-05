@@ -1,4 +1,4 @@
-//! Golden-buffer contract for the Tideline pod ledger (spec §2/§5c).
+//! Golden-buffer contract for the Tideline fleet ledger (spec §2/§5c).
 //! Goldens: `ledger_{w}x{h}` at the four blocker sizes — the 80-wide
 //! golden proves the three-column shed. Re-bless with
 //! `CODEWHALE_BLESS_GOLDENS=1`.

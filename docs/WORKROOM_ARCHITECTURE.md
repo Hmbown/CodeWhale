@@ -83,7 +83,7 @@ a list of `WorkroomThread` descriptors, and a bounded set of recent
 |---|---|
 | `codewhale-protocol` | Types: `Workroom`, `WorkroomId`, `WorkroomThread`, `WorkroomEvent`, `WorkroomLink`, `ExternalThreadRef`, `AgentAttribution` |
 | `codewhale-app-server` | Future endpoints: `GET /workrooms`, `GET /workroom/:id/threads`, `GET /workroom/resolve` |
-| `codewhale-tui` | Future model-facing link resolution and optional sidebar inbox |
+| `codewhale-tui` | Future model-facing link resolution and optional workbar inbox |
 | `codewhale-state` | Future: persistent workroom store (Phase 2) |
 
 ## Phase status
@@ -99,4 +99,4 @@ a list of `WorkroomThread` descriptors, and a bounded set of recent
 | 2 | Persistent workroom state store | ⏳ Not started |
 | 2 | Mobile page workroom inbox | ⏳ Not started |
 | 2 | Chat bridge event integration | ⏳ Not started |
-| 2 | TUI sidebar inbox | ⏳ Not started |
+| 2 | TUI workbar inbox | ⏳ Not started |

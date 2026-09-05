@@ -821,7 +821,10 @@ impl codewhale_command_contract::metadata::RegisterCommand<crate::commands::Comm
 
     fn handler()
     -> codewhale_command_contract::handler::CommandHandler<crate::commands::CommandResult> {
-        codewhale_command_contract::handler::CommandHandler::Contextual(init_contextual)
+        codewhale_command_contract::handler::CommandHandler::Contextual {
+            capabilities: codewhale_command_contract::handler::CommandCapabilities::WORKSPACE,
+            handler: init_contextual,
+        }
     }
 }
 

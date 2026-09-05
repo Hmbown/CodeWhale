@@ -283,7 +283,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
                 .replace("{old}", &old_model)
                 .replace("{new}", "auto");
             message.push_str(
-                " (session only — /pod save updates this Pod, /pod save-as saves a new Pod, /model save-default remembers the default)",
+                " (session only — /fleet save updates this Fleet, /fleet save-as saves a new Fleet, /model save-default remembers the default)",
             );
             return CommandResult::with_message_and_action(
                 message,
@@ -381,7 +381,7 @@ pub fn model(app: &mut App, model_name: Option<&str>) -> CommandResult {
             .replace("{old}", &old_model)
             .replace("{new}", &model_id);
         message.push_str(
-            " (session only — /pod save updates this Pod, /pod save-as saves a new Pod, /model save-default remembers the default)",
+            " (session only — /fleet save updates this Fleet, /fleet save-as saves a new Fleet, /model save-default remembers the default)",
         );
         CommandResult::with_message_and_action(
             message,
@@ -684,15 +684,10 @@ pub fn home_dashboard(app: &mut App) -> CommandResult {
     let _ = writeln!(stats, "\n{}", tr(locale, MessageId::HomeModeTips));
     let _ = writeln!(stats, "--------------------------------------------");
     match app.mode {
-        AppMode::Agent | AppMode::Auto => {
+        AppMode::Agent => {
             let _ = writeln!(stats, "{}", tr(locale, MessageId::HomeAgentModeTip));
             let _ = writeln!(stats, "{}", tr(locale, MessageId::HomeAgentModeReviewTip));
             let _ = writeln!(stats, "{}", tr(locale, MessageId::HomeAgentModeYoloTip));
-        }
-        AppMode::Yolo => {
-            // Compatibility residual: YOLO is invisible Act + Full Access.
-            let _ = writeln!(stats, "{}", tr(locale, MessageId::HomeYoloModeTip));
-            let _ = writeln!(stats, "{}", tr(locale, MessageId::HomeYoloModeCaution));
         }
         AppMode::Operate => {
             let _ = writeln!(stats, "{}", tr(locale, MessageId::HomeOperateModeTip));
@@ -1700,7 +1695,7 @@ mod tests {
         let result = home_dashboard(&mut app);
         assert!(result.message.is_some());
         let msg = result.message.unwrap();
-        assert!(msg.contains("Codewhale"));
+        assert!(msg.contains("codewhale"));
         assert!(!msg.contains("codewhale Home Dashboard"));
         assert!(msg.contains("Model:"));
         assert!(msg.contains("Mode:"));
@@ -1727,13 +1722,7 @@ mod tests {
 
     #[test]
     fn test_home_dashboard_mode_tips_for_each_mode() {
-        let modes = [
-            AppMode::Agent,
-            AppMode::Auto,
-            AppMode::Yolo,
-            AppMode::Plan,
-            AppMode::Operate,
-        ];
+        let modes = [AppMode::Agent, AppMode::Plan, AppMode::Operate];
         for mode in modes {
             let mut app = create_test_app();
             app.mode = mode;
@@ -1772,7 +1761,7 @@ mod tests {
             .message
             .expect("home dashboard should return message");
         assert!(
-            msg.contains("Codewhale"),
+            msg.contains("codewhale"),
             "missing canonical product title:\n{msg}"
         );
         assert!(msg.contains("模型"), "missing zh-Hans model label:\n{msg}");

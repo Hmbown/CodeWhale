@@ -1,148 +1,223 @@
 //! Review command: activate review skill and send a target immediately.
+//!
+//! FEAT-022 Phase 4: portable contextual dispatch. The host performs the
+//! discovery + side effects (`CommandSkillGroupContext::run_review`); the
+//! portable handler composes the exact error text and the `SendMessage` action.
 
-use crate::skills::{SkillRegistry, default_skills_dir};
-use crate::tui::app::{App, AppAction};
-use crate::tui::history::HistoryCell;
+use codewhale_command_contract::facets::{CommandSkillGroupContext, ReviewOutcome};
+use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
+use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::commands::CommandResult;
+use crate::tui::app::AppAction;
 
-fn warnings_suffix(registry: &SkillRegistry) -> String {
-    if registry.warnings().is_empty() {
+/// Render the review warnings suffix (baseline `warnings_suffix`).
+fn warnings_suffix(warnings: &[String]) -> String {
+    if warnings.is_empty() {
         return String::new();
     }
 
-    format!("\n\nWarnings:\n- {}", registry.warnings().join("\n- "))
+    format!("\n\nWarnings:\n- {}", warnings.join("\n- "))
 }
 
-fn review(app: &mut App, args: Option<&str>) -> CommandResult {
-    let target = args.unwrap_or("").trim();
+pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
+    name: "review",
+    aliases: &["shencha"],
+    usage: "/review <target>",
+    description_key: "cmd_review_description",
+};
+
+pub(in crate::commands) struct ReviewCmd;
+
+impl RegisterCommand<CommandResult> for ReviewCmd {
+    fn info() -> &'static CommandInfo {
+        &COMMAND_INFO
+    }
+
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Contextual {
+            capabilities: codewhale_command_contract::handler::CommandCapabilities::SKILL_GROUP,
+            handler: review_contextual,
+        }
+    }
+}
+
+/// Contextual `/review` dispatch: exactly the skill-group facet. The baseline
+/// command never refreshed the shared skill cache, so `/review` must not
+/// request the unrelated SKILLS facet.
+fn review_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
+    let mut parts = contexts.into_parts();
+    let Some(skill_group) = parts.skill_group.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: skill_group");
+    };
+    review(skill_group, arg)
+}
+
+/// Portable `/review` dispatch — byte-identical to the baseline handler.
+///
+/// The host performs discovery, warning merge, session-message insertion, and
+/// active-skill mutation (`run_review`); the handler validates the target,
+/// renders the not-found error, and emits the `SendMessage` action. The
+/// baseline success path renders no message and does not refresh the cache.
+fn review(group: &mut dyn CommandSkillGroupContext, arg: Option<&str>) -> CommandResult {
+    let target = arg.unwrap_or("").trim();
     if target.is_empty() {
         return CommandResult::error("Usage: /review <target>");
     }
 
-    let skills_dir = app.skills_dir.clone();
-    let registry = SkillRegistry::discover(&skills_dir).into_enabled();
-    let mut warnings = warnings_suffix(&registry);
-    let mut skill = registry.get("review").cloned();
-
-    let global_dir = default_skills_dir();
-    if skill.is_none() && global_dir != skills_dir {
-        let registry = SkillRegistry::discover(&global_dir).into_enabled();
-        if warnings.is_empty() {
-            warnings = warnings_suffix(&registry);
-        } else if !registry.warnings().is_empty() {
-            warnings.push_str(&format!("\n- {}", registry.warnings().join("\n- ")));
+    match group.run_review() {
+        Ok(ReviewOutcome::Ready) => {
+            CommandResult::action(AppAction::SendMessage(target.to_string()))
         }
-        skill = registry.get("review").cloned();
-    }
-
-    let skill = match skill {
-        Some(skill) => skill,
-        None => {
-            let global_display = global_dir.display();
-            return CommandResult::error(format!(
+        Ok(ReviewOutcome::NotFound {
+            skills_dir,
+            global_dir,
+            warnings,
+        }) => {
+            let warnings = warnings_suffix(&warnings);
+            CommandResult::error(format!(
                 "Review skill not found in {} or {}. Create ~/.codewhale/skills/review/SKILL.md.{}",
-                skills_dir.display(),
-                global_display,
-                warnings
-            ));
+                skills_dir, global_dir, warnings
+            ))
         }
-    };
-
-    let instruction = format!(
-        "You are now using a skill. Follow these instructions:\n\n# Skill: {}\n\n{}\n\n---\n\nNow respond to the user's request following the above skill instructions.",
-        skill.name, skill.body
-    );
-
-    app.add_message(HistoryCell::System {
-        content: format!("Activated skill: {}\n\n{}", skill.name, skill.description),
-    });
-    app.active_skill = Some(instruction);
-    app.active_skill_provenance = None;
-
-    CommandResult::action(AppAction::SendMessage(target.to_string()))
-}
-
-pub(in crate::commands) const COMMAND_INFO: crate::commands::traits::CommandInfo =
-    crate::commands::traits::CommandInfo {
-        name: "review",
-        aliases: &["shencha"],
-        usage: "/review <target>",
-        description_id: crate::localization::MessageId::CmdReviewDescription,
-    };
-
-pub(in crate::commands) struct ReviewCmd;
-
-impl crate::commands::traits::RegisterCommand for ReviewCmd {
-    fn info() -> &'static crate::commands::traits::CommandInfo {
-        &COMMAND_INFO
-    }
-
-    fn execute(
-        app: &mut crate::tui::app::App,
-        arg: Option<&str>,
-    ) -> crate::commands::CommandResult {
-        review(app, arg)
+        Err(err) => CommandResult::error(err),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::tui::app::{App, TuiOptions};
-    use tempfile::TempDir;
+    use codewhale_command_contract::facets::{
+        CommandApprovalState, RemoteRegistryOutcome, SkillActivationError, SkillMutationReceipt,
+        SkillRecommendation, SkillSyncOutcome, SkillTargetScope, SnapshotEntry,
+    };
 
-    fn create_test_app_with_tmpdir(tmpdir: &TempDir) -> App {
-        let options = TuiOptions {
-            skills_dir: tmpdir.path().join("skills"),
-            memory_path: tmpdir.path().join("memory.md"),
-            notes_path: tmpdir.path().join("notes.txt"),
-            mcp_config_path: tmpdir.path().join("mcp.json"),
-            ..crate::test_support::test_tui_options(tmpdir.path())
-        };
-        App::new(options, &Config::default())
+    struct FakeSkillGroup {
+        review: Result<ReviewOutcome, String>,
+        approval: CommandApprovalState,
     }
-
-    fn create_review_skill_dir(tmpdir: &TempDir) {
-        let skill_dir = tmpdir.path().join("skills").join("review");
-        std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: review\ndescription: Code review skill\n---\nReview the code",
-        )
-        .unwrap();
+    impl FakeSkillGroup {
+        fn ready() -> Self {
+            Self {
+                review: Ok(ReviewOutcome::Ready),
+                approval: CommandApprovalState {
+                    yolo: true,
+                    trust_mode: false,
+                },
+            }
+        }
+    }
+    impl CommandSkillGroupContext for FakeSkillGroup {
+        fn skill_registry_projection(
+            &self,
+        ) -> codewhale_command_contract::facets::SkillRegistryProjection {
+            unimplemented!("not used by review tests")
+        }
+        fn activate_skill(
+            &mut self,
+            _name: &str,
+        ) -> Result<codewhale_command_contract::facets::SkillActivationOutcome, SkillActivationError>
+        {
+            unimplemented!("not used by review tests")
+        }
+        fn install_skill(
+            &mut self,
+            _scope: Option<SkillTargetScope>,
+            _spec: &str,
+        ) -> Result<SkillMutationReceipt, String> {
+            unimplemented!("not used by review tests")
+        }
+        fn update_skill(
+            &mut self,
+            _scope: Option<SkillTargetScope>,
+            _name: &str,
+        ) -> Result<SkillMutationReceipt, String> {
+            unimplemented!("not used by review tests")
+        }
+        fn uninstall_skill(
+            &mut self,
+            _scope: Option<SkillTargetScope>,
+            _name: &str,
+        ) -> Result<SkillMutationReceipt, String> {
+            unimplemented!("not used by review tests")
+        }
+        fn trust_skill(
+            &mut self,
+            _scope: Option<SkillTargetScope>,
+            _name: &str,
+        ) -> Result<SkillMutationReceipt, String> {
+            unimplemented!("not used by review tests")
+        }
+        fn fetch_remote_registry(&mut self) -> Result<RemoteRegistryOutcome, String> {
+            unimplemented!("not used by review tests")
+        }
+        fn recommend_skills(&mut self, _task: &str) -> Result<Vec<SkillRecommendation>, String> {
+            unimplemented!("not used by review tests")
+        }
+        fn sync_registry(&mut self) -> Result<SkillSyncOutcome, String> {
+            unimplemented!("not used by review tests")
+        }
+        fn run_review(&mut self) -> Result<ReviewOutcome, String> {
+            self.review.clone()
+        }
+        fn snapshot_list(&mut self, _limit: usize) -> Result<Vec<SnapshotEntry>, String> {
+            unimplemented!("not used by review tests")
+        }
+        fn restore_snapshot(&mut self, _id: &str) -> Result<(), String> {
+            unimplemented!("not used by review tests")
+        }
+        fn approval_state(&self) -> CommandApprovalState {
+            self.approval
+        }
     }
 
     #[test]
-    fn test_review_without_target() {
-        let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = review(&mut app, None);
-        assert!(result.message.is_some());
+    fn review_without_target_prints_usage() {
+        let mut group = FakeSkillGroup::ready();
+        let result = review(&mut group, None);
+        assert!(result.is_error);
         assert!(result.message.unwrap().contains("Usage: /review"));
     }
 
     #[test]
-    fn test_review_without_skill_installed() {
-        let tmpdir = TempDir::new().unwrap();
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        // Set skills dir to empty temp dir
-        app.skills_dir = tmpdir.path().join("nonexistent_skills");
-        let result = review(&mut app, Some("file.rs"));
-        // The command should either error about missing skill or work if global skill exists
-        assert!(result.message.is_some() || result.action.is_some());
+    fn review_ready_sends_target_without_skills_context() {
+        let mut group = FakeSkillGroup::ready();
+        let contexts = CommandContexts::empty().with_skill_group(&mut group);
+        let result = review_contextual(contexts, Some("file.rs"));
+        assert!(result.message.is_none());
+        assert!(matches!(
+            result.action,
+            Some(AppAction::SendMessage(ref t)) if t == "file.rs"
+        ));
     }
 
     #[test]
-    fn test_review_with_skill_activates_and_sends() {
-        let tmpdir = TempDir::new().unwrap();
-        create_review_skill_dir(&tmpdir);
-        let mut app = create_test_app_with_tmpdir(&tmpdir);
-        let result = review(&mut app, Some("file.rs"));
-        assert!(result.message.is_none());
-        assert!(matches!(result.action, Some(AppAction::SendMessage(_))));
-        assert!(app.active_skill.is_some());
-        assert!(!app.history.is_empty());
+    fn review_not_found_renders_exact_error_with_warnings() {
+        let mut group = FakeSkillGroup::ready();
+        group.review = Ok(ReviewOutcome::NotFound {
+            skills_dir: "/ws/skills".to_string(),
+            global_dir: "/home/u/.codewhale/skills".to_string(),
+            warnings: vec!["one warning".to_string()],
+        });
+        let result = review(&mut group, Some("file.rs"));
+        assert!(result.is_error);
+        let msg = result.message.unwrap();
+        assert!(
+            msg.contains(
+                "Review skill not found in /ws/skills or /home/u/.codewhale/skills. Create ~/.codewhale/skills/review/SKILL.md."
+            ),
+            "{msg}"
+        );
+        assert!(msg.contains("Warnings:\n- one warning"), "{msg}");
+    }
+
+    #[test]
+    fn review_missing_facet_errors_are_safe() {
+        let result = review_contextual(CommandContexts::empty(), Some("file.rs"));
+        assert!(result.is_error);
+        assert_eq!(
+            result.message.unwrap(),
+            "Error: Command capability unavailable: skill_group"
+        );
     }
 }

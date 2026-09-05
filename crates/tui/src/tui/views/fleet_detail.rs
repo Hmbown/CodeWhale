@@ -18,12 +18,12 @@ use ratatui::{
 };
 
 use crate::config::{ApiProvider, Config};
+use crate::fleet::role::public_role_label;
 use crate::fleet::store::{
     FleetFile, FleetMember, FleetOperator, FleetScope, MemberCapability, load_fleet_in_scope,
     save_fleet, set_selected,
 };
 use crate::palette;
-use crate::tools::subagent::public_role_label;
 use crate::tui::app::App;
 use crate::tui::views::{
     ActionHint, ModalKind, ModalView, ViewAction, ViewEvent, render_modal_footer,

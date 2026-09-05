@@ -273,14 +273,6 @@ impl BundledSkillTier {
             Self::FormatTooling => "tools",
         }
     }
-
-    #[must_use]
-    pub const fn heading(self) -> &'static str {
-        match self {
-            Self::CoreAgentic => "Core agentic",
-            Self::FormatTooling => "Format & tooling",
-        }
-    }
 }
 
 /// Return the curated tier for a bundled skill name.

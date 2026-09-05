@@ -776,7 +776,7 @@ fn open_fleet_setup_target(app: &mut App, config: &Config, member_id: Option<&st
                 app, config, &name, scope, member_id,
             ) else {
                 app.set_sticky_status(
-                    "Selected Pod is invalid or unreadable; open /pod pods to repair or clear the selection. Legacy profiles were not opened."
+                    "Selected Fleet is invalid or unreadable; open /fleet fleets to repair or clear the selection. Legacy profiles were not opened."
                         .to_string(),
                     StatusToastLevel::Error,
                     None,
@@ -786,7 +786,7 @@ fn open_fleet_setup_target(app: &mut App, config: &Config, member_id: Option<&st
             let fleet_name = crate::safe_label::SafeLabel::phrase(&name);
             app.view_stack.push(view);
             app.status_message = Some(format!(
-                "Editing selected Pod `{fleet_name}` ({}) — legacy profiles will not be changed.",
+                "Editing selected Fleet `{fleet_name}` ({}) — legacy profiles will not be changed.",
                 scope.label()
             ));
         }
@@ -825,7 +825,7 @@ fn open_fleet_model_target(app: &mut App, config: &Config, member_id: &str) {
                 Some(member_id),
             ) else {
                 app.set_sticky_status(
-                    "Selected Pod is invalid or unreadable; open /pod pods to repair or clear the selection."
+                    "Selected Fleet is invalid or unreadable; open /fleet fleets to repair or clear the selection."
                         .to_string(),
                     StatusToastLevel::Error,
                     None,
@@ -836,7 +836,7 @@ fn open_fleet_model_target(app: &mut App, config: &Config, member_id: &str) {
             app.view_stack.push(view);
             let fleet_name = crate::safe_label::SafeLabel::phrase(&name);
             app.status_message = Some(format!(
-                "Editing member `{member_id}` in Pod `{fleet_name}` — choose a model route.",
+                "Editing member `{member_id}` in Fleet `{fleet_name}` — choose a model route.",
             ));
         }
         Ok(FleetSetupEditTarget::LegacyProfiles) => {
@@ -1053,6 +1053,52 @@ fn mark_active_turn_cancelled_locally(app: &mut App) {
     crate::retry_status::clear();
     crate::tui::notifications::clear_taskbar_progress();
     crate::tui::notifications::stop_title_animation_quietly();
+}
+
+/// The Esc-shaped "cancel the active turn" body, extracted verbatim from the
+/// event loop's `EscapeAction::CancelRequest` arm so the session control
+/// socket's `interrupt` verb and the Esc key cannot drift apart. Returns
+/// `true` when the caller should stop handling the event (compaction cancel
+/// or goal-continuation stop consumed it), `false` otherwise. The caller
+/// keeps its own Esc-specific state (backtrack reset) outside this body.
+pub(crate) fn escape_cancel_request(
+    app: &mut App,
+    engine_handle: &EngineHandle,
+    current_streaming_text: &mut String,
+    stream_display_clock: &mut StreamDisplayClock,
+) -> bool {
+    if try_cancel_compaction(app, engine_handle) {
+        return true;
+    }
+    if app.paused || app.paused_goal_objective.is_some() {
+        clear_paused_command_state(app, engine_handle);
+        if app.is_loading || matches!(app.runtime_turn_status.as_deref(), Some("in_progress")) {
+            engine_handle.cancel();
+            mark_active_turn_cancelled_locally(app);
+            current_streaming_text.clear();
+            stream_display_clock.reset();
+        }
+        app.active_allowed_tools = None;
+        app.goal.objective = None;
+        app.goal.tokens_used = 0;
+        app.goal.time_used_seconds = 0;
+        app.goal.continuation_count = 0;
+        app.status_message = Some(parent_stop_status(app, "Paused command cancelled"));
+        false
+    } else {
+        let was_waiting = app.goal_continuation_waiting;
+        engine_handle.cancel();
+        if was_waiting {
+            app.goal_continuation_waiting = false;
+            app.status_message = Some(app.tr(MessageId::GoalContinuationStopped).to_string());
+            return true;
+        }
+        mark_active_turn_cancelled_locally(app);
+        current_streaming_text.clear();
+        stream_display_clock.reset();
+        app.status_message = Some(parent_stop_status(app, "Request cancelled"));
+        false
+    }
 }
 
 fn suppress_engine_event_after_local_cancel(event: &EngineEvent) -> bool {

@@ -1944,7 +1944,7 @@ pub(crate) fn workspace_scope_matches(saved_workspace: &Path, current_workspace:
     }
 }
 
-fn is_empty_auto_created_session(session: &SessionMetadata) -> bool {
+pub(crate) fn is_empty_auto_created_session(session: &SessionMetadata) -> bool {
     session.message_count == 0
         && session
             .title

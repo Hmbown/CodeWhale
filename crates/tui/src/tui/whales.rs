@@ -115,7 +115,7 @@ impl WhaleSpecies {
             Self::Echo => "Echo",
             Self::Keel => "Keel",
             Self::Lantern => "Lantern",
-            Self::Plain => "Codewhale",
+            Self::Plain => "codewhale",
         }
     }
 
@@ -720,6 +720,6 @@ mod tests {
             }
         }
         assert_eq!(WhaleSpecies::Scout.name(), "Scout");
-        assert_eq!(WhaleSpecies::Plain.name(), "Codewhale");
+        assert_eq!(WhaleSpecies::Plain.name(), "codewhale");
     }
 }

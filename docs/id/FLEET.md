@@ -5,7 +5,7 @@ Agent fleet adalah control plane yang mengutamakan lokal (*local-first*) untuk e
 **Fleet** adalah nama publik untuk inventaris model pengguna: siapa yang ada di
 roster dan anggota mana yang dipilih. Ledger `.codewhale/fleet.jsonl`,
 `.codewhale/fleet/`, tabel konfigurasi `[fleet]`, dan flag Workflow `--fleet`
-menggunakan nama yang sama. `/pod` and `codewhale pod` remain accepted as compatibility aliases.
+menggunakan nama yang sama.
 
 Gunakan fleet daripada pembagian tugas agen yang berumur pendek ketika pekerjaan membutuhkan percobaan ulang (*retry*), ketahanan terhadap mode tidur/restart komputer, eksekusi jarak jauh, bukti tanda terima (*receipts*), atau jejak audit ber-ledger.
 

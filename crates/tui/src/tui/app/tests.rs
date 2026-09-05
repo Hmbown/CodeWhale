@@ -56,31 +56,34 @@ fn create_dir_symlink(target: &std::path::Path, link: &std::path::Path) -> std::
 }
 
 #[test]
-fn feature_intro_is_silent_while_onboarding_is_in_progress() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.onboarding = OnboardingState::Welcome;
-    let before = app.history.len();
-    app.maybe_show_feature_intro();
-    assert_eq!(
-        app.history.len(),
-        before,
-        "must not nudge while onboarding is in progress"
-    );
-}
-
-#[test]
-fn feature_intro_is_silent_when_auth_setup_is_incomplete() {
-    // --skip-onboarding with no provider key must not claim setup is ready (#3985).
-    let mut app = App::new(test_options(false), &Config::default());
-    app.onboarding = OnboardingState::None;
-    app.onboarding_needs_api_key = true;
-    let before = app.history.len();
-    app.maybe_show_feature_intro();
-    assert_eq!(
-        app.history.len(),
-        before,
-        "must not show 'setup is ready' when API key / auth is missing"
-    );
+fn feature_intro_scenario() {
+    // Scenario consolidation of: feature_intro_is_silent_while_onboarding_is_in_progress, feature_intro_is_silent_when_auth_setup_is_incomplete
+    // from feature_intro_is_silent_while_onboarding_is_in_progress
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.onboarding = OnboardingState::Welcome;
+        let before = app.history.len();
+        app.maybe_show_feature_intro();
+        assert_eq!(
+            app.history.len(),
+            before,
+            "must not nudge while onboarding is in progress"
+        );
+    }
+    // from feature_intro_is_silent_when_auth_setup_is_incomplete
+    {
+        // --skip-onboarding with no provider key must not claim setup is ready (#3985).
+        let mut app = App::new(test_options(false), &Config::default());
+        app.onboarding = OnboardingState::None;
+        app.onboarding_needs_api_key = true;
+        let before = app.history.len();
+        app.maybe_show_feature_intro();
+        assert_eq!(
+            app.history.len(),
+            before,
+            "must not show 'setup is ready' when API key / auth is missing"
+        );
+    }
 }
 
 #[test]
@@ -128,40 +131,43 @@ fn feature_intro_shows_once_persists_then_is_idempotent() {
 }
 
 #[test]
-fn initial_input_prefill_waits_for_manual_submit() {
-    let mut options = test_options(false);
-    options.initial_input = Some(InitialInput::Prefill("review this PR".to_string()));
+fn initial_input_scenario() {
+    // Scenario consolidation of: initial_input_prefill_waits_for_manual_submit, initial_input_submit_marks_startup_dispatch
+    // from initial_input_prefill_waits_for_manual_submit
+    {
+        let mut options = test_options(false);
+        options.initial_input = Some(InitialInput::Prefill("review this PR".to_string()));
 
-    let app = App::new(options, &Config::default());
+        let app = App::new(options, &Config::default());
 
-    assert!(
-        !app.launch.visible,
-        "an intentional prefilled prompt must enter the live composer instead of the startup hero"
-    );
-    assert_eq!(app.input, "review this PR");
-    assert_eq!(app.cursor_position, "review this PR".chars().count());
-    assert!(!app.auto_submit_initial_input);
-}
+        assert!(
+            !app.launch.visible,
+            "an intentional prefilled prompt must enter the live composer instead of the startup hero"
+        );
+        assert_eq!(app.input, "review this PR");
+        assert_eq!(app.cursor_position, "review this PR".chars().count());
+        assert!(!app.auto_submit_initial_input);
+    }
+    // from initial_input_submit_marks_startup_dispatch
+    {
+        let mut options = test_options(false);
+        options.initial_input = Some(InitialInput::Submit(
+            "阅读项目 and wait for instructions".to_string(),
+        ));
 
-#[test]
-fn initial_input_submit_marks_startup_dispatch() {
-    let mut options = test_options(false);
-    options.initial_input = Some(InitialInput::Submit(
-        "阅读项目 and wait for instructions".to_string(),
-    ));
+        let app = App::new(options, &Config::default());
 
-    let app = App::new(options, &Config::default());
-
-    assert!(
-        !app.launch.visible,
-        "an intentional submitted prompt must bypass the startup hero"
-    );
-    assert_eq!(app.input, "阅读项目 and wait for instructions");
-    assert_eq!(
-        app.cursor_position,
-        "阅读项目 and wait for instructions".chars().count()
-    );
-    assert!(app.auto_submit_initial_input);
+        assert!(
+            !app.launch.visible,
+            "an intentional submitted prompt must bypass the startup hero"
+        );
+        assert_eq!(app.input, "阅读项目 and wait for instructions");
+        assert_eq!(
+            app.cursor_position,
+            "阅读项目 and wait for instructions".chars().count()
+        );
+        assert!(app.auto_submit_initial_input);
+    }
 }
 
 #[test]
@@ -219,77 +225,77 @@ fn remote_control_initial_input_bypasses_startup_hero() {
 }
 
 #[test]
-fn composer_arrows_scroll_default_is_true_without_mouse_capture() {
-    assert!(default_composer_arrows_scroll_for_platform(false, false));
+fn composer_arrows_scenario() {
+    // Scenario consolidation of: composer_arrows_scroll_default_is_true_without_mouse_capture, composer_arrows_scroll_default_is_false_with_mouse_capture_on_non_windows, composer_arrows_scroll_default_is_false_with_mouse_capture_on_windows, composer_arrows_scroll_default_is_true_without_mouse_capture_on_windows
+    // from composer_arrows_scroll_default_is_true_without_mouse_capture
+    {
+        assert!(default_composer_arrows_scroll_for_platform(false, false));
+    }
+    // from composer_arrows_scroll_default_is_false_with_mouse_capture_on_non_windows
+    {
+        assert!(!default_composer_arrows_scroll_for_platform(true, false));
+    }
+    // from composer_arrows_scroll_default_is_false_with_mouse_capture_on_windows
+    {
+        assert!(!default_composer_arrows_scroll_for_platform(true, true));
+    }
+    // from composer_arrows_scroll_default_is_true_without_mouse_capture_on_windows
+    {
+        assert!(default_composer_arrows_scroll_for_platform(false, true));
+    }
 }
 
 #[test]
-fn composer_arrows_scroll_default_is_false_with_mouse_capture_on_non_windows() {
-    assert!(!default_composer_arrows_scroll_for_platform(true, false));
-}
-
-#[test]
-fn composer_arrows_scroll_default_is_false_with_mouse_capture_on_windows() {
-    assert!(!default_composer_arrows_scroll_for_platform(true, true));
-}
-
-#[test]
-fn composer_arrows_scroll_default_is_true_without_mouse_capture_on_windows() {
-    assert!(default_composer_arrows_scroll_for_platform(false, true));
-}
-
-#[test]
-fn move_cursor_line_start_multiline() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "abc\ndef\nghi".to_string();
-    app.cursor_position = "abc\ndef\nghi".chars().count(); // absolute end
-    app.move_cursor_line_start();
-    assert_eq!(app.cursor_position, "abc\ndef\n".len()); // start of "ghi"
-}
-
-#[test]
-fn move_cursor_line_start_singleline() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "hello".to_string();
-    app.cursor_position = 3;
-    app.move_cursor_line_start();
-    assert_eq!(app.cursor_position, 0);
-}
-
-#[test]
-fn move_cursor_line_end_multiline() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "abc\ndef\nghi".to_string();
-    app.cursor_position = 0; // start of first line
-    app.move_cursor_line_end();
-    assert_eq!(app.cursor_position, "abc".len()); // before first '\n'
-}
-
-#[test]
-fn move_cursor_line_end_at_newline_stays_at_line_end() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "abc\ndef\nghi".to_string();
-    app.cursor_position = "abc".len(); // on the '\n'
-    app.move_cursor_line_end();
-    assert_eq!(app.cursor_position, "abc".len()); // stays at line end
-}
-
-#[test]
-fn move_cursor_line_end_last_line() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "abc\ndef".to_string();
-    app.cursor_position = "abc\n".len(); // start of last line
-    app.move_cursor_line_end();
-    assert_eq!(app.cursor_position, "abc\ndef".chars().count()); // absolute end
-}
-
-#[test]
-fn move_cursor_line_start_already_at_start() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "abc\ndef".to_string();
-    app.cursor_position = "abc\n".len(); // start of second line
-    app.move_cursor_line_start();
-    assert_eq!(app.cursor_position, "abc\n".len()); // unchanged
+fn move_cursor_scenario() {
+    // Scenario consolidation of: move_cursor_line_start_multiline, move_cursor_line_start_singleline, move_cursor_line_end_multiline, move_cursor_line_end_at_newline_stays_at_line_end, move_cursor_line_end_last_line, move_cursor_line_start_already_at_start
+    // from move_cursor_line_start_multiline
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "abc\ndef\nghi".to_string();
+        app.cursor_position = "abc\ndef\nghi".chars().count(); // absolute end
+        app.move_cursor_line_start();
+        assert_eq!(app.cursor_position, "abc\ndef\n".len()); // start of "ghi"
+    }
+    // from move_cursor_line_start_singleline
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello".to_string();
+        app.cursor_position = 3;
+        app.move_cursor_line_start();
+        assert_eq!(app.cursor_position, 0);
+    }
+    // from move_cursor_line_end_multiline
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "abc\ndef\nghi".to_string();
+        app.cursor_position = 0; // start of first line
+        app.move_cursor_line_end();
+        assert_eq!(app.cursor_position, "abc".len()); // before first '\n'
+    }
+    // from move_cursor_line_end_at_newline_stays_at_line_end
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "abc\ndef\nghi".to_string();
+        app.cursor_position = "abc".len(); // on the '\n'
+        app.move_cursor_line_end();
+        assert_eq!(app.cursor_position, "abc".len()); // stays at line end
+    }
+    // from move_cursor_line_end_last_line
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "abc\ndef".to_string();
+        app.cursor_position = "abc\n".len(); // start of last line
+        app.move_cursor_line_end();
+        assert_eq!(app.cursor_position, "abc\ndef".chars().count()); // absolute end
+    }
+    // from move_cursor_line_start_already_at_start
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "abc\ndef".to_string();
+        app.cursor_position = "abc\n".len(); // start of second line
+        app.move_cursor_line_start();
+        assert_eq!(app.cursor_position, "abc\n".len()); // unchanged
+    }
 }
 
 #[test]
@@ -1154,50 +1160,53 @@ fn pending_zai_route_without_endpoint_receipt_is_effective_unavailable() {
 }
 
 #[test]
-fn reasoning_effort_display_receipts_route_normalization() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.api_provider = ApiProvider::Moonshot;
-    app.auto_model = false;
-    app.reasoning_effort = ReasoningEffort::Low;
-    app.active_route_base_url = crate::config::DEFAULT_MOONSHOT_BASE_URL.to_string();
-    app.model = "kimi-k2.5".to_string();
+fn reasoning_effort_scenario() {
+    // Scenario consolidation of: reasoning_effort_display_receipts_route_normalization, reasoning_effort_api_values_are_provider_aware_for_codex
+    // from reasoning_effort_display_receipts_route_normalization
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.api_provider = ApiProvider::Moonshot;
+        app.auto_model = false;
+        app.reasoning_effort = ReasoningEffort::Low;
+        app.active_route_base_url = crate::config::DEFAULT_MOONSHOT_BASE_URL.to_string();
+        app.model = "kimi-k2.5".to_string();
 
-    assert_eq!(app.reasoning_effort_display_label(), "low→high");
+        assert_eq!(app.reasoning_effort_display_label(), "low→high");
 
-    app.active_route_base_url = crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string();
-    app.model = "k3".to_string();
-    assert_eq!(app.reasoning_effort_display_label(), "low");
+        app.active_route_base_url = crate::config::DEFAULT_KIMI_CODE_BASE_URL.to_string();
+        app.model = "k3".to_string();
+        assert_eq!(app.reasoning_effort_display_label(), "low");
 
-    app.reasoning_effort = ReasoningEffort::Off;
-    assert_eq!(app.reasoning_effort_display_label(), "off→low");
-}
-
-#[test]
-fn reasoning_effort_api_values_are_provider_aware_for_codex() {
-    assert_eq!(
-        ReasoningEffort::Off.normalize_for_provider(ApiProvider::OpenaiCodex),
-        ReasoningEffort::Low
-    );
-    assert_eq!(
-        ReasoningEffort::Auto.normalize_for_provider(ApiProvider::OpenaiCodex),
-        ReasoningEffort::Medium
-    );
-    assert_eq!(
-        ReasoningEffort::Max.api_value_for_provider(ApiProvider::OpenaiCodex),
-        Some("xhigh")
-    );
-    assert_eq!(
-        ReasoningEffort::Off.api_value_for_provider(ApiProvider::OpenaiCodex),
-        Some("low")
-    );
-    assert_eq!(
-        ReasoningEffort::Max.api_value_for_provider(ApiProvider::Deepseek),
-        Some("max")
-    );
-    assert_eq!(
-        ReasoningEffort::from_setting("ultracode"),
-        ReasoningEffort::Ultra
-    );
+        app.reasoning_effort = ReasoningEffort::Off;
+        assert_eq!(app.reasoning_effort_display_label(), "off→low");
+    }
+    // from reasoning_effort_api_values_are_provider_aware_for_codex
+    {
+        assert_eq!(
+            ReasoningEffort::Off.normalize_for_provider(ApiProvider::OpenaiCodex),
+            ReasoningEffort::Low
+        );
+        assert_eq!(
+            ReasoningEffort::Auto.normalize_for_provider(ApiProvider::OpenaiCodex),
+            ReasoningEffort::Medium
+        );
+        assert_eq!(
+            ReasoningEffort::Max.api_value_for_provider(ApiProvider::OpenaiCodex),
+            Some("xhigh")
+        );
+        assert_eq!(
+            ReasoningEffort::Off.api_value_for_provider(ApiProvider::OpenaiCodex),
+            Some("low")
+        );
+        assert_eq!(
+            ReasoningEffort::Max.api_value_for_provider(ApiProvider::Deepseek),
+            Some("max")
+        );
+        assert_eq!(
+            ReasoningEffort::from_setting("ultracode"),
+            ReasoningEffort::Ultra
+        );
+    }
 }
 
 #[test]
@@ -1333,17 +1342,34 @@ fn reasoning_effort_normalizes_each_exact_k3_route_without_neighbor_leakage() {
 }
 
 #[test]
-fn picker_uses_catalog_reasoning_efforts_for_grok_46() {
-    let labels: Vec<&str> = crate::tui::model_picker::picker_efforts_for_route(
-        ApiProvider::Xai,
-        ApiProvider::Xai.default_base_url(),
-        crate::config::XAI_GROK_4_6_MODEL,
-        false,
-    )
-    .iter()
-    .map(|effort| effort.as_setting())
-    .collect();
-    assert_eq!(labels, vec!["auto", "low", "medium", "high", "xhigh"]);
+fn picker_uses_scenario() {
+    // Scenario consolidation of: picker_uses_catalog_reasoning_efforts_for_grok_46, picker_uses_catalog_reasoning_efforts_for_grok_45
+    // from picker_uses_catalog_reasoning_efforts_for_grok_46
+    {
+        let labels: Vec<&str> = crate::tui::model_picker::picker_efforts_for_route(
+            ApiProvider::Xai,
+            ApiProvider::Xai.default_base_url(),
+            crate::config::XAI_GROK_4_6_MODEL,
+            false,
+        )
+        .iter()
+        .map(|effort| effort.as_setting())
+        .collect();
+        assert_eq!(labels, vec!["auto", "low", "medium", "high", "xhigh"]);
+    }
+    // from picker_uses_catalog_reasoning_efforts_for_grok_45
+    {
+        let labels: Vec<&str> = crate::tui::model_picker::picker_efforts_for_route(
+            ApiProvider::Xai,
+            ApiProvider::Xai.default_base_url(),
+            crate::config::XAI_GROK_4_5_MODEL,
+            false,
+        )
+        .iter()
+        .map(|effort| effort.as_setting())
+        .collect();
+        assert_eq!(labels, vec!["auto", "low", "medium", "high"]);
+    }
 }
 
 #[test]
@@ -1400,102 +1426,187 @@ fn xai_grok_46_startup_app(config: &Config) -> App {
 }
 
 #[test]
-fn app_new_uses_grok_46_official_high_when_effort_is_unset() {
-    let _lock = lock_test_env();
-    let tmp = tempfile::TempDir::new().expect("tempdir");
-    let config_path = tmp.path().join("config.toml");
-    let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
-    let config = xai_grok_46_startup_config();
-    let app = xai_grok_46_startup_app(&config);
-
-    assert_eq!(app.api_provider, ApiProvider::Xai);
-    assert_eq!(app.model, crate::config::XAI_GROK_4_6_MODEL);
-    assert_eq!(
-        app.active_route_base_url,
-        crate::config::DEFAULT_XAI_BASE_URL
-    );
-    assert_eq!(app.reasoning_effort, ReasoningEffort::High);
-    assert_eq!(app.reasoning_effort_display_label(), "high");
-}
-
-#[test]
-fn app_new_maps_persisted_grok_46_off_to_high_and_max_to_xhigh() {
-    let _lock = lock_test_env();
-    let tmp = tempfile::TempDir::new().expect("tempdir");
-    let config_path = tmp.path().join("config.toml");
-    let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
-    let config = xai_grok_46_startup_config();
-
-    for (raw, expected, display) in [
-        ("off", ReasoningEffort::High, "high"),
-        ("max", ReasoningEffort::XHigh, "xhigh"),
-        ("auto", ReasoningEffort::Auto, "auto"),
-    ] {
-        std::fs::write(
-            tmp.path().join("settings.toml"),
-            format!("reasoning_effort = \"{raw}\"\n"),
-        )
-        .expect("settings");
-
+fn app_new_scenario() {
+    // Scenario consolidation of: app_new_uses_grok_46_official_high_when_effort_is_unset, app_new_maps_persisted_grok_46_off_to_high_and_max_to_xhigh, app_new_defaults_auto_compact_on_for_256k_class_models_when_unset, app_new_defaults_auto_compact_on_for_v4_class_models_when_unset, app_new_respects_explicit_auto_compact_false_for_256k_class_models, app_new_respects_explicit_auto_compact_false_for_v4_class_models, app_new_with_explicit_api_key_does_not_trigger_onboarding, app_new_respects_allow_shell_option_when_not_yolo
+    // from app_new_uses_grok_46_official_high_when_effort_is_unset
+    {
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let config = xai_grok_46_startup_config();
         let app = xai_grok_46_startup_app(&config);
-        assert_eq!(app.reasoning_effort, expected, "raw setting {raw}");
-        assert_eq!(app.reasoning_effort_display_label(), display);
+
+        assert_eq!(app.api_provider, ApiProvider::Xai);
+        assert_eq!(app.model, crate::config::XAI_GROK_4_6_MODEL);
+        assert_eq!(
+            app.active_route_base_url,
+            crate::config::DEFAULT_XAI_BASE_URL
+        );
+        assert_eq!(app.reasoning_effort, ReasoningEffort::High);
+        assert_eq!(app.reasoning_effort_display_label(), "high");
+    }
+    // from app_new_maps_persisted_grok_46_off_to_high_and_max_to_xhigh
+    {
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let config = xai_grok_46_startup_config();
+
+        for (raw, expected, display) in [
+            ("off", ReasoningEffort::High, "high"),
+            ("max", ReasoningEffort::XHigh, "xhigh"),
+            ("auto", ReasoningEffort::Auto, "auto"),
+        ] {
+            std::fs::write(
+                tmp.path().join("settings.toml"),
+                format!("reasoning_effort = \"{raw}\"\n"),
+            )
+            .expect("settings");
+
+            let app = xai_grok_46_startup_app(&config);
+            assert_eq!(app.reasoning_effort, expected, "raw setting {raw}");
+            assert_eq!(app.reasoning_effort_display_label(), display);
+        }
+    }
+    // from app_new_defaults_auto_compact_on_for_256k_class_models_when_unset
+    {
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+
+        let mut options = test_options(false);
+        options.model = "trinity-large-thinking".to_string();
+        let app = App::new(options, &Config::default());
+
+        assert!(app.auto_compact);
+        assert!(!app.auto_compact_user_configured);
+        assert_eq!(app.auto_compact_threshold_percent, 80.0);
+        assert_eq!(app.compact_threshold, 195_584);
+    }
+    // from app_new_defaults_auto_compact_on_for_v4_class_models_when_unset
+    {
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+
+        let mut options = test_options(false);
+        options.model = "deepseek-v4-pro".to_string();
+        let app = App::new(options, &Config::default());
+
+        assert!(app.auto_compact);
+        assert!(!app.auto_compact_user_configured);
+        assert_eq!(app.auto_compact_threshold_percent, 80.0);
+        assert_eq!(app.compact_threshold, 800_000);
+    }
+    // from app_new_respects_explicit_auto_compact_false_for_256k_class_models
+    {
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(tmp.path().join("settings.toml"), "auto_compact = false\n")
+            .expect("settings");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+
+        let mut options = test_options(false);
+        options.model = "trinity-large-thinking".to_string();
+        let app = App::new(options, &Config::default());
+
+        assert!(!app.auto_compact);
+        assert!(app.auto_compact_user_configured);
+        assert_eq!(app.compact_threshold, 195_584);
+    }
+    // from app_new_respects_explicit_auto_compact_false_for_v4_class_models
+    {
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        std::fs::write(tmp.path().join("settings.toml"), "auto_compact = false\n")
+            .expect("settings");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+
+        let mut options = test_options(false);
+        options.model = "deepseek-v4-pro".to_string();
+        let app = App::new(options, &Config::default());
+
+        assert!(!app.auto_compact);
+        assert!(app.auto_compact_user_configured);
+        assert_eq!(app.compact_threshold, 800_000);
+    }
+    // from app_new_with_explicit_api_key_does_not_trigger_onboarding
+    {
+        let _lock = lock_test_env();
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let _provider_env = EnvVarGuard::remove("CODEWHALE_PROVIDER");
+        let _legacy_provider_env = EnvVarGuard::remove("DEEPSEEK_PROVIDER");
+
+        let config = Config {
+            api_key: Some("sk-test-onboarding-key".to_string()),
+            ..Config::default()
+        };
+        let app = App::new(test_options(false), &config);
+        assert!(
+            !app.onboarding_needs_api_key,
+            "explicit config.api_key must satisfy the onboarding check"
+        );
+    }
+    // from app_new_respects_allow_shell_option_when_not_yolo
+    {
+        let mut options = test_options(false);
+        options.allow_shell = false;
+        options.start_in_agent_mode = true; // avoid coupling to settings.default_mode
+        let app = App::new(options, &Config::default());
+        assert!(!app.allow_shell);
     }
 }
 
 #[test]
-fn cycle_effort_walks_grok_46_official_ladder() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.api_provider = ApiProvider::Xai;
-    app.auto_model = false;
-    app.active_route_base_url = crate::config::DEFAULT_XAI_BASE_URL.to_string();
-    app.model = crate::config::XAI_GROK_4_6_MODEL.to_string();
-    app.reasoning_effort = ReasoningEffort::High;
+fn cycle_effort_scenario() {
+    // Scenario consolidation of: cycle_effort_walks_grok_46_official_ladder, cycle_effort_walks_grok_45_official_ladder_without_xhigh
+    // from cycle_effort_walks_grok_46_official_ladder
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.api_provider = ApiProvider::Xai;
+        app.auto_model = false;
+        app.active_route_base_url = crate::config::DEFAULT_XAI_BASE_URL.to_string();
+        app.model = crate::config::XAI_GROK_4_6_MODEL.to_string();
+        app.reasoning_effort = ReasoningEffort::High;
 
-    let expected = [
-        ReasoningEffort::XHigh,
-        ReasoningEffort::Auto,
-        ReasoningEffort::Low,
-        ReasoningEffort::Medium,
-        ReasoningEffort::High,
-    ];
-    for next in expected {
+        let expected = [
+            ReasoningEffort::XHigh,
+            ReasoningEffort::Auto,
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+        ];
+        for next in expected {
+            app.cycle_effort();
+            assert_eq!(app.reasoning_effort, next, "next {:?}", next);
+        }
+    }
+    // from cycle_effort_walks_grok_45_official_ladder_without_xhigh
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.api_provider = ApiProvider::Xai;
+        app.auto_model = false;
+        app.active_route_base_url = crate::config::DEFAULT_XAI_BASE_URL.to_string();
+        app.model = crate::config::XAI_GROK_4_5_MODEL.to_string();
+        app.reasoning_effort = ReasoningEffort::High;
+
         app.cycle_effort();
-        assert_eq!(app.reasoning_effort, next, "next {:?}", next);
+        assert_eq!(app.reasoning_effort, ReasoningEffort::Auto);
+        app.cycle_effort();
+        assert_eq!(app.reasoning_effort, ReasoningEffort::Low);
+        app.cycle_effort();
+        assert_eq!(app.reasoning_effort, ReasoningEffort::Medium);
+        app.cycle_effort();
+        assert_eq!(app.reasoning_effort, ReasoningEffort::High);
     }
-}
-
-#[test]
-fn cycle_effort_walks_grok_45_official_ladder_without_xhigh() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.api_provider = ApiProvider::Xai;
-    app.auto_model = false;
-    app.active_route_base_url = crate::config::DEFAULT_XAI_BASE_URL.to_string();
-    app.model = crate::config::XAI_GROK_4_5_MODEL.to_string();
-    app.reasoning_effort = ReasoningEffort::High;
-
-    app.cycle_effort();
-    assert_eq!(app.reasoning_effort, ReasoningEffort::Auto);
-    app.cycle_effort();
-    assert_eq!(app.reasoning_effort, ReasoningEffort::Low);
-    app.cycle_effort();
-    assert_eq!(app.reasoning_effort, ReasoningEffort::Medium);
-    app.cycle_effort();
-    assert_eq!(app.reasoning_effort, ReasoningEffort::High);
-}
-
-#[test]
-fn picker_uses_catalog_reasoning_efforts_for_grok_45() {
-    let labels: Vec<&str> = crate::tui::model_picker::picker_efforts_for_route(
-        ApiProvider::Xai,
-        ApiProvider::Xai.default_base_url(),
-        crate::config::XAI_GROK_4_5_MODEL,
-        false,
-    )
-    .iter()
-    .map(|effort| effort.as_setting())
-    .collect();
-    assert_eq!(labels, vec!["auto", "low", "medium", "high"]);
 }
 
 #[test]
@@ -1858,74 +1969,6 @@ fn explicit_launch_provider_overrides_saved_startup_provider() {
 }
 
 #[test]
-fn app_new_defaults_auto_compact_on_for_256k_class_models_when_unset() {
-    let _lock = lock_test_env();
-    let tmp = tempfile::TempDir::new().expect("tempdir");
-    let config_path = tmp.path().join("config.toml");
-    let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
-
-    let mut options = test_options(false);
-    options.model = "trinity-large-thinking".to_string();
-    let app = App::new(options, &Config::default());
-
-    assert!(app.auto_compact);
-    assert!(!app.auto_compact_user_configured);
-    assert_eq!(app.auto_compact_threshold_percent, 80.0);
-    assert_eq!(app.compact_threshold, 195_584);
-}
-
-#[test]
-fn app_new_defaults_auto_compact_on_for_v4_class_models_when_unset() {
-    let _lock = lock_test_env();
-    let tmp = tempfile::TempDir::new().expect("tempdir");
-    let config_path = tmp.path().join("config.toml");
-    let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
-
-    let mut options = test_options(false);
-    options.model = "deepseek-v4-pro".to_string();
-    let app = App::new(options, &Config::default());
-
-    assert!(app.auto_compact);
-    assert!(!app.auto_compact_user_configured);
-    assert_eq!(app.auto_compact_threshold_percent, 80.0);
-    assert_eq!(app.compact_threshold, 800_000);
-}
-
-#[test]
-fn app_new_respects_explicit_auto_compact_false_for_256k_class_models() {
-    let _lock = lock_test_env();
-    let tmp = tempfile::TempDir::new().expect("tempdir");
-    let config_path = tmp.path().join("config.toml");
-    std::fs::write(tmp.path().join("settings.toml"), "auto_compact = false\n").expect("settings");
-    let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
-
-    let mut options = test_options(false);
-    options.model = "trinity-large-thinking".to_string();
-    let app = App::new(options, &Config::default());
-
-    assert!(!app.auto_compact);
-    assert!(app.auto_compact_user_configured);
-    assert_eq!(app.compact_threshold, 195_584);
-}
-
-#[test]
-fn app_new_respects_explicit_auto_compact_false_for_v4_class_models() {
-    let _lock = lock_test_env();
-    let tmp = tempfile::TempDir::new().expect("tempdir");
-    let config_path = tmp.path().join("config.toml");
-    std::fs::write(tmp.path().join("settings.toml"), "auto_compact = false\n").expect("settings");
-    let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
-
-    let mut options = test_options(false);
-    options.model = "deepseek-v4-pro".to_string();
-    let app = App::new(options, &Config::default());
-
-    assert!(!app.auto_compact);
-    assert!(app.auto_compact_user_configured);
-    assert_eq!(app.compact_threshold, 800_000);
-}
-
-#[test]
 fn pending_turn_cost_moves_displayed_total_mid_turn() {
     let mut app = App::new(test_options(false), &Config::default());
 
@@ -2017,50 +2060,52 @@ fn critical_context_pressure_remains_visible_over_transient_info_toasts() {
 }
 
 #[test]
-fn cny_display_falls_back_to_usd_for_usd_only_costs() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.cost_currency = CostCurrency::Cny;
-    app.accrue_session_cost_estimate(CostEstimate::usd_only(0.42));
-    app.session.cost_priced_turns = 1;
+fn cny_display_scenario() {
+    // Scenario consolidation of: cny_display_falls_back_to_usd_for_usd_only_costs, cny_display_keeps_cny_when_costs_have_cny_rates, cny_display_does_not_fall_back_to_an_unproven_usd_total
+    // from cny_display_falls_back_to_usd_for_usd_only_costs
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.cost_currency = CostCurrency::Cny;
+        app.accrue_session_cost_estimate(CostEstimate::usd_only(0.42));
+        app.session.cost_priced_turns = 1;
 
-    let displayed = app.displayed_session_cost_for_currency(CostCurrency::Cny);
+        let displayed = app.displayed_session_cost_for_currency(CostCurrency::Cny);
 
-    assert_eq!(displayed, 0.42);
-    assert_eq!(app.session_cost_for_currency(CostCurrency::Cny), 0.42);
-    assert_eq!(app.format_cost_amount(displayed), "$0.42");
-}
+        assert_eq!(displayed, 0.42);
+        assert_eq!(app.session_cost_for_currency(CostCurrency::Cny), 0.42);
+        assert_eq!(app.format_cost_amount(displayed), "$0.42");
+    }
+    // from cny_display_keeps_cny_when_costs_have_cny_rates
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.cost_currency = CostCurrency::Cny;
+        app.accrue_session_cost_estimate(CostEstimate {
+            usd: 0.42,
+            cny: 2.5,
+        });
+        app.session.cost_priced_turns = 1;
+        app.session.cost_cny_priced_turns = 1;
 
-#[test]
-fn cny_display_keeps_cny_when_costs_have_cny_rates() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.cost_currency = CostCurrency::Cny;
-    app.accrue_session_cost_estimate(CostEstimate {
-        usd: 0.42,
-        cny: 2.5,
-    });
-    app.session.cost_priced_turns = 1;
-    app.session.cost_cny_priced_turns = 1;
+        let displayed = app.displayed_session_cost_for_currency(CostCurrency::Cny);
 
-    let displayed = app.displayed_session_cost_for_currency(CostCurrency::Cny);
+        assert_eq!(displayed, 2.5);
+        assert_eq!(app.format_cost_amount(displayed), "¥2.50");
+    }
+    // from cny_display_does_not_fall_back_to_an_unproven_usd_total
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.cost_currency = CostCurrency::Cny;
+        app.accrue_session_cost_estimate(CostEstimate::usd_only(0.42));
 
-    assert_eq!(displayed, 2.5);
-    assert_eq!(app.format_cost_amount(displayed), "¥2.50");
-}
-
-#[test]
-fn cny_display_does_not_fall_back_to_an_unproven_usd_total() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.cost_currency = CostCurrency::Cny;
-    app.accrue_session_cost_estimate(CostEstimate::usd_only(0.42));
-
-    assert_eq!(
-        app.cost_display_currency(CostCurrency::Cny),
-        CostCurrency::Cny
-    );
-    assert_eq!(
-        app.displayed_session_cost_for_currency(CostCurrency::Cny),
-        0.0
-    );
+        assert_eq!(
+            app.cost_display_currency(CostCurrency::Cny),
+            CostCurrency::Cny
+        );
+        assert_eq!(
+            app.displayed_session_cost_for_currency(CostCurrency::Cny),
+            0.0
+        );
+    }
 }
 
 #[test]
@@ -2138,26 +2183,29 @@ fn slash_command_classifier_treats_absolute_path_as_message() {
 }
 
 #[test]
-fn bang_shell_prefix_parses_compact_and_spaced_forms() {
-    assert_eq!(shell_command_from_bang_input("!pwd"), Ok(Some("pwd")));
-    assert_eq!(shell_command_from_bang_input("! pwd"), Ok(Some("pwd")));
-    assert_eq!(
-        shell_command_from_bang_input("  !  cargo test -p codewhale-tui sidebar"),
-        Ok(Some("cargo test -p codewhale-tui sidebar"))
-    );
-    assert_eq!(shell_command_from_bang_input("normal message"), Ok(None));
-}
-
-#[test]
-fn bang_shell_prefix_rejects_empty_command() {
-    assert_eq!(
-        shell_command_from_bang_input("!"),
-        Err("Usage: ! <shell command>")
-    );
-    assert_eq!(
-        shell_command_from_bang_input("!   "),
-        Err("Usage: ! <shell command>")
-    );
+fn bang_shell_scenario() {
+    // Scenario consolidation of: bang_shell_prefix_parses_compact_and_spaced_forms, bang_shell_prefix_rejects_empty_command
+    // from bang_shell_prefix_parses_compact_and_spaced_forms
+    {
+        assert_eq!(shell_command_from_bang_input("!pwd"), Ok(Some("pwd")));
+        assert_eq!(shell_command_from_bang_input("! pwd"), Ok(Some("pwd")));
+        assert_eq!(
+            shell_command_from_bang_input("  !  cargo test -p codewhale-tui sidebar"),
+            Ok(Some("cargo test -p codewhale-tui sidebar"))
+        );
+        assert_eq!(shell_command_from_bang_input("normal message"), Ok(None));
+    }
+    // from bang_shell_prefix_rejects_empty_command
+    {
+        assert_eq!(
+            shell_command_from_bang_input("!"),
+            Err("Usage: ! <shell command>")
+        );
+        assert_eq!(
+            shell_command_from_bang_input("!   "),
+            Err("Usage: ! <shell command>")
+        );
+    }
 }
 
 #[test]
@@ -2185,127 +2233,273 @@ fn submit_input_records_absolute_slash_path_as_message_history() {
 }
 
 #[test]
-fn restore_last_submitted_prompt_rehydrates_empty_composer() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.last_submitted_prompt = Some("fix the typo\nand retry".to_string());
+fn restore_last_scenario() {
+    // Scenario consolidation of: restore_last_submitted_prompt_rehydrates_empty_composer, restore_last_submitted_prompt_preserves_existing_draft, restore_last_cleared_input_restores_saved_draft, restore_last_cleared_input_does_nothing_when_composer_not_empty
+    // from restore_last_submitted_prompt_rehydrates_empty_composer
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.last_submitted_prompt = Some("fix the typo\nand retry".to_string());
 
-    assert!(app.restore_last_submitted_prompt_if_empty());
+        assert!(app.restore_last_submitted_prompt_if_empty());
 
-    assert_eq!(app.input, "fix the typo\nand retry");
-    assert_eq!(app.cursor_position, app.input.chars().count());
-    assert!(app.needs_redraw);
+        assert_eq!(app.input, "fix the typo\nand retry");
+        assert_eq!(app.cursor_position, app.input.chars().count());
+        assert!(app.needs_redraw);
+    }
+    // from restore_last_submitted_prompt_preserves_existing_draft
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.last_submitted_prompt = Some("previous prompt".to_string());
+        app.input = "new draft".to_string();
+        app.cursor_position = app.input.chars().count();
+
+        assert!(!app.restore_last_submitted_prompt_if_empty());
+
+        assert_eq!(app.input, "new draft");
+        assert_eq!(app.cursor_position, "new draft".chars().count());
+    }
+    // from restore_last_cleared_input_restores_saved_draft
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "previous".to_string();
+        app.cursor_position = 8;
+        app.clear_input_recoverable();
+        assert!(app.input.is_empty());
+
+        let restored = app.restore_last_cleared_input_if_empty();
+        assert!(restored);
+        assert_eq!(app.input, "previous");
+        assert!(app.clear_undo_buffer.is_none());
+    }
+    // from restore_last_cleared_input_does_nothing_when_composer_not_empty
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.clear_undo_buffer = Some("old".to_string());
+        app.input = "current".to_string();
+        assert!(!app.restore_last_cleared_input_if_empty());
+    }
 }
 
 #[test]
-fn restore_last_submitted_prompt_preserves_existing_draft() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.last_submitted_prompt = Some("previous prompt".to_string());
-    app.input = "new draft".to_string();
-    app.cursor_position = app.input.chars().count();
+fn composer_strips_scenario() {
+    // Scenario consolidation of: composer_strips_raw_sgr_mouse_report_when_mouse_capture_is_enabled, composer_strips_corrupted_mouse_report_burst, composer_strips_raw_sgr_mouse_report_when_mouse_capture_is_disabled, composer_strips_tail_only_mouse_report_burst_when_mouse_capture_is_disabled, composer_strips_osc8_hyperlink_fragment, composer_strips_closing_osc8_fragment, composer_strips_kitty_keyboard_protocol_fragment, composer_strips_dec_private_mode_set_reset_fragments, composer_strips_mixed_control_sequence_burst
+    // from composer_strips_raw_sgr_mouse_report_when_mouse_capture_is_enabled
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
 
-    assert!(!app.restore_last_submitted_prompt_if_empty());
+        app.insert_str("[<35;44;18M");
 
-    assert_eq!(app.input, "new draft");
-    assert_eq!(app.cursor_position, "new draft".chars().count());
+        assert_eq!(app.input, "");
+        assert_eq!(app.cursor_position, 0);
+    }
+    // from composer_strips_corrupted_mouse_report_burst
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("draft ");
+        let leaked = "43;19M[<35;44;18M[<35;45;18M5;46;18M;48;18M";
+
+        app.insert_str(leaked);
+
+        assert_eq!(app.input, "draft ");
+        assert_eq!(app.cursor_position, "draft ".chars().count());
+    }
+    // from composer_strips_raw_sgr_mouse_report_when_mouse_capture_is_disabled
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+
+        app.insert_str("[<35;44;18M");
+
+        assert_eq!(app.input, "");
+        assert_eq!(app.cursor_position, 0);
+    }
+    // from composer_strips_tail_only_mouse_report_burst_when_mouse_capture_is_disabled
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.insert_str("draft ");
+
+        app.insert_str(";76;20M35;74;22M35;73;23M");
+
+        assert_eq!(app.input, "draft ");
+        assert_eq!(app.cursor_position, "draft ".chars().count());
+    }
+    // from composer_strips_osc8_hyperlink_fragment
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("draft ");
+
+        // OSC 8 prefix with URL body but no terminator delivered yet —
+        // exactly what crossterm hands us if its event reader is
+        // interrupted mid-sequence and the leading ESC is consumed by the
+        // parser before the rest gets reclassified as Char(c).
+        app.insert_str("]8;;https://example.com");
+
+        assert_eq!(app.input, "draft ");
+        assert_eq!(app.cursor_position, "draft ".chars().count());
+    }
+    // from composer_strips_closing_osc8_fragment
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("hello ");
+
+        // The closing wrapper `]8;;` (with a stray ST `\\` from a
+        // chopped escape) can arrive on its own when the parser ate
+        // the start of the sequence in a previous read but caught the
+        // tail as keystrokes.
+        app.insert_str("]8;;\\");
+
+        assert_eq!(app.input, "hello ");
+        assert_eq!(app.cursor_position, "hello ".chars().count());
+    }
+    // from composer_strips_kitty_keyboard_protocol_fragment
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("ready ");
+
+        // Kitty keyboard protocol responses look like `\x1b[?1u`,
+        // `\x1b[>1u`, `\x1b[<1u`, or `\x1b[?u`. With the ESC consumed,
+        // the tail shape is `[?…u`, `[>…u`, or `[<…u`.
+        app.insert_str("[?1u[>1u[<1u[?u");
+
+        assert_eq!(app.input, "ready ");
+        assert_eq!(app.cursor_position, "ready ".chars().count());
+    }
+    // from composer_strips_dec_private_mode_set_reset_fragments
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("ok ");
+
+        // Regression for #2592: DEC private mode set/reset chatter ends in
+        // `h`/`l`, not `u`, so the `u`-only terminator used to leak the
+        // leading `[`. Bracketed paste, mouse capture, focus reporting, and
+        // synchronized output all leak during dense streaming.
+        app.insert_str("[?2004h[?2004l[?1000h[?1004h[?2026h[?25l");
+
+        assert_eq!(app.input, "ok ");
+        assert_eq!(app.cursor_position, "ok ".chars().count());
+    }
+    // from composer_strips_mixed_control_sequence_burst
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("hi");
+
+        // Mixed dense burst combining all three fragment families
+        // described in #1915.
+        app.insert_str("[<35;44;18M]8;;https://example.com[?1u");
+
+        assert_eq!(app.input, "hi");
+        assert_eq!(app.cursor_position, 2);
+    }
 }
 
 #[test]
-fn composer_strips_raw_sgr_mouse_report_when_mouse_capture_is_enabled() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
+fn composer_preserves_scenario() {
+    // Scenario consolidation of: composer_preserves_draft_suffix_when_stripping_mouse_report, composer_preserves_numeric_draft_when_stripping_mouse_report
+    // from composer_preserves_draft_suffix_when_stripping_mouse_report
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("commit -m");
 
-    app.insert_str("[<35;44;18M");
+        app.insert_str("[<65;44;18M");
 
-    assert_eq!(app.input, "");
-    assert_eq!(app.cursor_position, 0);
+        assert_eq!(app.input, "commit -m");
+        assert_eq!(app.cursor_position, "commit -m".chars().count());
+    }
+    // from composer_preserves_numeric_draft_when_stripping_mouse_report
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
+        app.insert_str("123");
+
+        app.insert_str("[<65;44;18M");
+
+        assert_eq!(app.input, "123");
+        assert_eq!(app.cursor_position, 3);
+    }
 }
 
 #[test]
-fn composer_strips_corrupted_mouse_report_burst() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
-    app.insert_str("draft ");
-    let leaked = "43;19M[<35;44;18M[<35;45;18M5;46;18M;48;18M";
+fn composer_keeps_scenario() {
+    // Scenario consolidation of: composer_keeps_coordinate_like_text_when_mouse_capture_is_disabled, composer_keeps_normal_bracket_text_with_mouse_capture_enabled, composer_keeps_coordinate_like_text_with_mouse_capture_enabled, composer_keeps_bracket_question_word_text, composer_keeps_legitimate_url_text_with_mouse_capture_enabled, composer_keeps_legitimate_bracket_question_text, composer_keeps_legitimate_closing_bracket_digit_text
+    // from composer_keeps_coordinate_like_text_when_mouse_capture_is_disabled
+    {
+        let mut app = App::new(test_options(false), &Config::default());
 
-    app.insert_str(leaked);
+        app.insert_str("Size 12;34M");
 
-    assert_eq!(app.input, "draft ");
-    assert_eq!(app.cursor_position, "draft ".chars().count());
-}
+        assert_eq!(app.input, "Size 12;34M");
+        assert_eq!(app.cursor_position, "Size 12;34M".chars().count());
+    }
+    // from composer_keeps_normal_bracket_text_with_mouse_capture_enabled
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
 
-#[test]
-fn composer_preserves_draft_suffix_when_stripping_mouse_report() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
-    app.insert_str("commit -m");
+        app.insert_str("Use [<tag>] normally");
 
-    app.insert_str("[<65;44;18M");
+        assert_eq!(app.input, "Use [<tag>] normally");
+    }
+    // from composer_keeps_coordinate_like_text_with_mouse_capture_enabled
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
 
-    assert_eq!(app.input, "commit -m");
-    assert_eq!(app.cursor_position, "commit -m".chars().count());
-}
+        app.insert_str("Size 12;34M");
 
-#[test]
-fn composer_preserves_numeric_draft_when_stripping_mouse_report() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
-    app.insert_str("123");
+        assert_eq!(app.input, "Size 12;34M");
+    }
+    // from composer_keeps_bracket_question_word_text
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
 
-    app.insert_str("[<65;44;18M");
+        // The `h`/`l` terminator only counts after a numeric parameter, so
+        // ordinary prose where a letter follows `[?` directly is preserved.
+        app.insert_str("[?help] and [?later]");
 
-    assert_eq!(app.input, "123");
-    assert_eq!(app.cursor_position, 3);
-}
+        assert_eq!(app.input, "[?help] and [?later]");
+    }
+    // from composer_keeps_legitimate_url_text_with_mouse_capture_enabled
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
 
-#[test]
-fn composer_strips_raw_sgr_mouse_report_when_mouse_capture_is_disabled() {
-    let mut app = App::new(test_options(false), &Config::default());
+        // URLs typed by the user must survive the filter — only
+        // recognized control-sequence shapes are stripped.
+        app.insert_str("see https://example.com/path?a=1&b=2 for info");
 
-    app.insert_str("[<35;44;18M");
+        assert_eq!(app.input, "see https://example.com/path?a=1&b=2 for info");
+    }
+    // from composer_keeps_legitimate_bracket_question_text
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
 
-    assert_eq!(app.input, "");
-    assert_eq!(app.cursor_position, 0);
-}
+        // Text that uses brackets, question marks, and lowercase `u` —
+        // shapes that overlap Kitty fragments — must not be eaten.
+        app.insert_str("[is this ok?] sure");
 
-#[test]
-fn composer_strips_tail_only_mouse_report_burst_when_mouse_capture_is_disabled() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.insert_str("draft ");
+        assert_eq!(app.input, "[is this ok?] sure");
+    }
+    // from composer_keeps_legitimate_closing_bracket_digit_text
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.use_mouse_capture = true;
 
-    app.insert_str(";76;20M35;74;22M35;73;23M");
+        // Plain `]8` followed by spaces and words must survive — only
+        // the OSC 8 shape `]8;` (with the mandatory `;` separator)
+        // should be treated as a fragment.
+        app.insert_str("array[]8 elements");
 
-    assert_eq!(app.input, "draft ");
-    assert_eq!(app.cursor_position, "draft ".chars().count());
-}
-
-#[test]
-fn composer_keeps_coordinate_like_text_when_mouse_capture_is_disabled() {
-    let mut app = App::new(test_options(false), &Config::default());
-
-    app.insert_str("Size 12;34M");
-
-    assert_eq!(app.input, "Size 12;34M");
-    assert_eq!(app.cursor_position, "Size 12;34M".chars().count());
-}
-
-#[test]
-fn composer_keeps_normal_bracket_text_with_mouse_capture_enabled() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
-
-    app.insert_str("Use [<tag>] normally");
-
-    assert_eq!(app.input, "Use [<tag>] normally");
-}
-
-#[test]
-fn composer_keeps_coordinate_like_text_with_mouse_capture_enabled() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
-
-    app.insert_str("Size 12;34M");
-
-    assert_eq!(app.input, "Size 12;34M");
+        assert_eq!(app.input, "array[]8 elements");
+    }
 }
 
 // === Bug #1915: broader terminal control-sequence fragments leaking
@@ -2315,132 +2509,6 @@ fn composer_keeps_coordinate_like_text_with_mouse_capture_enabled() {
 // keyboard protocol responses (`[?u`, `[>1u`). These can arrive when
 // crossterm's event reader is mid-sequence and the unparsed tail is
 // delivered as individual Char(c) keystrokes that land in the input.
-
-#[test]
-fn composer_strips_osc8_hyperlink_fragment() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
-    app.insert_str("draft ");
-
-    // OSC 8 prefix with URL body but no terminator delivered yet —
-    // exactly what crossterm hands us if its event reader is
-    // interrupted mid-sequence and the leading ESC is consumed by the
-    // parser before the rest gets reclassified as Char(c).
-    app.insert_str("]8;;https://example.com");
-
-    assert_eq!(app.input, "draft ");
-    assert_eq!(app.cursor_position, "draft ".chars().count());
-}
-
-#[test]
-fn composer_strips_closing_osc8_fragment() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
-    app.insert_str("hello ");
-
-    // The closing wrapper `]8;;` (with a stray ST `\\` from a
-    // chopped escape) can arrive on its own when the parser ate
-    // the start of the sequence in a previous read but caught the
-    // tail as keystrokes.
-    app.insert_str("]8;;\\");
-
-    assert_eq!(app.input, "hello ");
-    assert_eq!(app.cursor_position, "hello ".chars().count());
-}
-
-#[test]
-fn composer_strips_kitty_keyboard_protocol_fragment() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
-    app.insert_str("ready ");
-
-    // Kitty keyboard protocol responses look like `\x1b[?1u`,
-    // `\x1b[>1u`, `\x1b[<1u`, or `\x1b[?u`. With the ESC consumed,
-    // the tail shape is `[?…u`, `[>…u`, or `[<…u`.
-    app.insert_str("[?1u[>1u[<1u[?u");
-
-    assert_eq!(app.input, "ready ");
-    assert_eq!(app.cursor_position, "ready ".chars().count());
-}
-
-#[test]
-fn composer_strips_dec_private_mode_set_reset_fragments() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
-    app.insert_str("ok ");
-
-    // Regression for #2592: DEC private mode set/reset chatter ends in
-    // `h`/`l`, not `u`, so the `u`-only terminator used to leak the
-    // leading `[`. Bracketed paste, mouse capture, focus reporting, and
-    // synchronized output all leak during dense streaming.
-    app.insert_str("[?2004h[?2004l[?1000h[?1004h[?2026h[?25l");
-
-    assert_eq!(app.input, "ok ");
-    assert_eq!(app.cursor_position, "ok ".chars().count());
-}
-
-#[test]
-fn composer_keeps_bracket_question_word_text() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
-
-    // The `h`/`l` terminator only counts after a numeric parameter, so
-    // ordinary prose where a letter follows `[?` directly is preserved.
-    app.insert_str("[?help] and [?later]");
-
-    assert_eq!(app.input, "[?help] and [?later]");
-}
-
-#[test]
-fn composer_strips_mixed_control_sequence_burst() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
-    app.insert_str("hi");
-
-    // Mixed dense burst combining all three fragment families
-    // described in #1915.
-    app.insert_str("[<35;44;18M]8;;https://example.com[?1u");
-
-    assert_eq!(app.input, "hi");
-    assert_eq!(app.cursor_position, 2);
-}
-
-#[test]
-fn composer_keeps_legitimate_url_text_with_mouse_capture_enabled() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
-
-    // URLs typed by the user must survive the filter — only
-    // recognized control-sequence shapes are stripped.
-    app.insert_str("see https://example.com/path?a=1&b=2 for info");
-
-    assert_eq!(app.input, "see https://example.com/path?a=1&b=2 for info");
-}
-
-#[test]
-fn composer_keeps_legitimate_bracket_question_text() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
-
-    // Text that uses brackets, question marks, and lowercase `u` —
-    // shapes that overlap Kitty fragments — must not be eaten.
-    app.insert_str("[is this ok?] sure");
-
-    assert_eq!(app.input, "[is this ok?] sure");
-}
-
-#[test]
-fn composer_keeps_legitimate_closing_bracket_digit_text() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.use_mouse_capture = true;
-
-    // Plain `]8` followed by spaces and words must survive — only
-    // the OSC 8 shape `]8;` (with the mandatory `;` separator)
-    // should be treated as a fragment.
-    app.insert_str("array[]8 elements");
-
-    assert_eq!(app.input, "array[]8 elements");
-}
 
 // initial_onboarding_state tests
 // These pin the logic that decides whether the TUI shows the
@@ -2597,26 +2665,6 @@ fn first_run_app_starts_on_composer_when_a_key_is_missing() {
     assert_eq!(app.onboarding, OnboardingState::None);
     assert!(app.onboarding_needs_api_key);
     assert!(!app.onboarding_missing_key_recovery);
-}
-
-#[test]
-fn app_new_with_explicit_api_key_does_not_trigger_onboarding() {
-    let _lock = lock_test_env();
-    let tmp = tempfile::TempDir::new().expect("tempdir");
-    let config_path = tmp.path().join("config.toml");
-    let _config_path = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
-    let _provider_env = EnvVarGuard::remove("CODEWHALE_PROVIDER");
-    let _legacy_provider_env = EnvVarGuard::remove("DEEPSEEK_PROVIDER");
-
-    let config = Config {
-        api_key: Some("sk-test-onboarding-key".to_string()),
-        ..Config::default()
-    };
-    let app = App::new(test_options(false), &config);
-    assert!(
-        !app.onboarding_needs_api_key,
-        "explicit config.api_key must satisfy the onboarding check"
-    );
 }
 
 #[test]
@@ -3376,8 +3424,12 @@ fn app_mode_helpers_centralize_parse_labels_and_cycle_order() {
     assert_eq!(AppMode::parse("auto"), Some(AppMode::Agent));
     assert_eq!(AppMode::parse("3"), Some(AppMode::Operate));
     assert_eq!(AppMode::parse("operate"), Some(AppMode::Operate));
-    assert_eq!(AppMode::parse("YOLO"), Some(AppMode::Yolo));
-    assert_eq!(AppMode::parse("4"), Some(AppMode::Yolo));
+    // Legacy YOLO spellings resolve to Act; the bypass posture they imply
+    // travels on the permission surface, not on a mode.
+    assert_eq!(AppMode::parse("YOLO"), Some(AppMode::Agent));
+    assert_eq!(AppMode::parse("4"), Some(AppMode::Agent));
+    assert_eq!(AppMode::parse("bypass"), Some(AppMode::Agent));
+    assert_eq!(AppMode::parse("bypass-permissions"), Some(AppMode::Agent));
     assert_eq!(AppMode::parse("multitask"), None);
     assert_eq!(AppMode::parse("5"), None);
     assert_eq!(AppMode::parse("fast"), None);
@@ -3385,16 +3437,8 @@ fn app_mode_helpers_centralize_parse_labels_and_cycle_order() {
     assert_eq!(AppMode::from_setting("5"), AppMode::Operate);
 
     assert_eq!(AppMode::Agent.as_setting(), "agent");
-    assert_eq!(AppMode::Auto.as_setting(), "agent");
-    assert_eq!(AppMode::Yolo.as_setting(), "agent");
     assert_eq!(AppMode::Plan.display_name(), "Plan");
-    assert_eq!(AppMode::Auto.display_name(), "Act");
-    assert_eq!(AppMode::Auto.label(), "ACT");
-    assert_eq!(AppMode::Yolo.label(), "ACT");
-    assert_eq!(AppMode::Yolo.display_name(), "Act");
     assert_eq!(AppMode::Agent.number(), '1');
-    assert_eq!(AppMode::Auto.number(), '1');
-    assert_eq!(AppMode::Yolo.number(), '1');
     assert_eq!(AppMode::Operate.number(), '3');
     assert_eq!(
         AppMode::CYCLE,
@@ -3404,22 +3448,38 @@ fn app_mode_helpers_centralize_parse_labels_and_cycle_order() {
     assert_eq!(AppMode::Plan.next(), AppMode::Agent);
     assert_eq!(AppMode::Agent.next(), AppMode::Operate);
     assert_eq!(AppMode::Operate.next(), AppMode::Plan);
-    assert_eq!(AppMode::Auto.next(), AppMode::Agent);
-    assert_eq!(AppMode::Yolo.next(), AppMode::Agent);
     assert_eq!(AppMode::Plan.previous(), AppMode::Operate);
     assert_eq!(AppMode::Agent.previous(), AppMode::Plan);
     assert_eq!(AppMode::Operate.previous(), AppMode::Agent);
-    assert_eq!(AppMode::Auto.previous(), AppMode::Agent);
-    assert_eq!(AppMode::Yolo.previous(), AppMode::Agent);
 }
 
 #[test]
-fn test_cycle_mode_transitions() {
-    let mut app = App::new(test_options(false), &Config::default());
-    let initial_mode = app.mode;
-    app.cycle_mode();
-    // Mode should have changed
-    assert_ne!(app.mode, initial_mode);
+fn test_cycle_scenario() {
+    // Scenario consolidation of: test_cycle_mode_transitions, test_cycle_mode_reverse_transitions
+    // from test_cycle_mode_transitions
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        let initial_mode = app.mode;
+        app.cycle_mode();
+        // Mode should have changed
+        assert_ne!(app.mode, initial_mode);
+    }
+    // from test_cycle_mode_reverse_transitions
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+
+        app.mode = AppMode::Plan;
+        app.cycle_mode_reverse();
+        assert_eq!(app.mode, AppMode::Operate);
+
+        app.mode = AppMode::Operate;
+        app.cycle_mode_reverse();
+        assert_eq!(app.mode, AppMode::Agent);
+
+        app.mode = AppMode::Agent;
+        app.cycle_mode_reverse();
+        assert_eq!(app.mode, AppMode::Plan);
+    }
 }
 
 #[test]
@@ -3442,59 +3502,41 @@ fn effective_route_display_tracks_inflight_and_last_auto_provider() {
 }
 
 #[test]
-fn test_cycle_mode_reverse_transitions() {
-    let mut app = App::new(test_options(false), &Config::default());
+fn test_mode_scenario() {
+    // Scenario consolidation of: test_mode_switch_does_not_emit_redundant_toast, test_mode_switch_toasts_do_not_disrupt_non_mode_toasts
+    // from test_mode_switch_does_not_emit_redundant_toast
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        let first_mode = app.mode.next();
+        let second_mode = first_mode.next();
 
-    app.mode = AppMode::Plan;
-    app.cycle_mode_reverse();
-    assert_eq!(app.mode, AppMode::Operate);
+        app.set_mode(first_mode);
+        app.sync_status_message_to_toasts();
+        assert!(app.status_toasts.is_empty());
 
-    app.mode = AppMode::Operate;
-    app.cycle_mode_reverse();
-    assert_eq!(app.mode, AppMode::Agent);
+        app.set_mode(second_mode);
+        app.sync_status_message_to_toasts();
+        assert!(app.status_toasts.is_empty());
+    }
+    // from test_mode_switch_toasts_do_not_disrupt_non_mode_toasts
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.yolo_compat_notified = true;
+        app.status_message = Some("Task queued".to_string());
+        app.sync_status_message_to_toasts();
 
-    app.mode = AppMode::Agent;
-    app.cycle_mode_reverse();
-    assert_eq!(app.mode, AppMode::Plan);
+        app.set_mode(AppMode::Agent);
+        app.sync_status_message_to_toasts();
+        app.set_mode_yolo_compat();
+        app.sync_status_message_to_toasts();
 
-    app.mode = AppMode::Auto;
-    app.cycle_mode_reverse();
-    assert_eq!(app.mode, AppMode::Agent);
-}
-
-#[test]
-fn test_mode_switch_does_not_emit_redundant_toast() {
-    let mut app = App::new(test_options(false), &Config::default());
-    let first_mode = app.mode.next();
-    let second_mode = first_mode.next();
-
-    app.set_mode(first_mode);
-    app.sync_status_message_to_toasts();
-    assert!(app.status_toasts.is_empty());
-
-    app.set_mode(second_mode);
-    app.sync_status_message_to_toasts();
-    assert!(app.status_toasts.is_empty());
-}
-
-#[test]
-fn test_mode_switch_toasts_do_not_disrupt_non_mode_toasts() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.yolo_compat_notified = true;
-    app.status_message = Some("Task queued".to_string());
-    app.sync_status_message_to_toasts();
-
-    app.set_mode(AppMode::Agent);
-    app.sync_status_message_to_toasts();
-    app.set_mode(AppMode::Yolo);
-    app.sync_status_message_to_toasts();
-
-    assert_eq!(app.status_toasts.len(), 1);
-    assert!(
-        app.status_toasts
-            .iter()
-            .any(|toast| toast.text == "Task queued")
-    );
+        assert_eq!(app.status_toasts.len(), 1);
+        assert!(
+            app.status_toasts
+                .iter()
+                .any(|toast| toast.text == "Task queued")
+        );
+    }
 }
 
 #[test]
@@ -3516,30 +3558,33 @@ fn test_queue_message() {
 }
 
 #[test]
-fn test_remove_queued_message() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.queue_message(QueuedMessage::new("first".to_string(), None));
-    app.queue_message(QueuedMessage::new("second".to_string(), None));
+fn test_remove_scenario() {
+    // Scenario consolidation of: test_remove_queued_message, test_remove_queued_message_invalid_index
+    // from test_remove_queued_message
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.queue_message(QueuedMessage::new("first".to_string(), None));
+        app.queue_message(QueuedMessage::new("second".to_string(), None));
 
-    // Remove first (index 0)
-    let removed = app.remove_queued_message(0);
-    assert!(removed.is_some());
-    assert_eq!(app.queued_message_count(), 1);
+        // Remove first (index 0)
+        let removed = app.remove_queued_message(0);
+        assert!(removed.is_some());
+        assert_eq!(app.queued_message_count(), 1);
 
-    // Remove second (now at index 0)
-    let removed = app.remove_queued_message(0);
-    assert!(removed.is_some());
-    assert_eq!(app.queued_message_count(), 0);
-}
+        // Remove second (now at index 0)
+        let removed = app.remove_queued_message(0);
+        assert!(removed.is_some());
+        assert_eq!(app.queued_message_count(), 0);
+    }
+    // from test_remove_queued_message_invalid_index
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.queue_message(QueuedMessage::new("test".to_string(), None));
 
-#[test]
-fn test_remove_queued_message_invalid_index() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.queue_message(QueuedMessage::new("test".to_string(), None));
-
-    // Try to remove non-existent index
-    let removed = app.remove_queued_message(100);
-    assert!(removed.is_none());
+        // Try to remove non-existent index
+        let removed = app.remove_queued_message(100);
+        assert!(removed.is_none());
+    }
 }
 
 #[test]
@@ -3547,9 +3592,8 @@ fn test_set_mode_updates_state() {
     let mut app = App::new(test_options(false), &Config::default());
     app.yolo_compat_notified = true;
     app.set_mode(AppMode::Plan);
-    assert_eq!(app.mode, AppMode::Plan);
-    // The deprecated YOLO alias remaps to Agent (M6 back-compat shim).
-    app.set_mode(AppMode::Yolo);
+    // The deprecated YOLO alias lands in Act (M6 back-compat shim).
+    app.set_mode_yolo_compat();
     assert_eq!(app.mode, AppMode::Agent);
     assert!(app.yolo);
     // YOLO compat shim should enable trust, shell, and bypass approvals.
@@ -3559,81 +3603,74 @@ fn test_set_mode_updates_state() {
 }
 
 #[test]
-fn app_new_respects_allow_shell_option_when_not_yolo() {
-    let mut options = test_options(false);
-    options.allow_shell = false;
-    options.start_in_agent_mode = true; // avoid coupling to settings.default_mode
-    let app = App::new(options, &Config::default());
-    assert!(!app.allow_shell);
-}
+fn set_mode_scenario() {
+    // Scenario consolidation of: set_mode_yolo_restores_previous_policies_on_exit, set_mode_plan_restores_previous_approval_on_agent_exit, set_mode_plan_to_yolo_keeps_yolo_permissions_and_restores_agent_baseline
+    // from set_mode_yolo_restores_previous_policies_on_exit
+    {
+        let mut options = test_options(false);
+        options.allow_shell = false;
+        options.start_in_agent_mode = true; // avoid coupling to settings.default_mode
+        let mut app = App::new(options, &Config::default());
+        app.allow_shell = false;
+        app.trust_mode = false;
+        app.approval_mode = ApprovalMode::Never;
+        app.yolo_compat_notified = true;
 
-#[test]
-fn set_mode_yolo_restores_previous_policies_on_exit() {
-    let mut options = test_options(false);
-    options.allow_shell = false;
-    options.start_in_agent_mode = true; // avoid coupling to settings.default_mode
-    let mut app = App::new(options, &Config::default());
-    app.allow_shell = false;
-    app.trust_mode = false;
-    app.approval_mode = ApprovalMode::Never;
-    app.yolo_compat_notified = true;
+        app.set_mode_yolo_compat();
+        assert!(app.allow_shell);
+        assert!(app.trust_mode);
+        assert_eq!(app.approval_mode, ApprovalMode::Bypass);
 
-    app.set_mode(AppMode::Yolo);
-    assert!(app.allow_shell);
-    assert!(app.trust_mode);
-    assert_eq!(app.approval_mode, ApprovalMode::Bypass);
+        app.set_mode(AppMode::Agent);
+        assert!(!app.allow_shell);
+        assert!(!app.trust_mode);
+        assert_eq!(app.approval_mode, ApprovalMode::Never);
+    }
+    // from set_mode_plan_restores_previous_approval_on_agent_exit
+    {
+        let config = Config {
+            approval_policy: Some("never".to_string()),
+            ..Default::default()
+        };
+        let mut options = test_options(false);
+        options.start_in_agent_mode = true; // avoid coupling to settings.default_mode
+        let mut app = App::new(options, &config);
+        assert_eq!(app.mode, AppMode::Agent);
+        assert_eq!(app.approval_mode, ApprovalMode::Never);
 
-    app.set_mode(AppMode::Agent);
-    assert!(!app.allow_shell);
-    assert!(!app.trust_mode);
-    assert_eq!(app.approval_mode, ApprovalMode::Never);
-}
+        app.set_mode(AppMode::Plan);
+        app.approval_mode = ApprovalMode::Suggest;
 
-#[test]
-fn set_mode_plan_restores_previous_approval_on_agent_exit() {
-    let config = Config {
-        approval_policy: Some("never".to_string()),
-        ..Default::default()
-    };
-    let mut options = test_options(false);
-    options.start_in_agent_mode = true; // avoid coupling to settings.default_mode
-    let mut app = App::new(options, &config);
-    assert_eq!(app.mode, AppMode::Agent);
-    assert_eq!(app.approval_mode, ApprovalMode::Never);
+        app.set_mode(AppMode::Agent);
+        assert_eq!(app.mode, AppMode::Agent);
+        assert_eq!(app.approval_mode, ApprovalMode::Never);
+    }
+    // from set_mode_plan_to_yolo_keeps_yolo_permissions_and_restores_agent_baseline
+    {
+        let mut options = test_options(false);
+        options.allow_shell = false;
+        options.start_in_agent_mode = true; // avoid coupling to settings.default_mode
+        let mut app = App::new(options, &Config::default());
+        app.allow_shell = false;
+        app.trust_mode = false;
+        app.approval_mode = ApprovalMode::Never;
+        app.yolo_compat_notified = true;
 
-    app.set_mode(AppMode::Plan);
-    app.approval_mode = ApprovalMode::Suggest;
+        app.set_mode(AppMode::Plan);
+        app.approval_mode = ApprovalMode::Suggest;
 
-    app.set_mode(AppMode::Agent);
-    assert_eq!(app.mode, AppMode::Agent);
-    assert_eq!(app.approval_mode, ApprovalMode::Never);
-}
+        app.set_mode_yolo_compat();
+        assert_eq!(app.mode, AppMode::Agent);
+        assert!(app.allow_shell);
+        assert!(app.trust_mode);
+        assert_eq!(app.approval_mode, ApprovalMode::Bypass);
 
-#[test]
-fn set_mode_plan_to_yolo_keeps_yolo_permissions_and_restores_agent_baseline() {
-    let mut options = test_options(false);
-    options.allow_shell = false;
-    options.start_in_agent_mode = true; // avoid coupling to settings.default_mode
-    let mut app = App::new(options, &Config::default());
-    app.allow_shell = false;
-    app.trust_mode = false;
-    app.approval_mode = ApprovalMode::Never;
-    app.yolo_compat_notified = true;
-
-    app.set_mode(AppMode::Plan);
-    app.approval_mode = ApprovalMode::Suggest;
-
-    app.set_mode(AppMode::Yolo);
-    assert_eq!(app.mode, AppMode::Agent);
-    assert!(app.allow_shell);
-    assert!(app.trust_mode);
-    assert_eq!(app.approval_mode, ApprovalMode::Bypass);
-
-    app.set_mode(AppMode::Agent);
-    assert_eq!(app.mode, AppMode::Agent);
-    assert!(!app.allow_shell);
-    assert!(!app.trust_mode);
-    assert_eq!(app.approval_mode, ApprovalMode::Never);
+        app.set_mode(AppMode::Agent);
+        assert_eq!(app.mode, AppMode::Agent);
+        assert!(!app.allow_shell);
+        assert!(!app.trust_mode);
+        assert_eq!(app.approval_mode, ApprovalMode::Never);
+    }
 }
 
 #[test]
@@ -3660,13 +3697,6 @@ fn base_policy_for_mode_projects_the_mode_permission_table() {
     assert!(agent.trust_mode);
     assert_eq!(agent.approval_mode, ApprovalMode::Never);
 
-    // Auto: compatibility alias for the durable Agent baseline.
-    let auto = base_policy_for_mode(AppMode::Auto, &prefs);
-    assert_eq!(auto.mode, AppMode::Auto);
-    assert!(auto.allow_shell);
-    assert!(auto.trust_mode);
-    assert_eq!(auto.approval_mode, ApprovalMode::Never);
-
     // Operate uses the Agent baseline.
     let operate = base_policy_for_mode(AppMode::Operate, &prefs);
     assert_eq!(operate.mode, AppMode::Operate);
@@ -3674,13 +3704,8 @@ fn base_policy_for_mode_projects_the_mode_permission_table() {
     assert_eq!(operate.trust_mode, agent.trust_mode);
     assert_eq!(operate.approval_mode, ApprovalMode::Never);
 
-    // YOLO: full authority is represented by Bypass, not a separate
-    // auto-approve field (#3736).
-    let yolo = base_policy_for_mode(AppMode::Yolo, &prefs);
-    assert_eq!(yolo.mode, AppMode::Yolo);
-    assert!(yolo.allow_shell);
-    assert!(yolo.trust_mode);
-    assert_eq!(yolo.approval_mode, ApprovalMode::Bypass);
+    // Full Access is represented by the Bypass posture, not a mode row or a
+    // separate auto-approve field (#3736).
 
     // A minimal Agent baseline projects through Agent unchanged.
     let minimal = ModeSessionPrefs {
@@ -3699,55 +3724,59 @@ fn base_policy_for_mode_projects_the_mode_permission_table() {
 }
 
 #[test]
-fn cycle_approval_posture_cycles_suggest_auto_bypass() {
-    let _env_lock = lock_test_env();
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let config_path = tmp.path().join("config.toml");
-    let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
-    let mut options = test_options(false);
-    options.start_in_agent_mode = true;
-    options.config_path = Some(config_path);
-    let mut app = App::new(options, &Config::default());
-    app.approval_mode = ApprovalMode::Suggest;
+fn cycle_approval_scenario() {
+    // Scenario consolidation of: cycle_approval_posture_cycles_suggest_auto_bypass, cycle_approval_posture_emits_rebinding_notice_once
+    // from cycle_approval_posture_cycles_suggest_auto_bypass
+    {
+        let _env_lock = lock_test_env();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let mut options = test_options(false);
+        options.start_in_agent_mode = true;
+        options.config_path = Some(config_path);
+        let mut app = App::new(options, &Config::default());
+        app.approval_mode = ApprovalMode::Suggest;
 
-    assert!(app.cycle_approval_posture());
-    assert_eq!(app.approval_mode, ApprovalMode::Auto);
+        assert!(app.cycle_approval_posture());
+        assert_eq!(app.approval_mode, ApprovalMode::Auto);
 
-    assert!(app.cycle_approval_posture());
-    assert_eq!(app.approval_mode, ApprovalMode::Bypass);
+        assert!(app.cycle_approval_posture());
+        assert_eq!(app.approval_mode, ApprovalMode::Bypass);
 
-    assert!(app.cycle_approval_posture());
-    assert_eq!(app.approval_mode, ApprovalMode::Suggest);
-    let persisted = std::fs::read_to_string(tmp.path().join("settings.toml")).expect("settings");
-    assert!(persisted.contains("permission_posture = \"ask\""));
-}
+        assert!(app.cycle_approval_posture());
+        assert_eq!(app.approval_mode, ApprovalMode::Suggest);
+        let persisted =
+            std::fs::read_to_string(tmp.path().join("settings.toml")).expect("settings");
+        assert!(persisted.contains("permission_posture = \"ask\""));
+    }
+    // from cycle_approval_posture_emits_rebinding_notice_once
+    {
+        let _env_lock = lock_test_env();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_path = tmp.path().join("config.toml");
+        let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
+        let mut options = test_options(false);
+        options.start_in_agent_mode = true;
+        options.config_path = Some(config_path);
+        let mut app = App::new(options, &Config::default());
 
-#[test]
-fn cycle_approval_posture_emits_rebinding_notice_once() {
-    let _env_lock = lock_test_env();
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let config_path = tmp.path().join("config.toml");
-    let _config_env = EnvVarGuard::set("DEEPSEEK_CONFIG_PATH", &config_path);
-    let mut options = test_options(false);
-    options.start_in_agent_mode = true;
-    options.config_path = Some(config_path);
-    let mut app = App::new(options, &Config::default());
+        assert!(app.cycle_approval_posture());
+        let notices = app
+            .status_toasts
+            .iter()
+            .filter(|toast| toast.text.contains("moved to Ctrl+T"))
+            .count();
+        assert_eq!(notices, 1, "first cycle posts the rebinding notice");
 
-    assert!(app.cycle_approval_posture());
-    let notices = app
-        .status_toasts
-        .iter()
-        .filter(|toast| toast.text.contains("moved to Ctrl+T"))
-        .count();
-    assert_eq!(notices, 1, "first cycle posts the rebinding notice");
-
-    assert!(app.cycle_approval_posture());
-    let notices = app
-        .status_toasts
-        .iter()
-        .filter(|toast| toast.text.contains("moved to Ctrl+T"))
-        .count();
-    assert_eq!(notices, 1, "notice is one-shot per session");
+        assert!(app.cycle_approval_posture());
+        let notices = app
+            .status_toasts
+            .iter()
+            .filter(|toast| toast.text.contains("moved to Ctrl+T"))
+            .count();
+        assert_eq!(notices, 1, "notice is one-shot per session");
+    }
 }
 
 #[test]
@@ -4016,7 +4045,7 @@ fn yolo_entry_points_honor_a_locked_approval_policy() {
     assert!(!app.trust_mode);
     assert!(!app.yolo);
 
-    assert_eq!(app.select_mode(AppMode::Yolo), SettingSelection::Refused);
+    assert_eq!(app.select_yolo_compat(), SettingSelection::Refused);
     assert_eq!(app.approval_mode, ApprovalMode::Suggest);
     assert!(!app.allow_shell);
     assert!(!app.yolo);
@@ -4026,7 +4055,7 @@ fn yolo_entry_points_honor_a_locked_approval_policy() {
             .any(|toast| toast.text.contains("controlled"))
     );
 
-    assert!(!app.set_mode(AppMode::Yolo));
+    assert!(!app.set_mode_yolo_compat());
     assert_eq!(app.approval_mode, ApprovalMode::Suggest);
     assert!(!app.allow_shell);
     assert!(!app.yolo);
@@ -4046,7 +4075,8 @@ fn set_mode_agent_to_yolo_to_agent_restores_baseline_without_yolo_leak() {
     app.approval_mode = ApprovalMode::Suggest;
     app.yolo_compat_notified = true;
 
-    app.set_mode(AppMode::Yolo);
+    app.set_mode_yolo_compat();
+    assert_eq!(app.mode, AppMode::Agent);
     assert!(app.allow_shell);
     assert!(app.trust_mode);
     assert_eq!(app.approval_mode, ApprovalMode::Bypass);
@@ -4086,7 +4116,7 @@ fn set_mode_plan_to_yolo_to_agent_does_not_bleed_yolo_into_agent() {
     assert!(!app.trust_mode);
     assert_eq!(app.approval_mode, ApprovalMode::Suggest);
 
-    app.set_mode(AppMode::Yolo);
+    app.set_mode_yolo_compat();
     assert!(app.allow_shell);
     assert!(app.trust_mode);
     assert_eq!(app.approval_mode, ApprovalMode::Bypass);
@@ -4300,28 +4330,31 @@ fn live_motion_invalidation_only_bumps_live_transcript_rows() {
 }
 
 #[test]
-fn expanded_tool_runs_rebase_when_history_prefix_shifts() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.expanded_tool_runs = std::collections::HashSet::from([2usize, 6usize]);
+fn expanded_tool_scenario() {
+    // Scenario consolidation of: expanded_tool_runs_rebase_when_history_prefix_shifts, expanded_tool_runs_prune_when_history_is_truncated
+    // from expanded_tool_runs_rebase_when_history_prefix_shifts
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.expanded_tool_runs = std::collections::HashSet::from([2usize, 6usize]);
 
-    app.shift_history_maps_down(3);
+        app.shift_history_maps_down(3);
 
-    assert_eq!(app.expanded_tool_runs, std::collections::HashSet::from([3]));
-}
-
-#[test]
-fn expanded_tool_runs_prune_when_history_is_truncated() {
-    let mut app = App::new(test_options(false), &Config::default());
-    for idx in 0..5 {
-        app.add_message(HistoryCell::System {
-            content: format!("cell {idx}"),
-        });
+        assert_eq!(app.expanded_tool_runs, std::collections::HashSet::from([3]));
     }
-    app.expanded_tool_runs = std::collections::HashSet::from([1usize, 4usize]);
+    // from expanded_tool_runs_prune_when_history_is_truncated
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        for idx in 0..5 {
+            app.add_message(HistoryCell::System {
+                content: format!("cell {idx}"),
+            });
+        }
+        app.expanded_tool_runs = std::collections::HashSet::from([1usize, 4usize]);
 
-    app.truncate_history_to(3);
+        app.truncate_history_to(3);
 
-    assert_eq!(app.expanded_tool_runs, std::collections::HashSet::from([1]));
+        assert_eq!(app.expanded_tool_runs, std::collections::HashSet::from([1]));
+    }
 }
 
 #[test]
@@ -4506,49 +4539,51 @@ fn test_input_history_navigation() {
 }
 
 #[test]
-fn input_history_down_restores_live_draft_after_accidental_up() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input_history.push("previous prompt".to_string());
-    app.input = "careful current draft".to_string();
-    app.cursor_position = "careful".chars().count();
+fn input_history_scenario() {
+    // Scenario consolidation of: input_history_down_restores_live_draft_after_accidental_up, input_history_navigation_clears_stale_selection, input_history_restores_empty_draft_at_end_of_navigation
+    // from input_history_down_restores_live_draft_after_accidental_up
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input_history.push("previous prompt".to_string());
+        app.input = "careful current draft".to_string();
+        app.cursor_position = "careful".chars().count();
 
-    app.history_up();
-    assert_eq!(app.input, "previous prompt");
+        app.history_up();
+        assert_eq!(app.input, "previous prompt");
 
-    app.history_down();
-    assert_eq!(app.input, "careful current draft");
-    assert_eq!(app.cursor_position, "careful".chars().count());
-    assert!(app.history_index.is_none());
-}
+        app.history_down();
+        assert_eq!(app.input, "careful current draft");
+        assert_eq!(app.cursor_position, "careful".chars().count());
+        assert!(app.history_index.is_none());
+    }
+    // from input_history_navigation_clears_stale_selection
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input_history.push("previous input".to_string());
+        app.input = "hello world".to_string();
+        app.cursor_position = "hello ".chars().count();
+        app.selection_anchor = Some(app.input.chars().count());
 
-#[test]
-fn input_history_navigation_clears_stale_selection() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input_history.push("previous input".to_string());
-    app.input = "hello world".to_string();
-    app.cursor_position = "hello ".chars().count();
-    app.selection_anchor = Some(app.input.chars().count());
+        app.history_up();
+        assert_eq!(app.input, "previous input");
+        assert!(app.selection_anchor.is_none());
 
-    app.history_up();
-    assert_eq!(app.input, "previous input");
-    assert!(app.selection_anchor.is_none());
+        app.insert_char('x');
+        assert_eq!(app.input, "previous inputx");
+    }
+    // from input_history_restores_empty_draft_at_end_of_navigation
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input_history.push("previous prompt".to_string());
 
-    app.insert_char('x');
-    assert_eq!(app.input, "previous inputx");
-}
+        app.history_up();
+        assert_eq!(app.input, "previous prompt");
 
-#[test]
-fn input_history_restores_empty_draft_at_end_of_navigation() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input_history.push("previous prompt".to_string());
-
-    app.history_up();
-    assert_eq!(app.input, "previous prompt");
-
-    app.history_down();
-    assert!(app.input.is_empty());
-    assert_eq!(app.cursor_position, 0);
-    assert!(app.history_index.is_none());
+        app.history_down();
+        assert!(app.input.is_empty());
+        assert_eq!(app.cursor_position, 0);
+        assert!(app.history_index.is_none());
+    }
 }
 
 #[test]
@@ -4583,68 +4618,69 @@ fn editing_history_entry_leaves_navigation_mode() {
 }
 
 #[test]
-fn history_search_filters_matches_and_skips_duplicates() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input_history.clear();
-    app.input_history.push("alpha one".to_string());
-    app.input_history.push("beta two".to_string());
-    app.input_history.push("alpha one".to_string());
-    app.draft_history.push_back("draft alpha".to_string());
+fn history_search_scenario() {
+    // Scenario consolidation of: history_search_filters_matches_and_skips_duplicates, history_search_matches_unicode_case_insensitively, history_search_accepts_match_without_submitting, history_search_cancel_restores_pre_search_draft
+    // from history_search_filters_matches_and_skips_duplicates
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input_history.clear();
+        app.input_history.push("alpha one".to_string());
+        app.input_history.push("beta two".to_string());
+        app.input_history.push("alpha one".to_string());
+        app.draft_history.push_back("draft alpha".to_string());
 
-    app.start_history_search();
-    app.history_search_insert_str("alpha");
+        app.start_history_search();
+        app.history_search_insert_str("alpha");
 
-    assert_eq!(
-        app.history_search_matches(),
-        vec!["draft alpha".to_string(), "alpha one".to_string()]
-    );
-}
+        assert_eq!(
+            app.history_search_matches(),
+            vec!["draft alpha".to_string(), "alpha one".to_string()]
+        );
+    }
+    // from history_search_matches_unicode_case_insensitively
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input_history.clear();
+        app.input_history.push("CAFÉ prompt".to_string());
 
-#[test]
-fn history_search_matches_unicode_case_insensitively() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input_history.clear();
-    app.input_history.push("CAFÉ prompt".to_string());
+        app.start_history_search();
+        app.history_search_insert_str("café");
 
-    app.start_history_search();
-    app.history_search_insert_str("café");
+        assert_eq!(
+            app.history_search_matches(),
+            vec!["CAFÉ prompt".to_string()]
+        );
+    }
+    // from history_search_accepts_match_without_submitting
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input_history.clear();
+        app.input_history.push("older prompt".to_string());
 
-    assert_eq!(
-        app.history_search_matches(),
-        vec!["CAFÉ prompt".to_string()]
-    );
-}
+        app.start_history_search();
+        app.history_search_insert_str("older");
 
-#[test]
-fn history_search_accepts_match_without_submitting() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input_history.clear();
-    app.input_history.push("older prompt".to_string());
+        assert!(app.accept_history_search());
+        assert_eq!(app.input, "older prompt");
+        assert_eq!(app.cursor_position, "older prompt".chars().count());
+        assert!(app.composer_history_search.is_none());
+    }
+    // from history_search_cancel_restores_pre_search_draft
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input_history.clear();
+        app.input = "current draft".to_string();
+        app.cursor_position = 7;
+        app.input_history.push("older prompt".to_string());
 
-    app.start_history_search();
-    app.history_search_insert_str("older");
+        app.start_history_search();
+        app.history_search_insert_str("older");
+        app.cancel_history_search();
 
-    assert!(app.accept_history_search());
-    assert_eq!(app.input, "older prompt");
-    assert_eq!(app.cursor_position, "older prompt".chars().count());
-    assert!(app.composer_history_search.is_none());
-}
-
-#[test]
-fn history_search_cancel_restores_pre_search_draft() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input_history.clear();
-    app.input = "current draft".to_string();
-    app.cursor_position = 7;
-    app.input_history.push("older prompt".to_string());
-
-    app.start_history_search();
-    app.history_search_insert_str("older");
-    app.cancel_history_search();
-
-    assert_eq!(app.input, "current draft");
-    assert_eq!(app.cursor_position, 7);
-    assert!(app.composer_history_search.is_none());
+        assert_eq!(app.input, "current draft");
+        assert_eq!(app.cursor_position, 7);
+        assert!(app.composer_history_search.is_none());
+    }
 }
 
 #[test]
@@ -4665,47 +4701,28 @@ fn recoverable_clear_stashes_nonempty_draft() {
 }
 
 #[test]
-fn clear_undo_buffer_is_set_on_clear_input_recoverable() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "hello".to_string();
-    app.cursor_position = 5;
+fn clear_undo_scenario() {
+    // Scenario consolidation of: clear_undo_buffer_is_set_on_clear_input_recoverable, clear_undo_buffer_is_none_when_clearing_empty_input
+    // from clear_undo_buffer_is_set_on_clear_input_recoverable
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello".to_string();
+        app.cursor_position = 5;
 
-    app.clear_input_recoverable();
+        app.clear_input_recoverable();
 
-    assert!(app.input.is_empty());
-    assert_eq!(app.clear_undo_buffer.as_deref(), Some("hello"));
-}
+        assert!(app.input.is_empty());
+        assert_eq!(app.clear_undo_buffer.as_deref(), Some("hello"));
+    }
+    // from clear_undo_buffer_is_none_when_clearing_empty_input
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        assert!(app.input.is_empty());
 
-#[test]
-fn clear_undo_buffer_is_none_when_clearing_empty_input() {
-    let mut app = App::new(test_options(false), &Config::default());
-    assert!(app.input.is_empty());
+        app.clear_input_recoverable();
 
-    app.clear_input_recoverable();
-
-    assert!(app.clear_undo_buffer.is_none());
-}
-
-#[test]
-fn restore_last_cleared_input_restores_saved_draft() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "previous".to_string();
-    app.cursor_position = 8;
-    app.clear_input_recoverable();
-    assert!(app.input.is_empty());
-
-    let restored = app.restore_last_cleared_input_if_empty();
-    assert!(restored);
-    assert_eq!(app.input, "previous");
-    assert!(app.clear_undo_buffer.is_none());
-}
-
-#[test]
-fn restore_last_cleared_input_does_nothing_when_composer_not_empty() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.clear_undo_buffer = Some("old".to_string());
-    app.input = "current".to_string();
-    assert!(!app.restore_last_cleared_input_if_empty());
+        assert!(app.clear_undo_buffer.is_none());
+    }
 }
 
 #[test]
@@ -5058,54 +5075,60 @@ fn arm_quit_sets_two_second_window() {
 }
 
 #[test]
-fn disarm_quit_clears_the_timer() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.arm_quit();
-    app.needs_redraw = false;
-    app.disarm_quit();
-    assert!(!app.quit_is_armed());
-    assert!(app.quit_armed_until.is_none());
-    assert!(app.needs_redraw, "disarming should request a redraw");
+fn disarm_quit_scenario() {
+    // Scenario consolidation of: disarm_quit_clears_the_timer, disarm_quit_when_not_armed_is_a_noop
+    // from disarm_quit_clears_the_timer
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.arm_quit();
+        app.needs_redraw = false;
+        app.disarm_quit();
+        assert!(!app.quit_is_armed());
+        assert!(app.quit_armed_until.is_none());
+        assert!(app.needs_redraw, "disarming should request a redraw");
+    }
+    // from disarm_quit_when_not_armed_is_a_noop
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.needs_redraw = false;
+        app.disarm_quit();
+        assert!(!app.needs_redraw, "no redraw when nothing changed");
+    }
 }
 
 #[test]
-fn disarm_quit_when_not_armed_is_a_noop() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.needs_redraw = false;
-    app.disarm_quit();
-    assert!(!app.needs_redraw, "no redraw when nothing changed");
-}
+fn quit_armed_scenario() {
+    // Scenario consolidation of: quit_armed_expires_after_window, quit_armed_tick_is_noop_within_window
+    // from quit_armed_expires_after_window
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        // Pin the deadline in the past to simulate a stale timer.
+        app.quit_armed_until = Some(Instant::now() - Duration::from_millis(10));
+        assert!(
+            !app.quit_is_armed(),
+            "expired timer must not count as armed"
+        );
 
-#[test]
-fn quit_armed_expires_after_window() {
-    let mut app = App::new(test_options(false), &Config::default());
-    // Pin the deadline in the past to simulate a stale timer.
-    app.quit_armed_until = Some(Instant::now() - Duration::from_millis(10));
-    assert!(
-        !app.quit_is_armed(),
-        "expired timer must not count as armed"
-    );
-
-    app.needs_redraw = false;
-    app.tick_quit_armed();
-    assert!(app.quit_armed_until.is_none(), "tick clears expired timer");
-    assert!(
-        app.needs_redraw,
-        "expiry triggers a redraw to repaint footer"
-    );
-}
-
-#[test]
-fn quit_armed_tick_is_noop_within_window() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.arm_quit();
-    app.needs_redraw = false;
-    app.tick_quit_armed();
-    assert!(
-        app.quit_is_armed(),
-        "tick within window keeps the timer armed"
-    );
-    assert!(!app.needs_redraw, "no redraw when nothing changed");
+        app.needs_redraw = false;
+        app.tick_quit_armed();
+        assert!(app.quit_armed_until.is_none(), "tick clears expired timer");
+        assert!(
+            app.needs_redraw,
+            "expiry triggers a redraw to repaint footer"
+        );
+    }
+    // from quit_armed_tick_is_noop_within_window
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.arm_quit();
+        app.needs_redraw = false;
+        app.tick_quit_armed();
+        assert!(
+            app.quit_is_armed(),
+            "tick within window keeps the timer armed"
+        );
+        assert!(!app.needs_redraw, "no redraw when nothing changed");
+    }
 }
 
 #[test]
@@ -5122,53 +5145,68 @@ fn re_arming_after_expiry_starts_a_fresh_window() {
 // ---- Issue #208: in-flight input routing ----
 
 #[test]
-fn submit_disposition_immediate_when_idle_and_online() {
-    let app = App::new(test_options(false), &Config::default());
-    assert!(!app.is_loading);
-    assert!(!app.offline_mode);
-    assert_eq!(
-        app.decide_submit_disposition(),
-        SubmitDisposition::Immediate
-    );
-}
-
-#[test]
-fn submit_disposition_queue_when_busy_and_online_not_streaming() {
-    // Bare Enter has one stable busy-state meaning even before the provider
-    // emits its first token: queue a follow-up for the next turn.
-    let mut app = App::new(test_options(false), &Config::default());
-    app.is_loading = true;
-    app.offline_mode = false;
-    // streaming_message_index is None (default) → waiting phase
-    assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Queue);
-}
-
-#[test]
-fn submit_disposition_queue_when_busy_and_streaming() {
-    // #382: Busy + streaming → Queue (was QueueFollowUp; now unified)
-    let mut app = App::new(test_options(false), &Config::default());
-    app.is_loading = true;
-    app.offline_mode = false;
-    app.streaming_message_index = Some(0);
-    assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Queue);
-}
-
-#[test]
-fn submit_disposition_queue_when_offline_and_idle() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.is_loading = false;
-    app.offline_mode = true;
-    assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Queue);
-}
-
-#[test]
-fn submit_disposition_offline_busy_queues() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.is_loading = true;
-    app.offline_mode = true;
-    // Offline mode always queues, even when streaming
-    app.streaming_message_index = Some(0);
-    assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Queue);
+fn submit_disposition_scenario() {
+    // Scenario consolidation of: submit_disposition_immediate_when_idle_and_online, submit_disposition_queue_when_busy_and_online_not_streaming, submit_disposition_queue_when_busy_and_streaming, submit_disposition_queue_when_offline_and_idle, submit_disposition_offline_busy_queues, submit_disposition_does_not_mutate_the_queue
+    // from submit_disposition_immediate_when_idle_and_online
+    {
+        let app = App::new(test_options(false), &Config::default());
+        assert!(!app.is_loading);
+        assert!(!app.offline_mode);
+        assert_eq!(
+            app.decide_submit_disposition(),
+            SubmitDisposition::Immediate
+        );
+    }
+    // from submit_disposition_queue_when_busy_and_online_not_streaming
+    {
+        // Bare Enter has one stable busy-state meaning even before the provider
+        // emits its first token: queue a follow-up for the next turn.
+        let mut app = App::new(test_options(false), &Config::default());
+        app.is_loading = true;
+        app.offline_mode = false;
+        // streaming_message_index is None (default) → waiting phase
+        assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Queue);
+    }
+    // from submit_disposition_queue_when_busy_and_streaming
+    {
+        // #382: Busy + streaming → Queue (was QueueFollowUp; now unified)
+        let mut app = App::new(test_options(false), &Config::default());
+        app.is_loading = true;
+        app.offline_mode = false;
+        app.streaming_message_index = Some(0);
+        assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Queue);
+    }
+    // from submit_disposition_queue_when_offline_and_idle
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.is_loading = false;
+        app.offline_mode = true;
+        assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Queue);
+    }
+    // from submit_disposition_offline_busy_queues
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.is_loading = true;
+        app.offline_mode = true;
+        // Offline mode always queues, even when streaming
+        app.streaming_message_index = Some(0);
+        assert_eq!(app.decide_submit_disposition(), SubmitDisposition::Queue);
+    }
+    // from submit_disposition_does_not_mutate_the_queue
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.is_loading = true;
+        app.streaming_message_index = Some(0);
+        assert_eq!(app.enter_with_double_tap(), Some(SubmitDisposition::Queue));
+        app.queue_message(QueuedMessage::new("older queued".to_string(), None));
+        app.queue_message(QueuedMessage::new("just typed follow-up".to_string(), None));
+        assert!(app.input.is_empty());
+        // The event loop owns empty-Enter queue promotion. Merely asking for the
+        // disposition must not mutate queue state — even when the answer is the
+        // double-tap Steer.
+        assert_eq!(app.enter_with_double_tap(), Some(SubmitDisposition::Steer));
+        assert_eq!(app.queued_message_count(), 2);
+    }
 }
 
 #[test]
@@ -5226,28 +5264,41 @@ fn composer_submit_state_by_chord_matrix() {
 }
 
 #[test]
-fn bare_enter_while_streaming_queues_then_double_tap_steers() {
-    let mut app = App::new(test_options(false), &Config::default());
-    // Busy + streaming: the first bare Enter queues and opens the window; a
-    // second inside it steers (the same disposition Ctrl+Enter takes); a
-    // second after the window lapses is an ordinary queue.
-    app.is_loading = true;
-    app.streaming_message_index = Some(0);
+fn bare_enter_scenario() {
+    // Scenario consolidation of: bare_enter_while_streaming_queues_then_double_tap_steers, bare_enter_passes_through_when_idle
+    // from bare_enter_while_streaming_queues_then_double_tap_steers
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        // Busy + streaming: the first bare Enter queues and opens the window; a
+        // second inside it steers (the same disposition Ctrl+Enter takes); a
+        // second after the window lapses is an ordinary queue.
+        app.is_loading = true;
+        app.streaming_message_index = Some(0);
 
-    let first = app.enter_with_double_tap();
-    assert_eq!(first, Some(SubmitDisposition::Queue));
-    assert!(app.double_tap_window_open());
-    let second = app.enter_with_double_tap();
-    assert_eq!(second, Some(SubmitDisposition::Steer));
-    assert!(!app.double_tap_window_open(), "a steer closes the window");
+        let first = app.enter_with_double_tap();
+        assert_eq!(first, Some(SubmitDisposition::Queue));
+        assert!(app.double_tap_window_open());
+        let second = app.enter_with_double_tap();
+        assert_eq!(second, Some(SubmitDisposition::Steer));
+        assert!(!app.double_tap_window_open(), "a steer closes the window");
 
-    let first = app.enter_with_double_tap();
-    assert_eq!(first, Some(SubmitDisposition::Queue));
-    app.last_enter_instant =
-        Some(std::time::Instant::now() - App::DOUBLE_TAP_WINDOW - Duration::from_millis(1));
-    assert!(!app.double_tap_window_open());
-    let late = app.enter_with_double_tap();
-    assert_eq!(late, Some(SubmitDisposition::Queue));
+        let first = app.enter_with_double_tap();
+        assert_eq!(first, Some(SubmitDisposition::Queue));
+        app.last_enter_instant =
+            Some(std::time::Instant::now() - App::DOUBLE_TAP_WINDOW - Duration::from_millis(1));
+        assert!(!app.double_tap_window_open());
+        let late = app.enter_with_double_tap();
+        assert_eq!(late, Some(SubmitDisposition::Queue));
+    }
+    // from bare_enter_passes_through_when_idle
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        // Engine idle → Immediate every time.
+        let first = app.enter_with_double_tap();
+        assert_eq!(first, Some(SubmitDisposition::Immediate));
+        let second = app.enter_with_double_tap();
+        assert_eq!(second, Some(SubmitDisposition::Immediate));
+    }
 }
 
 #[test]
@@ -5274,22 +5325,6 @@ fn double_tap_takes_the_just_queued_message_only_inside_the_window() {
 }
 
 #[test]
-fn submit_disposition_does_not_mutate_the_queue() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.is_loading = true;
-    app.streaming_message_index = Some(0);
-    assert_eq!(app.enter_with_double_tap(), Some(SubmitDisposition::Queue));
-    app.queue_message(QueuedMessage::new("older queued".to_string(), None));
-    app.queue_message(QueuedMessage::new("just typed follow-up".to_string(), None));
-    assert!(app.input.is_empty());
-    // The event loop owns empty-Enter queue promotion. Merely asking for the
-    // disposition must not mutate queue state — even when the answer is the
-    // double-tap Steer.
-    assert_eq!(app.enter_with_double_tap(), Some(SubmitDisposition::Steer));
-    assert_eq!(app.queued_message_count(), 2);
-}
-
-#[test]
 fn sticky_error_ttl_is_capped_and_clears_on_composer_activity() {
     let mut app = App::new(test_options(false), &Config::default());
     app.set_sticky_status("workflow failed", StatusToastLevel::Error, None);
@@ -5297,16 +5332,6 @@ fn sticky_error_ttl_is_capped_and_clears_on_composer_activity() {
     assert_eq!(sticky.ttl_ms, Some(App::STICKY_ERROR_TTL_MS));
     app.insert_char('a');
     assert!(app.sticky_status.is_none());
-}
-
-#[test]
-fn bare_enter_passes_through_when_idle() {
-    let mut app = App::new(test_options(false), &Config::default());
-    // Engine idle → Immediate every time.
-    let first = app.enter_with_double_tap();
-    assert_eq!(first, Some(SubmitDisposition::Immediate));
-    let second = app.enter_with_double_tap();
-    assert_eq!(second, Some(SubmitDisposition::Immediate));
 }
 
 #[test]
@@ -5319,28 +5344,31 @@ fn push_pending_steer_arms_resend_flag() {
 }
 
 #[test]
-fn drain_pending_steers_clears_flag_and_returns_in_order() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.push_pending_steer(QueuedMessage::new("first".to_string(), None));
-    app.push_pending_steer(QueuedMessage::new("second".to_string(), None));
-    app.push_pending_steer(QueuedMessage::new("third".to_string(), None));
+fn drain_pending_scenario() {
+    // Scenario consolidation of: drain_pending_steers_clears_flag_and_returns_in_order, drain_pending_steers_when_empty_is_safe
+    // from drain_pending_steers_clears_flag_and_returns_in_order
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.push_pending_steer(QueuedMessage::new("first".to_string(), None));
+        app.push_pending_steer(QueuedMessage::new("second".to_string(), None));
+        app.push_pending_steer(QueuedMessage::new("third".to_string(), None));
 
-    let drained = app.drain_pending_steers();
-    assert_eq!(drained.len(), 3);
-    assert_eq!(drained[0].display, "first");
-    assert_eq!(drained[2].display, "third");
-    assert!(app.pending_steers.is_empty());
-    assert!(!app.submit_pending_steers_after_interrupt);
-}
-
-#[test]
-fn drain_pending_steers_when_empty_is_safe() {
-    let mut app = App::new(test_options(false), &Config::default());
-    // Flag-only set (someone armed it manually): drain still clears it.
-    app.submit_pending_steers_after_interrupt = true;
-    let drained = app.drain_pending_steers();
-    assert!(drained.is_empty());
-    assert!(!app.submit_pending_steers_after_interrupt);
+        let drained = app.drain_pending_steers();
+        assert_eq!(drained.len(), 3);
+        assert_eq!(drained[0].display, "first");
+        assert_eq!(drained[2].display, "third");
+        assert!(app.pending_steers.is_empty());
+        assert!(!app.submit_pending_steers_after_interrupt);
+    }
+    // from drain_pending_steers_when_empty_is_safe
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        // Flag-only set (someone armed it manually): drain still clears it.
+        app.submit_pending_steers_after_interrupt = true;
+        let drained = app.drain_pending_steers();
+        assert!(drained.is_empty());
+        assert!(!app.submit_pending_steers_after_interrupt);
+    }
 }
 
 #[test]
@@ -5353,59 +5381,60 @@ fn double_push_pending_steer_is_idempotent_on_flag() {
 }
 
 #[test]
-fn pop_last_queued_into_draft_pops_back_and_arms_draft() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.queue_message(QueuedMessage::new(
-        "first".to_string(),
-        Some("skill-A".to_string()),
-    ));
-    app.queue_message(QueuedMessage::new(
-        "last".to_string(),
-        Some("skill-B".to_string()),
-    ));
+fn pop_last_scenario() {
+    // Scenario consolidation of: pop_last_queued_into_draft_pops_back_and_arms_draft, pop_last_queued_into_draft_noop_when_composer_dirty, pop_last_queued_into_draft_noop_when_draft_already_armed, pop_last_queued_into_draft_noop_when_queue_empty
+    // from pop_last_queued_into_draft_pops_back_and_arms_draft
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.queue_message(QueuedMessage::new(
+            "first".to_string(),
+            Some("skill-A".to_string()),
+        ));
+        app.queue_message(QueuedMessage::new(
+            "last".to_string(),
+            Some("skill-B".to_string()),
+        ));
 
-    assert!(app.pop_last_queued_into_draft());
-    assert_eq!(app.input, "last");
-    assert_eq!(app.cursor_position, "last".chars().count());
-    assert_eq!(app.queued_messages.len(), 1);
-    let draft = app.queued_draft.clone().expect("draft is set");
-    assert_eq!(draft.display, "last");
-    assert_eq!(draft.skill_instruction.as_deref(), Some("skill-B"));
-}
+        assert!(app.pop_last_queued_into_draft());
+        assert_eq!(app.input, "last");
+        assert_eq!(app.cursor_position, "last".chars().count());
+        assert_eq!(app.queued_messages.len(), 1);
+        let draft = app.queued_draft.clone().expect("draft is set");
+        assert_eq!(draft.display, "last");
+        assert_eq!(draft.skill_instruction.as_deref(), Some("skill-B"));
+    }
+    // from pop_last_queued_into_draft_noop_when_composer_dirty
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.queue_message(QueuedMessage::new("queued".to_string(), None));
+        app.input = "typing".to_string();
+        app.cursor_position = char_count(&app.input);
 
-#[test]
-fn pop_last_queued_into_draft_noop_when_composer_dirty() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.queue_message(QueuedMessage::new("queued".to_string(), None));
-    app.input = "typing".to_string();
-    app.cursor_position = char_count(&app.input);
+        assert!(!app.pop_last_queued_into_draft());
+        assert_eq!(app.input, "typing");
+        assert_eq!(app.queued_messages.len(), 1);
+        assert!(app.queued_draft.is_none());
+    }
+    // from pop_last_queued_into_draft_noop_when_draft_already_armed
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.queue_message(QueuedMessage::new("queued".to_string(), None));
+        app.queued_draft = Some(QueuedMessage::new("editing".to_string(), None));
 
-    assert!(!app.pop_last_queued_into_draft());
-    assert_eq!(app.input, "typing");
-    assert_eq!(app.queued_messages.len(), 1);
-    assert!(app.queued_draft.is_none());
-}
-
-#[test]
-fn pop_last_queued_into_draft_noop_when_draft_already_armed() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.queue_message(QueuedMessage::new("queued".to_string(), None));
-    app.queued_draft = Some(QueuedMessage::new("editing".to_string(), None));
-
-    assert!(!app.pop_last_queued_into_draft());
-    assert_eq!(app.queued_messages.len(), 1);
-    assert_eq!(
-        app.queued_draft.as_ref().map(|d| d.display.as_str()),
-        Some("editing")
-    );
-}
-
-#[test]
-fn pop_last_queued_into_draft_noop_when_queue_empty() {
-    let mut app = App::new(test_options(false), &Config::default());
-    assert!(!app.pop_last_queued_into_draft());
-    assert!(app.input.is_empty());
-    assert!(app.queued_draft.is_none());
+        assert!(!app.pop_last_queued_into_draft());
+        assert_eq!(app.queued_messages.len(), 1);
+        assert_eq!(
+            app.queued_draft.as_ref().map(|d| d.display.as_str()),
+            Some("editing")
+        );
+    }
+    // from pop_last_queued_into_draft_noop_when_queue_empty
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        assert!(!app.pop_last_queued_into_draft());
+        assert!(app.input.is_empty());
+        assert!(app.queued_draft.is_none());
+    }
 }
 
 #[test]
@@ -5436,117 +5465,120 @@ fn cancel_queued_draft_edit_restores_original_message() {
 }
 
 #[test]
-fn finalize_streaming_assistant_marks_existing_cell_interrupted() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.add_message(HistoryCell::Assistant {
-        content: "partial reply so far".to_string(),
-        streaming: true,
-    });
-    let idx = app.history.len() - 1;
-    app.streaming_message_index = Some(idx);
+fn finalize_streaming_scenario() {
+    // Scenario consolidation of: finalize_streaming_assistant_marks_existing_cell_interrupted, finalize_streaming_assistant_handles_empty_content, finalize_streaming_assistant_no_op_without_index, finalize_streaming_assistant_is_idempotent_on_double_call
+    // from finalize_streaming_assistant_marks_existing_cell_interrupted
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.add_message(HistoryCell::Assistant {
+            content: "partial reply so far".to_string(),
+            streaming: true,
+        });
+        let idx = app.history.len() - 1;
+        app.streaming_message_index = Some(idx);
 
-    app.finalize_streaming_assistant_as_interrupted();
+        app.finalize_streaming_assistant_as_interrupted();
 
-    assert!(app.streaming_message_index.is_none());
-    match &app.history[idx] {
-        HistoryCell::Assistant { content, streaming } => {
-            assert!(content.starts_with("[interrupted]"), "got: {content}");
-            assert!(content.contains("partial reply so far"));
-            assert!(!*streaming);
+        assert!(app.streaming_message_index.is_none());
+        match &app.history[idx] {
+            HistoryCell::Assistant { content, streaming } => {
+                assert!(content.starts_with("[interrupted]"), "got: {content}");
+                assert!(content.contains("partial reply so far"));
+                assert!(!*streaming);
+            }
+            other => panic!("expected Assistant cell, got {other:?}"),
         }
-        other => panic!("expected Assistant cell, got {other:?}"),
+    }
+    // from finalize_streaming_assistant_handles_empty_content
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.add_message(HistoryCell::Assistant {
+            content: String::new(),
+            streaming: true,
+        });
+        let idx = app.history.len() - 1;
+        app.streaming_message_index = Some(idx);
+
+        app.finalize_streaming_assistant_as_interrupted();
+
+        match &app.history[idx] {
+            HistoryCell::Assistant { content, streaming } => {
+                assert_eq!(content, "[interrupted]");
+                assert!(!*streaming);
+            }
+            other => panic!("expected Assistant cell, got {other:?}"),
+        }
+    }
+    // from finalize_streaming_assistant_no_op_without_index
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        // No streaming index set; should not panic and should leave history unchanged.
+        let prev_len = app.history.len();
+        app.finalize_streaming_assistant_as_interrupted();
+        assert_eq!(app.history.len(), prev_len);
+        assert!(app.streaming_message_index.is_none());
+    }
+    // from finalize_streaming_assistant_is_idempotent_on_double_call
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.add_message(HistoryCell::Assistant {
+            content: "something".to_string(),
+            streaming: true,
+        });
+        let idx = app.history.len() - 1;
+        app.streaming_message_index = Some(idx);
+
+        app.finalize_streaming_assistant_as_interrupted();
+        // Second call without resetting state must be safe.
+        app.finalize_streaming_assistant_as_interrupted();
+
+        match &app.history[idx] {
+            HistoryCell::Assistant { content, .. } => {
+                // Second call still finds index None — content unchanged from first.
+                assert!(content.starts_with("[interrupted] "));
+                assert_eq!(content.matches("[interrupted]").count(), 1);
+            }
+            other => panic!("expected Assistant cell, got {other:?}"),
+        }
     }
 }
 
 #[test]
-fn finalize_streaming_assistant_handles_empty_content() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.add_message(HistoryCell::Assistant {
-        content: String::new(),
-        streaming: true,
-    });
-    let idx = app.history.len() - 1;
-    app.streaming_message_index = Some(idx);
+fn delete_word_scenario() {
+    // Scenario consolidation of: delete_word_backward_removes_previous_word_only, delete_word_backward_handles_trailing_space_and_utf8, delete_word_forward_handles_leading_space_and_utf8
+    // from delete_word_backward_removes_previous_word_only
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello world".to_string();
+        app.cursor_position = char_count(&app.input);
 
-    app.finalize_streaming_assistant_as_interrupted();
+        app.delete_word_backward();
 
-    match &app.history[idx] {
-        HistoryCell::Assistant { content, streaming } => {
-            assert_eq!(content, "[interrupted]");
-            assert!(!*streaming);
-        }
-        other => panic!("expected Assistant cell, got {other:?}"),
+        assert_eq!(app.input, "hello ");
+        assert_eq!(app.cursor_position, char_count("hello "));
     }
-}
+    // from delete_word_backward_handles_trailing_space_and_utf8
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "cafe 你好   ".to_string();
+        app.cursor_position = char_count(&app.input);
 
-#[test]
-fn finalize_streaming_assistant_no_op_without_index() {
-    let mut app = App::new(test_options(false), &Config::default());
-    // No streaming index set; should not panic and should leave history unchanged.
-    let prev_len = app.history.len();
-    app.finalize_streaming_assistant_as_interrupted();
-    assert_eq!(app.history.len(), prev_len);
-    assert!(app.streaming_message_index.is_none());
-}
+        app.delete_word_backward();
 
-#[test]
-fn finalize_streaming_assistant_is_idempotent_on_double_call() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.add_message(HistoryCell::Assistant {
-        content: "something".to_string(),
-        streaming: true,
-    });
-    let idx = app.history.len() - 1;
-    app.streaming_message_index = Some(idx);
-
-    app.finalize_streaming_assistant_as_interrupted();
-    // Second call without resetting state must be safe.
-    app.finalize_streaming_assistant_as_interrupted();
-
-    match &app.history[idx] {
-        HistoryCell::Assistant { content, .. } => {
-            // Second call still finds index None — content unchanged from first.
-            assert!(content.starts_with("[interrupted] "));
-            assert_eq!(content.matches("[interrupted]").count(), 1);
-        }
-        other => panic!("expected Assistant cell, got {other:?}"),
+        assert_eq!(app.input, "cafe ");
+        assert_eq!(app.cursor_position, char_count("cafe "));
     }
-}
+    // from delete_word_forward_handles_leading_space_and_utf8
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello 你好 world".to_string();
+        app.cursor_position = char_count("hello");
 
-#[test]
-fn delete_word_backward_removes_previous_word_only() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "hello world".to_string();
-    app.cursor_position = char_count(&app.input);
+        app.delete_word_forward();
 
-    app.delete_word_backward();
-
-    assert_eq!(app.input, "hello ");
-    assert_eq!(app.cursor_position, char_count("hello "));
-}
-
-#[test]
-fn delete_word_backward_handles_trailing_space_and_utf8() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "cafe 你好   ".to_string();
-    app.cursor_position = char_count(&app.input);
-
-    app.delete_word_backward();
-
-    assert_eq!(app.input, "cafe ");
-    assert_eq!(app.cursor_position, char_count("cafe "));
-}
-
-#[test]
-fn delete_word_forward_handles_leading_space_and_utf8() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "hello 你好 world".to_string();
-    app.cursor_position = char_count("hello");
-
-    app.delete_word_forward();
-
-    assert_eq!(app.input, "hello world");
-    assert_eq!(app.cursor_position, char_count("hello"));
+        assert_eq!(app.input, "hello world");
+        assert_eq!(app.cursor_position, char_count("hello"));
+    }
 }
 
 #[test]
@@ -5579,51 +5611,78 @@ fn kill_and_yank_handle_multibyte_utf8() {
 }
 
 #[test]
-fn selection_range_returns_none_when_no_anchor() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "hello world".to_string();
-    app.cursor_position = 5;
-    app.selection_anchor = None;
-    assert!(app.selection_range().is_none());
+fn selection_range_scenario() {
+    // Scenario consolidation of: selection_range_returns_none_when_no_anchor, selection_range_returns_ordered_range, selection_range_normalizes_order, selection_range_returns_none_when_anchor_equals_cursor
+    // from selection_range_returns_none_when_no_anchor
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello world".to_string();
+        app.cursor_position = 5;
+        app.selection_anchor = None;
+        assert!(app.selection_range().is_none());
+    }
+    // from selection_range_returns_ordered_range
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello world".to_string();
+        app.cursor_position = 5;
+        app.selection_anchor = Some(2);
+        assert_eq!(app.selection_range(), Some((2, 5)));
+    }
+    // from selection_range_normalizes_order
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello world".to_string();
+        app.cursor_position = 2;
+        app.selection_anchor = Some(5);
+        assert_eq!(app.selection_range(), Some((2, 5)));
+    }
+    // from selection_range_returns_none_when_anchor_equals_cursor
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello".to_string();
+        app.cursor_position = 3;
+        app.selection_anchor = Some(3);
+        assert!(app.selection_range().is_none());
+    }
 }
 
 #[test]
-fn selection_range_returns_ordered_range() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "hello world".to_string();
-    app.cursor_position = 5;
-    app.selection_anchor = Some(2);
-    assert_eq!(app.selection_range(), Some((2, 5)));
-}
-
-#[test]
-fn selection_range_normalizes_order() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "hello world".to_string();
-    app.cursor_position = 2;
-    app.selection_anchor = Some(5);
-    assert_eq!(app.selection_range(), Some((2, 5)));
-}
-
-#[test]
-fn selection_range_returns_none_when_anchor_equals_cursor() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "hello".to_string();
-    app.cursor_position = 3;
-    app.selection_anchor = Some(3);
-    assert!(app.selection_range().is_none());
-}
-
-#[test]
-fn delete_selection_removes_selected_text() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "hello world".to_string();
-    app.cursor_position = 5;
-    app.selection_anchor = Some(2);
-    assert!(app.delete_selection());
-    assert_eq!(app.input, "he world");
-    assert_eq!(app.cursor_position, 2);
-    assert!(app.selection_anchor.is_none());
+fn delete_selection_scenario() {
+    // Scenario consolidation of: delete_selection_removes_selected_text, delete_selection_noop_when_no_selection, delete_selection_handles_cjk_and_emoji_ranges
+    // from delete_selection_removes_selected_text
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello world".to_string();
+        app.cursor_position = 5;
+        app.selection_anchor = Some(2);
+        assert!(app.delete_selection());
+        assert_eq!(app.input, "he world");
+        assert_eq!(app.cursor_position, 2);
+        assert!(app.selection_anchor.is_none());
+    }
+    // from delete_selection_noop_when_no_selection
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello".to_string();
+        app.cursor_position = 3;
+        app.selection_anchor = None;
+        assert!(!app.delete_selection());
+        assert_eq!(app.input, "hello");
+        assert_eq!(app.cursor_position, 3);
+    }
+    // from delete_selection_handles_cjk_and_emoji_ranges
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "a你👩‍👩‍👧‍👦好b".to_string();
+        // Select 你 + family emoji (7 chars) + 好: chars 1..10.
+        app.selection_anchor = Some(1);
+        app.cursor_position = 10;
+        assert_eq!(app.selected_text(), "你👩‍👩‍👧‍👦好");
+        assert!(app.delete_selection());
+        assert_eq!(app.input, "ab");
+        assert_eq!(app.cursor_position, 1);
+    }
 }
 
 #[test]
@@ -5668,17 +5727,6 @@ fn insert_str_replaces_selection() {
     assert_eq!(app.input, "heyo world");
     assert_eq!(app.cursor_position, 4);
     assert!(app.selection_anchor.is_none());
-}
-
-#[test]
-fn delete_selection_noop_when_no_selection() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "hello".to_string();
-    app.cursor_position = 3;
-    app.selection_anchor = None;
-    assert!(!app.delete_selection());
-    assert_eq!(app.input, "hello");
-    assert_eq!(app.cursor_position, 3);
 }
 
 // === Composer real-editor contract (v0.9.1) ====================================
@@ -5769,47 +5817,48 @@ fn vim_x_removes_whole_grapheme_cluster() {
 }
 
 #[test]
-fn select_all_covers_whole_draft() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "hello 你好 🇯🇵".to_string();
-    app.cursor_position = 3;
-    app.select_all();
-    assert_eq!(app.selection_anchor, Some(0));
-    assert_eq!(app.cursor_position, char_count(&app.input));
-    assert_eq!(app.selected_text(), "hello 你好 🇯🇵");
-}
-
-#[test]
-fn select_all_on_empty_composer_sets_no_anchor() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.select_all();
-    assert!(app.selection_anchor.is_none());
-    assert!(app.selection_range().is_none());
-}
-
-#[test]
-fn select_all_then_typing_replaces_everything_recoverably() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "precious draft".to_string();
-    app.select_all();
-    app.insert_char('x');
-    assert_eq!(app.input, "x");
-    assert_eq!(app.cursor_position, 1);
-    // The overwritten draft is stashed like Ctrl+U would.
-    assert_eq!(app.clear_undo_buffer.as_deref(), Some("precious draft"));
-    assert!(app.draft_history.iter().any(|d| d == "precious draft"));
-}
-
-#[test]
-fn select_all_then_backspace_is_recoverable_with_ctrl_z() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "do not lose me".to_string();
-    app.select_all();
-    app.delete_char();
-    assert_eq!(app.input, "");
-    assert!(app.restore_last_cleared_input_if_empty());
-    assert_eq!(app.input, "do not lose me");
-    assert_eq!(app.cursor_position, char_count(&app.input));
+fn select_all_scenario() {
+    // Scenario consolidation of: select_all_covers_whole_draft, select_all_on_empty_composer_sets_no_anchor, select_all_then_typing_replaces_everything_recoverably, select_all_then_backspace_is_recoverable_with_ctrl_z
+    // from select_all_covers_whole_draft
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "hello 你好 🇯🇵".to_string();
+        app.cursor_position = 3;
+        app.select_all();
+        assert_eq!(app.selection_anchor, Some(0));
+        assert_eq!(app.cursor_position, char_count(&app.input));
+        assert_eq!(app.selected_text(), "hello 你好 🇯🇵");
+    }
+    // from select_all_on_empty_composer_sets_no_anchor
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.select_all();
+        assert!(app.selection_anchor.is_none());
+        assert!(app.selection_range().is_none());
+    }
+    // from select_all_then_typing_replaces_everything_recoverably
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "precious draft".to_string();
+        app.select_all();
+        app.insert_char('x');
+        assert_eq!(app.input, "x");
+        assert_eq!(app.cursor_position, 1);
+        // The overwritten draft is stashed like Ctrl+U would.
+        assert_eq!(app.clear_undo_buffer.as_deref(), Some("precious draft"));
+        assert!(app.draft_history.iter().any(|d| d == "precious draft"));
+    }
+    // from select_all_then_backspace_is_recoverable_with_ctrl_z
+    {
+        let mut app = App::new(test_options(false), &Config::default());
+        app.input = "do not lose me".to_string();
+        app.select_all();
+        app.delete_char();
+        assert_eq!(app.input, "");
+        assert!(app.restore_last_cleared_input_if_empty());
+        assert_eq!(app.input, "do not lose me");
+        assert_eq!(app.cursor_position, char_count(&app.input));
+    }
 }
 
 #[test]
@@ -5821,19 +5870,6 @@ fn partial_selection_delete_does_not_stash_undo_buffer() {
     assert!(app.delete_selection());
     assert_eq!(app.input, " world");
     assert!(app.clear_undo_buffer.is_none());
-}
-
-#[test]
-fn delete_selection_handles_cjk_and_emoji_ranges() {
-    let mut app = App::new(test_options(false), &Config::default());
-    app.input = "a你👩‍👩‍👧‍👦好b".to_string();
-    // Select 你 + family emoji (7 chars) + 好: chars 1..10.
-    app.selection_anchor = Some(1);
-    app.cursor_position = 10;
-    assert_eq!(app.selected_text(), "你👩‍👩‍👧‍👦好");
-    assert!(app.delete_selection());
-    assert_eq!(app.input, "ab");
-    assert_eq!(app.cursor_position, 1);
 }
 
 #[test]
@@ -5951,30 +5987,56 @@ fn advance_fallback_skips_unauthed_middle_provider_and_lands_on_next_ready() {
 }
 
 #[test]
-fn advance_fallback_local_provider_is_eligible_without_a_key() {
-    let _lock = lock_test_env();
-    let _openai = EnvVarGuard::remove("OPENAI_API_KEY");
+fn advance_fallback_scenario() {
+    // Scenario consolidation of: advance_fallback_local_provider_is_eligible_without_a_key, advance_fallback_local_primary_may_fall_back_to_local_sibling
+    // from advance_fallback_local_provider_is_eligible_without_a_key
+    {
+        let _lock = lock_test_env();
+        let _openai = EnvVarGuard::remove("OPENAI_API_KEY");
 
-    // Chain: Openai (active, keyed) -> Ollama (local, no key needed).
-    let mut app = app_with_fallback_chain(
-        ApiProvider::Openai,
-        &[codewhale_config::ProviderKind::Ollama],
-        &[ApiProvider::Openai],
-    );
+        // Chain: Openai (active, keyed) -> Ollama (local, no key needed).
+        let mut app = app_with_fallback_chain(
+            ApiProvider::Openai,
+            &[codewhale_config::ProviderKind::Ollama],
+            &[ApiProvider::Openai],
+        );
 
-    let next = app.advance_fallback("timeout");
-    assert_eq!(
-        next,
-        Some(ApiProvider::Ollama),
-        "self-hosted providers are ready without a key"
-    );
-    assert_eq!(app.api_provider, ApiProvider::Ollama);
-    let reason = app.last_fallback_reason.as_deref().unwrap_or_default();
-    assert!(reason.contains("Fell back to ollama"), "{reason}");
-    assert!(
-        !reason.contains("skipped"),
-        "no providers should be skipped: {reason}"
-    );
+        let next = app.advance_fallback("timeout");
+        assert_eq!(
+            next,
+            Some(ApiProvider::Ollama),
+            "self-hosted providers are ready without a key"
+        );
+        assert_eq!(app.api_provider, ApiProvider::Ollama);
+        let reason = app.last_fallback_reason.as_deref().unwrap_or_default();
+        assert!(reason.contains("Fell back to ollama"), "{reason}");
+        assert!(
+            !reason.contains("skipped"),
+            "no providers should be skipped: {reason}"
+        );
+    }
+    // from advance_fallback_local_primary_may_fall_back_to_local_sibling
+    {
+        let _lock = lock_test_env();
+
+        // Local primary (Ollama) -> local sibling (vLLM). Both are self-hosted, so
+        // the local/private posture is preserved and the fallback is allowed.
+        let mut app = app_with_fallback_chain(
+            ApiProvider::Ollama,
+            &[codewhale_config::ProviderKind::Vllm],
+            &[],
+        );
+
+        let next = app.advance_fallback("local runtime unavailable");
+        assert_eq!(
+            next,
+            Some(ApiProvider::Vllm),
+            "local->local fallback stays within the private posture"
+        );
+        assert_eq!(app.api_provider, ApiProvider::Vllm);
+        let reason = app.last_fallback_reason.as_deref().unwrap_or_default();
+        assert!(reason.contains("Fell back to vllm"), "{reason}");
+    }
 }
 
 #[test]
@@ -6125,29 +6187,6 @@ fn advance_fallback_local_primary_does_not_fall_back_to_cloud() {
         !reason.contains("needs auth"),
         "the block is policy, not missing auth: {reason}"
     );
-}
-
-#[test]
-fn advance_fallback_local_primary_may_fall_back_to_local_sibling() {
-    let _lock = lock_test_env();
-
-    // Local primary (Ollama) -> local sibling (vLLM). Both are self-hosted, so
-    // the local/private posture is preserved and the fallback is allowed.
-    let mut app = app_with_fallback_chain(
-        ApiProvider::Ollama,
-        &[codewhale_config::ProviderKind::Vllm],
-        &[],
-    );
-
-    let next = app.advance_fallback("local runtime unavailable");
-    assert_eq!(
-        next,
-        Some(ApiProvider::Vllm),
-        "local->local fallback stays within the private posture"
-    );
-    assert_eq!(app.api_provider, ApiProvider::Vllm);
-    let reason = app.last_fallback_reason.as_deref().unwrap_or_default();
-    assert!(reason.contains("Fell back to vllm"), "{reason}");
 }
 
 #[test]
@@ -6326,7 +6365,7 @@ fn explicit_mode_selection_and_hotbar_share_the_persistence_owner() {
 
     // The legacy YOLO entry point installs Act, so that is what must persist —
     // "yolo" is a permission alias, never a startup mode.
-    assert_eq!(app.select_mode(AppMode::Yolo), SettingSelection::Changed);
+    assert_eq!(app.select_yolo_compat(), SettingSelection::Changed);
     assert_eq!(Settings::load().expect("reload").default_mode, "agent");
 }
 
@@ -7294,51 +7333,54 @@ fn ambient_idle_settles_after_grace_and_wakes_on_activity() {
 }
 
 #[test]
-fn launch_onboarding_skips_picker_when_xai_oauth_needs_reauth() {
-    // #5032: an onboarded user whose active xAI OAuth credential is missing
-    // must NOT be sent back to the generic provider picker every launch.
-    let (onboarding, recovery) = launch_onboarding_decision(
-        false, // skip_onboarding
-        true,  // was_onboarded
-        false, // needs_language
-        true,  // needs_api_key
-        false, // needs_workspace_trust
-        true,  // xai_oauth_needs_reauth
-    );
-    assert_eq!(onboarding, OnboardingState::None);
-    assert!(!recovery);
-}
+fn launch_onboarding_scenario() {
+    // Scenario consolidation of: launch_onboarding_skips_picker_when_xai_oauth_needs_reauth, launch_onboarding_opens_picker_for_generic_missing_key, launch_onboarding_clean_when_onboarded_with_key, launch_onboarding_starts_first_run_at_composer
+    // from launch_onboarding_skips_picker_when_xai_oauth_needs_reauth
+    {
+        // #5032: an onboarded user whose active xAI OAuth credential is missing
+        // must NOT be sent back to the generic provider picker every launch.
+        let (onboarding, recovery) = launch_onboarding_decision(
+            false, // skip_onboarding
+            true,  // was_onboarded
+            false, // needs_language
+            true,  // needs_api_key
+            false, // needs_workspace_trust
+            true,  // xai_oauth_needs_reauth
+        );
+        assert_eq!(onboarding, OnboardingState::None);
+        assert!(!recovery);
+    }
+    // from launch_onboarding_opens_picker_for_generic_missing_key
+    {
+        // A generic missing key (not the xAI-OAuth re-auth case) still reopens the
+        // provider picker for recovery.
+        let (onboarding, recovery) =
+            launch_onboarding_decision(false, true, false, true, false, false);
+        assert_eq!(onboarding, OnboardingState::Provider);
+        assert!(recovery);
+    }
+    // from launch_onboarding_clean_when_onboarded_with_key
+    {
+        let (onboarding, recovery) =
+            launch_onboarding_decision(false, true, false, false, false, false);
+        assert_eq!(onboarding, OnboardingState::None);
+        assert!(!recovery);
+    }
+    // from launch_onboarding_starts_first_run_at_composer
+    {
+        // First paint is the composer. Recovery picker is returning-user only.
+        let (onboarding, recovery) =
+            launch_onboarding_decision(false, false, false, true, false, true);
+        assert_eq!(onboarding, OnboardingState::None);
+        assert!(!recovery);
 
-#[test]
-fn launch_onboarding_opens_picker_for_generic_missing_key() {
-    // A generic missing key (not the xAI-OAuth re-auth case) still reopens the
-    // provider picker for recovery.
-    let (onboarding, recovery) = launch_onboarding_decision(false, true, false, true, false, false);
-    assert_eq!(onboarding, OnboardingState::Provider);
-    assert!(recovery);
-}
+        let (language, _) = launch_onboarding_decision(false, false, true, true, true, false);
+        assert_eq!(language, OnboardingState::None);
 
-#[test]
-fn launch_onboarding_clean_when_onboarded_with_key() {
-    let (onboarding, recovery) =
-        launch_onboarding_decision(false, true, false, false, false, false);
-    assert_eq!(onboarding, OnboardingState::None);
-    assert!(!recovery);
-}
+        let (trust, _) = launch_onboarding_decision(false, false, false, false, true, false);
+        assert_eq!(trust, OnboardingState::None);
 
-#[test]
-fn launch_onboarding_starts_first_run_at_composer() {
-    // First paint is the composer. Recovery picker is returning-user only.
-    let (onboarding, recovery) = launch_onboarding_decision(false, false, false, true, false, true);
-    assert_eq!(onboarding, OnboardingState::None);
-    assert!(!recovery);
-
-    let (language, _) = launch_onboarding_decision(false, false, true, true, true, false);
-    assert_eq!(language, OnboardingState::None);
-
-    let (trust, _) = launch_onboarding_decision(false, false, false, false, true, false);
-    assert_eq!(trust, OnboardingState::None);
-
-    let (ready, _) = launch_onboarding_decision(false, false, false, false, false, false);
-    assert_eq!(ready, OnboardingState::None);
+        let (ready, _) = launch_onboarding_decision(false, false, false, false, false, false);
+        assert_eq!(ready, OnboardingState::None);
+    }
 }

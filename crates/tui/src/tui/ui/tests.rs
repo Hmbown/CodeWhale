@@ -4497,8 +4497,8 @@ fn bottom_placement_keeps_the_stage_and_queued_preview_at_twelve_rows() {
 #[test]
 fn wide_underwater_canvas_carries_the_ocean_to_both_terminal_edges() {
     let mut app = create_test_app();
-    app.ui_theme = crate::palette::UI_THEME;
-    app.ocean_treatment = crate::tui::ocean::OceanTreatment::Deepsea;
+    app.theme_id = crate::palette::ThemeId::Underwater;
+    app.ui_theme = crate::palette::UNDERWATER_UI_THEME;
     app.onboarding_workspace_trust_gate = false;
     app.onboarding = OnboardingState::None;
     let surface_bg = app.ui_theme.surface_bg;
@@ -4910,6 +4910,32 @@ fn raw_paste_beginning_with_space_preserves_payload_over_reasoning_action() {
             + Duration::from_millis(2),
     ));
     assert_eq!(app.input, " x");
+}
+
+#[test]
+fn paste_burst_does_not_leak_into_composer_while_a_modal_owns_keys() {
+    // `/model` opens a picker with its own query. A held paste-burst from
+    // typing the slash command must not flush into the composer under it.
+    let mut app = Box::new(create_test_app());
+    app.use_paste_burst_detection = true;
+    app.bracketed_paste_seen = false;
+    let now = Instant::now();
+    let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+    assert!(handle_plain_key_before_composer(&mut app, &slash, now));
+    app.view_stack.push(HelpView::new());
+    let flushed = flush_paste_burst_before_composer(
+        &mut app,
+        now + crate::tui::paste_burst::PasteBurst::recommended_flush_delay(),
+    );
+    assert!(
+        !flushed,
+        "modal-owned keys must not flush into the composer"
+    );
+    assert!(
+        app.input.is_empty() || app.input == "/",
+        "composer must not gain leaked burst text under a modal: {:?}",
+        app.input
+    );
 }
 
 #[test]
@@ -5678,13 +5704,13 @@ fn session_denied_notice_explains_cached_decision_and_recovery() {
 async fn cached_denial_explanation_survives_tool_completion_and_done_render() {
     use crate::core::engine::MockApprovalEvent;
     use crate::tools::spec::ToolError;
-    use crate::tui::ocean::OceanTreatment;
     use ratatui::{Terminal, backend::TestBackend};
 
     let mut app = create_test_app();
     app.onboarding = OnboardingState::None;
     app.launch.visible = false;
-    app.ocean_treatment = OceanTreatment::Deepsea;
+    app.theme_id = crate::palette::ThemeId::Underwater;
+    app.ui_theme = crate::palette::UNDERWATER_UI_THEME;
     app.is_loading = true;
     app.runtime_turn_status = Some("in_progress".to_string());
 
@@ -5886,28 +5912,6 @@ fn full_access_auto_approves_requests_while_auto_review_holds_without_a_modal() 
     );
 
     app.approval_mode = ApprovalMode::Suggest;
-    app.mode = AppMode::Yolo;
-    assert_eq!(
-        resolve_ui_approval_disposition(
-            &app,
-            "exec_shell",
-            "shell:exec_shell:cargo test",
-            "key",
-            false,
-        ),
-        ApprovalRequestDisposition::AutoApprove
-    );
-    assert_eq!(
-        resolve_ui_approval_disposition(
-            &app,
-            "exec_shell",
-            "shell:exec_shell:cargo test",
-            "key",
-            true,
-        ),
-        ApprovalRequestDisposition::AutoDenyFullAccessPolicyHold
-    );
-
     app.mode = AppMode::Agent;
     app.approval_session_approved
         .insert("shell:exec_shell:cargo test".to_string());
@@ -5935,7 +5939,7 @@ fn full_access_auto_approves_requests_while_auto_review_holds_without_a_modal() 
 }
 
 #[test]
-fn app_auto_approval_helper_covers_yolo_and_bypass_only() {
+fn app_auto_approval_helper_covers_bypass_only() {
     let mut app = create_test_app();
     app.mode = AppMode::Agent;
     app.approval_mode = ApprovalMode::Suggest;
@@ -5945,10 +5949,6 @@ fn app_auto_approval_helper_covers_yolo_and_bypass_only() {
     assert!(!app_auto_approve_enabled(&app));
 
     app.approval_mode = ApprovalMode::Bypass;
-    assert!(app_auto_approve_enabled(&app));
-
-    app.approval_mode = ApprovalMode::Suggest;
-    app.mode = AppMode::Yolo;
     assert!(app_auto_approve_enabled(&app));
 }
 
@@ -5969,10 +5969,9 @@ fn auto_review_suppresses_stale_question_prompts_while_other_postures_allow_them
         );
     }
 
-    // Compatibility shape: legacy Yolo hosts can carry a stale Auto enum,
-    // but their effective posture is Full Access, where questions are valid.
-    app.mode = AppMode::Yolo;
-    app.approval_mode = ApprovalMode::Auto;
+    // Full Access keeps questions valid, same as Auto-Review suppresses
+    // them only for its own stale-prompt cleanup.
+    app.approval_mode = ApprovalMode::Bypass;
     assert!(!should_suppress_user_input_prompt(&app));
 }
 
@@ -7768,13 +7767,7 @@ async fn mode_change_update_notifies_engine() {
     let mut engine = crate::core::engine::mock_engine_handle();
 
     assert!(
-        apply_mode_update(
-            &mut app,
-            &engine.handle,
-            &crate::config::Config::default(),
-            crate::tui::app::AppMode::Yolo
-        )
-        .await
+        apply_yolo_compat_update(&mut app, &engine.handle, &crate::config::Config::default()).await
     );
 
     match engine.rx_op.recv().await.expect("change mode op") {
@@ -11631,7 +11624,7 @@ fn ctrl_alt_4_selects_pinned_rail_panel_without_switching_modes() {
         app.work_surface.panel,
         crate::tui::work_surface::RailPanel::Files
     );
-    assert_eq!(app.status_message.as_deref(), Some("Rail panel: files"));
+    assert_eq!(app.status_message.as_deref(), Some("Workbar panel: files"));
 }
 
 #[test]
@@ -11903,7 +11896,7 @@ fn ctrl_alt_0_turns_rail_off() {
         app.work_surface.placement,
         crate::tui::work_surface::WorkSurfacePlacement::Off
     );
-    assert_eq!(app.status_message.as_deref(), Some("Rail is off"));
+    assert_eq!(app.status_message.as_deref(), Some("Workbar is off"));
 }
 
 #[test]
@@ -11919,28 +11912,28 @@ fn ctrl_alt_0_restores_bottom_rail_when_already_off() {
     );
     assert_eq!(
         app.status_message.as_deref(),
-        Some("Rail: bottom placement")
+        Some("Workbar: bottom placement")
     );
 }
 
 #[test]
 fn rail_command_reports_off_without_claiming_visibility() {
     // Replaces the old sidebar_render_state tests: the render-state machine
-    // is gone with the classic sidebar, and the /rail status readout is the
-    // contract that replaces it. It must never claim a surface that cannot
-    // render is visible.
+    // is gone with the classic sidebar, and the /workbar status readout is
+    // the contract that replaces it. It must never claim a surface that
+    // cannot render is visible.
     let mut app = create_test_app();
-    let result = crate::commands::execute("/rail off", &mut app);
+    let result = crate::commands::execute("/workbar off", &mut app);
     assert!(!result.is_error);
     assert_eq!(
         app.work_surface.placement,
         crate::tui::work_surface::WorkSurfacePlacement::Off
     );
     let message = result.message.unwrap_or_default();
-    assert!(message.contains("Rail is off"), "got: {message}");
+    assert!(message.contains("Workbar is off"), "got: {message}");
     assert!(
-        !message.contains("Sidebar is visible"),
-        "no control may claim the dead sidebar renders: {message}"
+        !message.contains("Workbar is visible"),
+        "no control may claim a hidden surface renders: {message}"
     );
 }
 
@@ -14117,7 +14110,6 @@ fn test_esc_priority_order_matches_cancel_stack() {
     let mut app = create_test_app();
     app.is_loading = true;
     app.input = "draft".to_string();
-    app.mode = AppMode::Yolo;
     assert_eq!(next_escape_action(&app, false), EscapeAction::CancelRequest);
 
     app.input.clear();
@@ -15005,6 +14997,83 @@ async fn enter_while_model_waiting_queues_instead_of_steering() {
     assert!(
         engine.rx_steer.try_recv().is_err(),
         "bare Enter must never become a same-turn steer"
+    );
+}
+
+/// Ops contract: Queue disposition must echo `HistoryCell::User` into the
+/// transcript before the model runs (swarm shot 12 / queued follow-up).
+#[tokio::test]
+async fn queue_disposition_echoes_user_turn_into_history() {
+    let mut app = create_test_app();
+    app.is_loading = true;
+    app.streaming_message_index = None;
+    let config = Config::default();
+    let engine = crate::core::engine::mock_engine_handle();
+    let queued = QueuedMessage::new("hello queued".to_string(), None);
+
+    submit_or_steer_message(
+        &mut app,
+        &config,
+        &engine.handle,
+        queued,
+        DispatchRecovery::Immediate,
+    )
+    .await
+    .expect("busy submit queues");
+
+    assert_eq!(app.queued_message_count(), 1);
+    assert!(
+        app.queued_messages
+            .front()
+            .is_some_and(|msg| msg.history_echoed),
+        "queued message must remember the history echo"
+    );
+    let user_cells: Vec<_> = app
+        .history
+        .iter()
+        .filter_map(|cell| match cell {
+            HistoryCell::User { content } => Some(content.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(user_cells, vec!["hello queued"]);
+}
+
+/// Draining a previously-echoed queued turn into Immediate prepare must not
+/// paint a second User bubble.
+#[test]
+fn prepare_skips_user_echo_when_history_echoed() {
+    let mut app = create_test_app();
+    app.add_message(HistoryCell::User {
+        content: "hello queued".to_string(),
+    });
+    let mut message = QueuedMessage::new("hello queued".to_string(), None);
+    message.history_echoed = true;
+    let before = app
+        .history
+        .iter()
+        .filter(|cell| matches!(cell, HistoryCell::User { .. }))
+        .count();
+
+    let _prepare = prepare_user_dispatch(&mut app, &Config::default(), message)
+        .expect("prepare echoed message");
+
+    let after = app
+        .history
+        .iter()
+        .filter(|cell| matches!(cell, HistoryCell::User { .. }))
+        .count();
+    assert_eq!(before, 1);
+    assert_eq!(
+        after, 1,
+        "history_echoed prepare must not double the User cell"
+    );
+    assert!(
+        matches!(
+            app.history.first(),
+            Some(HistoryCell::User { content }) if content == "hello queued"
+        ),
+        "existing echoed User cell must remain the reference target"
     );
 }
 
@@ -21574,7 +21643,7 @@ fn default_footer_excludes_provider_specific_diagnostic_chips() {
     );
     assert!(
         !items.contains(&crate::config::StatusItem::Balance),
-        "balance is DeepSeek-only and should not crowd the default footer for non-DeepSeek users"
+        "balance is an opt-in prepaid chip and should not crowd the default footer"
     );
     assert!(
         items.contains(&crate::config::StatusItem::Cache),
@@ -21589,27 +21658,43 @@ fn default_footer_excludes_provider_specific_diagnostic_chips() {
 // ── Balance footer chip tests ─────────────────────────────────────
 
 #[test]
-fn should_fetch_deepseek_balance_requires_balance_status_item() {
+fn should_fetch_provider_balance_requires_balance_status_item() {
     let mut app = create_test_app();
     app.api_provider = ApiProvider::Deepseek;
     app.status_items = crate::config::StatusItem::default_footer();
 
-    assert!(!should_fetch_deepseek_balance(&app));
+    assert!(!should_fetch_provider_balance(&app));
 
     app.status_items.push(crate::config::StatusItem::Balance);
-    assert!(should_fetch_deepseek_balance(&app));
+    assert!(should_fetch_provider_balance(&app));
 }
 
 #[test]
-fn should_fetch_deepseek_balance_requires_deepseek_provider() {
+fn should_fetch_provider_balance_covers_prepaid_providers() {
     let mut app = create_test_app();
     app.status_items = vec![crate::config::StatusItem::Balance];
 
+    app.api_provider = ApiProvider::Ollama;
+    assert!(!should_fetch_provider_balance(&app));
+
     app.api_provider = ApiProvider::Openrouter;
-    assert!(!should_fetch_deepseek_balance(&app));
+    assert!(should_fetch_provider_balance(&app));
+
+    app.api_provider = ApiProvider::Siliconflow;
+    assert!(should_fetch_provider_balance(&app));
 
     app.api_provider = ApiProvider::DeepseekCN;
-    assert!(should_fetch_deepseek_balance(&app));
+    assert!(should_fetch_provider_balance(&app));
+}
+
+#[test]
+fn openrouter_credits_map_remaining_usd() {
+    let info =
+        openrouter_credits_from_json(r#"{"data":{"total_credits":50.0,"total_usage":12.345}}"#)
+            .expect("openrouter credits JSON");
+    assert_eq!(info.currency, "USD");
+    assert_eq!(info.total_balance, "37.66");
+    assert_eq!(info.chip_label().as_deref(), Some("$37.66"));
 }
 
 /// Regression for issue #244: visible session spend must not decrease.
@@ -24527,4 +24612,58 @@ fn resumed_launch_keeps_the_loaded_session_id_for_the_engine() {
     let (engine, _handle) =
         crate::core::engine::Engine::new(build_engine_config(&app, &config), &config);
     assert_eq!(engine.session_id(), "800596e6-56fd-477c-9a0f-13ada7846194");
+}
+
+#[test]
+fn sixel_reconciler_emits_moves_and_clears() {
+    crate::tui::mark::set_sixel_supported_for_tests(true);
+    let mut app = create_test_app();
+    app.launch.sixel_cell_px = Some((10, 20));
+    // Force the transparent-stage branch: the raster composites onto the
+    // probed terminal background, and the clear below must repaint exactly
+    // that colour.
+    app.ui_theme.surface_bg = ratatui::style::Color::Reset;
+    app.launch.sixel_terminal_bg = Some(ratatui::style::Color::Rgb(3, 7, 13));
+    let mut writer: Vec<u8> = Vec::new();
+    // No reservation: silent, nothing tracked.
+    super::frame::reconcile_launch_sixel(&mut writer, &mut app);
+    assert!(writer.is_empty());
+    assert_eq!(app.launch.sixel_emitted, None);
+    // New block: one positioned emission, tracked in stage coordinates
+    // (stage cells are screen cells in fullscreen; CUP is 1-based, so
+    // stage (2,1) draws at row 2, column 3).
+    app.launch.sixel_mark_area = Some(Rect::new(2, 1, 6, 3));
+    super::frame::reconcile_launch_sixel(&mut writer, &mut app);
+    let text = String::from_utf8(writer.clone()).expect("ASCII stream");
+    assert!(text.contains("\x1b[2;3H"), "{text:?}");
+    assert!(text.contains("\x1bPq"), "{text:?}");
+    assert_eq!(app.launch.sixel_emitted, Some(Rect::new(2, 1, 6, 3)));
+    // Steady state: silent.
+    let settled = writer.len();
+    super::frame::reconcile_launch_sixel(&mut writer, &mut app);
+    assert_eq!(writer.len(), settled, "steady frame emits nothing");
+    // Moved block: the old screen block is wiped with the field colour,
+    // then the new block draws (stage (4,1) -> CUP row 3, column 6).
+    app.launch.sixel_mark_area = Some(Rect::new(4, 1, 6, 3));
+    super::frame::reconcile_launch_sixel(&mut writer, &mut app);
+    let text = String::from_utf8(writer.clone()).expect("ASCII stream");
+    let delta = &text[settled..];
+    assert!(delta.contains("48;2;"), "move clears the old block first");
+    assert!(
+        delta.contains("48;2;3;7;13m"),
+        "clear repaints the probed field: {delta:?}"
+    );
+    assert!(delta.contains("\x1b[2;5H"), "{delta:?}");
+    assert_eq!(app.launch.sixel_emitted, Some(Rect::new(4, 1, 6, 3)));
+    // Tier exit: the live block is wiped and tracking stops.
+    let moved = writer.len();
+    app.launch.sixel_mark_area = None;
+    super::frame::reconcile_launch_sixel(&mut writer, &mut app);
+    let text = String::from_utf8(writer.clone()).expect("ASCII stream");
+    assert!(
+        text[moved..].contains("48;2;"),
+        "exit clears the live block"
+    );
+    assert_eq!(app.launch.sixel_emitted, None);
+    crate::tui::mark::set_sixel_supported_for_tests(false);
 }

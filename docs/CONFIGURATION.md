@@ -945,35 +945,6 @@ Select a profile with:
 
 If a profile is selected but missing, codewhale exits with an error listing available profiles.
 
-## Harness Profiles
-
-v0.9 adds a config data model for model-specific harness posture. This is a
-preview schema: it can be parsed and tested, but runtime provider/model
-selection and prompt/tool behavior are wired in later v0.9 slices.
-When no configured profile matches, the resolver falls back to built-in seed
-profiles for the model families listed in the cutline doc. Configured profiles
-always take precedence over those seeds.
-
-```toml
-[[harness_profiles]]
-provider_route = "deepseek"
-model_pattern = "deepseek-v4.*"
-
-[harness_profiles.posture]
-kind = "cache-heavy"          # standard | cache-heavy | lean | custom
-max_subagents = 10            # 0 means runtime default
-prefer_codebase_search = false
-compaction_strategy = "prefix-cache" # default | prefix-cache | aggressive
-tool_surface = "full"              # full | read-only | auto
-safety_posture = "standard"        # standard | strict | permissive
-```
-
-Unknown posture names or unknown keys inside a harness profile fail config
-deserialization instead of silently becoming `custom`. That is intentional:
-once runtime wiring consumes these profiles, a typo should be visible.
-The v0.9 implementation order and automatic-creator boundary are documented in
-[`HARNESS_PROFILE_CUTLINE.md`](rfcs/HARNESS_PROFILE_CUTLINE.md).
-
 ## Environment Variables
 
 Most runtime environment variables override config values. API-key variables are
@@ -1583,9 +1554,10 @@ You can inspect or update these from the TUI with `/settings` and `/config`
 
 Common settings keys:
 
-- `theme` (`system`, `terminal`, `dark`, `light`, `grayscale`,
-  `catppuccin-mocha`, `tokyo-night`, `dracula`, `gruvbox-dark`, `claude`,
-  `matrix`, `solarized-light`; default `system`): `system` follows terminal
+- `theme` (`system`, `terminal`, `underwater`, `underwater-retro`,
+  `dark`, `light`, `grayscale`, `catppuccin-mocha`, `tokyo-night`,
+  `dracula`, `gruvbox-dark`, `claude`, `matrix`, `solarized-light`, `uwu`;
+  default `system`): `system` follows terminal
   background detection, `dark`/`light` use the Codewhale Whale pair,
   `terminal` inherits the host terminal, `grayscale` is the low-opinion
   black/white theme, and the named community presets apply across the TUI.
@@ -1609,21 +1581,25 @@ Common settings keys:
 - `paste_burst_detection` (on/off, default on): fallback rapid-key paste
   detection for terminals that do not emit bracketed-paste events. This is
   independent of terminal bracketed-paste mode.
-- `work_surface_placement` (`top`, `left`, `right`, or `off`; default `top`):
-  places the work bar — Tasks / To-do / Workers — above the transcript (the
-  default top bar), in a side rail, or hides it entirely (`off`). Side
-  choices fall back to the top layout on narrow terminals without changing
-  the saved preference. Set it live with
-  `/config work_surface_placement right --save` (or `left` / `top` / `off`).
-- `rail_panel` (`tasks`, `agents`, `context`, `pinned`; default `tasks`, alias
-  key `rail`): which panel the work bar shows. Panel selection is orthogonal
-  to placement. `tasks` is the full live work list (to-dos, then sub-agents);
-  `agents` narrows to the sub-agent rows; `pinned` shows the goal plus the
-  to-do checklist; `context` is a read-only session-facts list. In every
-  panel except `context`, rows are selectable and clickable and open their
-  detail surface. `Alt+!`/`Alt+@`/`Alt+#`/`Alt+$` switch panels live.
+- `work_surface_placement` (`bottom`, `top`, `left`, `right`, or `off`;
+  default `bottom`): places the workbar — Tasks / To-do / Workers — under the
+  composer (the default bottom workbar), above the transcript, in a side
+  workbar, or hides it entirely (`off`). Side choices fall back to the top
+  layout on narrow terminals without changing the saved preference. Set it
+  live with `/config work_surface_placement right --save` (or `left` / `top` /
+  `bottom` / `off`).
+- `rail_panel` (`tasks`, `agents`, `background`, `files`, `notepad`,
+  `context`, `git`, `price`; default `tasks`, alias key `rail`): which panel
+  the workbar shows. Panel selection is orthogonal to placement. `tasks` is
+  the full live work list (to-dos, then sub-agents); `agents` narrows to the
+  sub-agent rows; `background` lists background shells and automations;
+  `files` lists touched files; `notepad` shows the workspace notes; `context`
+  is a read-only session-facts list; `git` shows branch status; `price`
+  shows cost. In every panel except `context`, rows are selectable and
+  clickable and open their detail surface. `Alt+!`/`Alt+@`/`Alt+#`/`Alt+$`
+  switch panels live.
 - `work_surface_top_height` (2–16) and `work_surface_side_width` (26–80):
-  ceilings for the top strip's height and a side rail's width. Both are
+  ceilings for the top strip's height and the side workbar's width. Both are
   normally persisted by dragging the divider rather than edited by hand; the
   strip still auto-fits its content below the ceiling.
 - `focus_texture` (`off`, `scrim`, or `grain`; default `off`): focus-context
@@ -1697,15 +1673,15 @@ Common settings keys:
   `agents`/`subagents` become `rail_panel = "agents"`, `context`/`session`
   become `rail_panel = "context"`, `tasks`/`auto` (the old default) become the
   `tasks` panel, `sessions` enables `sessions_rail`, and `hidden` turns the
-  work bar off via `work_surface_placement = "off"`. An explicit `rail_panel`
-  in the file always wins over the migrated value. Configure the work bar with
+  workbar off via `work_surface_placement = "off"`. An explicit `rail_panel`
+  in the file always wins over the migrated value. Configure the workbar with
   `rail_panel` and `work_surface_placement`, not this key.
 - `sessions_rail` (`on`/`off`; default `off`): show the persistent Sessions
-  rail in the sidebar panel stack. Rows list this workspace's recent
+  list in the workbar. Rows list this workspace's recent
   non-archived sessions, newest first, with the active one marked; activating a
   row opens the session picker preselected on it (`/sessions open <id>`), so
   resume keeps its single implementation. Rows are projected from cached
-  session metadata — the rail never reads a transcript per frame, and never
+  session metadata — the list never reads a transcript per frame, and never
   contacts a provider.
 - `session_auto_resume` (`on`/`off`; default `off`): reattach to this
   workspace's most recent session when Codewhale starts. Off by default so
@@ -2169,10 +2145,6 @@ reasoning contract, and all four membership ids omit generic sampling fields.
 - `[verifier].enabled` (bool, default `false`): enables automatic
   claim-of-done verifier preview once that runtime trigger is active. The
   manual `run_verifiers` tool is still available when this is false.
-- `[verifier].verdict_policy` (string, default `"hunt"`): maps verifier
-  `pass` / `partial` / `fail` into the goal verdict vocabulary
-  `hunted` / `wounded` / `escaped`. `"hunt"` is the only shipped policy today;
-  unknown values are rejected so future policies can be added deliberately.
 - `mcp_config_path` (string, optional): defaults to `~/.codewhale/mcp.json`, with
   legacy `~/.deepseek/mcp.json` fallback when the Codewhale path is absent.
   Custom paths must be absolute; a relative value falls back to the user-global
@@ -2252,7 +2224,7 @@ reasoning contract, and all four membership ids omit generic sampling fields.
   "approval-needed"]`), `min_interval_ms` (int, default `2000`), `quiet`
   (bool, default `false`). See "Event sound cues" below.
 - `tui.alternate_screen` (string, optional, default `auto`): which screen an interactive session starts on. `auto` and `always` start on the TUI-owned alternate screen; `never` starts in inline mode — a ratatui viewport the full height of the terminal with no alternate screen, so the shell's scrollback survives the session and stays scrollable after exit. `/fullscreen` and `/inline` switch it in-process; a switch that the terminal refuses rolls back and says why. Inline mode paints the whole transcript inside its viewport — nothing is written into the host scrollback while the session runs.
-- `tui.mouse_capture` (bool, optional, default `true` on non-Windows terminals and on Windows Terminal/ConEmu/Cmder when the alternate screen is active; `false` on legacy Windows console and inside JetBrains JediTerm — PyCharm/IDEA/CLion/etc. — where mouse-event escapes leak into the input stream as garbled text, see #878 / #898): enable internal mouse scrolling, transcript selection, right-click context actions, and transcript scrollbar dragging. TUI-owned drag selection copies only transcript text, removes visual wrap-column line breaks from paragraphs, and keeps selection scoped to the transcript pane. Set this to `false` or run with `--no-mouse-capture` for raw terminal selection; set it to `true` or run with `--mouse-capture` to opt in anywhere it's defaulted off. On raw terminal selection, especially on legacy Windows console or when mouse capture is disabled, selection may cross the right sidebar and include visual wraps because the terminal, not the TUI, owns the selection.
+- `tui.mouse_capture` (bool, optional, default `true` on non-Windows terminals and on Windows Terminal/ConEmu/Cmder when the alternate screen is active; `false` on legacy Windows console and inside JetBrains JediTerm — PyCharm/IDEA/CLion/etc. — where mouse-event escapes leak into the input stream as garbled text, see #878 / #898): enable internal mouse scrolling, transcript selection, right-click context actions, and transcript scrollbar dragging. TUI-owned drag selection copies only transcript text, removes visual wrap-column line breaks from paragraphs, and keeps selection scoped to the transcript pane. Set this to `false` or run with `--no-mouse-capture` for raw terminal selection; set it to `true` or run with `--mouse-capture` to opt in anywhere it's defaulted off. On raw terminal selection, especially on legacy Windows console or when mouse capture is disabled, selection may cross the right workbar and include visual wraps because the terminal, not the TUI, owns the selection.
 - `tui.terminal_probe_timeout_ms` (int, optional, default `500`): startup terminal-mode probe timeout in milliseconds. Values are clamped to `100..=5000`; timeout emits a warning and aborts startup instead of hanging indefinitely.
 - `tui.stream_chunk_timeout_secs` (int, optional, default `900`): per-SSE-chunk idle timeout for streamed model responses. Slow local or compatible servers can raise this with `/config stream_chunk_timeout_secs <seconds>`; `0` maps to the default and explicit values must be `1..=3600`. The legacy `DEEPSEEK_STREAM_IDLE_TIMEOUT_SECS` env var is still honored when this key is omitted.
 - `tui.header_items` (array of strings, optional, default `[]`): opt-in header chips. Set `header_items = ["tokens"]` under `[tui]` to show the session input, cache-hit, and output token counts. Narrow terminals elide the optional chip; wide terminals show it alongside context utilization.
@@ -2540,6 +2512,49 @@ With `webhook_url` set, every event is additionally POSTed as
 Delivery is best-effort: failures are logged and dropped, never retried
 into the agent loop, and a failing webhook never blocks the local file
 append.
+
+## Control Socket (`[control_socket]`)
+
+Per-session control surface for supervised operation: with the feature
+enabled, the interactive TUI binds one unix domain socket per *running*
+session at `<sessions-dir>/<session-id>/control.sock` (mode `0600`;
+`<sessions-dir>` is the same directory the session store uses, typically
+`~/.codewhale/sessions`). The socket is removed with the session's
+artifact directory, and a stale socket left by a crashed process is taken
+over by the next launch. Unset or `enabled = false` = the feature is
+**off** (the default) and behavior is unchanged. Unix-only; on other
+platforms the key parses but no socket is bound.
+
+```toml
+[control_socket]
+enabled = false # default: OFF
+```
+
+The socket speaks newline-framed JSON-RPC, one request per connection:
+write one request line, read one response line, close.
+
+```json
+{"id":"1","method":"message","params":{"text":"hello"}}
+{"id":"2","method":"interrupt","params":{}}
+{"id":"3","method":"relaunch","params":{}}
+{"id":"4","method":"status","params":{}}
+```
+
+- `message` — delivers `text` as a structured user message through the
+  ordinary composer dispatch path; dispatched immediately when idle,
+  queued when a turn is in flight (the response's `delivery` field says
+  which).
+- `interrupt` — the Esc-shaped cancel of the active turn; `cancelled`
+  reports whether active work was in flight.
+- `relaunch` — routed through the `/relaunch` slash-command path (same
+  save-and-resume handoff, no separate mechanics).
+- `status` — answers `turn_state` (`idle` / `in_progress` / `waiting`) and
+  `goal` (`objective`, `status`, `paused`).
+
+Success responses echo the request id with a `type`-tagged result;
+failures carry `error.code` (`invalid_request`, `command_error`,
+`timeout`, `server_unavailable`). Requests are bounded at 1 MiB per line
+and a handler that does not answer within 5 s is reported as `timeout`.
 
 ## Tool Catalog
 

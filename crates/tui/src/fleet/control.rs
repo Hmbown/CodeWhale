@@ -1,6 +1,6 @@
 //! Shared Fleet control-plane surface (#1888, #4022).
 //!
-//! `codewhale fleet …` and the `/pod …` slash command (and therefore its
+//! `codewhale fleet …` and the `/fleet …` slash command (and therefore its
 //! hotbar action) run the *same* verbs against the *same* durable ledger and
 //! render the *same* [`ControlReceipt`]. Nothing here formats twice: the CLI's
 //! `print_status` / `print_inspection` delegate to the renderers below.
@@ -154,7 +154,7 @@ pub fn event_label(payload: &FleetWorkerEventPayload) -> String {
 
 /// Durable status snapshot as bounded Fleet receipt lines.
 ///
-/// The command and slash surfaces call the customer-facing concept a Pod, but
+/// The command and slash surfaces call the customer-facing concept a Fleet, but
 /// these strings are nested in the shared [`ControlReceipt`] detail contract.
 /// Keep the established `fleet:` prefix so existing receipt consumers and
 /// scripts do not need to parse a presentation rename.
@@ -195,9 +195,9 @@ pub fn status_lines(status: &FleetStatusSnapshot) -> Vec<String> {
     lines
 }
 
-/// Compatibility renderer shared by `codewhale pod status` and `/pod status`.
+/// Compatibility renderer shared by `codewhale fleet status` and `/fleet status`.
 ///
-/// The invocation names are public Pod wording; the returned detail stays in
+/// The invocation names are public Fleet wording; the returned detail stays in
 /// the durable Fleet receipt spelling by way of [`status_lines`].
 #[must_use]
 pub fn render_fleet_status_snapshot(status: &FleetStatusSnapshot) -> String {
@@ -432,7 +432,7 @@ fn instant_of(value: &Known<String>) -> Option<chrono::DateTime<chrono::Utc>> {
 }
 
 // ---------------------------------------------------------------------------
-// Executor — the one code path behind `codewhale fleet …` and `/pod …`
+// Executor — the one code path behind `codewhale fleet …` and `/fleet …`
 // ---------------------------------------------------------------------------
 
 /// Run a Fleet control verb against the durable workspace ledger, using a
@@ -497,7 +497,7 @@ pub fn execute_fleet_control_with(
             None,
             ControlFailure::new(
                 ControlFailureKind::InvalidTarget,
-                format!("{} is not a Pod verb", descriptor.id),
+                format!("{} is not a Fleet verb", descriptor.id),
             ),
         );
     }
@@ -566,7 +566,7 @@ pub fn execute_fleet_control_with(
                             surface,
                             Some(target.clone()),
                             ControlFailure::not_found(format!(
-                                "no Pod worker with id {} in this workspace's ledger",
+                                "no Fleet worker with id {} in this workspace's ledger",
                                 target.id
                             )),
                         );
@@ -804,7 +804,6 @@ mod tests {
         assert!(!detail.contains("\npod:"), "{detail}");
         let wire = serde_json::to_value(&summary).expect("serialize stable run DTO");
         assert!(wire.get("fleet").is_some(), "{wire}");
-        assert!(wire.get("pod").is_none(), "{wire}");
     }
 
     #[test]
@@ -877,13 +876,6 @@ mod tests {
                     .any(|line| line.starts_with("fleet: runs=")),
                 "the durable ledger snapshot must keep its receipt prefix"
             );
-            assert!(
-                receipt
-                    .detail
-                    .iter()
-                    .all(|line| !line.starts_with("pod: runs=")),
-                "Pod is the command name, not a replacement receipt key"
-            );
             let mut normalized = receipt.clone();
             normalized.surface = ControlSurface::Cli;
             rendered.insert(normalized.render());
@@ -920,13 +912,6 @@ mod tests {
                  escalated=0 transport_failed=0 task_failed=0 verifier_failed=0 cancelled=0 stale=0"
             )
         );
-        assert!(
-            receipt
-                .detail
-                .iter()
-                .all(|line| !line.starts_with("pod resume:") && !line.starts_with("pod: runs=")),
-            "receipt keys are compatibility fields: {receipt:?}"
-        );
     }
 
     #[test]
@@ -950,7 +935,7 @@ mod tests {
                 receipt
                     .availability
                     .hint()
-                    .is_some_and(|hint| hint.contains("codewhale pod restart"))
+                    .is_some_and(|hint| hint.contains("codewhale fleet restart"))
             );
         }
     }

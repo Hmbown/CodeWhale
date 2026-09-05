@@ -681,13 +681,10 @@ pub enum ViewEvent {
         value: String,
         persist: bool,
     },
-    /// The canonical `/theme` picker owns theme and underwater treatment as
-    /// one selection. Keeping the pair in one event lets its command owner
-    /// preview, roll back, and persist both fields without an observable
-    /// half-selected Deepsea state.
+    /// The canonical `/theme` picker's selection. Preview, rollback, and
+    /// persist travel in one event so the theme never changes by half.
     ThemeSelectionUpdated {
         theme: String,
-        ocean_treatment: String,
         persist: bool,
     },
     SubAgentsRefresh,
@@ -778,7 +775,7 @@ pub enum ViewEvent {
         delta: isize,
     },
     /// `⇧F` in the picker: add the row's exact route to the fleet (the
-    /// selected Pod), or remove it when it is already there (design §10 F1).
+    /// selected Fleet), or remove it when it is already there (design §10 F1).
     ModelPickerToggleFleet {
         provider: crate::config::ApiProvider,
         /// Exact named route for `Custom`; built-in providers leave this unset.
@@ -943,7 +940,7 @@ pub enum ViewEvent {
         reasoning_effort: Option<String>,
         locale: crate::localization::Locale,
     },
-    /// Emitted by the `/pod` roster view (`s` / Enter) to edit a member.
+    /// Emitted by the `/fleet` roster view (`s` / Enter) to edit a member.
     /// The host routes a selected v2 Fleet to its exact editor and uses the
     /// legacy profile wizard only when no named Fleet is selected.
     FleetRosterOpenSetupRequested {
@@ -951,22 +948,22 @@ pub enum ViewEvent {
         /// identify which row the operator selected.
         member_id: String,
     },
-    /// Emitted by the `/pod` roster `m` shortcut to open the selected
+    /// Emitted by the `/fleet` roster `m` shortcut to open the selected
     /// member's exact Fleet editor directly on its model picker.
     FleetRosterOpenModelRequested {
         /// Exact Fleet member id; roles are not unique and therefore cannot
         /// identify which row the operator selected.
         member_id: String,
     },
-    /// Open the live workers tab from the unified Pod surface.
+    /// Open the live workers tab from the unified Fleet surface.
     FleetRosterOpenWorkersRequested,
 
-    /// The roster asks the host to open the secondary named-Pod switcher
-    /// (`/pod pods`; `/pod fleets` remains compatible). Editing stays on
+    /// The roster asks the host to open the secondary named-Fleet switcher
+    /// (`/fleet fleets`; `/fleet fleets` remains compatible). Editing stays on
     /// setup; this is pick/select only.
     FleetRosterOpenFleetsRequested,
 
-    /// The Pod list view asks the host to open a saved Pod's detail view.
+    /// The Fleet list view asks the host to open a saved Fleet's detail view.
     FleetListOpenDetailRequested {
         name: String,
         scope: crate::fleet::store::FleetScope,
@@ -1661,7 +1658,7 @@ enum ConfigSection {
     Experimental,
 }
 
-/// The eight Tideline settings categories in rail order
+/// The seven Tideline settings categories in rail order
 /// (`docs/design/tideline-redesign.html`, "Settings categories").
 ///
 /// A category is a projection over the existing [`ConfigRow`] store: rows keep
@@ -1675,7 +1672,6 @@ enum ConfigSection {
 pub(crate) enum ConfigCategory {
     Appearance,
     ModelsProviders,
-    Pod,
     Work,
     ToolsMcp,
     Trust,
@@ -1689,7 +1685,6 @@ impl ConfigCategory {
         match self {
             ConfigCategory::Appearance => codewhale_config::settings_schema::TAB_APPEARANCE,
             ConfigCategory::ModelsProviders => codewhale_config::settings_schema::TAB_MODELS,
-            ConfigCategory::Pod => codewhale_config::settings_schema::TAB_POD,
             ConfigCategory::Work => codewhale_config::settings_schema::TAB_WORK,
             ConfigCategory::ToolsMcp => codewhale_config::settings_schema::TAB_TOOLS,
             ConfigCategory::Trust => codewhale_config::settings_schema::TAB_TRUST,
@@ -1702,10 +1697,9 @@ impl ConfigCategory {
         Self::ALL.into_iter().find(|category| category.id() == id)
     }
 
-    const ALL: [ConfigCategory; 8] = [
+    const ALL: [ConfigCategory; 7] = [
         ConfigCategory::Appearance,
         ConfigCategory::ModelsProviders,
-        ConfigCategory::Pod,
         ConfigCategory::Work,
         ConfigCategory::ToolsMcp,
         ConfigCategory::Trust,
@@ -1719,7 +1713,6 @@ impl ConfigCategory {
             match self {
                 ConfigCategory::Appearance => MessageId::ConfigCategoryAppearance,
                 ConfigCategory::ModelsProviders => MessageId::ConfigCategoryModelsProviders,
-                ConfigCategory::Pod => MessageId::ConfigCategoryPod,
                 ConfigCategory::Work => MessageId::ConfigCategoryWork,
                 ConfigCategory::ToolsMcp => MessageId::ConfigCategoryToolsMcp,
                 ConfigCategory::Trust => MessageId::ConfigCategoryTrust,
@@ -1783,7 +1776,7 @@ impl ConfigSection {
             ConfigSection::Network => "network",
             ConfigSection::Display => "display",
             ConfigSection::Composer => "composer",
-            ConfigSection::Sidebar => "sidebar",
+            ConfigSection::Sidebar => "workbar",
             ConfigSection::History => "history",
             ConfigSection::Mcp => "mcp",
             ConfigSection::Fleet => "fleet",
@@ -1836,7 +1829,7 @@ enum EditorControl {
 
 /// Clickable overflow markers of the category strip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NavStep {
+pub(crate) enum NavStep {
     Previous,
     Next,
 }
@@ -1877,6 +1870,14 @@ pub struct ConfigView {
     /// Exact painted cells of the strip's ‹ / › overflow markers.
     last_nav_controls: RefCell<Vec<(Rect, NavStep)>>,
     last_mouse_selected: Option<usize>,
+    /// Pointer hover state, repainted from the shared hover style. Hover
+    /// never moves the keyboard selection; it only tints what the pointer
+    /// is over so every clickable element answers visibly.
+    hovered_row: Option<usize>,
+    hovered_rail: Option<ConfigCategory>,
+    hovered_nav: Option<NavStep>,
+    hovered_editor: Option<EditorControl>,
+    hovered_choice: Option<usize>,
     api_provider: ApiProvider,
     route_base_url: String,
     route_model: String,
@@ -1989,23 +1990,6 @@ impl ConfigView {
         };
         let (active_route_provider, _) = app.effective_route_display();
         let (active_provider_identity, active_route_model) = app.effective_route_identity_display();
-        let routing_model = if app.auto_model {
-            app.last_effective_model
-                .as_deref()
-                .unwrap_or(app.model.as_str())
-        } else {
-            app.model.as_str()
-        };
-        let fast_model =
-            crate::model_routing::provider_router_candidates(active_route_provider, routing_model)
-                .cheap
-                .unwrap_or_else(|| {
-                    if app.auto_model && app.last_effective_model.is_none() {
-                        "available after Auto selects a route".to_string()
-                    } else {
-                        "no known fast sibling".to_string()
-                    }
-                });
         let mut rows = vec![
             ConfigRow {
                 key: "provider".to_string(),
@@ -2071,13 +2055,6 @@ impl ConfigView {
                 facts: ConfigRowFacts::session_setting()
                     .snapshot(SnapshotLane::Model)
                     .opens("/model", MessageId::ConfigActionOpenModel),
-            },
-            ConfigRow {
-                key: "fast_model".to_string(),
-                value: fast_model,
-                editable: false,
-                scope: ConfigScope::Session,
-                facts: ConfigRowFacts::diagnostic(SettingAuthority::Session),
             },
             // DeepSeek-only legacy fallback: hide on non-DeepSeek providers so
             // it is not misread as an active setting (#4717). Keep the field
@@ -2154,13 +2131,6 @@ impl ConfigView {
                 value: settings.background_color.clone().unwrap_or_else(|| {
                     tr(app.ui_locale, MessageId::ConfigDefaultValue).to_string()
                 }),
-                editable: true,
-                scope: ConfigScope::Saved,
-                facts: ConfigRowFacts::saved_setting(),
-            },
-            ConfigRow {
-                key: "ocean_treatment".to_string(),
-                value: settings.ocean_treatment.clone(),
                 editable: true,
                 scope: ConfigScope::Saved,
                 facts: ConfigRowFacts::saved_setting(),
@@ -2489,32 +2459,10 @@ impl ConfigView {
                 facts: ConfigRowFacts::read_only_setting(SettingAuthority::WorkspaceConfiguration),
             },
         ];
-        // #4717: only show the DeepSeek-only fallback model row when the active
-        // provider is a DeepSeek route (or an explicit value is set, so operators
-        // can still see/clear a leftover). Non-DeepSeek providers use
-        // provider-scoped models; the legacy row is inert there.
-        let show_deepseek_fallback = matches!(
-            app.api_provider,
-            ApiProvider::Deepseek | ApiProvider::DeepseekCN | ApiProvider::DeepseekAnthropic
-        ) || settings.default_model.is_some();
-        if show_deepseek_fallback {
-            // #4751: an inert DeepSeek-only compatibility field is not a model
-            // choice and never a Fleet choice — exact-Fleet users switch
-            // Fleets, not fallback models. Keep the persisted `default_model`
-            // key (the runtime still reads it) but present it in the explicitly
-            // Legacy section at the end, not among live Model settings.
-            rows.push(ConfigRow {
-                key: "default_model".to_string(),
-                value: settings
-                    .default_model
-                    .as_deref()
-                    .unwrap_or(&*tr(app.ui_locale, MessageId::ConfigDefaultValue))
-                    .to_string(),
-                editable: false,
-                scope: ConfigScope::Saved,
-                facts: ConfigRowFacts::read_only_setting(SettingAuthority::UserSettings),
-            });
-        }
+        // The DeepSeek-only legacy fallback stays a persisted runtime key but
+        // has no settings row: it is not a live choice on any provider, and
+        // a leftover value is cleared with `/set default_model` instead of
+        // a Legacy table section.
         let external_status_rows = [ApiProvider::OpenaiCodex, ApiProvider::Xai]
             .into_iter()
             .filter_map(|provider| {
@@ -2621,6 +2569,11 @@ impl ConfigView {
             last_rail_hitboxes: RefCell::new(Vec::new()),
             last_nav_controls: RefCell::new(Vec::new()),
             last_mouse_selected: None,
+            hovered_row: None,
+            hovered_rail: None,
+            hovered_nav: None,
+            hovered_editor: None,
+            hovered_choice: None,
             api_provider: app.api_provider,
             route_base_url: app.active_route_base_url.clone(),
             route_model: app.model.clone(),
@@ -2644,6 +2597,7 @@ impl ConfigView {
             self.category = ConfigCategory::for_row(&self.rows[index]);
             self.selected = index;
             self.last_mouse_selected = None;
+            self.clear_hover();
             self.adjust_scroll(self.visible_rows_cached());
         }
     }
@@ -2747,6 +2701,7 @@ impl ConfigView {
             self.scroll = 0;
         }
         self.last_mouse_selected = None;
+        self.clear_hover();
     }
 
     fn key_column_width(&self) -> usize {
@@ -2818,10 +2773,60 @@ impl ConfigView {
         }
     }
 
+    /// Clear every hover tint: selection moves, filters, and scrolls can all
+    /// shift painted rows out from under a stationary pointer.
+    fn clear_hover(&mut self) {
+        self.hovered_row = None;
+        self.hovered_rail = None;
+        self.hovered_nav = None;
+        self.hovered_editor = None;
+        self.hovered_choice = None;
+    }
+
+    /// Hover pass: tint whatever the pointer is over using the shared hover
+    /// style. Hover never moves the keyboard selection and never activates.
+    fn track_hover(&mut self, mouse: MouseEvent) {
+        let position = Position::new(mouse.column, mouse.row);
+        if self.editing.is_some() {
+            self.hovered_choice = self
+                .last_choice_hitboxes
+                .borrow()
+                .iter()
+                .find_map(|(rect, choice)| rect.contains(position).then_some(*choice));
+            self.hovered_editor = self
+                .last_editor_controls
+                .borrow()
+                .iter()
+                .find_map(|(rect, control)| rect.contains(position).then_some(*control));
+            self.hovered_row = None;
+            self.hovered_rail = None;
+            self.hovered_nav = None;
+            return;
+        }
+        self.hovered_row = self
+            .last_row_hitboxes
+            .borrow()
+            .iter()
+            .find_map(|(rect, row_idx)| rect.contains(position).then_some(*row_idx));
+        self.hovered_rail = self
+            .last_rail_hitboxes
+            .borrow()
+            .iter()
+            .find_map(|(rect, category)| rect.contains(position).then_some(*category));
+        self.hovered_nav = self
+            .last_nav_controls
+            .borrow()
+            .iter()
+            .find_map(|(rect, step)| rect.contains(position).then_some(*step));
+        self.hovered_editor = None;
+        self.hovered_choice = None;
+    }
+
     fn update_filter(&mut self, update: impl FnOnce(&mut String)) {
         update(&mut self.filter);
         self.status = None;
         self.last_mouse_selected = None;
+        self.clear_hover();
         self.sync_selection_to_filter();
         self.adjust_scroll(self.visible_rows_cached());
     }
@@ -2866,6 +2871,7 @@ impl ConfigView {
         let next = crate::tui::list_nav::wrap_index(current, matches.len(), delta);
 
         self.selected = matches[next];
+        self.clear_hover();
         let visible_rows = self.visible_rows_cached();
         self.adjust_scroll(visible_rows);
     }
@@ -2913,13 +2919,86 @@ impl ConfigView {
         } else {
             (edit.selected_choice + delta as usize).min(max)
         };
+        self.hovered_choice = None;
     }
 
-    /// Leave the editor without applying (Esc or the Cancel control).
-    fn cancel_edit(&mut self) {
+    /// Live-preview the edited choice when the edited key is the theme:
+    /// highlighting a theme row applies it session-only (`persist:false`)
+    /// so the surface behind the editor repaints immediately, while only
+    /// Enter/Apply persists. Other keys preview nothing.
+    fn preview_edited_choice(&self) -> ViewAction {
+        let Some(edit) = self.editing.as_ref() else {
+            return ViewAction::None;
+        };
+        if edit.key != "theme" {
+            return ViewAction::None;
+        }
+        let Some(value) = edit
+            .choices
+            .as_ref()
+            .and_then(|choices| choices.get(edit.selected_choice).cloned())
+        else {
+            return ViewAction::None;
+        };
+        ViewAction::Emit(ViewEvent::ConfigUpdated {
+            key: edit.key.clone(),
+            value,
+            persist: false,
+        })
+    }
+
+    /// Leave the editor without applying (Esc or the Cancel control). When
+    /// the theme highlight moved, the live surface already previews the
+    /// highlighted theme, so Esc reverts it to the exact value the editor
+    /// opened with (session-only, mirroring the `/theme` picker rollback).
+    fn cancel_edit(&mut self) -> ViewAction {
+        let revert = self
+            .editing
+            .as_ref()
+            .filter(|edit| edit.key == "theme")
+            .and_then(|edit| {
+                let highlighted = edit.choices.as_ref()?.get(edit.selected_choice)?;
+                (canonical_config_choice(&edit.key, highlighted)
+                    != canonical_config_choice(&edit.key, &edit.original_value))
+                .then(|| ViewEvent::ConfigUpdated {
+                    key: edit.key.clone(),
+                    value: edit.original_value.clone(),
+                    persist: false,
+                })
+            });
         self.editing = None;
         self.status = Some(self.tr(MessageId::ConfigEditCancelled).to_string());
         self.last_mouse_selected = None;
+        self.clear_hover();
+        revert.map_or(ViewAction::None, ViewAction::Emit)
+    }
+
+    /// Hover-follow for the editor's choice rows (the global hover rule):
+    /// the pointer highlights the hovered row, painted with the shared
+    /// selected-row style. On the theme editor it also live-previews,
+    /// exactly like ↑/↓.
+    fn hover_edited_choice(&mut self, mouse: MouseEvent) -> ViewAction {
+        let position = Position::new(mouse.column, mouse.row);
+        let hovered = self
+            .last_choice_hitboxes
+            .borrow()
+            .iter()
+            .find_map(|(rect, choice)| rect.contains(position).then_some(*choice));
+        let Some(hovered) = hovered else {
+            return ViewAction::None;
+        };
+        let changed = match self.editing.as_mut() {
+            Some(edit) if edit.selected_choice != hovered => {
+                edit.selected_choice = hovered;
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.preview_edited_choice()
+        } else {
+            ViewAction::None
+        }
     }
 
     /// Apply the editor's value (Enter or the Apply control): the selected
@@ -2929,6 +3008,7 @@ impl ConfigView {
             return ViewAction::None;
         };
         self.last_mouse_selected = None;
+        self.clear_hover();
         let value = match edit.choices.as_ref() {
             Some(choices) => match choices.get(edit.selected_choice).cloned() {
                 Some(value) => value,
@@ -2945,32 +3025,29 @@ impl ConfigView {
 
     fn handle_choice_key(&mut self, key: KeyEvent) -> ViewAction {
         match key.code {
-            KeyCode::Esc => {
-                self.cancel_edit();
-                ViewAction::None
-            }
+            KeyCode::Esc => self.cancel_edit(),
             KeyCode::Enter => self.commit_edit(),
             KeyCode::Up | KeyCode::Left | KeyCode::Char('k') => {
                 self.move_choice(-1);
-                ViewAction::None
+                self.preview_edited_choice()
             }
             KeyCode::Down | KeyCode::Right | KeyCode::Char('j') => {
                 self.move_choice(1);
-                ViewAction::None
+                self.preview_edited_choice()
             }
             KeyCode::PageUp => {
                 self.move_choice(-5);
-                ViewAction::None
+                self.preview_edited_choice()
             }
             KeyCode::PageDown => {
                 self.move_choice(5);
-                ViewAction::None
+                self.preview_edited_choice()
             }
             KeyCode::Home => {
                 if let Some(edit) = self.editing.as_mut() {
                     edit.selected_choice = 0;
                 }
-                ViewAction::None
+                self.preview_edited_choice()
             }
             KeyCode::End => {
                 if let Some(edit) = self.editing.as_mut()
@@ -2978,7 +3055,7 @@ impl ConfigView {
                 {
                     edit.selected_choice = choices.len().saturating_sub(1);
                 }
-                ViewAction::None
+                self.preview_edited_choice()
             }
             KeyCode::Char(digit @ '1'..='9') => {
                 if let Some(edit) = self.editing.as_mut()
@@ -2989,11 +3066,11 @@ impl ConfigView {
                         edit.selected_choice = index;
                     }
                 }
-                ViewAction::None
+                self.preview_edited_choice()
             }
             KeyCode::Char(' ') => {
                 self.move_choice(1);
-                ViewAction::None
+                self.preview_edited_choice()
             }
             _ => ViewAction::None,
         }
@@ -3008,10 +3085,7 @@ impl ConfigView {
             return self.handle_choice_key(key);
         }
         match key.code {
-            KeyCode::Esc => {
-                self.cancel_edit();
-                ViewAction::None
-            }
+            KeyCode::Esc => self.cancel_edit(),
             KeyCode::Enter => self.commit_edit(),
             KeyCode::Backspace => {
                 if let Some(edit) = self.editing.as_mut() {
@@ -3723,14 +3797,31 @@ impl ModalView for ConfigView {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
+        if matches!(mouse.kind, MouseEventKind::Moved) {
+            let has_choices = self
+                .editing
+                .as_ref()
+                .is_some_and(|edit| edit.choices.is_some());
+            if has_choices {
+                return self.hover_edited_choice(mouse);
+            }
+            self.track_hover(mouse);
+            return ViewAction::None;
+        }
         if self.editing.is_some() {
             let has_choices = self
                 .editing
                 .as_ref()
                 .is_some_and(|edit| edit.choices.is_some());
             match mouse.kind {
-                MouseEventKind::ScrollUp if has_choices => self.move_choice(-1),
-                MouseEventKind::ScrollDown if has_choices => self.move_choice(1),
+                MouseEventKind::ScrollUp if has_choices => {
+                    self.move_choice(-1);
+                    return self.preview_edited_choice();
+                }
+                MouseEventKind::ScrollDown if has_choices => {
+                    self.move_choice(1);
+                    return self.preview_edited_choice();
+                }
                 MouseEventKind::Down(MouseButton::Left) => {
                     let position = Position::new(mouse.column, mouse.row);
                     let control = self
@@ -3740,10 +3831,7 @@ impl ModalView for ConfigView {
                         .find_map(|(rect, control)| rect.contains(position).then_some(*control));
                     match control {
                         Some(EditorControl::Apply) => return self.commit_edit(),
-                        Some(EditorControl::Cancel) => {
-                            self.cancel_edit();
-                            return ViewAction::None;
-                        }
+                        Some(EditorControl::Cancel) => return self.cancel_edit(),
                         None => {}
                     }
                     let choice = self
@@ -3751,10 +3839,15 @@ impl ModalView for ConfigView {
                         .borrow()
                         .iter()
                         .find_map(|(rect, choice)| rect.contains(position).then_some(*choice));
-                    if let Some(choice) = choice
-                        && let Some(edit) = self.editing.as_mut()
-                    {
-                        edit.selected_choice = choice;
+                    let picked = match (choice, self.editing.as_mut()) {
+                        (Some(choice), Some(edit)) => {
+                            edit.selected_choice = choice;
+                            true
+                        }
+                        _ => false,
+                    };
+                    if picked {
+                        return self.preview_edited_choice();
                     }
                 }
                 _ => {}
@@ -3765,11 +3858,13 @@ impl ModalView for ConfigView {
             MouseEventKind::ScrollUp => {
                 self.move_selection(-3);
                 self.last_mouse_selected = None;
+                self.clear_hover();
                 return ViewAction::None;
             }
             MouseEventKind::ScrollDown => {
                 self.move_selection(3);
                 self.last_mouse_selected = None;
+                self.clear_hover();
                 return ViewAction::None;
             }
             _ => {}
@@ -3956,6 +4051,10 @@ impl ModalView for ConfigView {
                     ));
                     line.style = if selected {
                         menu_style::selected_row_style()
+                    } else if self.hovered_choice == Some(choice_idx) {
+                        Style::default()
+                            .fg(palette::TEXT_PRIMARY)
+                            .patch(crate::tui::menu_style::hovered_row_style())
                     } else {
                         Style::default().fg(palette::TEXT_PRIMARY)
                     };
@@ -4038,17 +4137,34 @@ impl ConfigView {
             (
                 EditorControl::Apply,
                 MessageId::ConfigEditorApply,
-                Style::default()
-                    .fg(palette::SELECTION_TEXT)
-                    .bg(palette::WHALE_ACTION)
-                    .add_modifier(Modifier::BOLD),
+                // The filled Apply control answers hover with an underline:
+                // a bg tint would erase its button fill.
+                if self.hovered_editor == Some(EditorControl::Apply) {
+                    Style::default()
+                        .fg(palette::SELECTION_TEXT)
+                        .bg(palette::WHALE_ACTION)
+                        .add_modifier(Modifier::BOLD)
+                        .add_modifier(Modifier::UNDERLINED)
+                } else {
+                    Style::default()
+                        .fg(palette::SELECTION_TEXT)
+                        .bg(palette::WHALE_ACTION)
+                        .add_modifier(Modifier::BOLD)
+                },
             ),
             (
                 EditorControl::Cancel,
                 MessageId::ConfigEditorCancel,
-                Style::default()
-                    .fg(palette::TEXT_PRIMARY)
-                    .add_modifier(Modifier::BOLD),
+                if self.hovered_editor == Some(EditorControl::Cancel) {
+                    Style::default()
+                        .fg(palette::TEXT_PRIMARY)
+                        .add_modifier(Modifier::BOLD)
+                        .patch(crate::tui::menu_style::hovered_row_style())
+                } else {
+                    Style::default()
+                        .fg(palette::TEXT_PRIMARY)
+                        .add_modifier(Modifier::BOLD)
+                },
             ),
         ] {
             let label = format!("[ {} ]", self.tr(id));
@@ -4222,6 +4338,7 @@ pub(crate) fn render_settings_category_rail(
     selected: ConfigCategory,
     locale: Locale,
     style: CategoryNavStyle,
+    hovered: Option<ConfigCategory>,
 ) -> Vec<(Rect, ConfigCategory)> {
     let mut hitboxes = Vec::new();
     if area.width < 3 {
@@ -4254,6 +4371,10 @@ pub(crate) fn render_settings_category_rail(
             label_width,
             if is_selected {
                 style.selected
+            } else if hovered == Some(*category) {
+                style
+                    .normal
+                    .patch(crate::tui::menu_style::hovered_row_style())
             } else {
                 style.normal
             },
@@ -4310,12 +4431,18 @@ pub(crate) struct CategoryStripHitboxes {
 /// Paint the horizontally windowed category strip (the narrow-width
 /// navigator from the design's `.settings-nav` rule) and return the painted
 /// rect of every visible category and overflow marker.
+///
+/// `hovered` tints the chip under the pointer (and `hovered_nav` the overflow
+/// marker) with the shared hover style so every strip target answers
+/// visibly; hover never moves `selected`.
 pub(crate) fn render_settings_category_strip(
     area: Rect,
     buf: &mut Buffer,
     selected: ConfigCategory,
     locale: Locale,
     style: CategoryNavStyle,
+    hovered: Option<ConfigCategory>,
+    hovered_nav: Option<NavStep>,
 ) -> CategoryStripHitboxes {
     use crate::tui::ui_text::{text_display_width, truncate_line_to_width};
 
@@ -4341,7 +4468,14 @@ pub(crate) fn render_settings_category_strip(
     let right = area.right();
     let mut x = area.x;
     if start > 0 {
-        buf.set_stringn(x, y, prev, 2, style.marker);
+        let prev_style = if hovered_nav == Some(NavStep::Previous) {
+            style
+                .marker
+                .patch(crate::tui::menu_style::hovered_row_style())
+        } else {
+            style.marker
+        };
+        buf.set_stringn(x, y, prev, 2, prev_style);
         hitboxes.previous = Some(Rect {
             x,
             y,
@@ -4365,6 +4499,10 @@ pub(crate) fn render_settings_category_strip(
         let category = ConfigCategory::ALL[index];
         let chip_style = if category == selected {
             style.selected
+        } else if hovered == Some(category) {
+            style
+                .normal
+                .patch(crate::tui::menu_style::hovered_row_style())
         } else {
             style.normal
         };
@@ -4382,7 +4520,14 @@ pub(crate) fn render_settings_category_strip(
     }
     if end < labels.len() {
         let marker_x = right.saturating_sub(2);
-        buf.set_stringn(marker_x, y, next, 2, style.marker);
+        let next_style = if hovered_nav == Some(NavStep::Next) {
+            style
+                .marker
+                .patch(crate::tui::menu_style::hovered_row_style())
+        } else {
+            style.marker
+        };
+        buf.set_stringn(marker_x, y, next, 2, next_style);
         hitboxes.next = Some(Rect {
             x: marker_x,
             y,
@@ -4927,6 +5072,8 @@ impl ConfigView {
                     self.category,
                     self.locale,
                     strip_style,
+                    self.hovered_rail,
+                    self.hovered_nav,
                 );
                 *self.last_rail_hitboxes.borrow_mut() = strip.chips;
                 *self.last_nav_controls.borrow_mut() = strip
@@ -4994,6 +5141,8 @@ impl ConfigView {
                         *idx,
                     ));
                     let selected = *idx == self.selected;
+                    // Hover tints but never steals the keyboard selection.
+                    let hovered = !selected && self.hovered_row == Some(*idx);
                     let style = if selected {
                         menu_style::selected_row_style()
                     } else if row.editable {
@@ -5049,6 +5198,8 @@ impl ConfigView {
                     ]);
                     if selected {
                         line.style = menu_style::selected_row_bg_style();
+                    } else if hovered {
+                        line.style = menu_style::hovered_row_style();
                     }
                     lines.push(line);
                 }
@@ -5548,7 +5699,10 @@ impl ModalView for SubAgentsView {
 
         if self.agents.is_empty() {
             lines.push(Line::from(Span::styled(
-                tr(self.locale, MessageId::SubagentsNoCurrentSessionPodWorkers),
+                tr(
+                    self.locale,
+                    MessageId::SubagentsNoCurrentSessionFleetWorkers,
+                ),
                 Style::default().fg(palette::TEXT_MUTED),
             )));
             lines.push(Line::from(Span::styled(
@@ -5594,14 +5748,14 @@ impl ModalView for SubAgentsView {
             lines.push(Line::from(Span::styled(
                 tr(
                     self.locale,
-                    MessageId::SubagentsCurrentSessionPodWorkersTitle,
+                    MessageId::SubagentsCurrentSessionFleetWorkersTitle,
                 ),
                 Style::default().fg(palette::WHALE_ACTION).bold(),
             )));
             lines.push(Line::from(Span::styled(
                 tr(
                     self.locale,
-                    MessageId::SubagentsCurrentSessionPodWorkerRoles,
+                    MessageId::SubagentsCurrentSessionFleetWorkerRoles,
                 ),
                 Style::default().fg(palette::TEXT_DIM),
             )));
@@ -6231,7 +6385,7 @@ mod tests {
         assert_eq!(
             tr(
                 Locale::ZhHans,
-                MessageId::SubagentsCurrentSessionPodWorkersTitle
+                MessageId::SubagentsCurrentSessionFleetWorkersTitle
             ),
             "当前会话的舰队工作器"
         );
@@ -6269,7 +6423,7 @@ mod tests {
             source: "test".to_string(),
         });
         agent.git_branch = Some("feature/localize".to_string());
-        agent.workspace = Some(PathBuf::from("/tmp/pod-workers"));
+        agent.workspace = Some(PathBuf::from("/tmp/fleet-workers"));
         agent.result = Some("all checks passed".to_string());
         let mut interrupted = manager_agent(
             "agent_interrupted",
@@ -6295,7 +6449,7 @@ mod tests {
             "reason: manual review",
             "role: release",
             "posture: network=on · shell=read-only · write=on",
-            "git: branch feature/localize @ pod-workers",
+            "git: branch feature/localize @ fleet-workers",
             "objective: verify localized row",
             "result: all checks passed",
             "live worker status · role · objective · model · elapsed",
@@ -6333,7 +6487,7 @@ mod tests {
             "原因：manualreview",
             "角色：release",
             "权限：网络=开·Shell=只读·写入=开",
-            "Git：分支feature/localize@pod-workers",
+            "Git：分支feature/localize@fleet-workers",
             "目标：verifylocalizedrow",
             "结果：allcheckspassed",
             "刷新",
@@ -7044,7 +7198,12 @@ mod tests {
         assert!(keys.contains(&"plugins_open"));
         assert!(keys.contains(&"mcp_config_path"));
         assert!(keys.contains(&"fleet.exec.max_spawn_depth"));
-        assert!(keys.contains(&"features.vision_model"));
+        // Retired rows: the backends stay live (`default_model` routing,
+        // the `vision_model` feature flag) or were derived receipts
+        // (`fast_model`), but none keeps a table row.
+        assert!(!keys.contains(&"features.vision_model"));
+        assert!(!keys.contains(&"fast_model"));
+        assert!(!keys.contains(&"default_model"));
         assert!(keys.contains(&"goal_command"));
         assert!(keys.contains(&"workflow"));
         assert!(!keys.contains(&"features.subagents"));
@@ -7053,18 +7212,19 @@ mod tests {
         assert!(!keys.contains(&"features.mcp"));
         assert!(!keys.contains(&"features.exec_policy"));
         assert!(!keys.contains(&"whaleflow"));
-        // Diagnostic-only model rows, managed permission rows, and live route
-        // receipts are not editable; everything else outside
-        // Experimental/Fleet should be.
+        // Diagnostic-only rows, managed permission rows, and live route
+        // receipts are not editable; everything else outside the
+        // read-only sections should be.
         const DIAGNOSTIC_ONLY: &[&str] = &[
-            "fast_model",
-            "default_model",
             "context_window",
             "effective_context_window",
             "external_credentials.openai-codex",
             "external_credentials.xai",
             "base_url",
             "provider_url",
+            // Sub-agent depth stays a read-only config.toml receipt in its
+            // new Model home; it is edited in the fleet config, not here.
+            "fleet.exec.max_spawn_depth",
         ];
         assert!(
             view.rows
@@ -7344,7 +7504,7 @@ api_key_env = "ACME_API_KEY"
     }
 
     #[test]
-    fn config_view_active_model_uses_picker_and_fallback_is_diagnostic_only() {
+    fn config_view_active_model_uses_picker_and_retired_rows_are_gone() {
         let app = create_test_app();
         let mut view = ConfigView::new_for_app(&app);
         view.focus_key("model");
@@ -7357,18 +7517,19 @@ api_key_env = "ACME_API_KEY"
         }
         assert!(view.editing.is_none());
 
+        // The derived fast-sibling receipt and the legacy DeepSeek fallback
+        // have no rows: sibling choice happens in the /model picker and the
+        // fallback stays a `/set`-only compatibility key.
         for key in ["fast_model", "default_model"] {
-            let row = view
-                .rows
-                .iter()
-                .find(|row| row.key == key)
-                .unwrap_or_else(|| panic!("{key} row"));
-            assert!(!row.editable, "{key} must be diagnostic-only");
+            assert!(
+                view.rows.iter().all(|row| row.key != key),
+                "{key} must have no settings row"
+            );
         }
     }
 
     #[test]
-    fn config_view_explains_zai_fast_sibling() {
+    fn config_view_zai_model_row_has_no_derived_rows() {
         let _guard = ConfigSettingsEnvGuard::new("");
         let mut app = create_test_app();
         app.api_provider = crate::config::ApiProvider::Zai;
@@ -7380,19 +7541,16 @@ api_key_env = "ACME_API_KEY"
             .iter()
             .find(|row| row.key == "model")
             .expect("active model row");
-        let fast = view
-            .rows
-            .iter()
-            .find(|row| row.key == "fast_model")
-            .expect("fast model row");
 
         assert_eq!(active.value, "Zhipu AI / Z.ai · GLM-5.2");
-        assert_eq!(fast.value, "GLM-5-Turbo");
-        // #4717: DeepSeek-only fallback must not appear on non-DeepSeek providers.
-        assert!(
-            view.rows.iter().all(|row| row.key != "default_model"),
-            "default_model row must be hidden for zai when unset"
-        );
+        // Derived receipts retired: the fast sibling is named in the /model
+        // picker, and the DeepSeek-only fallback never appears as a row.
+        for key in ["fast_model", "default_model"] {
+            assert!(
+                view.rows.iter().all(|row| row.key != key),
+                "{key} row must be gone for zai"
+            );
+        }
     }
 
     #[test]
@@ -7457,7 +7615,7 @@ api_key_env = "ACME_API_KEY"
     }
 
     #[test]
-    fn config_view_hides_deepseek_fallback_on_non_deepseek_providers() {
+    fn config_view_shows_no_deepseek_fallback_row_on_any_provider() {
         let _guard = ConfigSettingsEnvGuard::new("");
         let mut app = create_test_app();
         for provider in [
@@ -7465,51 +7623,41 @@ api_key_env = "ACME_API_KEY"
             crate::config::ApiProvider::Xai,
             crate::config::ApiProvider::Openrouter,
             crate::config::ApiProvider::Ollama,
+            crate::config::ApiProvider::Deepseek,
         ] {
             app.api_provider = provider;
             let view = ConfigView::new_for_app(&app);
             assert!(
                 view.rows.iter().all(|row| row.key != "default_model"),
-                "default_model must stay hidden for {:?}",
+                "default_model must have no row for {:?}",
                 provider
             );
         }
-
-        // DeepSeek providers still show the diagnostic row.
-        app.api_provider = crate::config::ApiProvider::Deepseek;
-        let view = ConfigView::new_for_app(&app);
-        assert!(
-            view.rows
-                .iter()
-                .any(|row| row.key == "default_model" && !row.editable),
-            "DeepSeek must keep the fallback diagnostic row"
-        );
     }
 
     #[test]
-    fn config_view_marks_saved_deepseek_fallback_as_legacy_off_route() {
+    fn config_view_saved_deepseek_fallback_stays_settable_without_a_row() {
+        // The backend key stays live even with no row: a saved fallback still
+        // parses, and `/set` still accepts it for cleanup.
         let _guard = ConfigSettingsEnvGuard::new("default_model = \"deepseek-v4-pro\"\n");
         let mut app = create_test_app();
         app.api_provider = crate::config::ApiProvider::Zai;
 
         let view = ConfigView::new_for_app(&app);
-        let row = view
-            .rows
-            .iter()
-            .find(|row| row.key == "default_model")
-            .expect("saved legacy fallback should remain visible for cleanup");
-        assert!(!row.editable, "legacy fallback must remain diagnostic-only");
-        assert_eq!(
-            config_label_for_key(&row.key),
-            "Legacy fallback model (DeepSeek routes only)"
+        assert!(
+            view.rows.iter().all(|row| row.key != "default_model"),
+            "saved legacy fallback must not surface a row"
         );
-        // #4751: never a Fleet (or live Model) choice.
-        assert_eq!(row.section(), super::ConfigSection::Legacy);
+        let mut settings = Settings::default();
+        settings
+            .set("default_model", "deepseek-v4-pro")
+            .expect("default_model stays settable through `/set` after the row is gone");
     }
 
-    /// #4751: Fleet settings hold Fleet/member concerns only. The
-    /// legacy DeepSeek fallback is Legacy, `/goal` is Session, and Workflow
-    /// orchestration is Workflow — every persisted key is unchanged.
+    /// Retired rows leave no section behind: sub-agent depth moved into the
+    /// Model group, the legacy fallback and the vision flag lost their rows,
+    /// and `/goal` + Workflow keep their own sections. Persisted keys are
+    /// unchanged.
     #[test]
     fn config_view_settings_rows_land_in_truthful_sections() {
         let _guard = ConfigSettingsEnvGuard::new("default_model = \"deepseek-v4-pro\"\n");
@@ -7524,38 +7672,48 @@ api_key_env = "ACME_API_KEY"
                 .unwrap_or_else(|| panic!("{key} row"))
                 .section()
         };
-        assert_eq!(section_of("default_model"), super::ConfigSection::Legacy);
+        assert_eq!(
+            section_of("fleet.exec.max_spawn_depth"),
+            super::ConfigSection::Model
+        );
         assert_eq!(section_of("goal_command"), super::ConfigSection::Session);
         assert_eq!(section_of("workflow"), super::ConfigSection::Workflow);
 
-        // Relabelling is presentation only: the persisted key, the persisted
-        // value, the Saved scope, and the read-only posture all round-trip
-        // unchanged, so existing config files keep loading identically.
-        let legacy = view
-            .rows
-            .iter()
-            .find(|row| row.section() == super::ConfigSection::Legacy)
-            .expect("legacy row");
-        assert_eq!(legacy.key, "default_model");
-        assert_eq!(legacy.value, "deepseek-v4-pro");
-        assert_eq!(legacy.scope, ConfigScope::Saved);
-        assert!(!legacy.editable);
+        // The retired rows are gone on every provider, even with a saved
+        // fallback value still on disk.
+        for key in ["default_model", "fast_model", "features.vision_model"] {
+            assert!(
+                view.rows.iter().all(|row| row.key != key),
+                "{key} must have no row"
+            );
+        }
 
-        // Fleet keeps Fleet/member concerns only.
-        let fleet_keys: Vec<&str> = view
+        // …and their sections retire with them: no Legacy, Experimental, or
+        // Fleet headings may survive with zero rows behind them.
+        let retired_sections = [
+            super::ConfigSection::Legacy,
+            super::ConfigSection::Experimental,
+            super::ConfigSection::Fleet,
+        ];
+        for row in &view.rows {
+            assert!(
+                !retired_sections.contains(&row.section()),
+                "{} still files under a retired section",
+                row.key
+            );
+        }
+
+        // Relabelling is presentation only: the persisted key and value
+        // round-trip unchanged, so existing config files keep loading
+        // identically.
+        let depth = view
             .rows
             .iter()
-            .filter(|row| row.section() == super::ConfigSection::Fleet)
-            .map(|row| row.key.as_str())
-            .collect();
-        assert!(
-            fleet_keys.iter().all(|key| key.starts_with("fleet.")),
-            "non-Fleet concerns leaked into Fleet settings: {fleet_keys:?}"
-        );
-        assert!(
-            !fleet_keys.contains(&"default_model"),
-            "the legacy fallback must not be presented as a Fleet choice"
-        );
+            .find(|row| row.key == "fleet.exec.max_spawn_depth")
+            .expect("sub-agent depth row");
+        assert_eq!(depth.scope, ConfigScope::Saved);
+        assert!(!depth.editable);
+        assert_eq!(config_label_for_key(&depth.key), "sub-agent depth");
 
         // Workflow keeps its own name and its `/workflow` wording.
         let workflow = view
@@ -7569,7 +7727,10 @@ api_key_env = "ACME_API_KEY"
     }
 
     #[test]
-    fn config_view_experimental_features_show_effective_state_and_overrides() {
+    fn config_view_experimental_features_leave_no_rows() {
+        // The vision row retired: even a configured beta flag surfaces no
+        // table row. The flag itself stays live in the feature backend,
+        // diagnosed where vision runs instead of in Advanced.
         let temp_root = std::env::temp_dir().join(format!(
             "codewhale-experimental-config-view-test-{}",
             std::process::id()
@@ -7590,22 +7751,16 @@ vision_model = true
         app.config_path = Some(config_path);
         let view = ConfigView::new_for_app(&app);
 
-        let web_search = view
-            .rows
-            .iter()
-            .find(|row| row.key == "features.web_search");
-        assert!(web_search.is_none());
-
-        let vision = view
-            .rows
-            .iter()
-            .find(|row| row.key == "features.vision_model")
-            .expect("vision feature row");
-        assert_eq!(vision.value, "enabled (configured; default disabled)");
-        assert!(!vision.editable);
-
-        let subagents = view.rows.iter().find(|row| row.key == "features.subagents");
-        assert!(subagents.is_none());
+        for key in [
+            "features.web_search",
+            "features.vision_model",
+            "features.subagents",
+        ] {
+            assert!(
+                view.rows.iter().all(|row| row.key != key),
+                "{key} must have no settings row"
+            );
+        }
     }
 
     #[test]
@@ -7639,17 +7794,19 @@ max_spawn_depth = 2
     }
 
     #[test]
-    fn config_view_experimental_section_is_searchable() {
+    fn config_view_retired_experimental_section_stays_gone() {
         let mut view = create_config_view(Locale::En);
 
+        // The Experimental group retired with the vision row: the flag stays
+        // live in the backend, but no section or row answers to it anymore.
         view.update_filter(|filter| filter.push_str("experimental"));
-        assert_eq!(visible_section_labels(&view), vec!["Experimental"]);
-        assert_eq!(visible_row_keys(&view), vec!["features.vision_model"]);
+        assert!(visible_section_labels(&view).is_empty());
+        assert!(visible_row_keys(&view).is_empty());
 
         view.clear_filter();
         type_filter(&mut view, "feature vision");
-        assert_eq!(visible_section_labels(&view), vec!["Experimental"]);
-        assert_eq!(visible_row_keys(&view), vec!["features.vision_model"]);
+        assert!(visible_section_labels(&view).is_empty());
+        assert!(visible_row_keys(&view).is_empty());
 
         view.clear_filter();
         type_filter(&mut view, "goal");
@@ -7820,6 +7977,48 @@ base_url = "https://api.xiaomimimo.com/v1"
                 &rendered,
             );
         }
+    }
+
+    /// Slice C: cell-exact goldens for Edit Theme with the underwater
+    /// default open — title, scope/current lanes, the 14 theme rows, and
+    /// the Apply/Cancel controls. Empty settings mean the editor opens on
+    /// the default theme, so these goldens pin the default end to end.
+    /// Re-bless with `CODEWHALE_BLESS_GOLDENS=1`.
+    #[test]
+    fn edit_theme_matches_goldens_at_blocker_sizes() {
+        let _guard = ConfigSettingsEnvGuard::new("");
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        view.focus_key("theme");
+        view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(
+            view.editing
+                .as_ref()
+                .is_some_and(|edit| edit.key == "theme"),
+            "Enter must open the theme editor"
+        );
+        for (width, height) in [(80u16, 24u16), (120u16, 32u16)] {
+            let rendered = crate::tui::golden_harness::render_golden_text(width, height, |buf| {
+                view.render(Rect::new(0, 0, width, height), buf);
+            });
+            crate::tui::golden_harness::assert_matches_golden(
+                &format!("edit_theme_{width}x{height}"),
+                &trim_golden_rows(&rendered),
+            );
+        }
+    }
+
+    /// Goldens are stored without cell padding: every row is right-trimmed
+    /// and trailing empty rows are dropped, so `git diff --check` stays
+    /// clean.
+    fn trim_golden_rows(text: &str) -> String {
+        let mut rows: Vec<&str> = text.lines().map(str::trim_end).collect();
+        while rows.last().is_some_and(|row| row.is_empty()) {
+            rows.pop();
+        }
+        let mut out = rows.join("\n");
+        out.push('\n');
+        out
     }
 
     /// The settings screen is a projection of the schema: its rail tabs, the
@@ -8154,10 +8353,10 @@ context_window = 262144
     fn config_view_filter_matches_group_and_rows() {
         let mut view = create_config_view(Locale::En);
 
-        type_filter(&mut view, "side");
+        type_filter(&mut view, "workbar");
 
-        assert_eq!(view.filter, "side");
-        assert_eq!(visible_section_labels(&view), vec!["Sidebar"]);
+        assert_eq!(view.filter, "workbar");
+        assert_eq!(visible_section_labels(&view), vec!["Workbar"]);
         assert_eq!(
             visible_row_keys(&view),
             vec![
@@ -8174,9 +8373,9 @@ context_window = 262144
     fn localized_config_view_filter_matches_english_section_and_scope_labels() {
         let mut view = create_config_view(Locale::PtBr);
 
-        type_filter(&mut view, "sidebar saved");
+        type_filter(&mut view, "workbar saved");
 
-        assert_eq!(view.filter, "sidebar saved");
+        assert_eq!(view.filter, "workbar saved");
         assert_eq!(visible_section_labels(&view), vec!["Barra lateral"]);
         assert_eq!(
             visible_row_keys(&view),
@@ -8689,7 +8888,10 @@ context_window = 262144
         assert_eq!(kind_for("mcp_diagnose"), SettingKind::Action);
         assert_eq!(kind_for("plugins_open"), SettingKind::Action);
         assert_eq!(kind_for("mcp_config_path"), SettingKind::Text);
-        assert_eq!(kind_for("fast_model"), SettingKind::ReadOnly);
+        assert_eq!(
+            kind_for("fleet.exec.max_spawn_depth"),
+            SettingKind::ReadOnly
+        );
 
         for row in &view.rows {
             let meta = registry.meta(row);
@@ -8821,6 +9023,72 @@ context_window = 262144
     }
 
     #[test]
+    fn config_view_hover_tints_without_moving_selection() {
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        let area = Rect::new(0, 0, 120, 32);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        let selected_before = view.selected;
+
+        // Hover a non-selected row: the tint lands, the selection holds.
+        let (rect, row_idx) = view
+            .last_row_hitboxes
+            .borrow()
+            .iter()
+            .copied()
+            .find(|(_, idx)| *idx != selected_before)
+            .expect("a non-selected row");
+        let action = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: rect.x.saturating_add(1),
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.hovered_row, Some(row_idx));
+        assert_eq!(view.selected, selected_before);
+
+        // Repaint: the hovered row wears the shared hover band.
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        assert_eq!(
+            buf[(rect.x, rect.y)].bg,
+            palette::SURFACE_ELEVATED,
+            "hovered row must show the shared hover band"
+        );
+
+        // Hover a strip chip: the rail tint lands, the tab holds.
+        let (chip, _) = view
+            .last_rail_hitboxes
+            .borrow()
+            .iter()
+            .copied()
+            .find(|(_, category)| *category == ConfigCategory::Advanced)
+            .expect("Advanced chip");
+        let action = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: chip.x.saturating_add(1),
+            row: chip.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.hovered_rail, Some(ConfigCategory::Advanced));
+        assert_eq!(view.category, ConfigCategory::Appearance);
+
+        // The search line is no target: hovering it clears every tint.
+        let action = view.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 5,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(matches!(action, ViewAction::None));
+        assert_eq!(view.hovered_row, None);
+        assert_eq!(view.hovered_rail, None);
+    }
+
+    #[test]
     fn config_view_rail_categories_are_clickable() {
         let app = create_test_app();
         let mut view = ConfigView::new_for_app(&app);
@@ -8859,7 +9127,7 @@ context_window = 262144
     }
 
     #[test]
-    fn config_categories_cover_every_row_with_the_approved_eight() {
+    fn config_categories_cover_every_row_with_the_approved_seven() {
         let app = create_test_app();
         let view = ConfigView::new_for_app(&app);
         let labels: Vec<Cow<'static, str>> = ConfigCategory::ALL
@@ -8871,7 +9139,6 @@ context_window = 262144
             [
                 "Appearance",
                 "Models & providers",
-                "Fleet",
                 "Work",
                 "Tools & MCP",
                 "Trust",
@@ -8894,15 +9161,9 @@ context_window = 262144
             category_of("reasoning_effort"),
             ConfigCategory::ModelsProviders
         );
-        // Raw endpoint, credential receipt, context diagnostic, timeout, and
-        // routing rows live under Advanced so default categories read as
-        // product language.
-        for key in [
-            "base_url",
-            "context_window",
-            "effective_context_window",
-            "fast_model",
-        ] {
+        // Raw endpoint, credential receipt, and context diagnostic rows live
+        // under Advanced so default categories read as product language.
+        for key in ["base_url", "context_window", "effective_context_window"] {
             assert_eq!(category_of(key), ConfigCategory::Advanced, "{key}");
         }
         assert!(
@@ -8912,9 +9173,10 @@ context_window = 262144
                 .all(|row| !row.key.starts_with("external_credentials.")),
             "credential receipts must not surface in Models & providers"
         );
+        // Sub-agent depth moved out of the one-row Fleet tab into Models.
         assert_eq!(
             category_of("fleet.exec.max_spawn_depth"),
-            ConfigCategory::Pod
+            ConfigCategory::ModelsProviders
         );
         assert_eq!(category_of("composer_density"), ConfigCategory::Work);
         assert_eq!(category_of("work_surface_placement"), ConfigCategory::Work);
@@ -8925,7 +9187,6 @@ context_window = 262144
         assert_eq!(category_of("telemetry"), ConfigCategory::Trust);
         assert_eq!(category_of("low_motion"), ConfigCategory::Motion);
         assert_eq!(category_of("fancy_animations"), ConfigCategory::Motion);
-        assert_eq!(category_of("default_model"), ConfigCategory::Advanced);
         for category in ConfigCategory::ALL {
             assert!(
                 view.rows.iter().any(|row| category.contains(row)),
@@ -9027,7 +9288,7 @@ context_window = 262144
             dump.contains(&en(MessageId::ConfigKindChoice)),
             "editor kind painted for the theme row:\n{dump}"
         );
-        assert_eq!(view.last_rail_hitboxes.borrow().len(), 8);
+        assert_eq!(view.last_rail_hitboxes.borrow().len(), 7);
 
         for (w, h) in [(0u16, 0u16), (20, 4), (44, 12), (60, 18), (300, 60)] {
             let _ = render_dump(&view, w, h);
@@ -9075,7 +9336,7 @@ context_window = 262144
         for (w, h) in [(40u16, 12u16), (44, 12), (60, 16)] {
             view.category = ConfigCategory::Appearance;
             view.select_first_visible_row();
-            for _ in 0..7 {
+            for _ in 0..6 {
                 let _ = view.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
             }
             assert_eq!(view.category, ConfigCategory::Advanced, "{w}x{h}");
@@ -9242,7 +9503,7 @@ context_window = 262144
                 "{key}"
             );
         }
-        for key in ["fast_model", "effective_context_window", "base_url"] {
+        for key in ["effective_context_window", "base_url"] {
             let receipt = row(key);
             assert_eq!(receipt.facts.kind, ConfigRowKind::Diagnostic, "{key}");
             assert!(view.setting_fact(receipt).is_none(), "{key}");
@@ -9411,14 +9672,15 @@ context_window = 262144
             assert!(dump.contains("Appearance"), "{w}x{h}:\n{dump}");
             assert!(dump.contains("Search:"), "{w}x{h}:\n{dump}");
 
-            // → → lands on Pod; the strip/rail follows and the Pod row is the
-            // selection (a read-only config.toml setting).
+            // → lands on Models & providers (the one-row Fleet tab is gone;
+            // sub-agent depth moved into the Model group). Focus it and check
+            // the read-only config.toml posture.
             assert!(matches!(key(&mut view, KeyCode::Right), ViewAction::None));
-            assert!(matches!(key(&mut view, KeyCode::Right), ViewAction::None));
-            assert_eq!(view.category, ConfigCategory::Pod);
+            assert_eq!(view.category, ConfigCategory::ModelsProviders);
+            view.focus_key("fleet.exec.max_spawn_depth");
             assert_eq!(view.rows[view.selected].key, "fleet.exec.max_spawn_depth");
-            let dump = snapshot(&view, "after → → (Pod)");
-            assert!(dump.contains("Fleet"), "{w}x{h}:\n{dump}");
+            let dump = snapshot(&view, "after → (Models & providers)");
+            assert!(dump.contains("Models & providers"), "{w}x{h}:\n{dump}");
             assert!(
                 dump.contains(super::setting_affordance(SettingKind::ReadOnly, None)),
                 "{w}x{h} read-only affordance:\n{dump}"
@@ -9688,6 +9950,181 @@ context_window = 262144
         let dump = render_dump(&view, 120, 32);
         let head: String = expected.chars().take(20).collect();
         assert!(dump.contains(&head), "source names the override:\n{dump}");
+    }
+
+    /// Slice C: Edit Theme live preview — highlighting a theme row emits a
+    /// session-only `ConfigUpdated` (the surface repaints immediately) while
+    /// only Enter/Apply persists; Esc reverts to the opening value.
+    #[test]
+    fn edit_theme_highlight_previews_without_persisting_and_esc_reverts() {
+        let _guard = ConfigSettingsEnvGuard::new("theme = \"terminal\"\n");
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        view.focus_key("theme");
+        let key = |view: &mut ConfigView, code: KeyCode| {
+            view.handle_key(KeyEvent::new(code, KeyModifiers::NONE))
+        };
+        assert!(matches!(key(&mut view, KeyCode::Enter), ViewAction::None));
+        assert!(
+            view.editing
+                .as_ref()
+                .is_some_and(|edit| edit.key == "theme"),
+            "Enter must open the theme editor"
+        );
+
+        // ↓ highlights underwater: preview (persist:false), editor stays open.
+        match key(&mut view, KeyCode::Down) {
+            ViewAction::Emit(ViewEvent::ConfigUpdated {
+                key,
+                value,
+                persist,
+            }) => {
+                assert_eq!(key, "theme");
+                assert_eq!(value, "underwater");
+                assert!(!persist, "highlighting must not persist");
+            }
+            other => panic!("highlight must preview, got {other:?}"),
+        }
+        assert!(view.editing.is_some(), "preview keeps the editor open");
+
+        // Esc reverts the live surface to the opening value, session-only.
+        match key(&mut view, KeyCode::Esc) {
+            ViewAction::Emit(ViewEvent::ConfigUpdated {
+                key,
+                value,
+                persist,
+            }) => {
+                assert_eq!(key, "theme");
+                assert_eq!(value, "terminal");
+                assert!(!persist, "revert must not persist");
+            }
+            other => panic!("esc must revert the preview, got {other:?}"),
+        }
+        assert!(view.editing.is_none());
+    }
+
+    /// Slice C: Enter/Apply in Edit Theme persists the highlighted theme.
+    #[test]
+    fn edit_theme_enter_persists_the_highlighted_theme() {
+        let _guard = ConfigSettingsEnvGuard::new("theme = \"terminal\"\n");
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        view.focus_key("theme");
+        let key = |view: &mut ConfigView, code: KeyCode| {
+            view.handle_key(KeyEvent::new(code, KeyModifiers::NONE))
+        };
+        assert!(matches!(key(&mut view, KeyCode::Enter), ViewAction::None));
+        let _ = key(&mut view, KeyCode::Down);
+        match key(&mut view, KeyCode::Enter) {
+            ViewAction::Emit(ViewEvent::ConfigUpdated {
+                key,
+                value,
+                persist,
+            }) => {
+                assert_eq!(key, "theme");
+                assert_eq!(value, "underwater");
+                assert!(persist, "Apply must persist");
+            }
+            other => panic!("enter must persist the highlight, got {other:?}"),
+        }
+        assert!(view.editing.is_none());
+    }
+
+    /// Slice C: Esc without moving the highlight previews nothing and
+    /// reverts nothing.
+    #[test]
+    fn edit_theme_esc_without_preview_is_silent() {
+        let _guard = ConfigSettingsEnvGuard::new("theme = \"terminal\"\n");
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        view.focus_key("theme");
+        let key = |view: &mut ConfigView, code: KeyCode| {
+            view.handle_key(KeyEvent::new(code, KeyModifiers::NONE))
+        };
+        assert!(matches!(key(&mut view, KeyCode::Enter), ViewAction::None));
+        assert!(
+            matches!(key(&mut view, KeyCode::Esc), ViewAction::None),
+            "no preview happened, so there is nothing to revert"
+        );
+    }
+
+    /// Slice C: live preview is theme-only — other choice editors keep
+    /// their silent highlight behavior.
+    #[test]
+    fn edit_choice_highlight_previews_only_the_theme_key() {
+        let _guard = ConfigSettingsEnvGuard::new("");
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        view.focus_key("default_mode");
+        let key = |view: &mut ConfigView, code: KeyCode| {
+            view.handle_key(KeyEvent::new(code, KeyModifiers::NONE))
+        };
+        assert!(matches!(key(&mut view, KeyCode::Enter), ViewAction::None));
+        assert!(
+            view.editing
+                .as_ref()
+                .is_some_and(|edit| edit.key == "default_mode"),
+            "Enter must open the default_mode editor"
+        );
+        assert!(
+            matches!(key(&mut view, KeyCode::Down), ViewAction::None),
+            "non-theme highlight must stay silent"
+        );
+        assert!(
+            matches!(key(&mut view, KeyCode::Esc), ViewAction::None),
+            "no preview means no revert"
+        );
+    }
+
+    /// Slice C (global hover rule): hovering an Edit Theme choice row
+    /// highlights it and live-previews; hovering the same row again is
+    /// silent.
+    #[test]
+    fn edit_theme_hover_highlights_and_previews() {
+        let _guard = ConfigSettingsEnvGuard::new("theme = \"terminal\"\n");
+        let app = create_test_app();
+        let mut view = ConfigView::new_for_app(&app);
+        view.focus_key("theme");
+        view.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let area = Rect::new(0, 0, 120, 32);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        let hover = |view: &mut ConfigView, column: u16, row: u16| {
+            view.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        // Choice index 2 is underwater (system, terminal, underwater, …).
+        let (rect, _) = view
+            .last_choice_hitboxes
+            .borrow()
+            .iter()
+            .copied()
+            .find(|(_, idx)| *idx == 2)
+            .expect("rendered underwater hitbox");
+        match hover(&mut view, rect.x, rect.y) {
+            ViewAction::Emit(ViewEvent::ConfigUpdated {
+                key,
+                value,
+                persist,
+            }) => {
+                assert_eq!(key, "theme");
+                assert_eq!(value, "underwater");
+                assert!(!persist, "hover preview must not persist");
+            }
+            other => panic!("hover must preview, got {other:?}"),
+        }
+        assert!(
+            matches!(hover(&mut view, rect.x, rect.y), ViewAction::None),
+            "hovering the highlighted row is silent"
+        );
+        assert!(
+            matches!(hover(&mut view, 0, 0), ViewAction::None),
+            "hovering outside every row is silent"
+        );
     }
 
     /// P1.3: at 40 columns every category is reachable with the pointer alone
@@ -10409,11 +10846,11 @@ context_window = 262144
 #[allow(dead_code)] // Tideline settings rail + preview (spec §5a)
 pub mod tideline_preview;
 
-/// The eight settings categories in rail order (Appearance → Advanced),
+/// The seven settings categories in rail order (Appearance → Advanced),
 /// exactly as `ConfigView` paints them.
 #[must_use]
 #[allow(dead_code)] // stage scaffolding: composed by the landing slice
-pub fn tideline_settings_categories(locale: Locale) -> [Cow<'static, str>; 8] {
+pub fn tideline_settings_categories(locale: Locale) -> [Cow<'static, str>; 7] {
     ConfigCategory::ALL.map(|category| category.label(locale))
 }
 
@@ -10470,6 +10907,9 @@ pub fn render_tideline_settings_rail(
         rail.category(),
         rail.locale,
         rail.nav_style(),
+        // The stage scaffold owns no pointer state yet; the landing slice
+        // threads its hover here when it wires the rail to mouse motion.
+        None,
     );
     // Meta rows pinned near the bottom (the reference's help/file/feedback).
     let meta_y = area.y + area.height.saturating_sub(3);
@@ -10518,11 +10958,21 @@ pub fn render_tideline_settings_strip(
     buf: &mut Buffer,
     rail: &TidelineSettingsRail<'_>,
 ) -> Vec<Rect> {
-    render_settings_category_strip(area, buf, rail.category(), rail.locale, rail.nav_style())
-        .chips
-        .into_iter()
-        .map(|(rect, _)| rect)
-        .collect()
+    render_settings_category_strip(
+        area,
+        buf,
+        rail.category(),
+        rail.locale,
+        rail.nav_style(),
+        // The stage scaffold owns no pointer state yet; the landing slice
+        // threads its hover here when it wires the strip to mouse motion.
+        None,
+        None,
+    )
+    .chips
+    .into_iter()
+    .map(|(rect, _)| rect)
+    .collect()
 }
 
 use ratatui::layout::{Constraint, Layout};

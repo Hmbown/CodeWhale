@@ -27,8 +27,6 @@ pub enum CommandReasoningEffort {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandMode {
     Agent,
-    Auto,
-    Yolo,
     Plan,
     Operate,
 }

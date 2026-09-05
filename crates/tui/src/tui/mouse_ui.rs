@@ -337,6 +337,72 @@ fn handle_plugin_cta_mouse(app: &mut App, mouse: MouseEvent) -> Option<Vec<ViewE
     Some(Vec::new())
 }
 
+/// Slash-autocomplete rows painted inside the composer. Click selects
+/// (second click on the same row applies, matching the command palette);
+/// wheel moves the highlight. Returns true when the event was consumed so
+/// the composer caret / draft-scroll path does not also handle it.
+fn handle_slash_autocomplete_mouse(app: &mut App, mouse: MouseEvent) -> bool {
+    let hitboxes = app.viewport.last_slash_menu_hitboxes.borrow();
+    if hitboxes.is_empty() {
+        return false;
+    }
+    let over_row = hitboxes
+        .iter()
+        .find_map(|(idx, rect)| mouse_hits_rect(mouse, Some(*rect)).then_some(*idx));
+    let over_menu = over_row.is_some()
+        || hitboxes.iter().any(|(_, rect)| {
+            mouse.row >= rect.y
+                && mouse.row < rect.y.saturating_add(rect.height)
+                && mouse.column >= rect.x
+                && mouse.column < rect.x.saturating_add(rect.width)
+        });
+    // Wheel over any painted slash row moves selection (mouse == keys).
+    // Clicks only fire when the pointer is on a row rect.
+    match mouse.kind {
+        MouseEventKind::ScrollUp if over_menu => {
+            drop(hitboxes);
+            let entries = crate::tui::slash_menu::visible_slash_menu_entries(app, 128);
+            if entries.is_empty() {
+                return false;
+            }
+            crate::tui::composer_ui::select_previous_slash_menu_entry(app, entries.len());
+            app.needs_redraw = true;
+            true
+        }
+        MouseEventKind::ScrollDown if over_menu => {
+            drop(hitboxes);
+            let entries = crate::tui::slash_menu::visible_slash_menu_entries(app, 128);
+            if entries.is_empty() {
+                return false;
+            }
+            crate::tui::composer_ui::select_next_slash_menu_entry(app, entries.len());
+            app.needs_redraw = true;
+            true
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            let Some(idx) = over_row else {
+                return false;
+            };
+            drop(hitboxes);
+            let entries = crate::tui::slash_menu::visible_slash_menu_entries(app, 128);
+            if entries.is_empty() || idx >= entries.len() {
+                return false;
+            }
+            // Same as command palette: click the highlighted row to apply;
+            // click another row to move the highlight (mouse == keys).
+            if app.slash_menu_selected == idx {
+                let _ = crate::tui::slash_menu::apply_slash_menu_selection(app, &entries, true);
+            } else {
+                app.slash_menu_selected = idx;
+                app.slash_menu_hidden = false;
+            }
+            app.needs_redraw = true;
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Handle mouse events within the composer area.
 /// Returns true if the event was consumed.
 pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
@@ -350,6 +416,11 @@ pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
         || mouse.row >= area.y + area.height
     {
         return false;
+    }
+    // Slash autocomplete owns its painted rows before caret placement or
+    // draft scroll — otherwise a click on `/model` would only move the caret.
+    if handle_slash_autocomplete_mouse(app, mouse) {
+        return true;
     }
     // Resolve the border- and submit-aware input plane through the same
     // persistent prompt geometry used by rendering, cursor placement, and
@@ -509,20 +580,46 @@ pub(crate) fn handle_mouse_event(app: &mut App, mouse: MouseEvent) -> Vec<ViewEv
 
     // The launch surface owns the whole frame until a session is chosen.
     // Consume every mouse event here so wheel input cannot leak into the
-    // transcript or composer behind the launch header. The composer is the
-    // screen's one focus owner, so a click can only submit; nothing else on
-    // the launch screen is a target.
+    // transcript or composer behind the launch header. Clicks land on the
+    // card's rows or the composer's send glyph; anything else keeps focus
+    // where it already is.
     if app.launch.visible {
-        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
-            let send_hit = app
-                .launch
-                .send_area
-                .is_some_and(|area| mouse_hits_rect(mouse, Some(area)));
-            if send_hit && !app.input.trim().is_empty() {
-                // Same submit path as the composer's Enter key.
-                app.pending_launch_action =
-                    Some(crate::tui::underwater::LaunchAction::SendComposer);
+        match mouse.kind {
+            MouseEventKind::Moved => {
+                // Hover paints the shared selected-row treatment through
+                // the same row hitboxes clicks use.
+                let hovered = app
+                    .launch
+                    .row_hitboxes
+                    .iter()
+                    .position(|(_, area)| mouse_hits_rect(mouse, Some(*area)));
+                if hovered != app.launch.hovered_row {
+                    app.launch.hovered_row = hovered;
+                    app.needs_redraw = true;
+                }
             }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let send_hit = app
+                    .launch
+                    .send_area
+                    .is_some_and(|area| mouse_hits_rect(mouse, Some(area)));
+                if send_hit && !app.input.trim().is_empty() {
+                    // Same submit path as the composer's Enter key.
+                    app.pending_launch_action =
+                        Some(crate::tui::underwater::LaunchAction::SendComposer);
+                } else if let Some(id) = app
+                    .launch
+                    .row_hitboxes
+                    .iter()
+                    .find(|(_, area)| mouse_hits_rect(mouse, Some(*area)))
+                    .map(|(id, _)| id.clone())
+                {
+                    // Same actions the keyboard's Enter runs.
+                    app.pending_launch_action =
+                        Some(crate::tui::underwater::launch_row_click_action(&id));
+                }
+            }
+            _ => {}
         }
         app.needs_redraw = true;
         return Vec::new();
@@ -1750,7 +1847,8 @@ pub(crate) fn selection_to_text(app: &App) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        agent_transcript_text, build_context_menu_entries, handle_mouse_event, sidebar_click_action,
+        agent_transcript_text, build_context_menu_entries, handle_composer_mouse,
+        handle_mouse_event, sidebar_click_action,
     };
     use crate::config::Config;
     use crate::models::Role;
@@ -1876,12 +1974,88 @@ mod tests {
     }
 
     #[test]
+    fn slash_autocomplete_click_selects_and_second_click_applies() {
+        let mut app = create_test_app();
+        app.launch.visible = false;
+        app.work_surface.last_area = None;
+        app.input = "/he".to_string();
+        app.cursor_position = app.input.chars().count();
+        app.slash_menu_hidden = false;
+        app.slash_menu_selected = 0;
+        // Simulate two painted rows from ComposerWidget.
+        app.viewport.last_composer_area = Some(Rect::new(0, 18, 80, 6));
+        *app.viewport.last_slash_menu_hitboxes.borrow_mut() =
+            vec![(0, Rect::new(1, 20, 78, 1)), (1, Rect::new(1, 21, 78, 1))];
+
+        assert!(
+            handle_composer_mouse(&mut app, left_click(5, 21)),
+            "slash row click must be consumed by the composer"
+        );
+        assert_eq!(
+            app.slash_menu_selected, 1,
+            "click on another row highlights it"
+        );
+        let before = app.input.clone();
+        assert_eq!(
+            before, "/he",
+            "select-only click must not rewrite the composer"
+        );
+
+        assert!(handle_composer_mouse(&mut app, left_click(5, 21)));
+        assert_ne!(app.input, before, "click on the highlighted row applies it");
+        assert!(
+            app.input.starts_with('/'),
+            "applied slash entry must replace the composer: {:?}",
+            app.input
+        );
+    }
+
+    #[test]
+    fn slash_autocomplete_wheel_moves_selection() {
+        let mut app = create_test_app();
+        app.launch.visible = false;
+        app.work_surface.last_area = None;
+        app.input = "/he".to_string();
+        app.cursor_position = app.input.chars().count();
+        app.slash_menu_hidden = false;
+        app.slash_menu_selected = 0;
+        app.viewport.last_composer_area = Some(Rect::new(0, 18, 80, 6));
+        *app.viewport.last_slash_menu_hitboxes.borrow_mut() =
+            vec![(0, Rect::new(1, 20, 78, 1)), (1, Rect::new(1, 21, 78, 1))];
+        let entries = crate::tui::slash_menu::visible_slash_menu_entries(&app, 128);
+        assert!(entries.len() >= 2, "prefix must offer multiple entries");
+
+        assert!(handle_composer_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                column: 5,
+                row: 20,
+                modifiers: KeyModifiers::NONE,
+            },
+        ));
+        assert_eq!(app.slash_menu_selected, 1);
+
+        assert!(handle_composer_mouse(
+            &mut app,
+            MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                column: 5,
+                row: 20,
+                modifiers: KeyModifiers::NONE,
+            },
+        ));
+        assert_eq!(app.slash_menu_selected, 0);
+    }
+
+    #[test]
     fn send_click_matches_the_keyboard_submit_and_focus_never_leaves_the_composer() {
         let mut app = create_test_app();
         app.launch.visible = true;
-        app.launch.worktree_available = true;
         let stage = Rect::new(0, 1, 80, 22); // the frame's stage slot at 80x24
-        let hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
+        let startup = crate::tui::underwater::tideline_startup_from_app(&app);
+        let mut hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
+        hitboxes.rows = crate::tui::underwater::tideline_startup_row_hitboxes(stage, &startup);
         crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
         let composer = app.launch.composer_area.expect("composer hitbox");
         let send = app.launch.send_area.expect("send hitbox");
@@ -1924,6 +2098,38 @@ mod tests {
         );
         assert!(app.launch.composer_focus);
         assert_eq!(app.pending_launch_action, None);
+    }
+
+    #[test]
+    fn launch_row_hover_and_click_run_the_keyboard_actions() {
+        let mut app = create_test_app();
+        app.launch.visible = true;
+        let stage = Rect::new(0, 1, 80, 22); // the frame's stage slot at 80x24
+        let startup = crate::tui::underwater::tideline_startup_from_app(&app);
+        let mut hitboxes = crate::tui::underwater::tideline_startup_hitboxes(stage);
+        hitboxes.rows = crate::tui::underwater::tideline_startup_row_hitboxes(stage, &startup);
+        crate::tui::underwater::apply_launch_hitboxes(&hitboxes, &mut app.launch);
+        assert!(
+            !app.launch.row_hitboxes.is_empty(),
+            "the card always lists a first row"
+        );
+        let (first_id, first_rect) = app.launch.row_hitboxes[0].clone();
+
+        // Hover highlights the row and repaints; moving away clears it.
+        app.needs_redraw = false;
+        handle_mouse_event(&mut app, mouse_move(first_rect.x + 1, first_rect.y));
+        assert_eq!(app.launch.hovered_row, Some(0));
+        assert!(app.needs_redraw, "hovering a row must repaint");
+        handle_mouse_event(&mut app, mouse_move(0, 0));
+        assert_eq!(app.launch.hovered_row, None);
+
+        // Clicking a row queues the same action the keyboard's Enter runs.
+        handle_mouse_event(&mut app, left_click(first_rect.x + 1, first_rect.y));
+        assert_eq!(
+            app.pending_launch_action.take(),
+            Some(crate::tui::underwater::launch_row_click_action(&first_id))
+        );
+        assert!(app.launch.composer_focus);
     }
 
     #[test]

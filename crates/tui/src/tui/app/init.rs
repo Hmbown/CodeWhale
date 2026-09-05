@@ -270,7 +270,6 @@ impl App {
         let low_motion = settings.low_motion;
         let constrained_frame_rate = settings.constrained_frame_rate;
         let fancy_animations = settings.fancy_animations;
-        let ocean_treatment = crate::tui::ocean::OceanTreatment::parse(&settings.ocean_treatment);
         let focus_texture =
             crate::tui::focus_texture::FocusTextureMode::parse(&settings.focus_texture)
                 .unwrap_or_default();
@@ -310,8 +309,8 @@ impl App {
         // the fallback's switch, honored only when bracketed paste is off.
         let use_paste_burst_detection = settings.paste_burst_detection && !use_bracketed_paste;
         // Resolve the named theme from settings; unknown values were already
-        // normalised to "system" in Settings::load. The background_color
-        // setting still overlays on top.
+        // normalised to the underwater default in Settings::load. The
+        // background_color setting still overlays on top.
         let background_color_override = settings
             .background_color
             .as_deref()
@@ -504,7 +503,10 @@ impl App {
 
         // Resolve the saved mode separately from the permission posture.
         let preferred_mode = AppMode::from_setting(&settings.default_mode);
-        let yolo_requested = yolo || (preferred_mode == AppMode::Yolo && !start_in_agent_mode);
+        // Legacy `default_mode = "yolo"` was split into Act plus the
+        // full-access posture at the settings edge, so only the CLI flag
+        // requests the compat elevation here.
+        let yolo_requested = yolo;
         let initial_mode = if yolo_requested || start_in_agent_mode {
             AppMode::Agent
         } else {
@@ -512,10 +514,8 @@ impl App {
         };
 
         // Durable Agent-era permission baseline (#3386). Plan/YOLO derive from
-        // and restore to this. Legacy Auto inputs parse to Agent; if an older
-        // caller still constructs `AppMode::Auto` directly, it projects through
-        // the Agent baseline instead of enabling a fourth runtime posture. When
-        // the user starts in YOLO the live shell flag is force-enabled below, so
+        // and restore to this. When the user starts in YOLO the live shell
+        // flag is force-enabled below, so
         // the baseline shell value is taken from the interactive default (the
         // pre-mode Agent surface) rather than the YOLO-forced live mirror;
         // otherwise it mirrors the resolved `allow_shell` option, which already
@@ -589,7 +589,7 @@ impl App {
             .unwrap_or_default();
         let configured_trust_mode = configured_approval_mode == ApprovalMode::Bypass;
         let mode_prefs = ModeSessionPrefs {
-            agent_allow_shell: if yolo_compat || matches!(initial_mode, AppMode::Yolo) {
+            agent_allow_shell: if yolo_compat {
                 config.interactive_allow_shell()
             } else {
                 allow_shell
@@ -862,7 +862,6 @@ impl App {
             ocean_turn_history_start: 0,
             ocean_receipt_settle_start: None,
             fancy_animations,
-            ocean_treatment,
             focus_texture,
             launch,
             pending_launch_action: None,

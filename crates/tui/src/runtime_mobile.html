@@ -215,10 +215,10 @@
     <section>
       <div class="head">
         <strong>Connection</strong>
-        <button id="save-token">Save</button>
+        <button id="save-token">Connect</button>
       </div>
       <div class="body grid">
-        <input id="token" autocomplete="off" spellcheck="false" placeholder="Runtime token">
+        <input id="token" autocomplete="off" spellcheck="false" placeholder="Runtime token (used once)">
         <div id="conn" class="status">Not connected</div>
       </div>
     </section>
@@ -262,13 +262,18 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const MAX_VISIBLE_EVENTS = 100;
-    const TOKEN_STORAGE_KEY = "codewhale_runtime_token";
-    const TOKEN_COOKIE = "codewhale_runtime_token";
+    const LEGACY_RUNTIME_TOKEN_STORAGE_KEY = "codewhale_runtime_token";
+    const LEGACY_RUNTIME_TOKEN_COOKIE = "codewhale_runtime_token";
+    const SESSION_STORAGE_KEY = "codewhale_mobile_session_proof";
+    const MOBILE_REQUEST_HEADER = "X-Codewhale-Mobile-Request";
+    const MOBILE_STREAM_TICKET_QUERY = "mobile_stream_ticket";
     const state = {
       threadId: "",
       activeTurnId: "",
       source: null,
-      eventCount: 0
+      eventCount: 0,
+      requestProof: "",
+      streamTicket: ""
     };
 
     function setStatus(message, tone = "") {
@@ -281,23 +286,58 @@
       return $("token").value.trim();
     }
 
-    function setRuntimeTokenCookie(value) {
-      const attrs = "; Path=/; SameSite=Strict";
-      if (!value) {
-        document.cookie = TOKEN_COOKIE + "=; Max-Age=0" + attrs;
-        return;
-      }
-      document.cookie = TOKEN_COOKIE + "=" + encodeURIComponent(value) + attrs;
+    function clearLegacyRuntimeToken() {
+      localStorage.removeItem(LEGACY_RUNTIME_TOKEN_STORAGE_KEY);
+      document.cookie = LEGACY_RUNTIME_TOKEN_COOKIE + "=; Max-Age=0; Path=/; SameSite=Strict";
     }
 
-    function takeTokenFromUrl() {
+    function saveMobileSession() {
+      if (!state.requestProof) {
+        sessionStorage.removeItem(SESSION_STORAGE_KEY);
+        return;
+      }
+      sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
+        requestProof: state.requestProof,
+        streamTicket: state.streamTicket
+      }));
+    }
+
+    function clearMobileSession() {
+      state.requestProof = "";
+      state.streamTicket = "";
+      sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    }
+
+    function loadMobileSession() {
+      try {
+        const stored = JSON.parse(sessionStorage.getItem(SESSION_STORAGE_KEY) || "null");
+        if (stored && typeof stored.requestProof === "string") {
+          state.requestProof = stored.requestProof;
+          state.streamTicket = typeof stored.streamTicket === "string" ? stored.streamTicket : "";
+        }
+      } catch (_) {
+        clearMobileSession();
+      }
+    }
+
+    function useMobileSession(session) {
+      if (!session || typeof session.request_proof !== "string") {
+        throw new Error("Mobile session bootstrap was incomplete");
+      }
+      state.requestProof = session.request_proof;
+      state.streamTicket = typeof session.stream_ticket === "string" ? session.stream_ticket : "";
+      saveMobileSession();
+    }
+
+    function takeMobileSessionFromUrl() {
       const hash = location.hash.startsWith("#") ? location.hash.slice(1) : "";
       const params = new URLSearchParams(hash);
-      const urlToken = params.get("token");
-      if (!urlToken) return;
-      localStorage.setItem(TOKEN_STORAGE_KEY, urlToken);
-      setRuntimeTokenCookie(urlToken);
-      params.delete("token");
+      const requestProof = params.get("request_proof");
+      const streamTicket = params.get("stream_ticket");
+      if (!requestProof || !streamTicket) return;
+      useMobileSession({ request_proof: requestProof, stream_ticket: streamTicket });
+      params.delete("request_proof");
+      params.delete("stream_ticket");
       const nextHash = params.toString();
       history.replaceState(
         null,
@@ -308,15 +348,17 @@
 
     function headers(extra = {}) {
       const out = Object.assign({ "Content-Type": "application/json" }, extra);
-      if (token()) out.Authorization = "Bearer " + token();
+      if (state.requestProof) out[MOBILE_REQUEST_HEADER] = state.requestProof;
       return out;
     }
 
     async function api(path, options = {}) {
       const res = await fetch(path, Object.assign({}, options, {
+        credentials: "same-origin",
         headers: headers(options.headers || {})
       }));
       if (!res.ok) {
+        if (res.status === 401) clearMobileSession();
         let detail = await res.text();
         try {
           const parsed = JSON.parse(detail);
@@ -326,6 +368,51 @@
       }
       if (res.status === 204) return null;
       return res.json();
+    }
+
+    async function connectMobileSession() {
+      const runtimeToken = token();
+      if (!runtimeToken) throw new Error("Enter a Runtime token to connect once");
+      let res;
+      try {
+        res = await fetch("/__codewhale/mobile/session", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Authorization": "Bearer " + runtimeToken }
+        });
+      } finally {
+        $("token").value = "";
+      }
+      if (!res.ok) {
+        let detail = await res.text();
+        try {
+          const parsed = JSON.parse(detail);
+          detail = parsed.error?.message || detail;
+        } catch (_) {}
+        throw new Error(detail || ("HTTP " + res.status));
+      }
+      useMobileSession(await res.json());
+    }
+
+    async function refreshStreamTicket() {
+      const result = await api("/__codewhale/mobile/stream-ticket", {
+        method: "POST",
+        body: "{}"
+      });
+      if (!result || typeof result.stream_ticket !== "string") {
+        throw new Error("Mobile stream ticket was unavailable");
+      }
+      state.streamTicket = result.stream_ticket;
+      saveMobileSession();
+      return state.streamTicket;
+    }
+
+    async function takeStreamTicket() {
+      if (!state.requestProof) return "";
+      const ticket = state.streamTicket || await refreshStreamTicket();
+      state.streamTicket = "";
+      saveMobileSession();
+      return ticket;
     }
 
     function escapeHtml(raw) {
@@ -481,9 +568,20 @@
       $("active-title").textContent = title || id;
       $("events").innerHTML = "";
       if (state.source) state.source.close();
-      if (token()) setRuntimeTokenCookie(token());
-      const qs = "?since_seq=0&replay_limit=" + MAX_VISIBLE_EVENTS;
-      const source = new EventSource("/v1/threads/" + encodeURIComponent(id) + "/events" + qs);
+      await openThreadEvents(id);
+      await loadThreads();
+    }
+
+    async function openThreadEvents(id) {
+      const streamTicket = await takeStreamTicket();
+      const query = new URLSearchParams({
+        since_seq: "0",
+        replay_limit: String(MAX_VISIBLE_EVENTS)
+      });
+      if (streamTicket) query.set(MOBILE_STREAM_TICKET_QUERY, streamTicket);
+      const source = new EventSource(
+        "/v1/threads/" + encodeURIComponent(id) + "/events?" + query.toString()
+      );
       state.source = source;
       const names = [
         "thread.started",
@@ -510,8 +608,16 @@
         });
       }
       source.onopen = () => setStatus("Connected", "ok");
-      source.onerror = () => setStatus("Event stream disconnected", "warn");
-      await loadThreads();
+      source.onerror = () => {
+        if (state.source !== source || state.threadId !== id) return;
+        source.close();
+        setStatus("Event stream disconnected; reconnecting", "warn");
+        window.setTimeout(() => {
+          if (state.threadId === id) {
+            openThreadEvents(id).catch((err) => setStatus(err.message, "bad"));
+          }
+        }, 750);
+      };
     }
 
     async function sendPrompt() {
@@ -554,12 +660,11 @@
     }
 
     async function boot() {
-      takeTokenFromUrl();
-      $("token").value = localStorage.getItem(TOKEN_STORAGE_KEY) || "";
-      if (token()) setRuntimeTokenCookie(token());
+      clearLegacyRuntimeToken();
+      loadMobileSession();
+      takeMobileSessionFromUrl();
       $("save-token").onclick = async () => {
-        localStorage.setItem(TOKEN_STORAGE_KEY, token());
-        setRuntimeTokenCookie(token());
+        await connectMobileSession();
         await loadThreads().catch((err) => setStatus(err.message, "bad"));
       };
       $("refresh").onclick = () => loadThreads().catch((err) => setStatus(err.message, "bad"));

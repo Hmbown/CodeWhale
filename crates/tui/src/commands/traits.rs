@@ -45,7 +45,7 @@ pub(crate) const ADVANCED_DISCOVERY_COMMANDS: &[&str] = &[
     "rlm",
     "settings",
     "share",
-    "rail",
+    "workbar",
     "status",
     "system",
     "theme",

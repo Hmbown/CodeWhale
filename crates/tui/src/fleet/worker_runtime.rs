@@ -1436,40 +1436,6 @@ pub fn apply_exec_hardening(
     spec
 }
 
-pub(crate) fn fleet_effective_permissions_from_worker_spec(
-    spec: &AgentWorkerSpec,
-) -> FleetEffectivePermissions {
-    fleet_effective_permissions_from_runtime_profile(
-        &effective_runtime_profile_for_role(&spec.agent_type, &spec.runtime_profile),
-        None,
-    )
-}
-
-/// Whether a Fleet role is never allowed a mutating shell, whatever its
-/// requested runtime profile says. Spawn narrows the child to a read-only
-/// shell for these roles, and every receipt must report that same posture.
-pub(crate) fn role_requires_read_only_shell(role: &crate::tools::subagent::FleetRole) -> bool {
-    use crate::tools::subagent::FleetRole;
-    matches!(
-        role,
-        FleetRole::Scout | FleetRole::Reviewer | FleetRole::Planner
-    )
-}
-
-/// The runtime profile a worker of `role` actually runs under: the requested
-/// profile with the shell narrowed for read-only roles. Receipts and headers
-/// derive from this, never from the requested profile alone (#5542 review).
-pub(crate) fn effective_runtime_profile_for_role(
-    role: &crate::tools::subagent::FleetRole,
-    requested: &WorkerRuntimeProfile,
-) -> WorkerRuntimeProfile {
-    let mut effective = requested.clone();
-    if role_requires_read_only_shell(role) && effective.shell.allows_shell() {
-        effective.shell = crate::worker_profile::ShellPolicy::ReadOnly;
-    }
-    effective
-}
-
 pub(crate) fn fleet_effective_permissions_for_task(
     task_spec: &FleetTaskSpec,
     agent_profiles: &[AgentProfile],
@@ -1478,32 +1444,14 @@ pub(crate) fn fleet_effective_permissions_for_task(
     let agent_profile = resolve_task_agent_profile(task_spec, agent_profiles)
         .ok()
         .flatten();
-    fleet_effective_permissions_from_runtime_profile(
-        &effective_runtime_profile_for_role(&spec.agent_type, &spec.runtime_profile),
-        agent_profile.as_deref(),
+    crate::fleet::role::fleet_effective_permissions(
+        &spec.agent_type,
+        &spec.runtime_profile,
+        agent_profile.as_ref().map(|profile| profile.id.as_str()),
+        agent_profile
+            .as_ref()
+            .map(|profile| profile_origin_label(profile.origin)),
     )
-}
-
-pub(crate) fn fleet_effective_permissions_from_runtime_profile(
-    profile: &WorkerRuntimeProfile,
-    agent_profile: Option<&AgentProfile>,
-) -> FleetEffectivePermissions {
-    FleetEffectivePermissions {
-        write: profile.permissions.write,
-        network: profile.permissions.network,
-        shell: shell_policy_label(profile.shell).to_string(),
-        tool_scope: tool_scope_label(&profile.tools).to_string(),
-        tools: match &profile.tools {
-            ToolScope::Inherit => Vec::new(),
-            ToolScope::Explicit(tools) => tools.clone(),
-        },
-        background: profile.background,
-        max_spawn_depth: profile.max_spawn_depth,
-        profile_id: agent_profile.map(|profile| profile.id.clone()),
-        profile_origin: agent_profile
-            .map(|profile| profile_origin_label(profile.origin).to_string()),
-        source: "worker_runtime_profile".to_string(),
-    }
 }
 
 /// Return a truthful dispatch warning when a brief asks for network-backed
@@ -1593,13 +1541,6 @@ fn shell_policy_label(shell: crate::worker_profile::ShellPolicy) -> &'static str
     }
 }
 
-fn tool_scope_label(tools: &ToolScope) -> &'static str {
-    match tools {
-        ToolScope::Inherit => "inherit",
-        ToolScope::Explicit(_) => "explicit",
-    }
-}
-
 /// Filter a tool profile against allowed/disallowed lists.
 fn filter_tool_profile(
     profile: &AgentWorkerToolProfile,
@@ -1645,6 +1586,7 @@ mod tests {
 
     #[test]
     fn read_only_roles_report_the_narrowed_shell_they_actually_run_under() {
+        use crate::fleet::role;
         use crate::tools::subagent::FleetRole;
         use crate::worker_profile::ShellPolicy;
         let mut requested = WorkerRuntimeProfile {
@@ -1653,21 +1595,21 @@ mod tests {
         };
 
         for role in [FleetRole::Scout, FleetRole::Reviewer, FleetRole::Planner] {
-            let effective = effective_runtime_profile_for_role(&role, &requested);
+            let effective = role::effective_runtime_profile_for_role(&role, &requested);
             assert_eq!(effective.shell, ShellPolicy::ReadOnly, "{role:?}");
             assert_eq!(
-                fleet_effective_permissions_from_runtime_profile(&effective, None).shell,
+                role::fleet_effective_permissions(&role, &requested, None, None).shell,
                 "read_only",
                 "{role:?}"
             );
         }
-        let worker = effective_runtime_profile_for_role(&FleetRole::Worker, &requested);
+        let worker = role::effective_runtime_profile_for_role(&FleetRole::Worker, &requested);
         assert_eq!(worker.shell, ShellPolicy::Full);
 
         // A role that was already narrower than read-only keeps its posture.
         requested.shell = ShellPolicy::None;
         assert_eq!(
-            effective_runtime_profile_for_role(&FleetRole::Scout, &requested).shell,
+            role::effective_runtime_profile_for_role(&FleetRole::Scout, &requested).shell,
             ShellPolicy::None
         );
     }
@@ -4064,7 +4006,12 @@ mod tests {
         assert_eq!(spec.runtime_profile.model, ModelRoute::Inherit);
         assert_eq!(spec.max_spawn_depth, 1);
 
-        let permissions = fleet_effective_permissions_from_worker_spec(&spec);
+        let permissions = crate::fleet::role::fleet_effective_permissions(
+            &spec.agent_type,
+            &spec.runtime_profile,
+            None,
+            None,
+        );
         assert!(!permissions.write);
         assert!(
             permissions.network,
@@ -4253,7 +4200,7 @@ mod tests {
             )
             .expect("worker spec with empty profiles");
 
-            let public_role = crate::tools::subagent::public_role_label(role);
+            let public_role = crate::fleet::role::public_role_label(role);
             assert_eq!(spec.role.as_deref(), Some(public_role.as_str()));
             assert_eq!(spec.agent_type, expected_type, "role {role}");
             assert_eq!(spec.tool_profile, expected_tools, "role {role}");

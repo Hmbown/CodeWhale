@@ -29,6 +29,16 @@ pub fn selected_row_style() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// Hovered-but-not-selected row (Slice G global rule: every clickable
+/// element responds visibly on hover). Underline + bold, deliberately *no*
+/// background fill, so a hovered row can never masquerade as the keyboard
+/// selection (`selected_row_style` owns the `SELECTION_BG` band). Callers
+/// apply this only when `!selected`; selection always wins.
+#[must_use]
+pub fn hovered_row_style() -> Style {
+    Style::default().bg(palette::SURFACE_ELEVATED)
+}
+
 /// Selected row with a caller-chosen foreground (the provider picker tints
 /// per-field ink while keeping the shared selection background).
 #[must_use]
@@ -188,6 +198,14 @@ mod tests {
                 .bg(palette::SURFACE_ELEVATED)
                 .add_modifier(Modifier::DIM)
         );
+    }
+
+    #[test]
+    fn hovered_row_is_elevated_band_without_selection_ink() {
+        let hovered = hovered_row_style();
+        assert_eq!(hovered, Style::default().bg(palette::SURFACE_ELEVATED));
+        assert_ne!(hovered, selected_row_style());
+        assert_ne!(hovered, selected_row_bg_style());
     }
 
     #[test]

@@ -583,7 +583,7 @@ impl OperationDescriptor {
                 Availability::unavailable(
                     UnavailableReason::NoFleetLedger,
                     "this workspace has no .codewhale/fleet.jsonl; create it with \
-                     `codewhale pod init`",
+                     `codewhale fleet init`",
                 )
             }
             _ => Availability::Available,
@@ -595,8 +595,8 @@ const LANE_RESTART_HINT: &str = "Lane restart has no backend: a Lane is one runn
      `codewhale lane start` / `codewhale workflow run`, not restarted in place.";
 const LANE_RESUME_HINT: &str = "Lane resume has no backend: a stopped Lane's Runtime session is gone, so there is \
      nothing to resume. Start a new Lane against the same issue/goal.";
-const FLEET_RESTART_HINT: &str = "Pod restart re-leases a task and then drives the manager loop to completion, which \
-     only the CLI runs. Use `codewhale pod restart <worker-id>`.";
+const FLEET_RESTART_HINT: &str = "Fleet restart re-leases a task and then drives the manager loop to completion, which \
+     only the CLI runs. Use `codewhale fleet restart <worker-id>`.";
 /// Lane interrupt tears down the Runtime (tmux kill-session, worktree TTL
 /// cleanup), which must never run on the TUI composer thread. It is *not*
 /// CLI-only: the slash surface submits it to an off-loop worker and returns a
@@ -727,7 +727,7 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         hotbar_bare_dispatch: false,
         slash_command: "fleet",
         cli_invocation: "codewhale fleet status",
-        summary: "Show durable Pod run/worker counts from the workspace ledger.",
+        summary: "Show durable Fleet run/worker counts from the workspace ledger.",
     },
     OperationDescriptor {
         operation: ControlOperation::FleetInterrupt,
@@ -781,7 +781,7 @@ pub static OPERATIONS: &[OperationDescriptor] = &[
         hotbar_bare_dispatch: false,
         slash_command: "fleet",
         cli_invocation: "codewhale fleet resume <run-id>",
-        summary: "Reconcile a durable Pod run's orphaned leases after a manager restart.",
+        summary: "Reconcile a durable Fleet run's orphaned leases after a manager restart.",
     },
 ];
 
@@ -1589,7 +1589,7 @@ pub struct RunSummaryDto {
     pub runtime: Known<String>,
     /// Workflow = order.
     pub workflow: Known<String>,
-    /// Pod = who. The field name stays `fleet` for serialized compatibility.
+    /// Fleet = who. The field name stays `fleet` for serialized compatibility.
     pub fleet: Known<String>,
     pub issue: Known<String>,
     pub goal: Known<String>,
@@ -1619,7 +1619,7 @@ pub struct RunSummaryDto {
 impl RunSummaryDto {
     /// Full stable receipt-detail rendering, shared by status surfaces.
     ///
-    /// Public commands call the Fleet domain a Pod, but these field labels are
+    /// Public commands call the Fleet domain a Fleet, but these field labels are
     /// part of the serialized receipt/detail compatibility boundary. Keep the
     /// durable domain and `fleet` field spellings here.
     #[must_use]
@@ -2362,7 +2362,7 @@ mod tests {
             }
         }
         // Exactly one verb is reachable from a bare press today: `/lane` with
-        // no argument lists. `/pod` with no argument opens the roster, so no
+        // no argument lists. `/fleet` with no argument opens the roster, so no
         // Fleet verb is bare-dispatchable.
         let reachable: Vec<&str> = OPERATIONS
             .iter()
@@ -2569,7 +2569,7 @@ mod tests {
             assert!(
                 availability
                     .hint()
-                    .is_some_and(|hint| hint.contains("codewhale pod restart")),
+                    .is_some_and(|hint| hint.contains("codewhale fleet restart")),
                 "an unavailable surface must point at the one that works"
             );
         }

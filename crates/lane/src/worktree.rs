@@ -74,6 +74,10 @@ pub fn provision_worktree(spec: &WorktreeProvision) -> Result<ProvisionedWorktre
 /// Remove a worktree when TTL has expired (or immediately when TTL is 0).
 ///
 /// `stopped_at` is RFC3339. When `ttl_secs` is `None`, no cleanup is performed.
+///
+/// Removal only ever touches a path that git identifies as a managed worktree
+/// of its own repository (#5824); anything else — a stale or malformed record
+/// pointing at an unrelated directory — is left untouched.
 pub fn remove_worktree_if_expired(
     worktree_path: &Path,
     ttl_secs: Option<u64>,
@@ -103,29 +107,37 @@ pub fn remove_worktree_if_expired(
 
     // Ask the worktree what it is before deleting it: once the directory is
     // gone, neither its branch nor its repository is recoverable from the path.
-    let details = worktree_details(worktree_path);
+    let Some(details) = worktree_details(worktree_path) else {
+        return Ok(());
+    };
+    // #5824: a stale or malformed record must not turn TTL cleanup into an
+    // unbounded recursive delete. Removal proceeds only for a path that git
+    // itself identifies as a managed worktree of `details.repo_root`.
+    if !is_managed_worktree(worktree_path, &details) {
+        tracing::debug!(
+            "skipped TTL cleanup of {}: git does not identify it as a managed worktree",
+            worktree_path.display()
+        );
+        return Ok(());
+    }
 
     // Best-effort: git worktree remove --force, then rm -rf.
-    let removed = details.as_ref().is_some_and(|details| {
-        Command::new("git")
-            .current_dir(&details.repo_root)
-            .args([
-                "worktree",
-                "remove",
-                "--force",
-                &worktree_path.to_string_lossy(),
-            ])
-            .status()
-            .is_ok_and(|status| status.success())
-    });
-    if worktree_path.exists() {
+    let removed = Command::new("git")
+        .current_dir(&details.repo_root)
+        .args([
+            "worktree",
+            "remove",
+            "--force",
+            &worktree_path.to_string_lossy(),
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !removed && worktree_path.exists() && is_managed_worktree(worktree_path, &details) {
+        // Re-verified immediately before the fallback: the directory may have
+        // been swapped for an unrelated one between identification and removal.
         fs::remove_dir_all(worktree_path)
             .with_context(|| format!("remove worktree {}", worktree_path.display()))?;
     }
-
-    let Some(details) = details else {
-        return Ok(());
-    };
     if !removed {
         // The directory is gone but git still has it registered, and
         // `git worktree add` refuses a path it already knows about.
@@ -140,11 +152,15 @@ pub fn remove_worktree_if_expired(
     Ok(())
 }
 
-/// What a lane worktree is: which repository owns it, and which branch it has
-/// checked out (`None` when detached).
+/// What a lane worktree is: which repository owns it, which branch it has
+/// checked out (`None` when detached), and every worktree that repository
+/// lists.
 struct WorktreeDetails {
     repo_root: PathBuf,
     branch: Option<String>,
+    /// The worktrees the owning repository lists; a candidate path must
+    /// resolve to one of these before cleanup may delete anything (#5824).
+    worktrees: Vec<PathBuf>,
 }
 
 fn worktree_details(worktree_path: &Path) -> Option<WorktreeDetails> {
@@ -154,12 +170,14 @@ fn worktree_details(worktree_path: &Path) -> Option<WorktreeDetails> {
         .output()
         .ok()
         .filter(|output| output.status.success())?;
-    // The main worktree is listed first, so its path is the repository root.
     let listing = String::from_utf8_lossy(&listing.stdout);
-    let repo_root = listing
+    let worktrees: Vec<PathBuf> = listing
         .lines()
-        .find_map(|line| line.strip_prefix("worktree "))
-        .map(PathBuf::from)?;
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .map(PathBuf::from)
+        .collect();
+    // The main worktree is listed first, so its path is the repository root.
+    let repo_root = worktrees.first().cloned()?;
 
     let branch = Command::new("git")
         .current_dir(worktree_path)
@@ -170,7 +188,59 @@ fn worktree_details(worktree_path: &Path) -> Option<WorktreeDetails> {
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
         .filter(|branch| !branch.is_empty());
 
-    Some(WorktreeDetails { repo_root, branch })
+    Some(WorktreeDetails {
+        repo_root,
+        branch,
+        worktrees,
+    })
+}
+
+/// Whether git identifies `worktree_path` itself as a managed worktree of the
+/// repository in `details` (#5824). Two checks, both required:
+///
+/// - the candidate resolves to a worktree the owning repository lists, and
+/// - the worktree is a *linked* one: its `.git` file names the registration
+///   the owning repository keeps beneath `<repo>/.git/worktrees/`.
+///
+/// Repository roots (whose `.git` is a directory with no registration) and
+/// plain subdirectories of a repo (which are not listed as worktrees) fail
+/// here and are never candidates for recursive deletion. Paths are
+/// canonicalized on both sides so symlinks (macOS `/tmp` -> `/private/tmp`)
+/// and relative records cannot smuggle a different directory past the check.
+fn is_managed_worktree(worktree_path: &Path, details: &WorktreeDetails) -> bool {
+    let Ok(candidate) = fs::canonicalize(worktree_path) else {
+        return false;
+    };
+    let listed = details
+        .worktrees
+        .iter()
+        .any(|path| fs::canonicalize(path).is_ok_and(|resolved| resolved == candidate));
+    if !listed {
+        return false;
+    }
+    let Ok(repo_root) = fs::canonicalize(&details.repo_root) else {
+        return false;
+    };
+    let registrations = repo_root.join(".git").join("worktrees");
+    let registration = fs::read_to_string(worktree_path.join(".git"))
+        .ok()
+        .and_then(|dot_git| {
+            dot_git
+                .lines()
+                .find_map(|line| line.strip_prefix("gitdir: "))
+                .map(str::trim)
+                .filter(|gitdir| !gitdir.is_empty())
+                .map(PathBuf::from)
+        });
+    let Some(registration) = registration else {
+        return false;
+    };
+    let registration = if registration.is_absolute() {
+        registration
+    } else {
+        worktree_path.join(registration)
+    };
+    fs::canonicalize(registration).is_ok_and(|resolved| resolved.starts_with(registrations))
 }
 
 /// Delete the branch a removed lane worktree was on.
@@ -359,6 +429,126 @@ mod tests {
         assert!(
             branch_exists(&repo, "codex/has-work"),
             "a branch with unmerged commits must survive worktree cleanup"
+        );
+    }
+
+    #[test]
+    fn ttl_cleanup_never_deletes_a_plain_directory() {
+        // #5824: a stale or malformed record pointing at an unrelated
+        // directory must not turn TTL cleanup into an unbounded recursive
+        // delete just because the TTL is zero.
+        let dir = tempdir().unwrap();
+        let precious = dir.path().join("not-a-worktree");
+        fs::create_dir_all(precious.join("nested")).unwrap();
+        fs::write(precious.join("nested/keep.txt"), "keep").unwrap();
+
+        remove_worktree_if_expired(&precious, Some(0), Some("2020-01-01T00:00:00Z")).unwrap();
+        assert!(
+            precious.exists(),
+            "git cannot identify this path as a managed worktree, so cleanup must do nothing"
+        );
+        assert_eq!(
+            fs::read_to_string(precious.join("nested/keep.txt")).unwrap(),
+            "keep"
+        );
+    }
+
+    #[test]
+    fn ttl_cleanup_never_deletes_inside_an_unrelated_repository() {
+        // Git commands succeed from within a subdirectory of some unrelated
+        // repo, but that repo does not list the subdirectory as a worktree.
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+        let precious = repo.join("src");
+        fs::create_dir_all(&precious).unwrap();
+        fs::write(precious.join("keep.txt"), "keep").unwrap();
+
+        remove_worktree_if_expired(&precious, Some(0), Some("2020-01-01T00:00:00Z")).unwrap();
+        assert!(
+            precious.exists(),
+            "a subdirectory of an unrelated repo is not a managed worktree"
+        );
+        assert!(precious.join("keep.txt").exists());
+    }
+
+    #[test]
+    fn ttl_cleanup_never_deletes_a_repository_root() {
+        // The main worktree of a repo is not a linked lane worktree: its
+        // `.git` is a directory with no registration beneath
+        // `.git/worktrees/`. A record pointing there must not wipe a repo.
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+
+        remove_worktree_if_expired(&repo, Some(0), Some("2020-01-01T00:00:00Z")).unwrap();
+        assert!(
+            repo.exists(),
+            "a repository root must never be recursively deleted by TTL cleanup"
+        );
+        assert!(repo.join(".git").exists());
+    }
+
+    #[test]
+    fn ttl_cleanup_leaves_a_path_swapped_after_provisioning_intact() {
+        // The record was written when the path was a managed worktree; by the
+        // time cleanup runs, the directory has been replaced by an unrelated
+        // one. Deletion must see the path as it is now, not as the record
+        // claims it was.
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+        let wt_path = dir.path().join("wt-lane");
+        provision_worktree(&WorktreeProvision {
+            repo_root: repo,
+            branch: "codex/swapped".into(),
+            path: wt_path.clone(),
+            base_ref: Some("main".into()),
+        })
+        .unwrap();
+
+        fs::remove_dir_all(&wt_path).unwrap();
+        fs::create_dir_all(&wt_path).unwrap();
+        fs::write(wt_path.join("keep.txt"), "keep").unwrap();
+
+        remove_worktree_if_expired(&wt_path, Some(0), Some("2020-01-01T00:00:00Z")).unwrap();
+        assert!(
+            wt_path.exists(),
+            "the replacement directory is not the identified worktree and must survive"
+        );
+        assert!(wt_path.join("keep.txt").exists());
+    }
+
+    #[test]
+    fn managed_identity_holds_for_a_real_worktree_and_fails_after_a_swap() {
+        // The gate that guards the window between identification and removal:
+        // it must accept the worktree git provisioned and refuse the same
+        // path once its contents no longer resolve to that worktree.
+        let dir = tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        init_repo(&repo);
+        let wt_path = dir.path().join("wt-lane");
+        provision_worktree(&WorktreeProvision {
+            repo_root: repo.clone(),
+            branch: "codex/identity".into(),
+            path: wt_path.clone(),
+            base_ref: Some("main".into()),
+        })
+        .unwrap();
+
+        let details = worktree_details(&wt_path).expect("a provisioned worktree identifies itself");
+        assert!(is_managed_worktree(&wt_path, &details));
+
+        fs::remove_dir_all(&wt_path).unwrap();
+        fs::create_dir_all(&wt_path).unwrap();
+        fs::write(wt_path.join("keep.txt"), "keep").unwrap();
+        assert!(
+            !is_managed_worktree(&wt_path, &details),
+            "a swapped directory no longer resolves to the identified worktree"
         );
     }
 }

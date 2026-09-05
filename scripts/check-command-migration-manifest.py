@@ -751,6 +751,27 @@ def _first_param_type(fn_sig: str) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Retained host machinery (FEAT-042 tracking)
+# ---------------------------------------------------------------------------
+#
+# The migration topology is immutable, so the dispatcher-only host helpers that
+# intentionally keep `&mut App` after a group migrates are declared here — the
+# gate's own enforcement home. Each entry maps a migrated group to selectors
+# that must keep their concrete-App signature until FEAT-042 extracts them to a
+# host-side module; a missing or refactored-away signature fails the gate, so
+# the tracking cannot silently go stale. FEAT-022: the skills group retains the
+# unified slash-command fallback and its activation helpers co-located with the
+# portable handlers (D7).
+RETAINED_HOST_MACHINERY: dict[str, list[dict]] = {
+    "skills": [
+        {"kind": "free", "item": ["crate", "commands", "groups", "skills", "skills", "run_skill_by_name"]},
+        {"kind": "free", "item": ["crate", "commands", "groups", "skills", "skills", "activate_skill_with_task"]},
+        {"kind": "free", "item": ["crate", "commands", "groups", "skills", "skills", "activate_skill"]},
+    ],
+}
+
+
 def _is_concrete_app_type(param_type: str | None) -> bool:
     if param_type is None:
         return False
@@ -951,6 +972,24 @@ def _self_type_qual(self_type: str, module_path: str) -> str:
     return f"{module_path}::{base}"
 
 
+def _selector_matches(selector: dict, item: RustItem) -> bool:
+    """Match one RustItem against a checked-in selector (shared by
+    `resolve_selector` and the retained-host source scan)."""
+    kind = selector["kind"]
+    if kind == "free":
+        target = "::".join(selector["item"])
+        return item.kind == "free" and item.qual_path == target
+    if kind == "inherent":
+        self_qual = _selector_type_to_text(selector["self_type"])
+        return item.kind == "inherent" and item.name == selector["method"] \
+            and item.qual_path.startswith(f"{self_qual}::")
+    self_qual = _selector_type_to_text(selector["self_type"])
+    trait_qual = _selector_type_to_text(selector["trait_path"])
+    return item.kind == "trait_impl" and item.name == selector["method"] \
+        and item.qual_path.startswith(f"{self_qual}::") \
+        and f"[{trait_qual}]" in item.qual_path
+
+
 def resolve_selector(selector: dict, items: list[RustItem]) -> list[SourceScanViolation]:
     """Resolve one checked-in handler selector against parsed items.
 
@@ -1084,6 +1123,25 @@ def check_source_frontier(topology: dict, frontier: list[str], root: Path = REPO
                 violations.extend(resolve_selector(selector, group_items))
             continue
 
+        # Validate retained host machinery declarations first so the tracking
+        # stays fail-closed even when the group has no other concrete-App
+        # handlers (e.g. every retained helper lost its signature at once).
+        retained_names: set[str] = set()
+        for selector in RETAINED_HOST_MACHINERY.get(group_name, []):
+            matches = [it for it in group_items if _selector_matches(selector, it)]
+            if not matches:
+                violations.append(SourceScanViolation(
+                    "retained-host", json.dumps(selector, sort_keys=True),
+                    f"retained host machinery selector resolves to no source item in {group_name!r}",
+                ))
+            for match in matches:
+                if not match.is_concrete_app:
+                    violations.append(SourceScanViolation(
+                        "retained-host", match.qual_path,
+                        "retained host machinery must keep its concrete-App signature until FEAT-042 extracts it",
+                    ))
+                retained_names.add(match.qual_path)
+
         if not handlers:
             continue
 
@@ -1116,16 +1174,18 @@ def check_source_frontier(topology: dict, frontier: list[str], root: Path = REPO
                 ))
                 continue
 
-        # Not pending and not split: every remaining handler is a stale removal.
-        for handler in handlers[:5]:
+        # Not pending and not split: every remaining handler is a stale removal,
+        # except the retained host machinery resolved above.
+        stale = [h for h in handlers if h.qual_path not in retained_names]
+        for handler in stale[:5]:
             violations.append(SourceScanViolation(
                 "stale-removal", handler.qual_path,
                 f"handler still uses concrete App but group {group_name!r} is not pending",
             ))
-        if len(handlers) > 5:
+        if len(stale) > 5:
             violations.append(SourceScanViolation(
                 "stale-removal", group_name,
-                f"... and {len(handlers) - 5} more concrete-App handlers in this group",
+                f"... and {len(stale) - 5} more concrete-App handlers in this group",
             ))
 
     return violations

@@ -8,12 +8,12 @@
                                                                                                     
                                                                                                     
           ╭──────────────────────────────────────────────────────────────────────────────╮          
-          │         Codewhale v0.9.12                                                    │          
-          │ ⣠⡾⠛⠷⠄   ● 2 MCP servers connected · 1 needs sign-in · run /mcp               │          
-          │ ⣿⣄⣠⣤⣶⠶⡆ ▸ New worktree                                                ctrl+n │          
-          │ ⠙⠿⣯⣿⡡⠞    Resume session                                              ctrl+r │          
-          │           Changelog                                                   ctrl+l │          
-          │           Quit                                                        ctrl+q │          
+          │         codewhale v0.9.12                                                    │          
+          │ ⢠⡶⠛⠧⠄   ● 2 MCP servers connected · 1 needs sign-in · run /mcp               │          
+          │ ⣿⣄⣠⣤⣶⠶⠆   New session                                                        │          
+          │ ⠘⠻⣿⣗⠡⠊  Recent                                                               │          
+          │           Fix login flow                                     2h ago · 4 msgs │          
+          │           Plan export                                       3d ago · 12 msgs │          
           ╰──────────────────────────────────────────────────────────────────────────────╯          
                                                                                                     
                                                                                                     

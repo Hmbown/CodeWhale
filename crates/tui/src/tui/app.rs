@@ -530,23 +530,57 @@ impl Default for LspRepairState {
     }
 }
 
+/// One recent session for the startup card's recent-work list (PRD 4.1).
+/// Loaded once with the launch state — never on the render path — and
+/// refreshed whenever the card is restored after a picker closes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchRecentSession {
+    pub id: String,
+    pub title: String,
+    pub updated_at: DateTime<Utc>,
+    pub message_count: usize,
+}
+
+/// Identity of one interactive row on the startup card. The card's rows are
+/// a single ordered list — the prominent new-session entry first, then
+/// recent work, then the see-all overflow — so keyboard, mouse, and paint
+/// share one indexing through
+/// [`crate::tui::underwater::launch_card_rows`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaunchRowId {
+    NewSession,
+    Recent(String),
+    SeeAll,
+}
+
+/// How many recent sessions the startup card lists inline before the
+/// see-all overflow opens the full picker.
+pub(crate) const LAUNCH_RECENT_INLINE_LIMIT: usize = 5;
+
 /// Pre-session launch menu state for the underwater shell.
 ///
 /// This is deliberately separate from onboarding and from the post-launch
-/// empty session. It selects real session/worktree actions before the
+/// empty session. It selects a fresh session or recent work before the
 /// transcript and composer become active.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchState {
     pub visible: bool,
-    pub worktree_input: Option<String>,
     pub status: Option<String>,
-    pub workspace_session_count: usize,
-    pub worktree_available: bool,
+    /// Canonical workspace this launch state is scoped to. Recent work is
+    /// the workspace's own sessions (archived and empty auto-created ones
+    /// excluded, like the resume picker); the row hitboxes below are
+    /// refreshed with it.
+    pub workspace: PathBuf,
+    /// Recent workspace sessions, most recent first, capped at
+    /// [`LAUNCH_RECENT_INLINE_LIMIT`].
+    pub recent: Vec<LaunchRecentSession>,
+    /// All workspace sessions behind the inline list; when this exceeds
+    /// `recent.len()` the card paints the see-all overflow row.
+    pub total_workspace_sessions: usize,
     /// Whether launch keys type into the pre-session composer. The composer
     /// is the launch screen's one focus owner, so this is `true` from first
-    /// paint; only the worktree-name prompt takes the keyboard while open.
-    /// The composer itself is the session `App`'s own `ComposerState` — this
-    /// flag only decides where keystrokes go.
+    /// paint. The composer itself is the session `App`'s own
+    /// `ComposerState` — this flag only decides where keystrokes go.
     pub composer_focus: bool,
     /// Composer input-row hitbox from the most recent launch render (the
     /// docked strip below the option strip). A click here focuses the
@@ -555,9 +589,20 @@ pub struct LaunchState {
     /// Send-glyph hitbox inside the composer row. A click here submits the
     /// composed message through the normal dispatch path.
     pub send_area: Option<Rect>,
-    /// The launch card's highlighted menu entry (index into the four entries
-    /// the card paints, all of whose chords exist).
-    pub menu_selected: usize,
+    /// Clickable rects for the card's rows from the most recent launch
+    /// render, in the same order as
+    /// [`crate::tui::underwater::launch_card_rows`].
+    pub row_hitboxes: Vec<(LaunchRowId, Rect)>,
+    /// Card row under the pointer, if any (index into `row_hitboxes`).
+    /// Painted with the shared selected-row treatment so every clickable
+    /// element responds visibly on hover.
+    pub hovered_row: Option<usize>,
+    /// The launch card's highlighted row (index into the rows the card
+    /// paints). `None` until the user arrows onto the list: nothing is
+    /// pre-selected, so a reflexive Enter at launch does nothing rather
+    /// than starting or resuming a session by accident (founder live-test,
+    /// 2026-09-02). Esc clears it again.
+    pub menu_selected: Option<usize>,
     /// Ambient-clock millisecond reading when the card began dissolving, if
     /// it has. The first keystroke or a launched command dissolves the card
     /// (founder decision, 2026-09-02).
@@ -565,36 +610,59 @@ pub struct LaunchState {
     /// Claude Code config was detected on this host (probed once at
     /// construction); drives the launch card's migration notice line.
     pub claude_code_detected: bool,
+    /// Sixel-tier plumbing (`MarkTier::Sixel`), all `None` until used:
+    /// - `sixel_cell_px`: the terminal's cell size in pixels, measured once
+    ///   at startup so the raster encodes to the block's exact pixels.
+    /// - `sixel_terminal_bg`: the probed terminal background, for
+    ///   transparent (`Reset`) theme stages whose ground the terminal owns.
+    /// - `sixel_mark_area`: the block the last launch render reserved, in
+    ///   stage coordinates; reset every frame by the frame renderer.
+    /// - `sixel_emitted`: the live image's block, in the same stage
+    ///   coordinates (identical to screen cells in fullscreen), or `None`
+    ///   when nothing is drawn. Compared against the reservation so the
+    ///   event loop re-emits only on moves and clears on tier exit.
+    pub sixel_cell_px: Option<(u16, u16)>,
+    pub sixel_terminal_bg: Option<Color>,
+    pub sixel_mark_area: Option<Rect>,
+    pub sixel_emitted: Option<Rect>,
 }
 
 /// The launch card's dissolve motion budget. One bounded motion; reduced
 /// motion dissolves instantly (same drawing at its endpoint).
 pub(crate) const LAUNCH_CARD_DISSOLVE_MS: u128 = 240;
 
+/// Load the startup card's recent-work list: the workspace's own sessions,
+/// most recent first (`list_sessions` already sorts that way), skipping
+/// archived sessions and empty auto-created ones exactly like the resume
+/// picker and `--continue` do. Returns the inline-capped list plus the
+/// total behind it for the see-all overflow.
+fn load_launch_recent(workspace: &std::path::Path) -> (Vec<LaunchRecentSession>, usize) {
+    let sessions = crate::session_manager::SessionManager::default_location()
+        .and_then(|manager| manager.list_sessions())
+        .unwrap_or_default();
+    let mut scoped: Vec<LaunchRecentSession> = sessions
+        .into_iter()
+        .filter(|session| {
+            !session.archived
+                && !crate::session_manager::is_empty_auto_created_session(session)
+                && crate::session_manager::workspace_scope_matches(&session.workspace, workspace)
+        })
+        .map(|session| LaunchRecentSession {
+            id: session.id,
+            title: session.title,
+            updated_at: session.updated_at,
+            message_count: session.message_count,
+        })
+        .collect();
+    let total = scoped.len();
+    scoped.truncate(LAUNCH_RECENT_INLINE_LIMIT);
+    (scoped, total)
+}
+
 impl LaunchState {
     #[must_use]
     pub fn new(visible: bool, workspace: &std::path::Path) -> Self {
-        let workspace_session_count = crate::session_manager::SessionManager::default_location()
-            .and_then(|manager| manager.list_sessions())
-            .map(|sessions| {
-                sessions
-                    .into_iter()
-                    .filter(|session| {
-                        crate::session_manager::workspace_scope_matches(
-                            &session.workspace,
-                            workspace,
-                        )
-                    })
-                    .count()
-            })
-            .unwrap_or(0);
-        let worktree_available = std::process::Command::new("git")
-            .current_dir(workspace)
-            .args(["rev-parse", "--show-toplevel"])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success());
+        let (recent, total_workspace_sessions) = load_launch_recent(workspace);
         // The launch card's migration notice is only painted when it is true:
         // Claude Code leaves its sessions under `~/.claude/projects`. One
         // stat at construction, never on the render path.
@@ -609,17 +677,32 @@ impl LaunchState {
             .unwrap_or(false);
         Self {
             visible,
-            worktree_input: None,
             status: None,
-            workspace_session_count,
-            worktree_available,
+            workspace: workspace.to_path_buf(),
+            recent,
+            total_workspace_sessions,
             composer_focus: true,
             composer_area: None,
             send_area: None,
-            menu_selected: 0,
+            row_hitboxes: Vec::new(),
+            hovered_row: None,
+            menu_selected: None,
             dissolve_started_ms: None,
             claude_code_detected,
+            sixel_cell_px: None,
+            sixel_terminal_bg: None,
+            sixel_mark_area: None,
+            sixel_emitted: None,
         }
+    }
+
+    /// Re-read the recent-work list from disk (same filter as
+    /// construction). Called when the card is restored after a picker
+    /// closes so a session created or renamed behind the picker shows up.
+    pub fn refresh_recent(&mut self) {
+        let (recent, total) = load_launch_recent(&self.workspace.clone());
+        self.recent = recent;
+        self.total_workspace_sessions = total;
     }
 
     /// Begin the card dissolve once (idempotent). The first keystroke or a
@@ -628,6 +711,19 @@ impl LaunchState {
         if self.dissolve_started_ms.is_none() {
             self.dissolve_started_ms = Some(now_ms);
         }
+    }
+
+    /// Bring the card back after a launch flow (the sessions picker) is
+    /// left with Esc: every launch path has a way back to the card, so a
+    /// dismissed picker never strands the user on an empty stage. The list
+    /// comes back with nothing highlighted, and the recent-work list is
+    /// re-read so sessions created behind the picker show up.
+    pub fn restore_card(&mut self) {
+        self.dissolve_started_ms = None;
+        self.menu_selected = None;
+        self.hovered_row = None;
+        self.status = None;
+        self.refresh_recent();
     }
 
     /// How far the card has dissolved, `[0.0 intact ..= 1.0 gone]`. Reduced
@@ -813,6 +909,11 @@ pub struct ViewportState {
     /// Vertical padding above the first text line in the composer,
     /// stored at render time for mouse coordinate mapping.
     pub last_composer_top_padding: usize,
+    /// Slash-autocomplete rows painted inside the composer on the latest
+    /// frame. Cleared and rewritten during `ComposerWidget::render` so a
+    /// resized or closed menu cannot swallow a click. Index is the entry
+    /// index into the visible slash menu (same as `slash_menu_selected`).
+    pub last_slash_menu_hitboxes: RefCell<Vec<(usize, Rect)>>,
 }
 
 impl Default for ViewportState {
@@ -844,6 +945,7 @@ impl Default for ViewportState {
             last_composer_content: None,
             last_composer_scroll_offset: 0,
             last_composer_top_padding: 0,
+            last_slash_menu_hitboxes: RefCell::new(Vec::new()),
         }
     }
 }
@@ -1242,7 +1344,7 @@ pub type DispatchApplyFn = Box<
 #[allow(clippy::struct_excessive_bools)]
 /// A route change made in-session that the user has not yet decided how to
 /// save. Route changes are temporary by default; persisting them requires an
-/// explicit choice (Update this Pod / Save as a new Pod / Remember as my
+/// explicit choice (Update this Fleet / Save as a new Fleet / Remember as my
 /// default / Keep for this session only).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingRouteSave {
@@ -1610,7 +1712,6 @@ pub struct App {
     pub fancy_animations: bool,
     /// Typed appearance treatment; appearance is independent from motion
     /// settings, and every underwater treatment keeps ambient life.
-    pub ocean_treatment: crate::tui::ocean::OceanTreatment,
     /// Focus-context texture prototype mode (#4823), parsed once from the
     /// `focus_texture` setting. `Off` by default; while off the modal render
     /// path is byte-identical to the pre-prototype path.
@@ -2387,8 +2488,8 @@ impl App {
         self.screen_mode.uses_alt_screen()
     }
 
-    /// Persist the pending session route as the explicit choice (`/pod save`,
-    /// `/pod save-as`, `/model save-default`). Returns the receipt
+    /// Persist the pending session route as the explicit choice (`/fleet save`,
+    /// `/fleet save-as`, `/model save-default`). Returns the receipt
     /// message naming the exact file written — or an error message when the
     /// write failed. Nothing is ever written without this explicit call.
     pub fn apply_route_save_choice(
@@ -2404,8 +2505,8 @@ impl App {
         match choice {
             RouteSaveChoice::UpdateFleet => {
                 let Some((name, scope)) = pending.fleet.clone() else {
-                    return "Nothing to update — no Pod is selected. Use /pod save-as to \
-                             save this route as a new Pod."
+                    return "Nothing to update — no Fleet is selected. Use /fleet save-as to \
+                             save this route as a new Fleet."
                         .to_string();
                 };
                 match crate::fleet::store::load_fleet_in_scope(&name, scope, &self.workspace) {
@@ -2417,16 +2518,16 @@ impl App {
                         });
                         match save_fleet(&fleet, scope, &self.workspace) {
                             Ok(path) => format!(
-                                "Pod `{}` now runs on {route} — wrote {}",
+                                "Fleet `{}` now runs on {route} — wrote {}",
                                 fleet.name,
                                 path.display()
                             ),
-                            Err(err) => format!("Pod update failed: {err}"),
+                            Err(err) => format!("Fleet update failed: {err}"),
                         }
                     }
                     Err(err) => format!(
-                        "Pod update failed: {err} — the saved Pod may have moved. Use \
-                         /pod save-as to persist the route."
+                        "Fleet update failed: {err} — the saved Fleet may have moved. Use \
+                         /fleet save-as to persist the route."
                     ),
                 }
             }
@@ -2442,7 +2543,7 @@ impl App {
                     display.clone(),
                     Some("Saved from a session route choice.".to_string()),
                 ) else {
-                    return "Could not create the Pod.".to_string();
+                    return "Could not create the Fleet.".to_string();
                 };
                 fleet.operator = Some(FleetOperator {
                     provider: pending.provider_identity.clone(),
@@ -2467,7 +2568,7 @@ impl App {
                             Err(err) => format!(" — selection failed: {err}"),
                         };
                         format!(
-                            "Saved route {route} as new Pod `{}` — wrote {}{selected_note}",
+                            "Saved route {route} as new Fleet `{}` — wrote {}{selected_note}",
                             display,
                             path.display()
                         )
@@ -2779,17 +2880,8 @@ impl App {
     }
 
     pub fn set_mode(&mut self, mode: AppMode) -> bool {
-        let requested_mode = mode;
-        let mode = match mode {
-            AppMode::Yolo => AppMode::Agent,
-            other => other,
-        };
-        // YOLO is a permission change (Full Access + trust + shell), not a
-        // mode change. A locked approval policy owns that surface — every
-        // other posture route already honors the lock.
-        let yolo_compat = requested_mode == AppMode::Yolo && !self.approval_policy_locked();
         let previous_mode = self.mode;
-        if previous_mode == mode && !yolo_compat && !self.yolo {
+        if previous_mode == mode && !self.yolo {
             return false;
         }
 
@@ -2812,38 +2904,95 @@ impl App {
             };
         }
 
-        if yolo_compat {
-            // Transient full-access mirrors for legacy YOLO entry points; do not
-            // persist trust/shell elevation into the durable Agent baseline.
-            if self.shell_access_editable {
-                self.allow_shell = true;
-            }
-            self.trust_mode = true;
-            self.approval_mode = ApprovalMode::Bypass;
-            self.yolo = true;
-            self.notify_yolo_compat_once();
-        } else {
-            let policy = base_policy_for_mode(mode, &self.mode_prefs);
-            self.allow_shell = policy.allow_shell;
-            self.trust_mode = policy.trust_mode;
-            self.approval_mode = policy.approval_mode;
-            self.yolo = matches!(policy.approval_mode, ApprovalMode::Bypass);
-        }
+        let policy = base_policy_for_mode(mode, &self.mode_prefs);
+        self.allow_shell = policy.allow_shell;
+        self.trust_mode = policy.trust_mode;
+        self.approval_mode = policy.approval_mode;
+        self.yolo = matches!(policy.approval_mode, ApprovalMode::Bypass);
 
-        // Execute mode change hooks. Built from `base_hook_context` so this
-        // event carries the same session id, workspace, model, and token total
-        // as every other event — it used to omit `DEEPSEEK_SESSION_ID`
-        // entirely, which made mode transitions uncorrelatable with the
-        // session they belonged to.
+        self.finish_mode_change(previous_mode);
+        true
+    }
+
+    /// Legacy YOLO entry points (`--yolo` launch, Alt+Y, the `/mode` yolo
+    /// alias, `/zidong`). YOLO is a permission change (Full Access + trust + shell),
+    /// not a mode change: the installed mode stays Act and the elevated
+    /// authority lives in transient full-access mirrors, never in the durable
+    /// Agent baseline (#3386/#3279).
+    pub fn set_mode_yolo_compat(&mut self) -> bool {
+        // YOLO is a permission change. A locked approval policy must not be
+        // sidestepped by --yolo, default_mode=yolo, /zidong, or Alt+Y.
+        if self.approval_policy_locked() {
+            return false;
+        }
+        let previous_mode = self.mode;
+        // Same baseline-refresh rule as a mode hop: the elevation must not
+        // bleed into the restored Agent surface.
+        if previous_mode.uses_agent_baseline() && !self.yolo {
+            self.mode_prefs = ModeSessionPrefs {
+                agent_allow_shell: self.allow_shell,
+                agent_trust_mode: self.trust_mode,
+                agent_approval_mode: self.approval_mode,
+            };
+        }
+        // The legacy alias always lands in Act, never in Plan or Operate.
+        self.mode = AppMode::Agent;
+        // Transient full-access mirrors; do not persist trust/shell elevation
+        // into the durable Agent baseline.
+        if self.shell_access_editable {
+            self.allow_shell = true;
+        }
+        self.trust_mode = true;
+        self.approval_mode = ApprovalMode::Bypass;
+        self.yolo = true;
+        self.notify_yolo_compat_once();
+        self.finish_mode_change(previous_mode);
+        true
+    }
+
+    /// Apply the legacy YOLO selection from a user-facing entry point
+    /// (Alt+Y, the `/mode` yolo alias, `/zidong`). A locked approval policy owns the
+    /// permission surface and refuses here; otherwise this behaves like
+    /// [`Self::select_mode`] and persists the mode actually installed (Act).
+    pub fn select_yolo_compat(&mut self) -> SettingSelection {
+        if self.reject_setting_change_while_busy(MessageId::SettingSubjectMode) {
+            return SettingSelection::Refused;
+        }
+        if self.approval_policy_locked() {
+            self.push_status_toast(
+                "Permissions are controlled by config or managed requirements".to_string(),
+                StatusToastLevel::Warning,
+                Some(6_000),
+            );
+            self.needs_redraw = true;
+            return SettingSelection::Refused;
+        }
+        let changed = self.set_mode_yolo_compat();
+        self.startup_defaults
+            .spawn(crate::tui::startup_defaults::StartupDefaults::mode(
+                self.mode,
+            ));
+        if changed {
+            SettingSelection::Changed
+        } else {
+            SettingSelection::PersistedSame
+        }
+    }
+
+    /// Shared tail of every mode transition: ModeChange hooks plus redraw.
+    /// Built from `base_hook_context` so this event carries the same session
+    /// id, workspace, model, and token total as every other event — it used
+    /// to omit `DEEPSEEK_SESSION_ID` entirely, which made mode transitions
+    /// uncorrelatable with the session they belonged to.
+    fn finish_mode_change(&mut self, previous_mode: AppMode) {
         let context = self
             .base_hook_context()
-            .with_mode(mode.label())
+            .with_mode(self.mode.label())
             .with_previous_mode(previous_mode.label());
         if let Err(error) = self.submit_hooks(HookEvent::ModeChange, context) {
             self.surface_observer_hook_submission_failure(error);
         }
         self.needs_redraw = true;
-        true
     }
 
     /// Apply a *user-facing* mode selection: change the live session mode and
@@ -2854,9 +3003,10 @@ impl App {
     /// application use it because they are re-installing a mode the user
     /// already chose elsewhere, and re-persisting there would let a restored
     /// session silently rewrite the startup default. Every interactive
-    /// selector (Tab/Shift+Tab cycling, the Alt+A/P/Y shortcuts, the hotbar
+    /// selector (Tab/Shift+Tab cycling, the Alt+A/P shortcuts, the hotbar
     /// mode actions) goes through here instead, so "I switched to Operate"
-    /// survives a restart (reported by Hunter against v0.9.1).
+    /// survives a restart (reported by Hunter against v0.9.1). The legacy
+    /// YOLO entry points go through [`Self::select_yolo_compat`] instead.
     ///
     /// The write is queued, not performed here: it is ordered behind every
     /// earlier selection by [`StartupDefaultsWriter`], and a failure surfaces
@@ -2864,10 +3014,7 @@ impl App {
     /// dropped.
     ///
     /// What is persisted is `self.mode` — the mode `set_mode` actually
-    /// installed — not the requested enum. The legacy `Yolo` entry point installs
-    /// Act, so persisting the request would write a startup mode the user never
-    /// lands in. `AppMode::as_setting` collapses that alias too, but reading the
-    /// installed value keeps the two from having to agree.
+    /// installed — not the requested enum.
     ///
     /// The outcome is typed, not a bool, because three things can happen and
     /// only one of them means "nothing was saved":
@@ -2889,15 +3036,6 @@ impl App {
     /// [`StartupDefaultsWriter`]: crate::tui::startup_defaults::StartupDefaultsWriter
     pub fn select_mode(&mut self, mode: AppMode) -> SettingSelection {
         if self.reject_setting_change_while_busy(MessageId::SettingSubjectMode) {
-            return SettingSelection::Refused;
-        }
-        if matches!(mode, AppMode::Yolo) && self.approval_policy_locked() {
-            self.push_status_toast(
-                "Permissions are controlled by config or managed requirements".to_string(),
-                StatusToastLevel::Warning,
-                Some(6_000),
-            );
-            self.needs_redraw = true;
             return SettingSelection::Refused;
         }
         let changed = self.set_mode(mode);
@@ -4144,7 +4282,7 @@ impl App {
                 let role = agent.agent_type.as_str().trim();
                 (!role.is_empty()).then(|| role.to_string())
             })
-            .map(|role| crate::tools::subagent::public_role_label(&role))
+            .map(|role| crate::fleet::role::public_role_label(&role))
     }
 
     /// `true` for the `Agent N` counter placeholder assigned before a child's

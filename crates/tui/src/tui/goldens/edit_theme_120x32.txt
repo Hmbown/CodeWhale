@@ -1,0 +1,31 @@
+
+   Config  ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Edit Theme [theme]
+
+  Scope: SAVED
+  Current: underwater
+
+  Choose:
+       1. system
+       2. terminal
+    ▸  3. underwater
+       4. underwater-retro
+       5. dark
+       6. light
+       7. grayscale
+       8. catppuccin-mocha
+       9. tokyo-night
+      10. dracula
+      11. gruvbox-dark
+      12. claude
+      13. matrix
+      14. solarized-light
+      15. uwu
+
+
+
+  [ Apply ]  [ Cancel ]
+  ↑/↓ or click choose · Enter/Apply · Esc/Cancel · 1-9 jump
+
+ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

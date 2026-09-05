@@ -119,9 +119,9 @@ describe("Fleet compatibility boundary", () => {
     const doc = repoText("docs/FLEET.md");
     expect(doc).toContain("`codewhale fleet …`");
     expect(doc).toContain("`/fleet …`");
-    expect(doc).toContain("`codewhale pod …`");
-    expect(doc).toContain("`/pod …`");
-    expect(doc).toContain("`/pod` and `codewhale pod` remain accepted as compatibility aliases.");
+    // Pod was ripped out before ever shipping: no pod aliases documented.
+    expect(doc).not.toContain("`/pod`");
+    expect(doc).not.toContain("codewhale pod");
     for (const artifact of [
       ".codewhale/fleet.jsonl",
       "fleets/<name>.toml",

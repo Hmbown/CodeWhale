@@ -43,9 +43,10 @@ pub(crate) struct EffectiveModePolicy {
 /// This is the single source of truth for the mode/permission table:
 /// - `Plan`   -> read-only: no shell, no trust, `Suggest` approvals.
 /// - `Agent`  -> the user's durable baseline (`prefs`).
-/// - `Auto`   -> compatibility alias for Agent; not a separate behavior.
 /// - `Operate` -> Agent baseline plus orchestration capabilities in the runtime.
-/// - `Yolo`   -> legacy compat; full authority: shell + trust + `Bypass` approvals.
+///
+/// The legacy YOLO spelling resolves to Agent plus a `Bypass` approval
+/// posture before it reaches this table; modes no longer carry permission.
 #[must_use]
 pub(crate) fn base_policy_for_mode(mode: AppMode, prefs: &ModeSessionPrefs) -> EffectiveModePolicy {
     match mode {
@@ -55,17 +56,11 @@ pub(crate) fn base_policy_for_mode(mode: AppMode, prefs: &ModeSessionPrefs) -> E
             trust_mode: false,
             approval_mode: ApprovalMode::Suggest,
         },
-        AppMode::Agent | AppMode::Auto | AppMode::Operate => EffectiveModePolicy {
+        AppMode::Agent | AppMode::Operate => EffectiveModePolicy {
             mode,
             allow_shell: prefs.agent_allow_shell,
             trust_mode: prefs.agent_trust_mode,
             approval_mode: prefs.agent_approval_mode,
-        },
-        AppMode::Yolo => EffectiveModePolicy {
-            mode,
-            allow_shell: true,
-            trust_mode: true,
-            approval_mode: ApprovalMode::Bypass,
         },
     }
 }
@@ -188,17 +183,13 @@ impl TurnAuthority {
     /// Authority for the per-tool approval gate, folded from the legacy
     /// session `auto_approve` bit so [`resolve_tool_permission`] observes the
     /// same effective posture the old boolean helpers encoded: a set bit is
-    /// Full Access (Yolo/Bypass-shaped), a cleared bit is an ordinary Ask
+    /// the Full Access posture (Bypass), a cleared bit is an ordinary Ask
     /// turn. The engine's `Never` denial deliberately stays at the UI layer,
     /// so this constructor never produces a `Never` posture.
     #[must_use]
     pub(crate) fn for_tool_approval_decision(auto_approve: bool) -> Self {
         Self::from_effective_fields(
-            if auto_approve {
-                AppMode::Yolo
-            } else {
-                AppMode::Agent
-            },
+            AppMode::Agent,
             true,
             false,
             auto_approve,
@@ -242,7 +233,7 @@ pub(crate) fn effective_input_policy(
     auto_approve: bool,
     approval_mode: ApprovalMode,
 ) -> TurnAuthority {
-    let mut mode = requested_mode;
+    let mode = requested_mode;
     let mut trust_mode = trust_mode;
     let mut auto_approve = auto_approve;
     let mut approval_mode = approval_mode;
@@ -251,13 +242,8 @@ pub(crate) fn effective_input_policy(
     if !provenance_can_inherit_standing_auto_authority(provenance) {
         let from_mode = mode;
         let from_approval = approval_mode;
-        let had_auto_authority = matches!(mode, AppMode::Yolo)
-            || trust_mode
-            || auto_approve
-            || matches!(approval_mode, ApprovalMode::Bypass);
-        if matches!(mode, AppMode::Yolo) {
-            mode = AppMode::Agent;
-        }
+        let had_auto_authority =
+            trust_mode || auto_approve || matches!(approval_mode, ApprovalMode::Bypass);
         trust_mode = false;
         auto_approve = false;
         if matches!(approval_mode, ApprovalMode::Auto | ApprovalMode::Bypass) {
@@ -345,7 +331,7 @@ pub(crate) fn sandbox_policy_for_turn(
 ) -> SandboxPolicy {
     let default = if mode == AppMode::Plan {
         SandboxPolicy::ReadOnly
-    } else if mode == AppMode::Yolo || approval_mode == ApprovalMode::Bypass {
+    } else if approval_mode == ApprovalMode::Bypass {
         SandboxPolicy::DangerFullAccess
     } else {
         workspace_write_policy(workspace, network_access)
@@ -418,7 +404,7 @@ pub(crate) fn shell_policy_for_mode(mode: AppMode, allow_shell: bool) -> ShellPo
     }
     match mode {
         AppMode::Plan => ShellPolicy::None,
-        AppMode::Agent | AppMode::Auto | AppMode::Operate | AppMode::Yolo => ShellPolicy::Full,
+        AppMode::Agent | AppMode::Operate => ShellPolicy::Full,
     }
 }
 
@@ -443,9 +429,9 @@ pub(crate) enum ToolPermission {
 /// - `Auto` tools always run — even under `Never`, which stays read-only
 ///   rather than dead.
 /// - `Never` denies any tool that would otherwise prompt, but only when the
-///   authority is not full-access shaped: a Yolo/Bypass authority carrying a
-///   stale `Never` enum still auto-approves, matching the legacy UI order in
-///   which the full-access shortcut ran before the `Never` check.
+///   authority is not full-access shaped: a Bypass-shaped authority carrying
+///   a stale `Never` enum still auto-approves, matching the legacy UI order
+///   in which the full-access shortcut ran before the `Never` check.
 /// - `Suggest` and `Required` are both bypassable by auto-approve authority
 ///   unless the tool is on the typed non-bypassable hold list
 ///   (`is_non_bypassable`), which always prompts. A generic `Required` tool
@@ -459,7 +445,6 @@ pub(crate) fn resolve_tool_permission(
     if authority.approval_mode == ApprovalMode::Never
         && requirement != ApprovalRequirement::Auto
         && !authority.auto_approve
-        && authority.mode != AppMode::Yolo
     {
         return ToolPermission::Deny;
     }
@@ -471,16 +456,13 @@ pub(crate) fn resolve_tool_permission(
                 // shell included — so a hold that cannot open its own
                 // approval modal auto-approves instead of stranding the call.
                 // #3866 blocked here through v0.9.6; reversed 2026-08-10.
-                return if authority.auto_approve || authority.mode == AppMode::Yolo {
+                return if authority.auto_approve {
                     ToolPermission::Allow
                 } else {
                     ToolPermission::Prompt
                 };
             }
-            if authority.auto_approve
-                || authority.approval_mode == ApprovalMode::Bypass
-                || authority.mode == AppMode::Yolo
-            {
+            if authority.auto_approve || authority.approval_mode == ApprovalMode::Bypass {
                 ToolPermission::Allow
             } else {
                 ToolPermission::Prompt
@@ -503,7 +485,7 @@ pub(crate) fn write_carve_out_posture(
     auto_approve: bool,
 ) -> bool {
     !auto_approve
-        && matches!(mode, AppMode::Agent | AppMode::Auto | AppMode::Operate)
+        && matches!(mode, AppMode::Agent | AppMode::Operate)
         && approval_mode == ApprovalMode::Suggest
 }
 
@@ -727,11 +709,6 @@ mod tests {
             ApprovalMode::Bypass,
             true
         ));
-        assert!(!write_carve_out_posture(
-            AppMode::Yolo,
-            ApprovalMode::Bypass,
-            true
-        ));
         // Never still denies; Auto-Review still fails unresolved holds closed;
         // Plan is read-only by mode.
         assert!(!write_carve_out_posture(
@@ -911,11 +888,11 @@ mod tests {
             }
         }
 
-        // Yolo/Bypass is deliberately unsandboxed and keeps its semantics:
-        // DangerFullAccess reports network regardless of this key, because it
-        // applies no sandbox at all.
-        let yolo = authority(AppMode::Yolo, true, ApprovalMode::Bypass);
-        let policy = yolo.sandbox_policy(workspace, None, SandboxNetworkAccess::Restricted);
+        // The Bypass posture is deliberately unsandboxed and keeps its
+        // semantics: DangerFullAccess reports network regardless of this key,
+        // because it applies no sandbox at all.
+        let bypass = authority(AppMode::Agent, true, ApprovalMode::Bypass);
+        let policy = bypass.sandbox_policy(workspace, None, SandboxNetworkAccess::Restricted);
         assert_eq!(policy, SandboxPolicy::DangerFullAccess);
         assert!(policy.has_network_access());
 
@@ -986,7 +963,6 @@ mod tests {
             (AppMode::Agent, false, ApprovalMode::Auto),
             (AppMode::Agent, false, ApprovalMode::Never),
             (AppMode::Agent, true, ApprovalMode::Bypass),
-            (AppMode::Yolo, true, ApprovalMode::Bypass),
             (AppMode::Plan, false, ApprovalMode::Suggest),
         ] {
             let auth = authority(mode, auto_approve, approval_mode);
@@ -1019,7 +995,6 @@ mod tests {
     fn full_access_allows_bypassable_but_prompts_for_non_bypassable() {
         for auth in [
             authority(AppMode::Agent, true, ApprovalMode::Bypass),
-            authority(AppMode::Yolo, true, ApprovalMode::Bypass),
             TurnAuthority::for_tool_approval_decision(true),
         ] {
             for requirement in [ApprovalRequirement::Suggest, ApprovalRequirement::Required] {
@@ -1065,17 +1040,12 @@ mod tests {
             "Never remains read-only rather than dead"
         );
 
-        // Legacy host shape: full-access bit/Yolo mode with a stale Never enum
-        // still auto-approves — the UI's full-access shortcut ran before its
-        // Never check.
+        // Legacy host shape: a full-access bit with a stale Never enum still
+        // auto-approves — the UI's full-access shortcut ran before its Never
+        // check.
         let stale = authority(AppMode::Agent, true, ApprovalMode::Never);
         assert_eq!(
             resolve_tool_permission(&stale, ApprovalRequirement::Suggest, false),
-            ToolPermission::Allow
-        );
-        let yolo_never = authority(AppMode::Yolo, false, ApprovalMode::Never);
-        assert_eq!(
-            resolve_tool_permission(&yolo_never, ApprovalRequirement::Suggest, false),
             ToolPermission::Allow
         );
     }

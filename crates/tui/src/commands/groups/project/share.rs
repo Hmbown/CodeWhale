@@ -205,7 +205,10 @@ impl RegisterCommand<CommandResult> for ShareCmd {
     }
 
     fn handler() -> CommandHandler<CommandResult> {
-        CommandHandler::Contextual(share_contextual)
+        CommandHandler::Contextual {
+            capabilities: codewhale_command_contract::handler::CommandCapabilities::PROJECT,
+            handler: share_contextual,
+        }
     }
 }
 

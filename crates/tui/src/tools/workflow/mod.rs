@@ -30,14 +30,14 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::core::events::Event;
+use crate::fleet::role::public_role_label;
 use crate::tools::spec::{
     ApprovalRequirement, ToolCapability, ToolContext, ToolError, ToolResult, ToolSpec,
     optional_bool, optional_str, optional_u64,
 };
 use crate::tools::subagent::{
     SharedSubAgentManager, SubAgentCompletion, SubAgentManager, SubAgentResult, SubAgentRuntime,
-    SubAgentStatus, WorkflowTaskSpawnIdentity, WorkflowTaskSpawnMetadata, public_role_label,
-    spawn_workflow_task,
+    SubAgentStatus, WorkflowTaskSpawnIdentity, WorkflowTaskSpawnMetadata, spawn_workflow_task,
 };
 use crate::tools::verifier::run_workflow_completion_gates;
 use crate::tools::workflow_plan_approval::{
@@ -1286,15 +1286,10 @@ async fn start_workflow(
         state.attach_lifecycle(&run_id, lifecycle);
     }
 
-    // An exact Fleet runs on a run-scoped roster projected from its immutable
-    // snapshot, so every child resolves its member (and that member's exact
-    // provider pin) from the value frozen at start rather than from whatever
-    // the session roster holds now.
-    let mut runtime = runtime;
-    if let Some(operation) = fleet.exact() {
-        runtime.fleet_roster = operation.roster().clone();
-    }
-
+    // Role-only dispatch: workflow children resolve roles, never saved
+    // members. The exact Fleet's run-scoped roster stays inside its own
+    // driver (`fleet.exact()`); it is no longer installed on the spawn
+    // runtime.
     let driver = SubAgentWorkflowDriver::new(
         run_id.clone(),
         context.state_namespace.clone(),
@@ -4140,7 +4135,7 @@ impl SubAgentWorkflowDriver {
             }
             Some(bind_exact_fleet_task_request(
                 operation,
-                crate::fleet::exact::session_permission_ceiling(&self.runtime),
+                crate::tools::subagent::session_permission_ceiling(&self.runtime),
                 &mut request,
             )?)
         } else {
@@ -6139,15 +6134,18 @@ permissions = "read_only"
         let binding = bind_exact_fleet_task_request(&operation, exact_session(), &mut request)
             .expect("exact member resolves");
 
-        // Addressed by member id, so the run-scoped roster profile (which
-        // carries the exact provider pin and canonical wire model) is what the
+        // Addressed by member id, so the frozen snapshot route (which carries
+        // the exact provider pin and canonical wire model) is what the
         // spawn resolves…
         assert_eq!(request.profile.as_deref(), Some("implementer"));
         // …while the semantic role is preserved for gates and records.
         assert_eq!(request.role.as_deref(), Some("implement"));
-        let member = operation.roster().get("implementer").expect("roster");
-        assert_eq!(member.profile.provider.as_deref(), Some("zai"));
-        assert_eq!(member.profile.model.as_deref(), Some("glm-5"));
+        let member = operation
+            .snapshot()
+            .member("implementer")
+            .expect("snapshot entry");
+        assert_eq!(member.route.provider, "zai");
+        assert_eq!(member.route.model, "glm-5");
 
         // Runtime's role/parent intersection reached the request before routing.
         assert_eq!(request.write_authority.as_deref(), Some("workspace_write"));
@@ -6582,16 +6580,10 @@ permissions = "read_only"
             .await
             .expect("routing");
 
-        // The roster profile — and therefore the spawn metadata — carries the
-        // posture role, because that is what picked the child's tool surface.
-        let posture = operation
-            .roster()
-            .get("auditor")
-            .expect("roster entry")
-            .profile
-            .role
-            .name
-            .clone();
+        // The binding authority — and therefore the spawn metadata — carries
+        // the posture role, because that is what picked the child's tool
+        // surface.
+        let posture = binding.authority.posture_role.to_string();
         assert_eq!(posture, "custom");
         assert_eq!(receipt.posture_role.as_deref(), Some("custom"));
 
@@ -6908,10 +6900,12 @@ permissions = "read_only"
             .await
             .expect("launch after the edit");
 
-        let member = operation.roster().get("implementer").expect("roster");
+        let member = operation
+            .snapshot()
+            .member("implementer")
+            .expect("snapshot entry");
         assert_eq!(
-            member.profile.model.as_deref(),
-            Some("glm-5"),
+            member.route.model, "glm-5",
             "the in-flight snapshot must keep the model it started with"
         );
         assert_eq!(request.thinking.as_deref(), Some("max"));
@@ -6933,13 +6927,12 @@ permissions = "read_only"
             )),
         );
         assert_eq!(
-            next.roster()
-                .get("implementer")
-                .expect("roster")
-                .profile
-                .model
-                .as_deref(),
-            Some("glm-4")
+            next.snapshot()
+                .member("implementer")
+                .expect("snapshot entry")
+                .route
+                .model,
+            "glm-4"
         );
         assert_ne!(next.snapshot().content_hash(), started_hash);
     }
@@ -9418,7 +9411,7 @@ reviewer = "reviewer"
                         "gates": [
                             {
                                 "id": "terminal-release",
-                                "role": "release_lead",
+                                "role": "reviewer",
                                 "on": "role_complete",
                                 "gate": "approve",
                                 "on_fail": "block",
@@ -9433,7 +9426,7 @@ reviewer = "reviewer"
                                     "id": "release-receipt",
                                     "prompt": "Return the terminal verdict and receipt.",
                                     "agent_type": "general",
-                                    "role": "release_lead",
+                                    "role": "reviewer",
                                     "mode": "read_only",
                                     "permissions": { "deny_all_tools": true },
                                     "budget": { "max_steps": 1 }
@@ -10225,7 +10218,7 @@ FINAL RECEIPT
             ("implement", "builder"),
             ("reviewer", "reviewer"),
             ("test", "verifier"),
-            ("release_lead", "manager"),
+            ("release_lead", "advisor"),
         ];
         assert_eq!(started.len(), expected_roles.len(), "{started:#?}");
         for (event, (role, profile)) in started.iter().zip(expected_roles) {

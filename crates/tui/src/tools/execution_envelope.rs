@@ -2,7 +2,7 @@
 //! **executes**, **mutates**, or **reaches the network**.
 //!
 //! Before this module the answer was spread across three hand-maintained name
-//! lists ([`crate::fleet::exact::RAW_SHELL_DENYLIST`] and its siblings) plus a
+//! lists ([`crate::fleet::role::RAW_SHELL_DENYLIST`] and its siblings) plus a
 //! role posture that keyed on `ShellPolicy::Full`. That shape had a structural
 //! hole: a name list can only deny the execution primitives someone remembered
 //! to write down, and `shell = "full"` was being read as "may run arbitrary

@@ -6890,3 +6890,28 @@ async fn plugin_contributed_server_auth_required_names_its_env_credential_not_oa
 
     mock.task.abort();
 }
+
+#[test]
+fn mcp_display_target_shows_command_names_only() {
+    // stdio: no `./…` path prefix, no directories, no args.
+    assert_eq!(
+        mcp_display_target("stdio", "./mcp/custom-server --port 8080"),
+        "custom-server"
+    );
+    assert_eq!(mcp_display_target("stdio", "node server.js"), "node");
+    assert_eq!(mcp_display_target("stdio", "/usr/local/bin/foo -x"), "foo");
+    assert_eq!(
+        mcp_display_target("stdio", "C:\\tools\\mcp.exe --stdio"),
+        "mcp.exe"
+    );
+    assert_eq!(mcp_display_target("stdio", "(missing)"), "(missing)");
+    // URL transports keep the full URL: it is the identity.
+    assert_eq!(
+        mcp_display_target("http/sse", "https://example.invalid/mcp"),
+        "https://example.invalid/mcp"
+    );
+    assert_eq!(
+        mcp_display_target("sse", "https://example.invalid/sse?token=abc"),
+        "https://example.invalid/sse?token=abc"
+    );
+}

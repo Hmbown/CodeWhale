@@ -74,7 +74,7 @@ impl InlineDiffMode {
 /// # Example `~/.codewhale/tui.toml`
 ///
 /// ```toml
-/// theme    = "terminal"    # host-owned background; "dark" | "light" | "grayscale" | ... remain available
+/// theme    = "underwater"    # painted ocean field; "terminal" | "dark" | "light" | "grayscale" | ... remain available
 /// font_size = 14
 ///
 /// [keybinds]
@@ -86,8 +86,9 @@ impl InlineDiffMode {
 #[serde(default)]
 pub struct TuiPrefs {
     /// UI colour theme.
-    /// Default `"terminal"`, which leaves foreground and background to the
-    /// host terminal while retaining ANSI-safe semantic accents.
+    /// Default `"underwater"`, the painted ocean field. `"terminal"` leaves
+    /// foreground and background to the host terminal while retaining
+    /// ANSI-safe semantic accents.
     pub theme: String,
     /// Terminal font size hint forwarded to supporting front-ends (e.g. the
     /// Tauri shell). `0` means "use terminal default". Default `0`.
@@ -100,7 +101,7 @@ pub struct TuiPrefs {
 impl Default for TuiPrefs {
     fn default() -> Self {
         Self {
-            theme: "terminal".to_string(),
+            theme: "underwater".to_string(),
             font_size: 0,
             keybinds: KeybindPrefs::default(),
         }
@@ -314,9 +315,6 @@ pub struct Settings {
     /// Enable expressive live-state motion. This affects chrome and state
     /// affordances only; model text always follows upstream stream deltas.
     pub fancy_animations: bool,
-    /// Background treatment: `deepsea` paints the terminal-native water column;
-    /// `flat` preserves all state marks on the theme's plain surface.
-    pub ocean_treatment: String,
     /// Focus-context texture prototype for modal views (#4823): `off`
     /// (default), `scrim` dims the area outside the focused modal, `grain`
     /// sprinkles deterministic dots over blank cells there. Static texture,
@@ -395,12 +393,13 @@ pub struct Settings {
     /// ca, de, fr, id, hi, ru, uk.
     /// Every shipped pack holds full `en.json` parity; nothing falls back.
     pub locale: String,
-    /// Named UI theme. `"terminal"` is the fresh-install default and fully
-    /// inherits the host terminal's foreground/background. `"system"`,
-    /// `"dark"`, `"light"`, `"grayscale"`, and the community
-    /// presets: `"catppuccin-mocha"`, `"tokyo-night"`, `"dracula"`,
-    /// `"gruvbox-dark"`. The `background_color` setting still overrides the
-    /// surface color on top of the resolved theme.
+    /// Named UI theme. `"underwater"` is the fresh-install default and paints
+    /// the ocean field. `"terminal"` fully inherits the host terminal's
+    /// foreground/background. `"system"`, `"dark"`, `"light"`,
+    /// `"grayscale"`, and the community presets: `"catppuccin-mocha"`,
+    /// `"tokyo-night"`, `"dracula"`, `"gruvbox-dark"`. The
+    /// `background_color` setting still overrides the surface color on top
+    /// of the resolved theme.
     pub theme: String,
     /// Optional main TUI background color as a 6-digit hex RGB value.
     pub background_color: Option<String>,
@@ -562,11 +561,8 @@ impl Default for Settings {
             low_motion: false,
             load_error: None,
             fancy_animations: true,
-            // A fresh terminal follows the host surface. Deep/ocean treatment
-            // remains an explicit appearance choice rather than a backdrop
-            // painted over every terminal the user brings.
-            ocean_treatment: "flat".to_string(),
             focus_texture: "off".to_string(),
+
             // Round 3 (2026-09-01): the bar's information lives under the
             // composer. Side rails are opt-in and fall back to the top strip
             // on narrow terminals.
@@ -595,7 +591,7 @@ impl Default for Settings {
             show_tool_details: false,
             inline_diffs: "full".to_string(),
             locale: "auto".to_string(),
-            theme: "terminal".to_string(),
+            theme: "underwater".to_string(),
             background_color: None,
             composer_density: "comfortable".to_string(),
             composer_border: true,
@@ -646,13 +642,6 @@ pub const CALM_PRESET_FIELDS: &[(&str, &str)] = &[
     ("fancy_animations", "false"),
     ("show_tool_details", "false"),
 ];
-
-fn normalize_ocean_treatment(value: &str) -> &'static str {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "deepsea" | "underwater" | "ombre" | "gradient" | "classic" => "deepsea",
-        _ => "flat",
-    }
-}
 
 fn normalize_work_surface_placement(value: &str) -> &'static str {
     match value.trim().to_ascii_lowercase().as_str() {
@@ -916,6 +905,27 @@ impl Settings {
             }) {
                 s.auto_compact = true;
             }
+
+            // Compat boundary (2026-09-02): `ocean_treatment` was a modifier
+            // on `theme`; the painted field is now the `underwater` theme
+            // itself. Fold any persisted deepsea treatment into
+            // `theme = "underwater"`, then drop the retired key on the next
+            // ordinary save (the struct simply has no such field).
+            if let Some(_treatment) = parsed_document
+                .as_ref()
+                .and_then(toml::Value::as_table)
+                .and_then(|table| table.get("ocean_treatment"))
+                .and_then(toml::Value::as_str)
+                .filter(|treatment| {
+                    matches!(
+                        treatment.trim().to_ascii_lowercase().as_str(),
+                        "deepsea" | "underwater" | "ombre" | "gradient" | "classic"
+                    )
+                })
+            {
+                s.theme = "underwater".to_string();
+            }
+
             // "yolo" used to bundle two independent choices: Agent mode and
             // unrestricted approvals.  Keep that behavior on upgrade, but
             // store/show the two choices explicitly so Settings does not claim
@@ -935,7 +945,6 @@ impl Settings {
             // gone, so its settings carry forward instead of stranding.
             migrate_sidebar_settings_to_rail(&mut s);
             s.status_indicator = normalize_status_indicator(&s.status_indicator).to_string();
-            s.ocean_treatment = normalize_ocean_treatment(&s.ocean_treatment).to_string();
             s.work_surface_placement =
                 normalize_work_surface_placement(&s.work_surface_placement).to_string();
             s.rail_panel = normalize_rail_panel(&s.rail_panel).to_string();
@@ -1334,18 +1343,6 @@ impl Settings {
             "fancy_animations" | "fancy" | "animations" => {
                 self.fancy_animations = parse_bool(value)?;
             }
-            "ocean_treatment" | "treatment" | "background_treatment" => {
-                let normalized = value.trim().to_ascii_lowercase();
-                self.ocean_treatment = match normalized.as_str() {
-                    "deepsea" | "underwater" | "ombre" | "gradient" | "classic" => {
-                        "deepsea".to_string()
-                    }
-                    "flat" | "terminal" | "none" => "flat".to_string(),
-                    _ => anyhow::bail!(
-                        "Failed to update setting: invalid ocean treatment '{value}'. Expected: deepsea or flat."
-                    ),
-                };
-            }
             "focus_texture" | "texture" => {
                 let normalized = value.trim().to_ascii_lowercase();
                 if !matches!(normalized.as_str(), "off" | "scrim" | "grain") {
@@ -1369,15 +1366,25 @@ impl Settings {
             }
             "rail_panel" | "rail" => {
                 let normalized = value.trim().to_ascii_lowercase();
+                // `pinned` stays accepted as a setting word; it folds into
+                // the tasks view exactly like the load-time migration.
                 if !matches!(
                     normalized.as_str(),
-                    "tasks" | "agents" | "context" | "pinned"
+                    "tasks"
+                        | "agents"
+                        | "background"
+                        | "files"
+                        | "notepad"
+                        | "context"
+                        | "git"
+                        | "price"
+                        | "pinned"
                 ) {
                     anyhow::bail!(
-                        "Failed to update setting: invalid rail panel '{value}'. Expected: tasks, agents, context, or pinned."
+                        "Failed to update setting: invalid workbar panel '{value}'. Expected: tasks, agents, background, files, notepad, context, git, or price."
                     );
                 }
-                self.rail_panel = normalized;
+                self.rail_panel = normalize_rail_panel(&normalized).to_string();
                 self.rail_panel_explicit = true;
             }
             "work_surface_top_height" | "work_top_height" => {
@@ -1635,7 +1642,6 @@ impl Settings {
         lines.push(format!("  tool_collapse:      {}", self.tool_collapse_mode));
         lines.push(format!("  low_motion:         {}", self.low_motion));
         lines.push(format!("  fancy_animations:   {}", self.fancy_animations));
-        lines.push(format!("  ocean_treatment:    {}", self.ocean_treatment));
         lines.push(format!("  focus_texture:      {}", self.focus_texture));
         lines.push(format!(
             "  work_surface:       {}",
@@ -1776,10 +1782,6 @@ impl Settings {
             ),
             ("fancy_animations", "Expressive live-state motion: on/off"),
             (
-                "ocean_treatment",
-                "Transcript background treatment: deepsea/flat (independent of motion)",
-            ),
-            (
                 "focus_texture",
                 "Modal focus-context texture prototype: off/scrim/grain (default off)",
             ),
@@ -1896,11 +1898,11 @@ impl Settings {
             ),
             (
                 "context_panel",
-                "Show the session context sidebar panel: on/off",
+                "Show the session context workbar panel: on/off",
             ),
             (
                 "sessions_rail",
-                "Show the persistent Sessions rail in the sidebar: on/off (default off)",
+                "Show the persistent Sessions workbar: on/off (default off)",
             ),
             (
                 "session_auto_resume",
@@ -2736,9 +2738,9 @@ fn normalize_synchronized_output(value: &str) -> &str {
 
 fn normalize_settings_theme(value: &str) -> String {
     // A malformed persisted selector must not turn into a painted application
-    // background. Falling back to Terminal preserves the host surface and
-    // ANSI semantics until the user picks an explicit palette.
-    normalize_theme_setting(value).unwrap_or_else(|_| "terminal".to_string())
+    // background. Falling back to the underwater default keeps a single
+    // compiled first-party theme until the user picks an explicit palette.
+    normalize_theme_setting(value).unwrap_or_else(|_| "underwater".to_string())
 }
 
 /// Returns `true` when the active terminal is Ptyxis (the new default
@@ -3155,29 +3157,50 @@ mod tests {
     }
 
     #[test]
-    fn ocean_treatment_is_appearance_not_motion() {
-        let mut settings = Settings::default();
-        assert_eq!(settings.ocean_treatment, "flat");
-        assert!(!settings.low_motion);
+    fn retired_ocean_treatment_folds_into_the_underwater_theme() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("settings.toml");
+        std::fs::write(&path, "theme = \"light\"\nocean_treatment = \"deepsea\"\n")
+            .expect("legacy settings");
 
-        settings.set("ocean_treatment", "flat").unwrap();
-        assert_eq!(settings.ocean_treatment, "flat");
-        assert!(!settings.low_motion, "appearance must not change motion");
-
-        settings.set("ocean_treatment", "deepsea").unwrap();
-        assert_eq!(settings.ocean_treatment, "deepsea");
-        settings.set("ocean_treatment", "ombre").unwrap();
+        let settings = Settings::load_persisted_from_candidates(Some(path.clone()), None, None)
+            .expect("legacy setting must remain readable");
         assert_eq!(
-            settings.ocean_treatment, "deepsea",
-            "legacy values migrate one way to the public Deepsea contract"
+            settings.theme, "underwater",
+            "the persisted painted field is the user-visible fact; it becomes the theme"
         );
-        settings.set("ocean_treatment", "underwater").unwrap();
-        assert_eq!(settings.ocean_treatment, "deepsea");
-        assert_eq!(normalize_ocean_treatment("Underwater"), "deepsea");
-        assert_eq!(normalize_ocean_treatment("kelp"), "flat");
 
-        let err = settings.set("ocean_treatment", "kelp").unwrap_err();
-        assert!(err.to_string().contains("deepsea or flat"));
+        settings
+            .save_to_path(&path)
+            .expect("save normalized settings");
+        let saved = std::fs::read_to_string(&path).expect("read normalized settings");
+        assert!(
+            !saved.contains("ocean_treatment"),
+            "the retired key must not be written back: {saved}"
+        );
+        assert!(saved.contains("theme = \"underwater\""), "{saved}");
+    }
+
+    #[test]
+    fn flat_ocean_treatment_leaves_the_theme_alone_and_is_dropped() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("settings.toml");
+        std::fs::write(&path, "theme = \"light\"\nocean_treatment = \"flat\"\n")
+            .expect("legacy settings");
+
+        let settings = Settings::load_persisted_from_candidates(Some(path.clone()), None, None)
+            .expect("legacy setting must remain readable");
+        assert_eq!(
+            settings.theme, "light",
+            "flat never opted into a painted field"
+        );
+
+        settings
+            .save_to_path(&path)
+            .expect("save normalized settings");
+        let saved = std::fs::read_to_string(&path).expect("read normalized settings");
+        assert!(!saved.contains("ocean_treatment"), "{saved}");
+        assert!(saved.contains("theme = \"light\""), "{saved}");
     }
 
     #[test]
@@ -3205,11 +3228,22 @@ mod tests {
     }
 
     #[test]
-    fn rail_panel_persists_tasks_agents_context_and_pinned() {
+    fn rail_panel_persists_every_dock_panel_and_folds_pinned_into_tasks() {
         let mut settings = Settings::default();
         assert_eq!(settings.rail_panel, "tasks");
 
-        for panel in ["agents", "context", "pinned", "tasks"] {
+        // Every panel the dock cycles through must survive `set` and a
+        // settings.toml round trip — the dock persists all eight.
+        for panel in [
+            "tasks",
+            "agents",
+            "background",
+            "files",
+            "notepad",
+            "context",
+            "git",
+            "price",
+        ] {
             settings.set("rail_panel", panel).expect("valid panel");
             assert_eq!(settings.rail_panel, panel);
             let body = toml::to_string(&settings).expect("serialize settings");
@@ -3217,12 +3251,18 @@ mod tests {
             assert_eq!(restored.rail_panel, panel);
         }
 
+        // `pinned` stays accepted as a setting word but persists as the
+        // canonical tasks view, matching the load-time migration.
+        settings.set("rail_panel", "agents").expect("reset panel");
+        settings.set("rail_panel", "pinned").expect("pinned alias");
+        assert_eq!(settings.rail_panel, "tasks");
+
         let err = settings
             .set("rail_panel", "auto")
             .expect_err("auto-collapse was dropped with the legacy sidebar");
         assert!(
             err.to_string()
-                .contains("tasks, agents, context, or pinned")
+                .contains("tasks, agents, background, files, notepad, context, git, or price")
         );
         assert_eq!(settings.rail_panel, "tasks");
     }
@@ -3765,9 +3805,22 @@ mod tests {
     }
 
     #[test]
+    fn default_settings_resolve_to_the_underwater_theme() {
+        // Slice C: the fresh-install default is the underwater theme, end to
+        // end from `Settings::default()` through theme resolution.
+        let settings = Settings::default();
+        assert_eq!(settings.theme, "underwater");
+        let (name, id, theme) =
+            crate::palette::resolve_theme_setting(&settings.theme, None).expect("default resolves");
+        assert_eq!(id, crate::palette::ThemeId::Underwater);
+        assert_eq!(name, "underwater");
+        assert_eq!(theme.name, "underwater");
+    }
+
+    #[test]
     fn theme_normalizes_supported_values_and_rejects_unknowns() {
         let mut settings = Settings::default();
-        assert_eq!(settings.theme, "terminal");
+        assert_eq!(settings.theme, "underwater");
 
         settings.set("theme", "grayscale").expect("set grayscale");
         assert_eq!(settings.theme, "grayscale");
@@ -5080,7 +5133,7 @@ mod tests {
         let loaded = Settings::load().expect("load settings");
 
         assert_eq!(
-            loaded.theme, "terminal",
+            loaded.theme, "underwater",
             "explicit CODEWHALE_HOME must not inherit ambient legacy settings"
         );
         assert_eq!(
@@ -5195,7 +5248,7 @@ mod tests {
     #[test]
     fn tui_prefs_defaults_inherit_the_terminal_zero_font() {
         let prefs = TuiPrefs::default();
-        assert_eq!(prefs.theme, "terminal");
+        assert_eq!(prefs.theme, "underwater");
         assert_eq!(prefs.font_size, 0);
         assert!(prefs.keybinds.submit.is_none());
         assert!(prefs.keybinds.new_line.is_none());
@@ -5291,7 +5344,10 @@ mod tests {
         std::fs::create_dir_all(&tmp).unwrap();
         let _config_override = EnvVarRestore::set("DEEPSEEK_CONFIG_PATH", tmp.join("config.toml"));
         let prefs = TuiPrefs::load().expect("load should not fail when file absent");
-        assert_eq!(prefs.theme, "terminal", "should fall back to default theme");
+        assert_eq!(
+            prefs.theme, "underwater",
+            "should fall back to default theme"
+        );
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

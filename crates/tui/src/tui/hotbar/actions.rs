@@ -592,7 +592,7 @@ impl HotbarActionSource for BuiltinHotbarActionSource {
             "mode.operate",
             "operate",
             "Operate mode",
-            "Send tasks while Pod workers run in parallel.",
+            "Send tasks while Fleet workers run in parallel.",
             AppHotbarKind::Mode(AppMode::Operate),
         ));
         registry.register(AppHotbarAction::new(
@@ -605,8 +605,8 @@ impl HotbarActionSource for BuiltinHotbarActionSource {
         registry.register(AppHotbarAction::new(
             "sidebar.toggle",
             "side",
-            "Toggle sidebar",
-            "Show or hide the sidebar.",
+            "Toggle workbar",
+            "Show or hide the workbar.",
             AppHotbarKind::SidebarToggle,
         ));
         registry.register(AppHotbarAction::new(
@@ -765,9 +765,7 @@ impl HotbarActionSource for ConfiguredRouteHotbarActionSource<'_> {
 impl HotbarActionRegistry {
     #[must_use]
     pub fn get(&self, id: &str) -> Option<Arc<dyn HotbarAction>> {
-        self.actions
-            .get(codewhale_config::normalize_hotbar_action_id(id))
-            .cloned()
+        self.actions.get(id).cloned()
     }
 
     #[must_use]
@@ -912,11 +910,7 @@ impl AppHotbarAction {
             AppHotbarKind::SessionCompact => MessageId::HotbarActionSessionCompactName,
             AppHotbarKind::Mode(AppMode::Plan) => MessageId::HotbarActionModePlanName,
             AppHotbarKind::Mode(AppMode::Agent) => MessageId::HotbarActionModeAgentName,
-            AppHotbarKind::Mode(AppMode::Yolo) => MessageId::HotbarActionModeYoloName,
             AppHotbarKind::Mode(AppMode::Operate) => MessageId::HotbarActionModeOperateName,
-            AppHotbarKind::Mode(AppMode::Auto) => {
-                return None;
-            }
             AppHotbarKind::ReasoningCycle => MessageId::HotbarActionReasoningCycleName,
             AppHotbarKind::SidebarToggle => MessageId::HotbarActionSidebarToggleName,
             AppHotbarKind::FileTreeToggle => MessageId::HotbarActionFileTreeToggleName,
@@ -931,11 +925,7 @@ impl AppHotbarAction {
             AppHotbarKind::SessionCompact => MessageId::HotbarActionSessionCompactDescription,
             AppHotbarKind::Mode(AppMode::Plan) => MessageId::HotbarActionModePlanDescription,
             AppHotbarKind::Mode(AppMode::Agent) => MessageId::HotbarActionModeAgentDescription,
-            AppHotbarKind::Mode(AppMode::Yolo) => MessageId::HotbarActionModeYoloDescription,
             AppHotbarKind::Mode(AppMode::Operate) => MessageId::HotbarActionModeOperateDescription,
-            AppHotbarKind::Mode(AppMode::Auto) => {
-                return None;
-            }
             AppHotbarKind::ReasoningCycle => MessageId::HotbarActionReasoningCycleDescription,
             AppHotbarKind::SidebarToggle => MessageId::HotbarActionSidebarToggleDescription,
             AppHotbarKind::FileTreeToggle => MessageId::HotbarActionFileTreeToggleDescription,
@@ -1027,11 +1017,11 @@ impl HotbarAction for AppHotbarAction {
                 {
                     app.work_surface.placement =
                         crate::tui::work_surface::WorkSurfacePlacement::Bottom;
-                    app.status_message = Some("Rail: bottom placement".to_string());
+                    app.status_message = Some("Workbar: bottom placement".to_string());
                 } else {
                     app.work_surface.placement =
                         crate::tui::work_surface::WorkSurfacePlacement::Off;
-                    app.status_message = Some("Rail is off".to_string());
+                    app.status_message = Some("Workbar is off".to_string());
                 }
                 app.needs_redraw = true;
                 Ok(HotbarDispatch::Handled)
@@ -2184,18 +2174,11 @@ mod tests {
     }
 
     #[test]
-    fn persisted_slash_pod_binding_dispatches_the_canonical_fleet_action() {
+    fn retired_slash_pod_binding_stays_unbound() {
         let registry = HotbarActionRegistry::with_builtins();
-        let legacy = registry
-            .get("slash.pod")
-            .expect("legacy persisted id resolves through the compatibility boundary");
-        assert_eq!(legacy.id(), "slash.fleet");
-        assert_eq!(legacy.metadata(Locale::En).display_name, "/fleet");
-
-        let mut app = test_app();
-        assert_eq!(
-            legacy.dispatch(&mut app).expect("dispatch legacy binding"),
-            HotbarDispatch::AppAction(AppAction::OpenFleetRoster)
+        assert!(
+            registry.get("slash.pod").is_none(),
+            "the retired pod id must not resolve to any action"
         );
     }
 

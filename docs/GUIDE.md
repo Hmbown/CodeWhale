@@ -211,7 +211,7 @@ The interactive TUI has a few stable regions:
 - Transcript: the conversation, tool calls, command output summaries, and
   model responses.
 - Composer: where you type prompts, slash commands, and file mentions.
-- Work bar: the strip above the transcript (or an optional side rail) that
+- Workbar: the strip under the composer (or an optional side workbar) that
   holds the active goal, the to-do list, and sub-agents. Rows stay for the
   whole session — finished work reads as done rather than disappearing — and
   clicking a row (or pressing `Enter` on it) opens its detail.
@@ -247,7 +247,7 @@ The composer accepts normal prompts and slash commands. Type `/` to discover
 available commands. Use file mentions when you want the model to focus on a
 specific file or directory instead of searching broadly.
 
-The work bar is useful when a turn spans multiple steps. It keeps the goal,
+The workbar is useful when a turn spans multiple steps. It keeps the goal,
 the to-do list, and agent state visible while the transcript continues to
 grow — including after the work settles, so you can still open what happened.
 
@@ -359,8 +359,7 @@ Next for durable multi-worker work: [FLEET_WORKFLOW_TUTORIAL.md](FLEET_WORKFLOW_
 walks through fleet task specs, monitoring, and Workflow authoring.
 
 Fleet is the public noun for the durable roster. `codewhale fleet …` is
-the canonical command and `/fleet` the canonical slash command. `/pod` and
-`codewhale pod` remain accepted as compatibility aliases. The Fleet name is
+the command and `/fleet` the slash command. The Fleet name is
 shared by what has to stay stable across versions: the durable ledger
 `.codewhale/fleet.jsonl`, saved rosters `fleets/<name>.toml`, the `[fleet]` and
 `[fleets.*]` config tables, and the `codewhale workflow run --fleet` flag.

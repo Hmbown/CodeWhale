@@ -29,7 +29,7 @@ fn draw_stage(width: u16, height: u16) -> String {
             ascii_safe: false,
             locale: Locale::En,
         };
-        let theme_list = TidelineThemeList::new(&UI_THEME, 3).motion(false, true);
+        let theme_list = TidelineThemeList::new(&UI_THEME, 4).motion(false, true);
         let preview = TidelineSettingsPreview {
             active_theme: &UI_THEME,
             candidate: &UI_THEME,
@@ -65,7 +65,7 @@ fn settings_stage_matches_goldens_at_blocker_sizes() {
 }
 
 #[test]
-fn settings_rail_lists_eight_categories_and_meta_rows() {
+fn settings_rail_lists_seven_categories_and_meta_rows() {
     let rail = TidelineSettingsRail {
         theme: &UI_THEME,
         selected: 0,
@@ -76,7 +76,7 @@ fn settings_rail_lists_eight_categories_and_meta_rows() {
         render_tideline_settings_rail(Rect::new(0, 0, 20, 30), buf, &rail);
     });
     let categories = tideline_settings_categories(Locale::En);
-    assert_eq!(categories.len(), 8);
+    assert_eq!(categories.len(), 7);
     // One taxonomy: the stage rail lists exactly ConfigView's categories.
     for (label, category) in categories.iter().zip(ConfigCategory::ALL) {
         assert_eq!(label.as_ref(), category.label(Locale::En).as_ref());
@@ -93,7 +93,7 @@ fn settings_rail_lists_eight_categories_and_meta_rows() {
 
 #[test]
 fn settings_strip_windows_to_the_selected_category_with_painted_hitboxes() {
-    for (width, selected) in [(38u16, 7usize), (44, 7), (60, 4), (76, 0), (96, 7)] {
+    for (width, selected) in [(38u16, 6usize), (44, 6), (60, 4), (76, 0), (96, 6)] {
         let rail = TidelineSettingsRail {
             theme: &UI_THEME,
             selected,
@@ -126,12 +126,12 @@ fn settings_strip_windows_to_the_selected_category_with_painted_hitboxes() {
 }
 
 #[test]
-fn theme_list_shows_thirteen_themes_boxed_selection_and_motion_toggles() {
-    let list = TidelineThemeList::new(&UI_THEME, 3).motion(false, true);
+fn theme_list_shows_fourteen_themes_boxed_selection_and_motion_toggles() {
+    let list = TidelineThemeList::new(&UI_THEME, 4).motion(false, true);
     let text = render_golden_text(30, 24, |buf| {
         render_tideline_theme_list(Rect::new(0, 0, 30, 24), buf, &list);
     });
-    assert_eq!(SELECTABLE_THEMES.len(), 13, "4 mode rows + 9 presets");
+    assert_eq!(SELECTABLE_THEMES.len(), 15, "4 mode rows + 11 presets");
     for name in [
         "System",
         "Terminal",
@@ -141,9 +141,12 @@ fn theme_list_shows_thirteen_themes_boxed_selection_and_motion_toggles() {
     ] {
         assert!(text.contains(name), "missing {name}: {text}");
     }
-    // Index 3 is the fourth mode row (Blue Stage Light).
+    // Index 4 is Blue Stage; Underwater + Underwater Retro sit between
+    // Terminal and Blue Stage.
+    assert!(text.contains("Underwater"), "{text}");
+    assert!(text.contains("Underwater Retro"), "{text}");
     assert!(
-        text.contains("[ ✓ Blue Stage Light ]"),
+        text.contains("[ ✓ Blue Stage ]"),
         "selected row boxed with check: {text}"
     );
     assert!(text.contains("MOTION (OPTIONAL)"), "{text}");
@@ -171,7 +174,7 @@ fn live_preview_is_a_real_projection_of_the_real_renderers() {
     assert!(text.contains("PREVIEW · Blue Stage"), "{text}");
     assert!(text.contains("└── whale-2"), "real pod tree: {text}");
     assert!(text.contains("● working"), "real receipt marks: {text}");
-    assert!(text.contains("POD LEDGER"), "real ledger: {text}");
+    assert!(text.contains("FLEET LEDGER"), "real ledger: {text}");
     assert!(text.contains("╭"), "real composer chrome: {text}");
     assert!(text.contains("╮"), "real composer corner: {text}");
     assert!(
@@ -234,7 +237,7 @@ fn settings_rail_and_theme_list_hitboxes_match_painted_rows() {
     let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
     render_tideline_theme_list(form, &mut buf, &list);
     let boxes = tideline_theme_list_hitboxes(form, &list);
-    assert_eq!(boxes.len(), 15, "13 theme rows + 2 motion toggles");
+    assert_eq!(boxes.len(), 17, "15 theme rows + 2 motion toggles");
     for rect in &boxes {
         let cells: String = (rect.x..rect.x + rect.width)
             .map(|x| buf[(x, rect.y)].symbol().to_string())

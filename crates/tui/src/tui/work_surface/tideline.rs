@@ -1,5 +1,5 @@
 //! Tideline rail — the left column of the work screen (spec §5a "Rail",
-//! §5b work layout): five groups (RUNS / WHALES / POD / WORK / CONTEXT),
+//! §5b work layout): five groups (RUNS / WHALES / FLEET / WORK / CONTEXT),
 //! then help/settings, and the `«` collapse. This is **additive** rendering
 //! per the spec — #5699's shell semantics (placement, panels, hitboxes,
 //! interaction) are untouched; the Tideline rail is the approved screen's
@@ -45,7 +45,7 @@ pub struct TidelineRailGroup {
 #[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub struct TidelineRail<'a> {
     pub theme: &'a UiTheme,
-    /// The five groups in display order: RUNS, WHALES, POD, WORK, CONTEXT.
+    /// The five groups in display order: RUNS, WHALES, FLEET, WORK, CONTEXT.
     pub groups: &'a [TidelineRailGroup],
     /// Collapsed state — a 2-column `»` expander remains.
     pub collapsed: bool,
@@ -206,13 +206,13 @@ pub fn render_tideline_rail(area: Rect, buf: &mut Buffer, rail: &TidelineRail<'_
 }
 
 /// The five-group fixture projection used by goldens and the preview pane:
-/// RUNS / WHALES / POD / WORK / CONTEXT in display order.
+/// RUNS / WHALES / FLEET / WORK / CONTEXT in display order.
 #[must_use]
 #[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub fn tideline_rail_groups(
     run_label: &str,
     whales: &str,
-    pod_label: &str,
+    fleet_label: &str,
     work_lines: &[&str],
     context_percent: u8,
 ) -> Vec<TidelineRailGroup> {
@@ -231,8 +231,8 @@ pub fn tideline_rail_groups(
             lines: vec![(whales.to_string(), ChromeInk::Info)],
         },
         TidelineRailGroup {
-            label: "POD",
-            lines: vec![(pod_label.to_string(), ChromeInk::Active)],
+            label: "FLEET",
+            lines: vec![(fleet_label.to_string(), ChromeInk::Active)],
         },
         TidelineRailGroup {
             label: "WORK",

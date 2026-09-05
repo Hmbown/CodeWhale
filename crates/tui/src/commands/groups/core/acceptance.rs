@@ -108,7 +108,7 @@ async fn clear_replaces_prior_transcript_with_visible_confirmation() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn persistent_work_commands_report_visible_dispatch_requests() {
-    run_scenario(PERSISTENT_WORK_SCENARIO, 8).await;
+    run_scenario(PERSISTENT_WORK_SCENARIO, 10).await;
 }
 
 async fn run_scenario(name: &'static str, expected_steps: usize) {

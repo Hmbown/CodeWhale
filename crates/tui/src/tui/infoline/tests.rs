@@ -363,3 +363,34 @@ fn infoline_hover_and_narrow_do_not_panic() {
     let ctx_x = u16::try_from(render_row(&UI_THEME, 120, &segments).find("ctx").unwrap()).unwrap();
     assert_eq!(plain[(ctx_x, 0)], hovered[(ctx_x, 0)]);
 }
+
+/// Slice G: the context reading owns the inspector click action, so it
+/// brightens on hover exactly like the model segment; status-only facts
+/// (cost) never do.
+#[test]
+fn infoline_context_hover_brightens_only_the_context_reading() {
+    let segments = work_segments();
+    let hint = help_hint();
+    let area = Rect::new(0, 0, 120, 1);
+    let mut plain = ratatui::buffer::Buffer::empty(area);
+    ratatui::widgets::Widget::render(InfoLine::new(&UI_THEME, &hint, &segments), area, &mut plain);
+    let mut hovered = ratatui::buffer::Buffer::empty(area);
+    ratatui::widgets::Widget::render(
+        InfoLine::new(&UI_THEME, &hint, &segments).hovered(Some(InfoSegmentId::Context)),
+        area,
+        &mut hovered,
+    );
+    let row = render_row(&UI_THEME, 120, &segments);
+    // Hover feedback lands on the value cells (`61%`); the dim label prefix
+    // (`ctx`) keeps its reading ink, mirroring the model segment's probe.
+    let ctx_x = u16::try_from(row.find("61%").unwrap()).unwrap();
+    assert_ne!(
+        plain[(ctx_x, 0)].modifier,
+        hovered[(ctx_x, 0)].modifier,
+        "hovered context reading must respond visibly"
+    );
+    // Model (actionable but not hovered) and cost (status-only) stay clean.
+    assert_eq!(plain[(0, 0)], hovered[(0, 0)]);
+    let cost_x = u16::try_from(row.find("$0.42").unwrap()).unwrap();
+    assert_eq!(plain[(cost_x, 0)], hovered[(cost_x, 0)]);
+}

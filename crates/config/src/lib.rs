@@ -6,7 +6,6 @@ mod config_document;
 pub mod descriptors;
 pub mod device_code;
 pub mod external_credentials;
-mod harness;
 pub mod model_reference;
 pub mod models_dev;
 pub mod persistence;
@@ -23,10 +22,6 @@ mod xai_credentials;
 pub use config_document::{
     create_config_document, mutate_config_document, replace_config_document_if_unchanged,
     set_config_document_value, unset_config_document_value,
-};
-pub use harness::{
-    HarnessCompactionStrategy, HarnessPosture, HarnessPostureKind, HarnessProfile,
-    HarnessSafetyPosture, HarnessToolSurface, built_in_harness_profiles,
 };
 pub use model_reference::{Modality, ModelReferenceCard, ModelReferenceDatabase};
 pub(crate) use provider_defaults::*;
@@ -866,10 +861,6 @@ pub struct ConfigToml {
     /// applies the defaults documented in [`LspConfigToml`].
     #[serde(default)]
     pub lsp: Option<LspConfigToml>,
-    /// Per-model harness profiles (#2693). Runtime wiring lands in follow-up
-    /// v0.9 slices; this is the durable config data model.
-    #[serde(default)]
-    pub harness_profiles: Vec<HarnessProfile>,
     /// Optional 1-8 hotbar slot bindings (#2064). When absent, the TUI falls
     /// back to the built-in default slots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -882,6 +873,11 @@ pub struct ConfigToml {
     /// empty `path` disables the feature and leaves behavior unchanged.
     #[serde(default)]
     pub lifecycle_outbox: Option<LifecycleOutboxToml>,
+    /// Per-session control socket (`[control_socket]`). Opt-in: an absent
+    /// table or `enabled = false` (the default) leaves the feature off and
+    /// behavior unchanged.
+    #[serde(default)]
+    pub control_socket: Option<ControlSocketToml>,
     /// Agent Fleet trust and security policy (#3165). When absent, fleet
     /// workers inherit conservative Sandbox defaults.
     #[serde(default)]
@@ -1218,23 +1214,6 @@ fn insert_provider_config_values(
 }
 
 impl ConfigToml {
-    /// Resolve the first configured harness profile for a provider/model route.
-    ///
-    /// This helper is deliberately dormant for v0.9: callers may display or
-    /// test the resolved profile, but runtime provider/model routing and prompt
-    /// shaping remain unchanged until a later, explicit integration slice.
-    #[must_use]
-    pub fn resolve_harness_profile(
-        &self,
-        provider_route: &str,
-        model: &str,
-    ) -> Option<&HarnessProfile> {
-        self.harness_profiles
-            .iter()
-            .chain(built_in_harness_profiles().iter())
-            .find(|profile| profile.matches_route(provider_route, model))
-    }
-
     /// Resolve durable hotbar config into normalized 1-8 slot bindings.
     ///
     /// `known_action_ids` is supplied by the TUI action registry in later
@@ -1345,20 +1324,6 @@ pub const DEFAULT_HOTBAR_ACTIONS: [&str; HOTBAR_SLOT_COUNT as usize] = [
     "sidebar.toggle",
 ];
 
-/// Normalize persisted action ids at the compatibility boundary.
-///
-/// `/pod` is the canonical public command, but existing settings may still
-/// contain the former `slash.pod` hotbar id. Resolution and direct registry
-/// lookup both use this helper so those slots continue to dispatch while any
-/// subsequent save naturally writes the canonical id.
-#[must_use]
-pub fn normalize_hotbar_action_id(action_id: &str) -> &str {
-    match action_id {
-        "slash.pod" => "slash.fleet",
-        other => other,
-    }
-}
-
 /// On-disk schema for one `[[hotbar]]` table.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -1468,7 +1433,7 @@ pub fn resolve_hotbar_bindings(
             .iter()
             .map(|binding| HotbarBinding {
                 slot: binding.slot,
-                action: normalize_hotbar_action_id(&binding.action).to_string(),
+                action: binding.action.clone(),
                 label: binding.label.clone(),
             })
             .collect::<Vec<_>>(),
@@ -1619,6 +1584,21 @@ pub struct LifecycleOutboxToml {
     /// webhook POSTs. Ignored when `webhook_url` is unset.
     #[serde(default)]
     pub webhook_token: Option<String>,
+}
+
+/// On-disk schema for the `[control_socket]` table.
+///
+/// Opt-in per-session control surface: when `enabled`, the interactive TUI
+/// binds a unix domain socket at `<sessions-dir>/<session-id>/control.sock`
+/// for the running session. The socket speaks newline-framed JSON-RPC with
+/// the verbs `message`, `interrupt`, `relaunch`, and `status`. An absent
+/// table, or `enabled = false` (the default), disables the feature entirely —
+/// behavior is unchanged from a release without the table.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ControlSocketToml {
+    /// Bind the per-session control socket. Default: false (OFF).
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 /// On-disk schema for the `[skills]` table (#140). See `config.example.toml`
@@ -2466,38 +2446,14 @@ pub fn built_in_role_presets() -> BTreeMap<String, FleetRolePreset> {
     .into()
 }
 
-/// Verdict policy for the verifier-preview surface (#2093).
-///
-/// Only the hunt vocabulary is shipped today. Keeping this typed lets future
-/// policy additions reject misspellings instead of silently accepting unknown
-/// strings.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum VerifierVerdictPolicy {
-    #[default]
-    Hunt,
-}
-
 /// On-disk schema for `[verifier]`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VerifierConfigToml {
     /// Enable automatic verifier preview when the runtime wires a
     /// claim-of-done trigger. Manual `run_verifiers` remains available
     /// regardless.
     #[serde(default)]
     pub enabled: bool,
-    /// How verifier verdicts map into the goal/hunt system.
-    #[serde(default)]
-    pub verdict_policy: VerifierVerdictPolicy,
-}
-
-impl Default for VerifierConfigToml {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            verdict_policy: VerifierVerdictPolicy::Hunt,
-        }
-    }
 }
 
 /// On-disk schema for `[advisor]` (#3982).
@@ -7028,13 +6984,17 @@ impl EnvRuntimeOverrides {
             sandbox_mode: std::env::var("CODEWHALE_SANDBOX_MODE")
                 .or_else(|_| std::env::var("DEEPSEEK_SANDBOX_MODE"))
                 .ok(),
+            // `DEEPSEEK_YOLO` is a read-only deprecated alias of
+            // `CODEWHALE_YOLO` so existing scripts keep working; when both are
+            // set `CODEWHALE_YOLO` wins. The alias is removed in 0.10 per
+            // issue #5443 — do not write it anywhere.
             yolo: std::env::var("CODEWHALE_YOLO")
                 .or_else(|_| std::env::var("DEEPSEEK_YOLO"))
                 .ok()
                 .and_then(|v| match parse_bool(&v) {
                     Ok(b) => Some(b),
                     Err(_) => {
-                        tracing::warn!("Invalid CODEWHALE_YOLO/DEEPSEEK_YOLO value '{v}', expected true/false");
+                        tracing::warn!("Invalid CODEWHALE_YOLO value '{v}', expected true/false");
                         None
                     }
                 }),

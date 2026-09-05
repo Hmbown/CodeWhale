@@ -1,7 +1,7 @@
 //! Operator controls for durable scheduled automations.
 
 use codewhale_command_contract::facets::CommandPresentationContext;
-use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
+use codewhale_command_contract::handler::{CommandCapabilities, CommandContexts, CommandHandler};
 use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::commands::CommandResult;
@@ -22,16 +22,18 @@ impl RegisterCommand<CommandResult> for AutomationCmd {
     }
 
     fn handler() -> CommandHandler<CommandResult> {
-        CommandHandler::Contextual(automation_contextual)
+        CommandHandler::Contextual {
+            capabilities: CommandCapabilities::PRESENTATION,
+            handler: automation_contextual,
+        }
     }
 }
 
 fn automation_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
     let mut parts = contexts.into_parts();
-    let presentation = parts
-        .presentation
-        .as_deref_mut()
-        .expect("presentation facet");
+    let Some(presentation) = parts.presentation.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: presentation");
+    };
     automation(presentation, arg)
 }
 
@@ -207,10 +209,20 @@ mod tests {
 
     #[test]
     fn handler_is_contextual_and_requests_presentation_facet() {
-        assert!(matches!(
-            AutomationCmd::handler(),
-            CommandHandler::Contextual(_)
-        ));
+        let CommandHandler::Contextual {
+            capabilities,
+            handler,
+        } = AutomationCmd::handler()
+        else {
+            panic!("automation must be contextual");
+        };
+        assert_eq!(capabilities, CommandCapabilities::PRESENTATION);
+        let missing = handler(CommandContexts::empty(), Some("list"));
+        assert!(missing.is_error);
+        assert_eq!(
+            missing.message.as_deref(),
+            Some("Error: Command capability unavailable: presentation")
+        );
         assert_eq!(
             AutomationCmd::info().description_key,
             "cmd_automation_description"

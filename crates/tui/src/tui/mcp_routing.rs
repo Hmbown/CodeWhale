@@ -2,7 +2,8 @@
 
 use crate::localization::{Locale, MessageId, tr};
 use crate::mcp::{
-    McpManagerSnapshot, McpServerCapabilityMetadata, McpServerSnapshot, format_mcp_tool_description,
+    McpManagerSnapshot, McpServerCapabilityMetadata, McpServerSnapshot,
+    format_mcp_tool_description, mcp_display_target,
 };
 use crate::tui::app::App;
 use crate::tui::history::HistoryCell;
@@ -53,9 +54,11 @@ fn push_server(lines: &mut Vec<String>, server: &McpServerSnapshot, locale: Loca
         "disabled".to_string()
     };
     let required = if server.required { " required" } else { "" };
+    // Command names only: no `./…`-style path display in the manager.
+    let target = mcp_display_target(&server.transport, &server.command_or_url);
     lines.push(format!(
         "- {} [{}{}] {} {}",
-        server.name, state, required, server.transport, server.command_or_url
+        server.name, state, required, server.transport, target
     ));
     lines.push(format!(
         "  timeouts: connect={}s execute={}s read={}s",
@@ -233,6 +236,39 @@ mod tests {
         assert!(text.contains("next: Diagnose /mcp validate"));
         assert!(text.contains("Next: Connect /mcp reload · Diagnose /mcp validate"));
         assert!(!text.contains("/mcp auth"));
+    }
+
+    #[test]
+    fn manager_text_shows_command_names_not_paths() {
+        let snapshot = McpManagerSnapshot {
+            config_path: PathBuf::from("/tmp/mcp.json"),
+            config_exists: true,
+            reload_required: false,
+            servers: vec![McpServerSnapshot {
+                name: "local".to_string(),
+                enabled: true,
+                required: false,
+                transport: "stdio".to_string(),
+                command_or_url: "./mcp/custom-server --port 8080".to_string(),
+                connect_timeout: 10,
+                execute_timeout: 60,
+                read_timeout: 120,
+                connected: true,
+                error: None,
+                auth_required: false,
+                capability_metadata: McpServerCapabilityMetadata::NotObserved,
+                tools: Vec::new(),
+                resources: Vec::new(),
+                prompts: Vec::new(),
+            }],
+        };
+        let text = format_mcp_manager(&snapshot, Locale::En);
+        assert!(
+            text.contains("- local [connected] stdio custom-server"),
+            "{text}"
+        );
+        assert!(!text.contains("./mcp/"), "{text}");
+        assert!(!text.contains("--port"), "{text}");
     }
 
     #[test]

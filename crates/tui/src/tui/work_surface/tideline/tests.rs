@@ -64,7 +64,7 @@ fn groups() -> Vec<super::TidelineRailGroup> {
     tideline_rail_groups(
         "release 0.9.12",
         "3/4 whales",
-        "launch pod",
+        "launch fleet",
         &["▸ footer band", "  goldens ×4"],
         61,
     )
@@ -112,7 +112,7 @@ fn rail_shows_five_groups_help_and_collapse() {
     let text = render_golden_text(22, 30, |buf| {
         render_tideline_rail(Rect::new(0, 0, 22, 30), buf, &rail);
     });
-    for label in ["RUNS", "WHALES", "POD", "WORK", "CONTEXT"] {
+    for label in ["RUNS", "WHALES", "FLEET", "WORK", "CONTEXT"] {
         assert!(text.contains(label), "missing {label}: {text}");
     }
     assert!(text.contains("3/4 whales"), "{text}");
@@ -206,7 +206,7 @@ fn work_stage_hitboxes_match_painted_rows() {
     let stream_area = Rect::new(22, 0, w - 22, h);
     let stream_boxes = tideline_stream_hitboxes(stream_area, &stream);
     assert_eq!(stream_boxes.len(), events.len(), "one rect per event");
-    // The pod tree's rect spans its three edge rows.
+    // The fleet tree's rect spans its three edge rows.
     assert_eq!(stream_boxes[1].height, 3);
     for rect in &stream_boxes {
         let cells: String = (rect.x..rect.x + rect.width)

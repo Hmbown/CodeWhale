@@ -2351,7 +2351,7 @@ pub enum StatusItem {
     RateLimit,
     /// Session token usage: input / cache-hit / output.
     Tokens,
-    /// DeepSeek account balance, refreshed once per turn completion.
+    /// Prepaid remaining credit, refreshed once per turn completion.
     Balance,
     /// Session metrics strip: turns · steps │ LLM · tools │ TTFT · tok/s │
     /// cache │ in — sourced from engine timings and provider usage.
@@ -2466,7 +2466,7 @@ impl StatusItem {
             StatusItem::LastToolElapsed => "ms of the most recent tool call (reserved)",
             StatusItem::RateLimit => "remaining requests in the budget (reserved)",
             StatusItem::Tokens => "input / cache-hit / output token totals",
-            StatusItem::Balance => "topped-up + granted balance from DeepSeek",
+            StatusItem::Balance => "remaining prepaid credit from the active provider",
             StatusItem::SessionMetrics => "turns · steps · LLM/tool time · TTFT · tok/s · input",
         }
     }
@@ -2499,12 +2499,24 @@ impl StatusItem {
     #[must_use]
     pub fn is_available_for(self, provider: ApiProvider) -> bool {
         match self {
-            StatusItem::Balance => {
-                matches!(provider, ApiProvider::Deepseek | ApiProvider::DeepseekCN)
-            }
+            StatusItem::Balance => provider_has_balance_api(provider),
             _ => true,
         }
     }
+}
+
+/// Prepaid providers that publish a remaining-credit endpoint Codewhale
+/// can fetch. Local runtimes and invoice-only vendors stay out.
+#[must_use]
+pub fn provider_has_balance_api(provider: ApiProvider) -> bool {
+    matches!(
+        provider,
+        ApiProvider::Deepseek
+            | ApiProvider::DeepseekCN
+            | ApiProvider::Openrouter
+            | ApiProvider::Siliconflow
+            | ApiProvider::SiliconflowCn
+    )
 }
 
 /// One configurable header item
@@ -3106,6 +3118,13 @@ pub struct Config {
     /// Fires for interactive TUI sessions and headless `codewhale exec` runs.
     #[serde(default)]
     pub lifecycle_outbox: Option<codewhale_config::LifecycleOutboxToml>,
+
+    /// Per-session control socket (`[control_socket]`). Opt-in: an absent
+    /// table or `enabled = false` (the default) leaves the feature off.
+    /// When enabled, the interactive TUI binds a unix socket per running
+    /// session (see `crate::tui::control_socket`).
+    #[serde(default)]
+    pub control_socket: Option<codewhale_config::ControlSocketToml>,
 
     /// Provider-specific credentials and defaults shared with the `codewhale` facade.
     #[serde(default)]
@@ -9262,6 +9281,9 @@ fn apply_env_overrides_unlocked(config: &mut Config, policy: ConfigEnvironmentPo
             .map(str::to_string)
             .collect();
     }
+    // `DEEPSEEK_YOLO` is a read-only deprecated alias of `CODEWHALE_YOLO`
+    // (removable in 0.10 per issue #5443); `CODEWHALE_YOLO` wins when both
+    // are set.
     if let Ok(value) = std::env::var("CODEWHALE_YOLO").or_else(|_| std::env::var("DEEPSEEK_YOLO")) {
         config.yolo = Some(value == "1" || value.eq_ignore_ascii_case("true"));
     }
@@ -10493,6 +10515,7 @@ fn merge_config(base: Config, override_cfg: Config) -> Config {
         transcript: override_cfg.transcript.or(base.transcript),
         hooks: override_cfg.hooks.or(base.hooks),
         lifecycle_outbox: override_cfg.lifecycle_outbox.or(base.lifecycle_outbox),
+        control_socket: override_cfg.control_socket.or(base.control_socket),
         providers: merge_providers(base.providers, override_cfg.providers),
         features: merge_features(base.features, override_cfg.features),
         notifications: override_cfg.notifications.or(base.notifications),

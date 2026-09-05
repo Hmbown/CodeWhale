@@ -39,109 +39,164 @@ pub enum ShellTier {
     Wide,
 }
 
-/// What one launch key produces. The launch screen is Claude Code's: the
-/// composer holds focus and takes every ordinary key, so the only launch-
-/// owned inputs are chords (Ctrl+R resume, Ctrl+N worktree, Ctrl+L
-/// changelog, Ctrl+Q quit, F1 help) and the worktree-name prompt.
+/// What one launch key produces. The composer holds focus and takes every
+/// ordinary key, so the only launch-owned input is F1 help; the card's
+/// rows are driven by Up/Down + Enter (and the mouse) through
+/// [`run_launch_card_row`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchAction {
     None,
-    CreateWorktree(String),
-    Resume,
+    /// The prominent new-session entry: begin a fresh session in the
+    /// current workspace.
+    NewSession,
+    /// Resume one recent-work row by session id.
+    ResumeSession(String),
+    /// The see-all overflow: open the full session picker.
+    BrowseSessions,
     Help,
-    Changelog,
-    Quit,
     /// Submit the composed pre-session message: begin the launch session,
     /// then hand the text to the normal composer dispatch path.
     SendComposer,
 }
 
-/// Translate a launch chord (or a worktree-prompt key) into one product
-/// action. Reached only through [`LaunchComposerKey::MenuChord`] or while
-/// the worktree-name prompt owns the keyboard.
+/// Translate a launch key into one product action. Reached only through
+/// [`LaunchComposerKey::MenuChord`]; every other key belongs to the
+/// composer authority.
 pub fn handle_launch_key(
-    launch: &mut crate::tui::app::LaunchState,
+    _launch: &mut crate::tui::app::LaunchState,
     key: KeyEvent,
-    locale: Locale,
+    _locale: Locale,
 ) -> LaunchAction {
-    if let Some(input) = launch.worktree_input.as_mut() {
-        // The prompt owns the keyboard while open; closing it hands focus
-        // back to the composer, the screen's one focus owner.
-        return match key.code {
-            KeyCode::Esc => {
-                launch.worktree_input = None;
-                launch.status = None;
-                launch.composer_focus = true;
-                LaunchAction::None
-            }
-            KeyCode::Enter => {
-                let name = input.trim().to_string();
-                launch.worktree_input = None;
-                launch.composer_focus = true;
-                LaunchAction::CreateWorktree(name)
-            }
-            KeyCode::Backspace => {
-                input.pop();
-                LaunchAction::None
-            }
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                launch.worktree_input = None;
-                launch.status = None;
-                launch.composer_focus = true;
-                LaunchAction::None
-            }
-            KeyCode::Char(ch)
-                if !key.modifiers.intersects(
-                    KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER,
-                ) =>
-            {
-                input.push(ch);
-                LaunchAction::None
-            }
-            _ => LaunchAction::None,
-        };
-    }
-
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
-        KeyCode::Char('r') if ctrl => LaunchAction::Resume,
-        KeyCode::Char('n') if ctrl => {
-            open_launch_worktree_prompt(launch, locale);
-            LaunchAction::None
-        }
-        KeyCode::Char('l' | 'L') if ctrl => LaunchAction::Changelog,
-        KeyCode::Char('q' | 'Q') if ctrl => LaunchAction::Quit,
         KeyCode::F(1) => LaunchAction::Help,
         _ => LaunchAction::None,
     }
 }
 
-/// Open the worktree-name prompt, or say why there cannot be one. Shared by
-/// the Ctrl+N chord and the card's New worktree entry.
-fn open_launch_worktree_prompt(launch: &mut crate::tui::app::LaunchState, locale: Locale) {
-    if launch.worktree_available {
-        launch.worktree_input = Some(String::new());
-        launch.status = Some(tr(locale, MessageId::LaunchWorktreePrompt).into_owned());
-        launch.composer_focus = false;
-    } else {
-        launch.status = Some(tr(locale, MessageId::LaunchWorktreeNeedsGit).into_owned());
+/// One interactive row on the startup card: the prominent new-session
+/// entry, one recent-work row, or the see-all overflow. Labels are
+/// localized; `detail` is right-aligned metadata (a recent row's age).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchCardRow {
+    pub id: crate::tui::app::LaunchRowId,
+    pub label: String,
+    pub detail: String,
+    /// The new-session entry paints prominent (bold accent) when it is
+    /// neither keyboard-selected nor hovered.
+    pub prominent: bool,
+}
+
+/// A recent session projected for the card: the display title plus its
+/// right-aligned detail line. Preformatted by the caller so the renderer
+/// stays deterministic for golden buffers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchRecentEntry {
+    pub id: String,
+    pub title: String,
+    pub detail: String,
+}
+
+/// The card's rows in paint/click/keyboard order: the prominent
+/// new-session entry first, then recent work, then the see-all overflow
+/// when more sessions sit behind the inline list. The single ordering
+/// keyboard, mouse, and paint share.
+#[must_use]
+pub fn launch_card_rows(
+    locale: Locale,
+    recent: &[LaunchRecentEntry],
+    has_more: bool,
+) -> Vec<LaunchCardRow> {
+    let mut rows = Vec::with_capacity(recent.len() + 2);
+    rows.push(LaunchCardRow {
+        id: crate::tui::app::LaunchRowId::NewSession,
+        label: tr(locale, MessageId::LaunchNewSession).into_owned(),
+        detail: String::new(),
+        prominent: true,
+    });
+    rows.extend(recent.iter().map(|entry| LaunchCardRow {
+        id: crate::tui::app::LaunchRowId::Recent(entry.id.clone()),
+        label: entry.title.clone(),
+        detail: entry.detail.clone(),
+        prominent: false,
+    }));
+    if has_more {
+        rows.push(LaunchCardRow {
+            id: crate::tui::app::LaunchRowId::SeeAll,
+            label: tr(locale, MessageId::LaunchSeeAllSessions).into_owned(),
+            detail: String::new(),
+            prominent: false,
+        });
+    }
+    rows
+}
+
+/// Project the launch state's loaded recent-work list into card entries:
+/// display titles with right-aligned relative ages, like the resume
+/// picker. Pure projection of loaded state — no disk reads.
+fn launch_recent_entries(app: &App) -> (Vec<LaunchRecentEntry>, bool) {
+    let recent = app
+        .launch
+        .recent
+        .iter()
+        .map(|session| {
+            let raw = crate::session_manager::extract_title(&session.title);
+            let title = if raw == "Session" || raw.trim().is_empty() {
+                crate::session_manager::truncate_id(&session.id).to_string()
+            } else {
+                raw.to_string()
+            };
+            let age = crate::tui::session_picker::format_relative_time(
+                &session.updated_at,
+                app.ui_locale,
+            );
+            let count = tr(app.ui_locale, MessageId::SessionsMessageCountCompact)
+                .replace("{count}", &session.message_count.to_string());
+            LaunchRecentEntry {
+                id: session.id.clone(),
+                title,
+                detail: format!("{age} · {count}"),
+            }
+        })
+        .collect::<Vec<_>>();
+    let has_more = app.launch.total_workspace_sessions > recent.len();
+    (recent, has_more)
+}
+
+/// The card's rows for live `App` state, for keyboard navigation and
+/// Enter — the same [`launch_card_rows`] order paint and hitboxes share.
+#[must_use]
+pub fn launch_rows_for_app(app: &App) -> Vec<LaunchCardRow> {
+    let (recent, has_more) = launch_recent_entries(app);
+    launch_card_rows(app.ui_locale, &recent, has_more)
+}
+
+/// The click twin of [`run_launch_card_row`]: one card row id runs the
+/// same action the keyboard's Enter runs, so mouse and keyboard share one
+/// contract.
+#[must_use]
+pub fn launch_row_click_action(id: &crate::tui::app::LaunchRowId) -> LaunchAction {
+    match id {
+        crate::tui::app::LaunchRowId::NewSession => LaunchAction::NewSession,
+        crate::tui::app::LaunchRowId::Recent(session_id) => {
+            LaunchAction::ResumeSession(session_id.clone())
+        }
+        crate::tui::app::LaunchRowId::SeeAll => LaunchAction::BrowseSessions,
     }
 }
 
-/// Run the card's highlighted menu entry. Enter on the card is the menu's
-/// runner; the chords painted beside each entry run the same actions.
-pub fn run_launch_menu_entry(
-    launch: &mut crate::tui::app::LaunchState,
-    locale: Locale,
-) -> LaunchAction {
-    match launch.menu_selected % LAUNCH_MENU_ENTRIES {
-        0 => {
-            open_launch_worktree_prompt(launch, locale);
-            LaunchAction::None
-        }
-        1 => LaunchAction::Resume,
-        2 => LaunchAction::Changelog,
-        _ => LaunchAction::Quit,
+/// Run the card's highlighted row. Enter on the card is the list's runner;
+/// an untouched list runs nothing.
+pub fn run_launch_card_row(rows: &[LaunchCardRow], menu_selected: Option<usize>) -> LaunchAction {
+    let Some(selected) = menu_selected else {
+        return LaunchAction::None;
+    };
+    match rows.get(selected) {
+        None => LaunchAction::None,
+        Some(row) => match &row.id {
+            crate::tui::app::LaunchRowId::NewSession => LaunchAction::NewSession,
+            crate::tui::app::LaunchRowId::Recent(id) => LaunchAction::ResumeSession(id.clone()),
+            crate::tui::app::LaunchRowId::SeeAll => LaunchAction::BrowseSessions,
+        },
     }
 }
 
@@ -154,11 +209,13 @@ pub fn run_launch_menu_entry(
 /// would be in a live session. Word motion, selection, completion menus,
 /// attachments, history, paste bursts, and vim behaviour therefore cannot
 /// drift from the shell. Only three things are launch-specific here: an
-/// empty Enter, the launch chords, and submitting.
+/// empty Enter, F1 help, and submitting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaunchComposerKey {
-    /// The key is fully consumed and does nothing (Enter on an empty
-    /// composer: there is no row to run and nothing to send).
+    /// The key is fully consumed and does nothing more (Enter on an empty
+    /// composer with no menu entry highlighted: there is no row to run and
+    /// nothing to send; Esc clearing the menu highlight or bringing the
+    /// card back).
     Consumed,
     /// Submit the composed message through the normal dispatch path.
     Submit,
@@ -166,18 +223,17 @@ pub enum LaunchComposerKey {
     /// open and Enter picked the highlighted entry); the key is consumed
     /// without submitting — the completed text stays in the composer.
     MenuSelect,
-    /// A launch chord (Ctrl+R resume, Ctrl+N worktree, Ctrl+L changelog,
-    /// Ctrl+Q quit, F1 help): the same key is then handed to
-    /// [`handle_launch_key`]. Launch chords deliberately win over their
-    /// composer meanings while the launch screen is up.
+    /// The launch chord (F1 help): the same key is then handed to
+    /// [`handle_launch_key`]. It deliberately wins over its composer
+    /// meaning while the launch screen is up.
     MenuChord,
     /// Not launch-specific: the conversation composer match below owns the
     /// key. The event loop must not run [`handle_launch_key`] for it.
     ComposerAuthority,
-    /// Move the launch card's menu selection (Up/Down while the card is up).
+    /// Move the launch card's row selection (Up/Down while the card is up).
     MenuNavigate(i32),
-    /// Run the card's highlighted menu entry (Enter while the card is up and
-    /// the composer is empty).
+    /// Run the card's highlighted row (Enter while the card is up, the
+    /// composer is empty, and the user has arrowed onto a row).
     MenuRun,
 }
 
@@ -185,7 +241,7 @@ pub enum LaunchComposerKey {
 ///
 /// Editing keys are never handled here — they fall through to the
 /// conversation composer match so there is exactly one composer input
-/// system. Only the launch chords stay launch-owned via
+/// system. Only F1 help stays launch-owned via
 /// [`LaunchComposerKey::MenuChord`].
 pub fn handle_launch_composer_key(app: &mut App, key: KeyEvent) -> LaunchComposerKey {
     let multiline = app.composer_multiline_mode;
@@ -212,9 +268,9 @@ pub fn handle_launch_composer_key(app: &mut App, key: KeyEvent) -> LaunchCompose
                 app.close_slash_menu();
             }
             if app.input.trim().is_empty() {
-                if card_up {
-                    // The card owns Enter while it is up: run the
-                    // highlighted menu entry.
+                if card_up && app.launch.menu_selected.is_some() {
+                    // The card owns Enter only once the user has arrowed
+                    // onto a row; an untouched list runs nothing.
                     return LaunchComposerKey::MenuRun;
                 }
                 LaunchComposerKey::Consumed
@@ -225,8 +281,16 @@ pub fn handle_launch_composer_key(app: &mut App, key: KeyEvent) -> LaunchCompose
         }
         KeyCode::Up if card_up => LaunchComposerKey::MenuNavigate(-1),
         KeyCode::Down if card_up => LaunchComposerKey::MenuNavigate(1),
-        KeyCode::Char('r' | 'n' | 'l' | 'q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            LaunchComposerKey::MenuChord
+        // Esc walks back one step: a highlighted row is unhighlighted;
+        // an empty composer with the card gone brings the card back. A draft
+        // in the composer keeps Esc's composer meaning.
+        KeyCode::Esc if card_up && app.launch.menu_selected.is_some() => {
+            app.launch.menu_selected = None;
+            LaunchComposerKey::Consumed
+        }
+        KeyCode::Esc if !card_up && app.input.is_empty() => {
+            app.launch.restore_card();
+            LaunchComposerKey::Consumed
         }
         KeyCode::F(1) => LaunchComposerKey::MenuChord,
         // Every other key — text, caret motion, word motion, selection,
@@ -507,11 +571,7 @@ fn header_mode_ink(mode: AppMode) -> ChromeInk {
     match mode {
         AppMode::Plan => ChromeInk::PolicyPlan,
         AppMode::Operate => ChromeInk::PolicyOperate,
-        // YOLO stays Policy, not Failure — the header must not spend red
-        // on a selected mode. It wears the act badge because `mode_label`
-        // resolves it to act; the posture it implies is the permission
-        // chip's Cognition ink, not this one.
-        AppMode::Agent | AppMode::Auto | AppMode::Yolo => ChromeInk::PolicyAct,
+        AppMode::Agent => ChromeInk::PolicyAct,
     }
 }
 
@@ -649,7 +709,7 @@ pub(crate) fn title_activity_verb(app: &App) -> &'static str {
             LiveActivityKind::Reasoning => "reasoning…",
             LiveActivityKind::Reading => "reading…",
             LiveActivityKind::UsingTool => "using tool…",
-            LiveActivityKind::UsingSubagents => "pod underway…",
+            LiveActivityKind::UsingSubagents => "fleet underway…",
             LiveActivityKind::Verifying => "verifying…",
             LiveActivityKind::Working => "in the current…",
         },
@@ -731,7 +791,7 @@ pub(crate) fn phase_marker_with_activity(
 
 fn mode_label(locale: Locale, mode: AppMode) -> Cow<'static, str> {
     match mode {
-        AppMode::Agent | AppMode::Auto | AppMode::Yolo => tr(locale, MessageId::ChipModeAct),
+        AppMode::Agent => tr(locale, MessageId::ChipModeAct),
         AppMode::Plan => tr(locale, MessageId::ChipModePlan),
         AppMode::Operate => tr(locale, MessageId::ChipModeOperate),
     }
@@ -773,8 +833,8 @@ fn permission_label(app: &App) -> Cow<'static, str> {
 /// has, and printing `files: workspace` on every frame of every session spent
 /// seventeen columns of the primary chrome saying so. A notice that is always
 /// on cannot signal anything; folding the expected case away is what lets
-/// `files: full disk` and `files: workspace (unenforced)` land as warnings
-/// when they do appear.
+/// `files: workspace (unenforced)` and the Full-Access-but-confined case land
+/// as warnings when they do appear.
 ///
 /// `read-only` under Plan is dropped for the same reason from the other side:
 /// the permission word there is already the literal phrase "read only".
@@ -808,7 +868,13 @@ fn filesystem_scope_notice(app: &App) -> Option<Cow<'static, str>> {
         crate::sandbox::SandboxPolicy::ReadOnly => {
             (app.mode != AppMode::Plan).then_some(Cow::Borrowed("files: read-only"))
         }
-        crate::sandbox::SandboxPolicy::DangerFullAccess => Some(Cow::Borrowed("files: full disk")),
+        // `DangerFullAccess` only ever arises from the Bypass posture
+        // (`sandbox_policy_for_turn`), whose permission chip already reads
+        // "Full Access" two words to the left. The name is the disclosure;
+        // restating it as `files: full disk` spent columns saying it twice.
+        // The scope chip speaks in this posture only when the scope is
+        // *narrower* than the name implies (the WorkspaceWrite arm below).
+        crate::sandbox::SandboxPolicy::DangerFullAccess => None,
         crate::sandbox::SandboxPolicy::ExternalSandbox { .. } => {
             Some(Cow::Borrowed("files: external sandbox"))
         }
@@ -1137,6 +1203,7 @@ impl<'a> LaunchComposerDisplay<'a> {
 /// beneath. This is the same composer state the conversation view edits,
 /// not a second input system; only the geometry is the startup stage's
 /// dock.
+#[allow(clippy::too_many_arguments)] // pre-existing baseline signature; FEAT-022 gate repair
 fn render_launch_composer(
     area: Rect,
     buf: &mut Buffer,
@@ -1886,7 +1953,7 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
         app.mcp_configured_count,
         width,
     );
-    let brand = "Codewhale";
+    let brand = "codewhale";
     let brand_inset = " ".repeat(width.saturating_sub(brand.width()) / 2);
     lines.push(Line::from(Span::styled(
         format!("{brand_inset}{brand}"),
@@ -1915,110 +1982,131 @@ pub fn empty_state_lines(app: &App, area: Rect) -> Vec<Line<'static>> {
 
 #[cfg(test)]
 mod launch_contract_tests {
-    use super::{LaunchAction, handle_launch_key};
+    use super::{
+        LaunchAction, LaunchRecentEntry, handle_launch_key, launch_card_rows,
+        launch_row_click_action, run_launch_card_row,
+    };
     use crate::localization::Locale;
-    use crate::tui::app::LaunchState;
+    use crate::tui::app::{LaunchRowId, LaunchState};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn launch_state() -> LaunchState {
         LaunchState {
             visible: true,
-            worktree_input: None,
             status: None,
-            workspace_session_count: 2,
-            worktree_available: true,
+            workspace: std::env::temp_dir(),
+            recent: Vec::new(),
+            total_workspace_sessions: 0,
             composer_focus: true,
             composer_area: None,
             send_area: None,
-            menu_selected: 0,
+            row_hitboxes: Vec::new(),
+            hovered_row: None,
+            menu_selected: None,
             dissolve_started_ms: None,
             claude_code_detected: false,
+            sixel_cell_px: None,
+            sixel_terminal_bg: None,
+            sixel_mark_area: None,
+            sixel_emitted: None,
+        }
+    }
+
+    fn recent_entry(id: &str) -> LaunchRecentEntry {
+        LaunchRecentEntry {
+            id: id.to_string(),
+            title: format!("title {id}"),
+            detail: "2h ago · 4 msgs".to_string(),
         }
     }
 
     #[test]
-    fn launch_chords_dispatch_without_any_row_to_select() {
+    fn only_f1_survives_as_a_launch_key() {
+        // The old ctrl+n/r/l/q menu chords are gone: those keys belong to
+        // the composer authority now, so the launch key handler yields
+        // nothing for them.
         let key = |code, mods| KeyEvent::new(code, mods);
         let ctrl = KeyModifiers::CONTROL;
         let none = KeyModifiers::NONE;
-        for (chord, expected) in [
-            (key(KeyCode::Char('r'), ctrl), LaunchAction::Resume),
-            (key(KeyCode::Char('l'), ctrl), LaunchAction::Changelog),
-            (key(KeyCode::Char('q'), ctrl), LaunchAction::Quit),
-            (key(KeyCode::F(1), none), LaunchAction::Help),
-        ] {
-            let mut launch = launch_state();
-            assert_eq!(handle_launch_key(&mut launch, chord, Locale::En), expected);
-            assert!(
-                launch.composer_focus,
-                "{chord:?} leaves the composer focused"
-            );
-        }
-        // Plain letters and arrows are composer text, never launch actions.
+        let mut launch = launch_state();
+        assert_eq!(
+            handle_launch_key(&mut launch, key(KeyCode::F(1), none), Locale::En),
+            LaunchAction::Help
+        );
+        assert!(launch.composer_focus, "F1 leaves the composer focused");
         for code in [
+            KeyCode::Char('n'),
+            KeyCode::Char('r'),
+            KeyCode::Char('l'),
+            KeyCode::Char('q'),
             KeyCode::Char('p'),
             KeyCode::Char('w'),
             KeyCode::Enter,
             KeyCode::Down,
         ] {
-            let mut launch = launch_state();
-            assert_eq!(
-                handle_launch_key(&mut launch, key(code, none), Locale::En),
-                LaunchAction::None
-            );
+            for mods in [none, ctrl] {
+                let mut launch = launch_state();
+                assert_eq!(
+                    handle_launch_key(&mut launch, key(code, mods), Locale::En),
+                    LaunchAction::None,
+                    "{code:?} with {mods:?} is not a launch action"
+                );
+            }
         }
     }
 
     #[test]
-    fn the_worktree_prompt_borrows_the_keyboard_and_hands_it_back() {
-        let mut launch = launch_state();
-        let ctrl_n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
-        assert_eq!(
-            handle_launch_key(&mut launch, ctrl_n, Locale::En),
-            LaunchAction::None
-        );
-        assert_eq!(launch.worktree_input.as_deref(), Some(""));
-        assert!(
-            !launch.composer_focus,
-            "the prompt owns the keyboard while open"
-        );
-        for ch in "feat".chars() {
-            handle_launch_key(
-                &mut launch,
-                KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
-                Locale::En,
-            );
-        }
-        assert_eq!(
-            handle_launch_key(
-                &mut launch,
-                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-                Locale::En,
-            ),
-            LaunchAction::CreateWorktree("feat".to_string())
-        );
-        assert!(launch.worktree_input.is_none());
-        assert!(
-            launch.composer_focus,
-            "closing the prompt refocuses the composer"
-        );
-
-        // Esc cancels and refocuses the same way.
-        handle_launch_key(&mut launch, ctrl_n, Locale::En);
-        assert!(!launch.composer_focus);
-        handle_launch_key(
-            &mut launch,
-            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    fn card_rows_run_new_resume_and_see_all() {
+        let rows = launch_card_rows(
             Locale::En,
+            &[recent_entry("abc"), recent_entry("def")],
+            true,
         );
-        assert!(launch.worktree_input.is_none() && launch.composer_focus);
+        // New session, two recents, then the see-all overflow.
+        assert_eq!(rows.len(), 4);
+        assert!(rows[0].prominent);
+        assert_eq!(run_launch_card_row(&rows, None), LaunchAction::None);
+        assert_eq!(
+            run_launch_card_row(&rows, Some(0)),
+            LaunchAction::NewSession
+        );
+        assert_eq!(
+            run_launch_card_row(&rows, Some(1)),
+            LaunchAction::ResumeSession("abc".to_string())
+        );
+        assert_eq!(
+            run_launch_card_row(&rows, Some(2)),
+            LaunchAction::ResumeSession("def".to_string())
+        );
+        assert_eq!(
+            run_launch_card_row(&rows, Some(3)),
+            LaunchAction::BrowseSessions
+        );
+        assert_eq!(run_launch_card_row(&rows, Some(99)), LaunchAction::None);
+        // Clicks run the same actions as the keyboard's Enter.
+        assert_eq!(
+            launch_row_click_action(&LaunchRowId::NewSession),
+            LaunchAction::NewSession
+        );
+        assert_eq!(
+            launch_row_click_action(&LaunchRowId::Recent("abc".to_string())),
+            LaunchAction::ResumeSession("abc".to_string())
+        );
+        assert_eq!(
+            launch_row_click_action(&LaunchRowId::SeeAll),
+            LaunchAction::BrowseSessions
+        );
+    }
 
-        // No git: the prompt never opens; the status says why.
-        let mut no_git = launch_state();
-        no_git.worktree_available = false;
-        handle_launch_key(&mut no_git, ctrl_n, Locale::En);
-        assert!(no_git.worktree_input.is_none());
-        assert!(no_git.status.is_some() && no_git.composer_focus);
+    #[test]
+    fn card_rows_omit_the_overflow_when_nothing_sits_behind() {
+        let rows = launch_card_rows(Locale::En, &[], false);
+        assert_eq!(rows.len(), 1, "only the new-session entry");
+        assert!(rows[0].prominent);
+        assert_eq!(
+            run_launch_card_row(&rows, Some(0)),
+            LaunchAction::NewSession
+        );
     }
 }
 
@@ -2026,8 +2114,9 @@ mod launch_contract_tests {
 mod launch_composer_tests {
     use super::{
         LaunchAction, LaunchComposerKey, apply_launch_hitboxes, handle_launch_composer_key,
-        handle_launch_key, launch_composer_rows, render_launch_completion_popup,
-        render_tideline_startup, tideline_startup_from_app, tideline_startup_hitboxes,
+        handle_launch_key, launch_composer_rows, launch_rows_for_app,
+        render_launch_completion_popup, render_tideline_startup, run_launch_card_row,
+        tideline_startup_from_app, tideline_startup_hitboxes,
     };
     use crate::localization::{Locale, MessageId, tr};
     use crate::tui::app::App;
@@ -2064,10 +2153,19 @@ mod launch_composer_tests {
         let mut buf = Buffer::empty(area);
         let startup = tideline_startup_from_app(app);
         render_tideline_startup(area, &mut buf, &startup);
-        let hitboxes = tideline_startup_hitboxes(area);
+        let mut hitboxes = tideline_startup_hitboxes(area);
+        hitboxes.rows = super::tideline_startup_row_hitboxes(area, &startup);
         let mut launch = app.launch.clone();
         apply_launch_hitboxes(&hitboxes, &mut launch);
         (buf, area)
+    }
+
+    fn recent_fixture(id: &str, title: &str) -> super::LaunchRecentEntry {
+        super::LaunchRecentEntry {
+            id: id.to_string(),
+            title: title.to_string(),
+            detail: "2h ago · 4 msgs".to_string(),
+        }
     }
 
     #[test]
@@ -2187,6 +2285,129 @@ mod launch_composer_tests {
         (from..to.min(area.x + area.width))
             .map(|x| buf[(x, area.y + y)].symbol().to_string())
             .collect()
+    }
+
+    #[test]
+    fn card_lists_new_session_over_recent_work() {
+        let app = launch_app();
+        let area = stage_for(100, 30);
+        let mut startup = tideline_startup_from_app(&app);
+        startup.recent = vec![
+            recent_fixture("abc", "Fix login flow"),
+            recent_fixture("def", "Plan export"),
+        ];
+        startup.has_more_recent = true;
+        let mut buf = Buffer::empty(area);
+        render_tideline_startup(area, &mut buf, &startup);
+        let text = (0..area.height)
+            .map(|y| row_text(&buf, area, y))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for fact in [
+            "codewhale",
+            "New session",
+            "Recent",
+            "Fix login flow",
+            "Plan export",
+            "2h ago",
+            "See all sessions",
+        ] {
+            assert!(text.contains(fact), "missing {fact:?} in:\n{text}");
+        }
+        // The prominent entry leads; the old menu is gone entirely.
+        assert!(
+            text.find("New session").unwrap() < text.find("Fix login flow").unwrap(),
+            "new session leads the list:\n{text}"
+        );
+        for gone in [
+            "New worktree",
+            "Resume session",
+            "Changelog",
+            "Quit",
+            "ctrl+n",
+            "ctrl+r",
+            "ctrl+l",
+            "ctrl+q",
+        ] {
+            assert!(!text.contains(gone), "{gone:?} is back:\n{text}");
+        }
+    }
+
+    #[test]
+    fn empty_workspace_points_at_the_composer() {
+        let app = launch_app();
+        let area = stage_for(100, 30);
+        let mut startup = tideline_startup_from_app(&app);
+        startup.recent = Vec::new();
+        startup.has_more_recent = false;
+        let mut buf = Buffer::empty(area);
+        render_tideline_startup(area, &mut buf, &startup);
+        let text = (0..area.height)
+            .map(|y| row_text(&buf, area, y))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("New session"), "the entry survives:\n{text}");
+        assert!(
+            text.contains("No recent sessions"),
+            "empty workspaces say so:\n{text}"
+        );
+        assert!(
+            !text.contains("See all sessions"),
+            "no overflow without sessions:\n{text}"
+        );
+    }
+
+    #[test]
+    fn row_hitboxes_match_painted_cells_and_hover_highlights() {
+        use crate::tui::app::LaunchRowId;
+        let app = launch_app();
+        let area = stage_for(100, 30);
+        let mut startup = tideline_startup_from_app(&app);
+        startup.recent = vec![recent_fixture("abc", "Fix login flow")];
+        startup.has_more_recent = true;
+        let mut buf = Buffer::empty(area);
+        render_tideline_startup(area, &mut buf, &startup);
+        let rows = super::tideline_startup_row_hitboxes(area, &startup);
+        assert_eq!(
+            rows.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>(),
+            vec![
+                LaunchRowId::NewSession,
+                LaunchRowId::Recent("abc".to_string()),
+                LaunchRowId::SeeAll,
+            ]
+        );
+        for (_, rect) in &rows {
+            let painted: String = (rect.x..rect.x + rect.width)
+                .map(|x| buf[(x, rect.y)].symbol().to_string())
+                .collect();
+            assert!(!painted.trim().is_empty(), "row hitbox covers empty cells");
+        }
+        // Hover paints the shared selection band on exactly the hovered
+        // row — the visible response every clickable element owes.
+        startup.hovered = Some(1);
+        let mut buf = Buffer::empty(area);
+        render_tideline_startup(area, &mut buf, &startup);
+        for (index, (_, rect)) in rows.iter().enumerate() {
+            let banded = (rect.x..rect.x + rect.width)
+                .filter(|x| buf[(*x, rect.y)].bg == crate::palette::SELECTION_BG)
+                .count();
+            if index == 1 {
+                assert!(banded > 0, "the hovered row carries the selection band");
+            } else {
+                assert_eq!(banded, 0, "only the hovered row highlights");
+            }
+        }
+        // Keyboard selection paints the same band.
+        startup.hovered = None;
+        startup.menu_selected = Some(0);
+        let mut buf = Buffer::empty(area);
+        render_tideline_startup(area, &mut buf, &startup);
+        let (_, first) = &rows[0];
+        assert!(
+            (first.x..first.x + first.width)
+                .any(|x| buf[(x, first.y)].bg == crate::palette::SELECTION_BG),
+            "keyboard selection paints the same band as hover"
+        );
     }
 
     #[test]
@@ -2321,33 +2542,32 @@ mod launch_composer_tests {
             assert!(app.launch.composer_focus);
         }
 
-        // …while the launch chords stay launch-owned.
+        // …while F1 help stays launch-owned.
         assert_eq!(
-            handle_launch_composer_key(
-                &mut app,
-                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)
-            ),
+            handle_launch_composer_key(&mut app, KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE)),
             LaunchComposerKey::MenuChord
         );
         assert!(app.launch.composer_focus);
         assert_eq!(
             handle_launch_key(
                 &mut app.launch,
-                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+                KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE),
                 Locale::En,
             ),
-            LaunchAction::Resume
+            LaunchAction::Help
         );
-        for (code, modifiers) in [
-            (KeyCode::Char('n'), KeyModifiers::CONTROL),
-            (KeyCode::Char('l'), KeyModifiers::CONTROL),
-            (KeyCode::Char('q'), KeyModifiers::CONTROL),
-            (KeyCode::F(1), KeyModifiers::NONE),
+        // The old ctrl+n/r/l/q menu chords are composer keys now: the
+        // admission guard omits them to the composer authority.
+        for code in [
+            KeyCode::Char('n'),
+            KeyCode::Char('r'),
+            KeyCode::Char('l'),
+            KeyCode::Char('q'),
         ] {
             assert_eq!(
-                handle_launch_composer_key(&mut app, KeyEvent::new(code, modifiers)),
-                LaunchComposerKey::MenuChord,
-                "{code:?} must stay launch-owned while the composer holds focus"
+                handle_launch_composer_key(&mut app, KeyEvent::new(code, KeyModifiers::CONTROL)),
+                LaunchComposerKey::ComposerAuthority,
+                "{code:?} belongs to the composer now"
             );
         }
     }
@@ -2389,27 +2609,83 @@ mod launch_composer_tests {
         assert_eq!(app.handle_composer_enter().as_deref(), Some("hello world"));
         assert!(app.input.is_empty());
 
-        // Enter on an empty composer runs the card's highlighted menu
-        // entry while the card is up; the classification alone does not
-        // move focus (the event loop runs the entry).
+        // Enter on an empty composer with an untouched list runs nothing:
+        // no row is pre-selected, so a reflexive Enter at launch cannot
+        // start or resume a session by accident (founder live-test,
+        // 2026-09-02).
         let mut empty = launch_app();
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(empty.launch.menu_selected, None);
+        assert_eq!(
+            handle_launch_composer_key(&mut empty, enter),
+            LaunchComposerKey::Consumed
+        );
+        assert_eq!(
+            run_launch_card_row(&launch_rows_for_app(&empty), empty.launch.menu_selected),
+            LaunchAction::None
+        );
+        assert!(empty.launch.composer_focus);
+        // Once the user has arrowed onto a row, Enter runs it: row 0 is
+        // the prominent new-session entry.
         assert_eq!(
             handle_launch_composer_key(
                 &mut empty,
-                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)
             ),
+            LaunchComposerKey::MenuNavigate(1)
+        );
+        empty.launch.menu_selected = Some(0);
+        assert_eq!(
+            handle_launch_composer_key(&mut empty, enter),
             LaunchComposerKey::MenuRun
         );
-        assert!(empty.launch.composer_focus);
+        assert_eq!(
+            run_launch_card_row(&launch_rows_for_app(&empty), empty.launch.menu_selected),
+            LaunchAction::NewSession
+        );
+        // Esc unhighlights the list instead of reaching the composer.
+        assert_eq!(
+            handle_launch_composer_key(&mut empty, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            LaunchComposerKey::Consumed
+        );
+        assert_eq!(empty.launch.menu_selected, None);
         // Once the card has dissolved, empty-composer Enter is consumed:
         // there is no row to run and nothing to send.
         empty.launch.dissolve_started_ms = Some(0);
         assert_eq!(
-            handle_launch_composer_key(
-                &mut empty,
-                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
-            ),
+            handle_launch_composer_key(&mut empty, enter),
             LaunchComposerKey::Consumed
+        );
+        // And Esc on the empty composer brings the card back.
+        assert_eq!(
+            handle_launch_composer_key(&mut empty, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            LaunchComposerKey::Consumed
+        );
+        assert_eq!(empty.launch.dissolve_started_ms, None);
+    }
+
+    #[test]
+    fn highlighted_new_session_row_runs_a_fresh_session() {
+        // Row 0 is always the prominent new-session entry.
+        let app = launch_app();
+        let rows = launch_rows_for_app(&app);
+        assert!(!rows.is_empty(), "the card always lists a first row");
+        assert_eq!(
+            run_launch_card_row(&rows, Some(0)),
+            LaunchAction::NewSession
+        );
+        // Esc with a highlighted row unhighlights instead of dissolving:
+        // the card is still up.
+        let mut app = app;
+        app.launch.menu_selected = Some(0);
+        assert_eq!(
+            handle_launch_composer_key(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            LaunchComposerKey::Consumed
+        );
+        assert_eq!(app.launch.menu_selected, None);
+        assert!(
+            app.launch.dissolve_started_ms.is_none(),
+            "the card is still up"
         );
     }
 
@@ -2629,22 +2905,29 @@ mod header_tests {
         assert!(filesystem_scope_notice(&app).is_none());
         let line = header_line(&app, 120);
         assert!(!line.contains("files:"), "{line:?}");
-        assert!(line.starts_with("Codewhale"), "{line:?}");
+        assert!(line.starts_with("codewhale"), "{line:?}");
         assert!(line.contains("work"), "{line:?}");
         assert!(line.contains("ask"), "{line:?}");
     }
 
     #[test]
-    fn a_deviating_scope_still_takes_the_header() {
-        // The chip exists for exactly this: tool-approval "Full Access" being
-        // read as unrestricted disk writes. Folding the default away is what
-        // makes this one land.
+    fn full_access_is_the_disclosure_and_is_not_restated() {
+        // Full disk access is stated once, by the permission chip's own
+        // name. A second `files: full disk` chip beside it said the same
+        // thing twice; the mode name stays prominent and does the work.
         let mut app = app();
         app.approval_mode = ApprovalMode::Bypass;
         app.configured_sandbox_mode = Some("danger-full-access".to_string());
-        let notice = filesystem_scope_notice(&app).expect("full disk must be stated");
-        assert_eq!(notice, "files: full disk");
-        assert!(header_line(&app, 120).contains("files: full disk"));
+        assert!(filesystem_scope_notice(&app).is_none());
+        let line = header_line(&app, 120);
+        assert!(!line.contains("files:"), "{line:?}");
+        assert!(
+            line.contains(&*super::tr(
+                app.ui_locale,
+                super::MessageId::ChipPermissionFullAccess
+            )),
+            "{line:?}"
+        );
     }
 
     #[test]
@@ -2803,11 +3086,15 @@ const TINY_MARK_BELOW_WIDTH: u16 = 40;
 const ROUTE_BUDGET: usize = 60;
 
 /// Which mark the stage paints. Decided by the caller from the terminal
-/// (`kitty_graphics_supported`, `ascii_safe_enabled`), never in here.
+/// (`kitty_graphics_supported`, `sixel_graphics_supported`,
+/// `ascii_safe_enabled`), never in here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarkTier {
     /// Kitty graphics placeholders over the transmitted PNG.
     Image,
+    /// A blank block the event loop draws the sixel raster over after the
+    /// frame. Same block size as [`MarkTier::Image`]; same PNG.
+    Sixel,
     /// The braille rows.
     Braille,
     /// ASCII-safe: no mark, the wordmark line stands alone.
@@ -2880,8 +3167,16 @@ pub struct TidelineStartup<'a> {
     /// How far the launch card has dissolved, `[0.0 intact ..= 1.0 gone]`.
     /// Injected for the same determinism as `surface_progress`.
     pub card_dissolve: f32,
-    /// The card menu's highlighted entry.
-    pub menu_selected: usize,
+    /// Recent work for the card's recent-work list, most recent first.
+    pub recent: Vec<LaunchRecentEntry>,
+    /// More workspace sessions sit behind `recent`: the card paints the
+    /// see-all overflow row.
+    pub has_more_recent: bool,
+    /// The card row's highlighted entry, if the user has arrowed onto one.
+    pub menu_selected: Option<usize>,
+    /// The card row under the pointer, if any (index into the rows
+    /// [`launch_card_rows`] yields for this stage).
+    pub hovered: Option<usize>,
     /// The one migration notice above the composer, only when true.
     pub notice: Option<String>,
     /// `model (effort) · permission` — the composer bottom rule's trailing
@@ -2910,7 +3205,10 @@ impl<'a> TidelineStartup<'a> {
             mark: MarkTier::Braille,
             surface_progress: 1.0,
             card_dissolve: 0.0,
-            menu_selected: 0,
+            recent: Vec::new(),
+            has_more_recent: false,
+            menu_selected: None,
+            hovered: None,
             notice: None,
             composer_rule: None,
             branch: None,
@@ -2932,10 +3230,26 @@ impl<'a> TidelineStartup<'a> {
         self
     }
 
-    /// Set the card menu's highlighted entry.
+    /// Set the card's recent-work list and whether more sessions sit
+    /// behind it (the see-all overflow row).
     #[must_use]
-    pub fn menu_selected(mut self, selected: usize) -> Self {
+    pub fn recent(mut self, recent: Vec<LaunchRecentEntry>, has_more: bool) -> Self {
+        self.recent = recent;
+        self.has_more_recent = has_more;
+        self
+    }
+
+    /// Set the card row's highlighted entry.
+    #[must_use]
+    pub fn menu_selected(mut self, selected: Option<usize>) -> Self {
         self.menu_selected = selected;
+        self
+    }
+
+    /// Set the card row under the pointer.
+    #[must_use]
+    pub fn hovered(mut self, hovered: Option<usize>) -> Self {
+        self.hovered = hovered;
         self
     }
 
@@ -3104,19 +3418,191 @@ fn startup_layout(stage: Rect) -> StartupLayout {
     StartupLayout { header, dock }
 }
 
-/// The card menu's entries: label and the chord that runs it. Every chord
-/// exists in [`handle_launch_key`], so a hint can never advertise a dead key.
-fn launch_menu_entries(locale: Locale) -> [(Cow<'static, str>, &'static str); 4] {
-    [
-        (tr(locale, MessageId::LaunchMenuNewWorktree), "ctrl+n"),
-        (tr(locale, MessageId::LaunchMenuResume), "ctrl+r"),
-        (tr(locale, MessageId::LaunchMenuChangelog), "ctrl+l"),
-        (tr(locale, MessageId::LaunchMenuQuit), "ctrl+q"),
-    ]
+/// One content row inside the launch card below the title/announcement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaunchCardPlanRow {
+    /// Non-interactive `Recent` section heading — no hitbox.
+    Heading,
+    /// Non-interactive empty-workspace note — no hitbox.
+    Note,
+    /// Interactive row by index into [`launch_card_rows`].
+    Interactive(usize),
 }
 
-/// Number of entries the launch card paints.
-pub(crate) const LAUNCH_MENU_ENTRIES: usize = 4;
+/// The launch card's laid-out geometry: the card rect plus the absolute y
+/// of each content row below the title/announcement.
+struct LaunchCardPlan {
+    card: Rect,
+    announcement: bool,
+    rows: Vec<(u16, LaunchCardPlanRow)>,
+}
+
+/// The mark rung the card would like on this stage, before knowing whether
+/// the interior can hold it. Width alone picks Small vs Tiny for braille;
+/// the bitmap tiers have one size.
+fn launch_mark_rung(stage: Rect, tier: MarkTier) -> (MarkTier, MarkSize) {
+    let margin = (stage.width / 10).clamp(2, 12);
+    let card_w = stage.width.saturating_sub(margin.saturating_mul(2));
+    let rung = if card_w < TINY_MARK_BELOW_WIDTH {
+        MarkSize::Tiny
+    } else {
+        MarkSize::Small
+    };
+    (tier, rung)
+}
+
+/// Step the mark down until it fits `interior_h` rows: bitmap → braille
+/// Small → braille Tiny → none. Each step keeps the whale on the card at
+/// the largest size the stage allows.
+fn step_mark_to_fit(tier: MarkTier, rung: MarkSize, interior_h: u16) -> (MarkTier, MarkSize) {
+    let mut tier = tier;
+    let mut rung = rung;
+    loop {
+        let rows = match tier {
+            MarkTier::Image | MarkTier::Sixel => crate::tui::mark::MARK_IMAGE_ROWS,
+            MarkTier::Braille => rung.cells().1,
+            MarkTier::None => return (tier, rung),
+        };
+        if interior_h >= rows {
+            return (tier, rung);
+        }
+        match (tier, rung) {
+            (MarkTier::Image | MarkTier::Sixel, _) => tier = MarkTier::Braille,
+            (MarkTier::Braille, MarkSize::Small) => rung = MarkSize::Tiny,
+            (MarkTier::Braille, MarkSize::Tiny) => tier = MarkTier::None,
+            (MarkTier::None, _) => return (tier, rung),
+        }
+    }
+}
+
+/// Lay out the launch card: title, one announcement line when true, then
+/// the new-session entry, the `Recent` heading over the recents, the
+/// see-all overflow, and the empty note when there is no recent work.
+/// Pure geometry shared by the painter and
+/// [`tideline_startup_row_hitboxes`], so rects match painted cells
+/// wherever both run on the same stage.
+/// What the launch card has to place: counted once by the caller so the
+/// painter and the hitbox pass hand the plan the same inputs.
+#[derive(Debug, Clone, Copy)]
+struct LaunchCardContent {
+    notice_rows: u16,
+    announcement: bool,
+    interactive: usize,
+    has_recents: bool,
+    empty_note: bool,
+    mark_rows: u16,
+}
+
+impl LaunchCardContent {
+    fn for_startup(startup: &TidelineStartup<'_>, stage: Rect, interactive: usize) -> Self {
+        let (mark_tier, braille_rung) = launch_mark_rung(stage, startup.mark);
+        let mark_rows = match mark_tier {
+            MarkTier::Image | MarkTier::Sixel => crate::tui::mark::MARK_IMAGE_ROWS,
+            MarkTier::Braille => braille_rung.cells().1,
+            MarkTier::None => 0,
+        };
+        Self {
+            notice_rows: u16::from(startup.notice.is_some()),
+            announcement: startup.state_line().is_some(),
+            interactive,
+            has_recents: !startup.recent.is_empty(),
+            empty_note: startup.recent.is_empty() && !startup.has_more_recent,
+            mark_rows,
+        }
+    }
+}
+
+fn launch_card_plan(
+    stage: Rect,
+    layout: &StartupLayout,
+    content: LaunchCardContent,
+) -> Option<LaunchCardPlan> {
+    let LaunchCardContent {
+        notice_rows,
+        announcement,
+        interactive,
+        has_recents,
+        empty_note,
+        mark_rows,
+    } = content;
+    let margin = (stage.width / 10).clamp(2, 12);
+    let card_w = stage.width.saturating_sub(margin.saturating_mul(2));
+    // Vertically centred between the top line (and the notice row it keeps
+    // clear) and the composer dock.
+    let available = layout
+        .dock
+        .y
+        .saturating_sub(stage.y)
+        .saturating_sub(1 + notice_rows);
+    if card_w < 20 {
+        return None;
+    }
+    // The card sheds rather than clips: recents and the overflow from the
+    // bottom, then the heading/note, then the announcement; the title and
+    // the new-session entry hold last. A stage too small even for those
+    // keeps only the composer.
+    let mut plan_rows: Vec<LaunchCardPlanRow> = vec![LaunchCardPlanRow::Interactive(0)];
+    if has_recents {
+        plan_rows.push(LaunchCardPlanRow::Heading);
+        for index in 1..interactive {
+            plan_rows.push(LaunchCardPlanRow::Interactive(index));
+        }
+    } else if interactive > 1 {
+        // No recents: every row past the new-session entry is the see-all
+        // overflow.
+        for index in 1..interactive {
+            plan_rows.push(LaunchCardPlanRow::Interactive(index));
+        }
+    }
+    if empty_note {
+        plan_rows.push(LaunchCardPlanRow::Note);
+    }
+    let mut show_announcement = announcement;
+    let mut content_rows = 1 + u16::from(show_announcement) + plan_rows.len() as u16;
+    while available < content_rows + 2 {
+        if plan_rows
+            .last()
+            .is_some_and(|last| *last != LaunchCardPlanRow::Interactive(0))
+        {
+            plan_rows.pop();
+            content_rows -= 1;
+            continue;
+        }
+        if show_announcement {
+            show_announcement = false;
+            content_rows -= 1;
+        } else {
+            return None;
+        }
+    }
+    // The mark is part of the card, not a decoration that fits when it
+    // happens to: reserve its rows whenever the stage can spare them, so a
+    // two-row card (title + new session) still carries the whale. Text rows
+    // keep their top-aligned positions inside the taller interior.
+    let interior_rows = if available >= mark_rows + 2 {
+        content_rows.max(mark_rows)
+    } else {
+        content_rows
+    };
+    let card_h = interior_rows + 2;
+    let card = Rect {
+        x: stage.x + margin,
+        y: stage.y + 1 + notice_rows + (available - card_h) / 2,
+        width: card_w,
+        height: card_h,
+    };
+    let mut rows = Vec::with_capacity(plan_rows.len());
+    let mut y = card.y + 1 + u16::from(show_announcement);
+    for kind in plan_rows {
+        y += 1;
+        rows.push((y, kind));
+    }
+    Some(LaunchCardPlan {
+        card,
+        announcement: show_announcement,
+        rows,
+    })
+}
 
 /// Mix a style's ink toward the surface colour by `fade` — the card
 /// dissolve's whole motion, one bounded lerp.
@@ -3206,56 +3692,31 @@ fn render_launch_top_line(
 }
 
 /// Paint the centred launch card: the mark at left, `Codewhale` + version,
-/// one announcement line only when true, then the menu with its chords
-/// right-aligned. The dissolve fades every ink toward the surface colour;
-/// at progress 1.0 the caller stops painting the card entirely.
+/// one announcement line only when true, then the prominent new-session
+/// entry over the recent-work list (PRD 4.1). The dissolve fades every ink
+/// toward the surface colour; at progress 1.0 the caller stops painting
+/// the card entirely. Returns the sixel tier's reserved block (stage
+/// coordinates), or a zero-width rect when no sixel block was reserved.
 fn render_launch_card(
     stage: Rect,
     buf: &mut Buffer,
     startup: &TidelineStartup<'_>,
     layout: &StartupLayout,
-) {
+) -> Rect {
     let theme = startup.theme;
     let fade = startup.card_dissolve;
-    let entries = launch_menu_entries(startup.locale);
+    let rows = launch_card_rows(startup.locale, &startup.recent, startup.has_more_recent);
     let announcement = startup.state_line();
-    let notice_rows = u16::from(startup.notice.is_some());
-    let margin = (stage.width / 10).clamp(2, 12);
-    let card_w = stage.width.saturating_sub(margin.saturating_mul(2));
-    // Vertically centred between the top line (and the notice row it keeps
-    // clear) and the composer dock.
-    let available = layout
-        .dock
-        .y
-        .saturating_sub(stage.y)
-        .saturating_sub(1 + notice_rows);
-    if card_w < 20 {
-        return;
-    }
-    // The card sheds rather than clips: menu entries from the bottom, then
-    // the announcement; the title holds last. A stage too small even for
-    // the title keeps only the composer.
-    let mut show_announcement = announcement.is_some();
-    let mut menu_rows = entries.len() as u16;
-    let mut content_rows = 1 + u16::from(show_announcement) + menu_rows;
-    while available < content_rows + 2 {
-        if menu_rows > 0 {
-            menu_rows -= 1;
-            content_rows -= 1;
-        } else if show_announcement {
-            show_announcement = false;
-            content_rows -= 1;
-        } else {
-            return;
-        }
-    }
-    let card_h = content_rows + 2;
-    let card = Rect {
-        x: stage.x + margin,
-        y: stage.y + 1 + notice_rows + (available - card_h) / 2,
-        width: card_w,
-        height: card_h,
+    let (mark_tier, braille_rung) = launch_mark_rung(stage, startup.mark);
+    let Some(plan) = launch_card_plan(
+        stage,
+        layout,
+        LaunchCardContent::for_startup(startup, stage, rows.len()),
+    ) else {
+        return Rect::new(0, 0, 0, 0);
     };
+    let card = plan.card;
+    let card_w = card.width;
 
     let border = faded(chrome(theme, ChromeInk::MetadataDim), theme, fade);
     let top = startup.sym(&{
@@ -3294,21 +3755,23 @@ fn render_launch_card(
     );
 
     // The mark: the card's left column, vertically centred in the interior.
+    // Only the sixel tier reports a block; every other tier leaves this
+    // zero-width so the event loop emits nothing.
+    let mut sixel_reserve = Rect::new(0, 0, 0, 0);
     let interior_h = card.height.saturating_sub(2);
-    let braille_rung = if card_w < TINY_MARK_BELOW_WIDTH {
-        MarkSize::Tiny
-    } else {
-        MarkSize::Small
-    };
-    let (mark_cols, mark_rows) = match startup.mark {
-        MarkTier::Image => (
-            crate::tui::mark::KITTY_MARK_COLS,
-            crate::tui::mark::KITTY_MARK_ROWS,
+    // The plan reserved rows for this rung; if the stage could not spare
+    // them, step down (Image/Sixel → braille Small → Tiny) before giving
+    // the mark up. No-mark is the last resort, never the first.
+    let (mark_tier, braille_rung) = step_mark_to_fit(mark_tier, braille_rung, interior_h);
+    let (mark_cols, mark_rows) = match mark_tier {
+        MarkTier::Image | MarkTier::Sixel => (
+            crate::tui::mark::MARK_IMAGE_COLS,
+            crate::tui::mark::MARK_IMAGE_ROWS,
         ),
         MarkTier::Braille => braille_rung.cells(),
         MarkTier::None => (0, 0),
     };
-    let mark_fits = card_w >= 30 && interior_h >= mark_rows;
+    let mark_fits = mark_tier != MarkTier::None && card_w >= 30 && interior_h >= mark_rows;
     let text_x = if mark_fits {
         let mark_area = Rect {
             x: card.x + 2,
@@ -3316,13 +3779,23 @@ fn render_launch_card(
             width: mark_cols,
             height: mark_rows,
         };
-        match startup.mark {
+        match mark_tier {
             MarkTier::Image => {
                 crate::tui::mark::render_kitty_placeholders(
                     mark_area,
                     buf,
                     startup.surface_progress,
                 );
+            }
+            MarkTier::Sixel => {
+                // Binary visibility, no surfacing: the raster is either
+                // there (settled, like reduced motion) or gone. Once the
+                // card starts dissolving the block stays unreserved so the
+                // event loop clears the image instead of stranding it over
+                // the working screen.
+                if fade <= 0.0 {
+                    sixel_reserve = crate::tui::mark::render_sixel_reserve(mark_area, buf);
+                }
             }
             MarkTier::Braille => {
                 crate::tui::mark::render_mark(
@@ -3355,7 +3828,7 @@ fn render_launch_card(
         text_x,
         row,
         &Span::styled(
-            fit("Codewhale"),
+            fit("codewhale"),
             faded(
                 Style::default()
                     .fg(theme.accent_action)
@@ -3366,7 +3839,7 @@ fn render_launch_card(
         ),
     );
     let version = format!("v{}", startup.version);
-    let version_x = text_x + "Codewhale".width() as u16 + 1;
+    let version_x = text_x + "codewhale".width() as u16 + 1;
     if usize::from(version_x) + version.width() <= interior_w {
         set_span(
             buf,
@@ -3380,8 +3853,11 @@ fn render_launch_card(
     }
     row += 1;
 
-    // The announcement: the one blocking fact or piece of news, only true.
-    if let Some((line, ink)) = announcement {
+    // The announcement: the one blocking fact or piece of news, only true
+    // (and only when the plan kept it).
+    if plan.announcement
+        && let Some((line, ink)) = announcement
+    {
         set_span(
             buf,
             text_x,
@@ -3390,64 +3866,113 @@ fn render_launch_card(
         );
         row += 1;
     }
+    debug_assert_eq!(
+        row,
+        plan.rows.first().map_or(row, |(y, _)| *y),
+        "title/announcement rows must land on the plan"
+    );
 
-    // The menu: Enter runs the highlighted entry; chords right-aligned.
-    let selected = startup.menu_selected % LAUNCH_MENU_ENTRIES;
-    for (index, (label, chord)) in entries.iter().enumerate().take(menu_rows as usize) {
-        let is_selected = index == selected;
-        let marker = startup.sym(crate::tui::glyphs::selection_marker(is_selected));
-        let marker_style = if is_selected {
-            faded(
-                Style::default().fg(crate::palette::SELECTION_TEXT),
-                theme,
-                fade,
-            )
-        } else {
-            faded(chrome(theme, ChromeInk::MetadataDim), theme, fade)
-        };
-        set_span(
-            buf,
-            text_x,
-            row,
-            &Span::styled(marker.clone(), marker_style),
-        );
-        set_span(
-            buf,
-            text_x + marker.width() as u16 + 1,
-            row,
-            &Span::styled(
-                fit(label),
-                if is_selected {
+    // The rows: ↑/↓ highlight, Enter runs the highlighted row, hover
+    // paints the same shared selected-row treatment as the keyboard, and
+    // recent details sit right-aligned where the chords used to be.
+    // Nothing is highlighted until the user arrows or hovers.
+    let right_edge = card.right().saturating_sub(2);
+    for (y, kind) in &plan.rows {
+        match kind {
+            LaunchCardPlanRow::Heading => {
+                set_span(
+                    buf,
+                    text_x,
+                    *y,
+                    &Span::styled(
+                        fit(&tr(startup.locale, MessageId::LaunchRecentHeading)),
+                        faded(chrome(theme, ChromeInk::MetadataDim), theme, fade),
+                    ),
+                );
+            }
+            LaunchCardPlanRow::Note => {
+                set_span(
+                    buf,
+                    text_x,
+                    *y,
+                    &Span::styled(
+                        fit(&tr(startup.locale, MessageId::LaunchNoRecentSessions)),
+                        faded(chrome(theme, ChromeInk::Metadata), theme, fade),
+                    ),
+                );
+            }
+            LaunchCardPlanRow::Interactive(index) => {
+                let Some(entry) = rows.get(*index) else {
+                    continue;
+                };
+                let active =
+                    startup.menu_selected == Some(*index) || startup.hovered == Some(*index);
+                let marker = startup.sym(crate::tui::glyphs::selection_marker(active));
+                let marker_w = marker.width() as u16;
+                // The selected/hovered band runs the row's full interior in
+                // the shared selection treatment (the pickers' convention);
+                // the prominent new-session entry reads bold accent until
+                // then.
+                let row_style = if active {
+                    faded(crate::tui::menu_style::selected_row_style(), theme, fade)
+                } else if entry.prominent {
                     faded(
                         Style::default()
-                            .fg(crate::palette::SELECTION_TEXT)
+                            .fg(theme.accent_action)
                             .add_modifier(Modifier::BOLD),
                         theme,
                         fade,
                     )
                 } else {
                     faded(chrome(theme, ChromeInk::Metadata), theme, fade)
-                },
-            ),
-        );
-        let chord_text = chord.to_string();
-        let chord_x = card
-            .right()
-            .saturating_sub(2)
-            .saturating_sub(chord_text.width() as u16);
-        if chord_x > text_x + marker.width() as u16 + label.width() as u16 + 1 {
-            set_span(buf, chord_x, row, &Span::styled(chord_text, marker_style));
+                };
+                if active {
+                    let fill = crate::tui::menu_style::selected_row_bg_style();
+                    let mut x = card.x + 1;
+                    while x < card.right().saturating_sub(1) {
+                        let cell = &mut buf[(x, *y)];
+                        if let Some(bg) = faded(fill, theme, fade).bg {
+                            cell.set_bg(bg);
+                        }
+                        x += 1;
+                    }
+                }
+                set_span(buf, text_x, *y, &Span::styled(marker.clone(), row_style));
+                set_span(
+                    buf,
+                    text_x + marker_w + 1,
+                    *y,
+                    &Span::styled(fit(&entry.label), row_style),
+                );
+                if !entry.detail.is_empty() {
+                    let detail_x = right_edge.saturating_sub(entry.detail.width() as u16);
+                    let label_end = text_x + marker_w + 1 + entry.label.width() as u16 + 1;
+                    if detail_x > label_end {
+                        set_span(
+                            buf,
+                            detail_x,
+                            *y,
+                            &Span::styled(entry.detail.clone(), row_style),
+                        );
+                    }
+                }
+            }
         }
-        row += 1;
     }
+    sixel_reserve
 }
 
 /// Paint the startup stage: top line, the launch card (or the working
 /// screen once dissolved), then the docked composer. Deterministic; every
-/// fact is injected.
-pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &TidelineStartup<'_>) {
+/// fact is injected. Returns the sixel tier's reserved block (stage
+/// coordinates), or a zero-width rect when no sixel block was reserved.
+pub fn render_tideline_startup(
+    stage: Rect,
+    buf: &mut Buffer,
+    startup: &TidelineStartup<'_>,
+) -> Rect {
     if stage.width < 8 || stage.height < 5 {
-        return;
+        return Rect::new(0, 0, 0, 0);
     }
     let theme = startup.theme;
     let layout = startup_layout(stage);
@@ -3457,6 +3982,9 @@ pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &Tideline
     let card_gone = startup.card_dissolve >= 1.0;
     render_launch_top_line(layout.header, buf, startup, card_gone);
 
+    // The sixel block reserved by this paint, if any. The card is its only
+    // source; the working screen and the composer never reserve.
+    let mut sixel_reserve = Rect::new(0, 0, 0, 0);
     if card_gone {
         // The working screen's first transcript receipt, only when the
         // session fact is true.
@@ -3478,7 +4006,7 @@ pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &Tideline
             &Span::styled(receipt, chrome(theme, ChromeInk::Metadata)),
         );
     } else {
-        render_launch_card(stage, buf, startup, &layout);
+        sixel_reserve = render_launch_card(stage, buf, startup, &layout);
     }
 
     // The docked pre-session composer is the same rounded Tideline shell
@@ -3550,11 +4078,13 @@ pub fn render_tideline_startup(stage: Rect, buf: &mut Buffer, startup: &Tideline
             );
         }
     }
+    sixel_reserve
 }
 
 /// Recorded interactive hitboxes for the startup stage: the docked
-/// composer's focus, input and send targets. The header is deliberately
-/// non-interactive and has no hitbox.
+/// composer's focus, input and send targets, plus the launch card's
+/// clickable rows. The header is deliberately non-interactive and has no
+/// hitbox.
 #[derive(Debug, Clone, Default)]
 pub struct TidelineStartupHitboxes {
     /// The docked composer focus surface (a click here is a no-op that keeps
@@ -3564,6 +4094,44 @@ pub struct TidelineStartupHitboxes {
     pub input: Option<Rect>,
     /// The send glyph inside the composer row (click submits).
     pub send: Option<Rect>,
+    /// The card's clickable rows in [`launch_card_rows`] order.
+    pub rows: Vec<(crate::tui::app::LaunchRowId, Rect)>,
+}
+
+/// Clickable rects for the startup card's rows: the same
+/// [`launch_card_plan`] geometry the painter uses, so rects match painted
+/// cells wherever both run on the same stage.
+#[must_use]
+pub fn tideline_startup_row_hitboxes(
+    stage: Rect,
+    startup: &TidelineStartup<'_>,
+) -> Vec<(crate::tui::app::LaunchRowId, Rect)> {
+    let rows = launch_card_rows(startup.locale, &startup.recent, startup.has_more_recent);
+    let layout = startup_layout(stage);
+    let Some(plan) = launch_card_plan(
+        stage,
+        &layout,
+        LaunchCardContent::for_startup(startup, stage, rows.len()),
+    ) else {
+        return Vec::new();
+    };
+    plan.rows
+        .iter()
+        .filter_map(|(y, kind)| match kind {
+            LaunchCardPlanRow::Interactive(index) => rows.get(*index).map(|row| {
+                (
+                    row.id.clone(),
+                    Rect {
+                        x: plan.card.x + 1,
+                        y: *y,
+                        width: plan.card.width.saturating_sub(2),
+                        height: 1,
+                    },
+                )
+            }),
+            LaunchCardPlanRow::Heading | LaunchCardPlanRow::Note => None,
+        })
+        .collect()
 }
 
 /// Compute the startup hitboxes for one render area. Pure geometry through
@@ -3651,14 +4219,29 @@ pub fn tideline_startup_from_app(app: &App) -> TidelineStartup<'_> {
         MarkTier::None
     } else if crate::tui::mark::kitty_graphics_supported() {
         MarkTier::Image
+    } else if app.use_alt_screen()
+        && app.launch.sixel_cell_px.is_some()
+        && crate::tui::mark::sixel_graphics_supported()
+        && crate::tui::mark::sixel_field_bg(&app.ui_theme, app.launch.sixel_terminal_bg).is_some()
+    {
+        // Sixel last: cursor-addressed pixels need the alternate screen
+        // (inline viewports have no stable CUP origin), a measured cell
+        // size, and an RGB field to composite the raster's corners onto.
+        // Anything missing keeps the braille tier.
+        MarkTier::Sixel
     } else {
         MarkTier::Braille
     };
     // The composer's launch rule: `model (effort) · permission` — the one
-    // place the route and the posture show while the card is up.
+    // place the route and the posture show while the card is up — plus the
+    // filesystem scope whenever it says something the permission word does
+    // not (PRD 4.1: the recommended route carries its visible trust and
+    // billing boundary; the provider identity in the route line is the
+    // billing owner, the permission + scope is the trust boundary).
     let (_, model) = app.effective_route_identity_display();
     let permission = permission_label(app);
-    let composer_rule = Some(if model.is_empty() {
+    let scope = filesystem_scope_notice(app).map(|scope| scope.into_owned());
+    let mut rule = if model.is_empty() {
         format!(
             "{} · {}",
             tr(app.ui_locale, MessageId::InfoLineNotConnected),
@@ -3671,7 +4254,15 @@ pub fn tideline_startup_from_app(app: &App) -> TidelineStartup<'_> {
         } else {
             format!("{model} ({effort}) · {permission}")
         }
-    });
+    };
+    if let Some(scope) = scope {
+        rule.push_str(" · ");
+        rule.push_str(&scope);
+    }
+    let composer_rule = Some(rule);
+    // Recent work is projected from the launch state's loaded list — the
+    // render path never touches disk.
+    let (recent, has_more) = launch_recent_entries(app);
     let branch = git_matches_workspace
         .then(|| git.branch.clone())
         .flatten()
@@ -3693,8 +4284,12 @@ pub fn tideline_startup_from_app(app: &App) -> TidelineStartup<'_> {
         .ascii_safe(ascii_safe)
         .mark(mark)
         .composer(LaunchComposerDisplay::from_app(app))
-        .status_line(launch_status_line(app, ascii_safe))
+        // The transient line over the dock: the latest launch status (a
+        // resume failure leaves the card up and says why here).
+        .status_line(app.launch.status.clone())
+        .recent(recent, has_more)
         .menu_selected(app.launch.menu_selected)
+        .hovered(app.launch.hovered_row)
         .notice(
             app.launch
                 .claude_code_detected
@@ -3717,35 +4312,26 @@ pub fn tideline_startup_from_app(app: &App) -> TidelineStartup<'_> {
         })
 }
 
-/// The launch surface's transient line: the worktree-name prompt while the
-/// name is being typed, else the most recent launch status message.
-fn launch_status_line(app: &App, ascii_safe: bool) -> Option<String> {
-    if let Some(input) = app.launch.worktree_input.as_deref() {
-        let caret = if app.low_motion || ascii_safe {
-            "_"
-        } else {
-            "▌"
-        };
-        Some(format!(
-            "{}  {}{caret}",
-            tr(app.ui_locale, MessageId::LaunchWorktreeNameLabel),
-            input
-        ))
-    } else {
-        app.launch.status.as_deref().map(str::to_string)
-    }
-}
-
 /// Store the startup stage's clickable rects into the launch state. Call
 /// after the stage is painted, with the hitboxes computed for the same
 /// stage rect: the docked composer's input and send rects land in
-/// `composer_area`/`send_area`.
+/// `composer_area`/`send_area`, and the card's clickable rows land in
+/// `row_hitboxes` (hover and click share them).
 pub fn apply_launch_hitboxes(
     hitboxes: &TidelineStartupHitboxes,
     launch: &mut crate::tui::app::LaunchState,
 ) {
     launch.composer_area = hitboxes.composer;
     launch.send_area = hitboxes.send;
+    launch.row_hitboxes = hitboxes.rows.clone();
+    // Hover must match a painted cell, so a shed row clears it; the
+    // keyboard selection is intentionally kept (Enter still runs it).
+    if launch
+        .hovered_row
+        .is_some_and(|hovered| hovered >= launch.row_hitboxes.len())
+    {
+        launch.hovered_row = None;
+    }
 }
 
 #[cfg(test)]

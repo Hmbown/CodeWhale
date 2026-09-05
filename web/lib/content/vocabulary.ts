@@ -43,8 +43,8 @@ export const PRODUCT_TERMS: ProductTerm[] = [
       zh: "用户的模型清单：花名册中有哪些成员，以及选中了哪一位",
     },
     long: {
-      en: "Fleet records member IDs and names, semantic roles, provider/model identities, and roster state. `/pod` and `codewhale pod` remain accepted command aliases.",
-      zh: "Fleet 记录成员 ID 和名称、语义角色、提供商/模型身份以及花名册状态。`/pod` 和 `codewhale pod` 仍是可接受的命令别名。",
+      en: "Fleet records member IDs and names, semantic roles, provider/model identities, and roster state.",
+      zh: "Fleet 记录成员 ID 和名称、语义角色、提供商/模型身份以及花名册状态。",
     },
   },
   {

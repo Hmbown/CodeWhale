@@ -3,14 +3,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::fs;
-use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use async_stream::stream;
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{ConnectInfo, Path, Query, Request, State};
 use axum::http::header;
 use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware;
@@ -88,11 +88,13 @@ use codewhale_protocol::fleet::{
 };
 
 mod auth;
+mod mobile;
+mod plugins;
 mod sessions;
 mod web;
 mod workspace;
 #[cfg(test)]
-use self::auth::{ResolvedRuntimeAuth, token_from_cookie_header};
+use self::auth::ResolvedRuntimeAuth;
 use self::auth::{
     require_runtime_token, resolve_runtime_auth, runtime_auth_status_lines,
     runtime_request_is_authorized,
@@ -171,6 +173,7 @@ pub struct RuntimeApiState {
     bind_host: String,
     bind_port: u16,
     mobile_enabled: bool,
+    mobile: Option<mobile::RuntimeMobileState>,
     web: Option<web::RuntimeWebState>,
     /// Executable used by Runtime API-owned Fleet manager loops. Stored on
     /// state so tests and embedded callers can provide a hermetic worker.
@@ -548,6 +551,7 @@ fn default_runtime_capabilities() -> RuntimeCapabilities {
         memory: true,
         mcp_server_management: true,
         skill_lifecycle: true,
+        plugin_management: true,
         agent_mail: true,
     }
 }
@@ -836,15 +840,7 @@ pub async fn run_http_server(
     plugin_discovery: Arc<crate::plugins::PluginDiscoveryContext>,
     options: RuntimeApiOptions,
 ) -> Result<()> {
-    if options.port == 0 {
-        bail!("Port must be > 0");
-    }
-    if options.web && options.host != "127.0.0.1" {
-        bail!("Codewhale web is loopback-only and must bind to 127.0.0.1");
-    }
-    if options.web && options.insecure_no_auth {
-        bail!("Codewhale web requires Runtime authentication; remove --insecure");
-    }
+    validate_runtime_listener_security(&options)?;
 
     let task_default_model = config.default_model();
     let task_cfg = TaskManagerConfig::from_runtime(
@@ -892,6 +888,12 @@ pub async fn run_http_server(
     } else {
         (None, None)
     };
+    let (mobile, mobile_bootstrap) = if options.mobile && auth_enabled {
+        let (mobile, bootstrap) = mobile::RuntimeMobileState::new();
+        (Some(mobile), Some(bootstrap))
+    } else {
+        (None, None)
+    };
     let skill_state = SkillStateStore::load_default()
         .context("load persistent Skill activation state for Runtime API")?;
     let sub_agent_manager = runtime_api_sub_agent_manager(&workspace, options.workers);
@@ -913,6 +915,7 @@ pub async fn run_http_server(
         bind_host: options.host.clone(),
         bind_port: options.port,
         mobile_enabled: options.mobile,
+        mobile,
         web,
         fleet_codewhale_binary: configured_codewhale_binary(),
         mcp_pool: Arc::new(Mutex::new(None)),
@@ -921,9 +924,7 @@ pub async fn run_http_server(
     };
     let app = build_router(state);
 
-    let addr: SocketAddr = format!("{}:{}", options.host, options.port)
-        .parse()
-        .with_context(|| format!("Invalid bind address '{}:{}'", options.host, options.port))?;
+    let addr = runtime_bind_address(&options.host, options.port)?;
     let listener = TcpListener::bind(addr)
         .await
         .with_context(|| format!("Failed to bind {addr}"))?;
@@ -944,6 +945,7 @@ pub async fn run_http_server(
             auth_enabled,
             resolved_auth.generated,
             options.show_qr,
+            mobile_bootstrap.as_deref(),
         );
     }
     if let Some(bootstrap) = web_bootstrap {
@@ -957,7 +959,7 @@ pub async fn run_http_server(
             println!("{warning}");
         }
     }
-    let is_loopback = options.host == "127.0.0.1" || options.host == "::1";
+    let is_loopback = is_loopback_bind_host(&options.host);
     if is_loopback {
         println!("Security: this server is local-first. Do not expose it to untrusted networks.");
     } else {
@@ -986,6 +988,42 @@ pub async fn run_http_server(
     scheduler_cancel.cancel();
     scheduler_handle.abort();
     serve_result
+}
+
+/// Mobile control uses plain HTTP only on loopback. It has no TLS or verified
+/// overlay transport, so a non-loopback listener would expose the Runtime API
+/// to peers that can observe or replay browser traffic.
+fn validate_runtime_listener_security(options: &RuntimeApiOptions) -> Result<()> {
+    if options.port == 0 {
+        bail!("Port must be > 0");
+    }
+    if options.web && options.host != "127.0.0.1" {
+        bail!("Codewhale web is loopback-only and must bind to 127.0.0.1");
+    }
+    if options.web && options.insecure_no_auth {
+        bail!("Codewhale web requires Runtime authentication; remove --insecure");
+    }
+    if options.mobile && !is_loopback_bind_host(&options.host) {
+        bail!(
+            "Codewhale mobile is loopback-only without TLS or a verified overlay; bind to 127.0.0.1 or ::1"
+        );
+    }
+    Ok(())
+}
+
+fn is_loopback_bind_host(host: &str) -> bool {
+    host.parse::<IpAddr>()
+        .is_ok_and(|address| address.is_loopback())
+}
+
+fn runtime_bind_address(host: &str, port: u16) -> Result<SocketAddr> {
+    let address = match host.parse::<IpAddr>() {
+        Ok(IpAddr::V6(_)) => format!("[{host}]:{port}"),
+        _ => format!("{host}:{port}"),
+    };
+    address
+        .parse()
+        .with_context(|| format!("Invalid bind address '{host}:{port}'"))
 }
 
 fn web_launcher_warning(result: Result<()>) -> Option<String> {
@@ -1150,6 +1188,47 @@ pub fn build_router(state: RuntimeApiState) -> Router {
         .route("/v1/skills/{name}/trust", post(trust_skill_api))
         .route("/v1/skills/{name}/audit", get(audit_skill_api))
         .route("/v1/apps/mcp/tools", get(list_mcp_tools))
+        .route("/v1/apps/plugins", get(plugins::list_plugins))
+        .route(
+            "/v1/apps/plugins/install",
+            post(plugins::install_plugin_api),
+        )
+        .route(
+            "/v1/apps/plugins/{selector}",
+            get(plugins::get_plugin).delete(plugins::uninstall_plugin_api),
+        )
+        .route(
+            "/v1/apps/plugins/{selector}/update",
+            post(plugins::update_plugin_api),
+        )
+        .route(
+            "/v1/apps/plugins/{selector}/trust",
+            post(plugins::trust_plugin_api),
+        )
+        .route(
+            "/v1/apps/plugins/{selector}/enable",
+            post(plugins::enable_plugin_api),
+        )
+        .route(
+            "/v1/apps/plugins/{selector}/disable",
+            post(plugins::disable_plugin_api),
+        )
+        .route(
+            "/v1/apps/plugins/{selector}/revoke",
+            post(plugins::revoke_plugin_api),
+        )
+        .route(
+            "/v1/apps/marketplaces",
+            get(plugins::list_marketplaces).post(plugins::add_marketplace),
+        )
+        .route(
+            "/v1/apps/marketplaces/{name}",
+            get(plugins::get_marketplace).delete(plugins::remove_marketplace),
+        )
+        .route(
+            "/v1/apps/marketplaces/{name}/install",
+            post(plugins::install_marketplace_candidate_api),
+        )
         .route(
             "/v1/automations",
             get(list_automations).post(create_automation),
@@ -1205,6 +1284,15 @@ pub fn build_router(state: RuntimeApiState) -> Router {
             "/__codewhale/bootstrap/{nonce}",
             get(web::exchange_bootstrap),
         )
+        .route(
+            "/__codewhale/mobile/bootstrap/{nonce}",
+            get(exchange_mobile_bootstrap),
+        )
+        .route("/__codewhale/mobile/session", post(exchange_mobile_session))
+        .route(
+            "/__codewhale/mobile/stream-ticket",
+            post(refresh_mobile_stream_ticket),
+        )
         .route("/health", get(health))
         .route("/mobile", get(mobile_page))
         .route("/mobile/", get(mobile_page))
@@ -1223,41 +1311,185 @@ async fn mobile_page(State(state): State<RuntimeApiState>, req: Request) -> Resp
             .into_response();
     }
     let _ = req;
-    Html(MOBILE_HTML).into_response()
+    let mut response = Html(MOBILE_HTML).into_response();
+    secure_mobile_response(&mut response);
+    response
 }
 
-fn print_mobile_urls(addr: SocketAddr, auth_enabled: bool, generated_auth: bool, show_qr: bool) {
+#[derive(Serialize)]
+struct MobileSessionResponse {
+    request_proof: String,
+    stream_ticket: String,
+    session_expires_in_seconds: u64,
+    stream_ticket_expires_in_seconds: u64,
+}
+
+async fn exchange_mobile_bootstrap(
+    State(state): State<RuntimeApiState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path(nonce): Path<String>,
+) -> Response {
+    let Some(mobile_state) = state.mobile.as_ref() else {
+        return mobile_not_found();
+    };
+    let session = match mobile_state.consume_bootstrap(&nonce, peer.ip()) {
+        Ok(session) => session,
+        Err(mobile::BootstrapError::NonLoopback) => {
+            return secured_mobile_text(StatusCode::FORBIDDEN, "bootstrap unavailable");
+        }
+        Err(mobile::BootstrapError::Invalid | mobile::BootstrapError::Expired) => {
+            return secured_mobile_text(StatusCode::UNAUTHORIZED, "bootstrap unavailable");
+        }
+    };
+
+    let location = format!(
+        "/mobile#request_proof={}&stream_ticket={}",
+        session.request_proof, session.stream_ticket
+    );
+    let cookie = mobile::mobile_session_cookie(&session.session_cookie);
+    let mut response = (StatusCode::SEE_OTHER, "").into_response();
+    response.headers_mut().insert(
+        header::LOCATION,
+        HeaderValue::from_str(&location).expect("generated mobile fragment is a valid header"),
+    );
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&cookie).expect("generated mobile cookie is a valid header"),
+    );
+    secure_mobile_response(&mut response);
+    response
+}
+
+async fn exchange_mobile_session(State(state): State<RuntimeApiState>, req: Request) -> Response {
+    let Some(mobile_state) = state.mobile.as_ref() else {
+        return mobile_not_found();
+    };
+    let Some(expected) = state.runtime_token.as_deref() else {
+        return mobile_not_found();
+    };
+    if !auth::request_has_header_runtime_token(&req, expected) {
+        return mobile_unauthorized();
+    }
+    mobile_session_response(mobile_state.issue_session())
+}
+
+async fn refresh_mobile_stream_ticket(
+    State(state): State<RuntimeApiState>,
+    req: Request,
+) -> Response {
+    let Some(mobile_state) = state.mobile.as_ref() else {
+        return mobile_not_found();
+    };
+    if !auth::mobile_session_request_is_authorized(&req, &state, mobile_state) {
+        return mobile_unauthorized();
+    }
+    let ticket = mobile_state.refresh_stream_ticket(
+        req.headers()
+            .get(header::COOKIE)
+            .and_then(|value| value.to_str().ok()),
+        req.headers()
+            .get(mobile::MOBILE_REQUEST_HEADER)
+            .and_then(|value| value.to_str().ok()),
+    );
+    let Some(ticket) = ticket else {
+        return mobile_unauthorized();
+    };
+    let mut response = Json(json!({
+        "stream_ticket": ticket.ticket,
+        "expires_in_seconds": ticket.expires_in_seconds,
+    }))
+    .into_response();
+    secure_mobile_response(&mut response);
+    response
+}
+
+fn mobile_session_response(session: mobile::MobileSessionBootstrap) -> Response {
+    let cookie = mobile::mobile_session_cookie(&session.session_cookie);
+    let mut response = Json(MobileSessionResponse {
+        request_proof: session.request_proof,
+        stream_ticket: session.stream_ticket,
+        session_expires_in_seconds: session.session_ttl_seconds,
+        stream_ticket_expires_in_seconds: session.stream_ticket_ttl_seconds,
+    })
+    .into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&cookie).expect("generated mobile cookie is a valid header"),
+    );
+    secure_mobile_response(&mut response);
+    response
+}
+
+fn mobile_not_found() -> Response {
+    secured_mobile_text(StatusCode::NOT_FOUND, "not found")
+}
+
+fn mobile_unauthorized() -> Response {
+    let mut response = auth::runtime_token_required_response();
+    secure_mobile_response(&mut response);
+    response
+}
+
+fn secured_mobile_text(status: StatusCode, body: &'static str) -> Response {
+    let mut response = (status, body).into_response();
+    secure_mobile_response(&mut response);
+    response
+}
+
+fn secure_mobile_response(response: &mut Response) {
+    let headers = response.headers_mut();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(
+            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
+        ),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+}
+
+fn print_mobile_urls(
+    addr: SocketAddr,
+    auth_enabled: bool,
+    generated_auth: bool,
+    show_qr: bool,
+    mobile_bootstrap: Option<&str>,
+) {
     println!("Mobile control page enabled.");
 
-    let port = addr.port();
-    let qr_url = if addr.ip().is_unspecified() {
-        println!("  Local: http://127.0.0.1:{port}/mobile");
-        if let Some(ip) = detect_lan_ip() {
-            let lan_url = format!("http://{ip}:{port}/mobile");
-            println!("  LAN:   {lan_url}");
-            lan_url
-        } else {
-            println!("  LAN:   bind is 0.0.0.0; open http://<this-machine-ip>:{port}/mobile");
-            format!("http://127.0.0.1:{port}/mobile")
-        }
-    } else {
-        let url = format!("http://{addr}/mobile");
-        println!("  URL:   {url}");
-        url
-    };
+    let url = format!("http://{addr}/mobile");
+    println!("  URL:   {url}");
     if auth_enabled {
-        if generated_auth {
+        if let Some(bootstrap) = mobile_bootstrap {
+            let bootstrap_url = mobile::bootstrap_url(addr, bootstrap);
             println!(
-                "  Auth uses an unprinted generated token; restart with CODEWHALE_RUNTIME_TOKEN or --auth-token to sign in from another client."
+                "  Bootstrap (single-use, expires in {} min): {bootstrap_url}",
+                mobile::BOOTSTRAP_TTL.as_secs() / 60
+            );
+        } else if generated_auth {
+            println!(
+                "  Auth uses an unprinted generated token; open the bootstrap URL printed above."
             );
         } else {
-            println!("  Enter the configured runtime token in the page connection field.");
+            println!(
+                "  Use the bootstrap URL; the page also supports one-time bearer entry without storing it."
+            );
         }
     }
-    println!("Mobile security: use only on a trusted LAN/VPN; this server does not provide TLS.");
+    println!(
+        "Mobile security: loopback-only; no LAN/VPN device access without a verified transport boundary."
+    );
 
     if show_qr {
-        match qrcode::QrCode::new(qr_url.as_bytes()) {
+        println!("  QR is loopback-only and cannot pair another device.");
+        match qrcode::QrCode::new(url.as_bytes()) {
             Ok(qr) => {
                 let qr_str = qr.render::<qrcode::render::unicode::Dense1x2>().build();
                 println!("\n{qr_str}");
@@ -1267,31 +1499,6 @@ fn print_mobile_urls(addr: SocketAddr, auth_enabled: bool, generated_auth: bool,
             }
         }
     }
-}
-
-#[cfg(test)]
-fn url_query_component(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => {
-                use std::fmt::Write as _;
-                let _ = write!(encoded, "%{byte:02X}");
-            }
-        }
-    }
-    encoded
-}
-
-fn detect_lan_ip() -> Option<String> {
-    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
-    // UDP connect only selects the outbound interface locally; no packet is sent.
-    socket.connect("10.255.255.255:1").ok()?;
-    let addr = socket.local_addr().ok()?;
-    Some(addr.ip().to_string())
 }
 
 async fn health() -> Json<HealthResponse> {

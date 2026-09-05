@@ -1,6 +1,6 @@
-//! Runtime for an **exact named Pod** (`schema = "exact"`).
+//! Runtime for an **exact named Fleet** (`schema = "exact"`).
 //!
-//! The saved Pod is the Pod that runs. At Workflow start its definition is
+//! The saved Fleet is the Fleet that runs. At Workflow start its definition is
 //! read from the standard `FleetSearchRoot` locations, every worker route is
 //! **preflighted and frozen**, the attached Reasoning Router service is
 //! resolved, and the whole thing is captured into an immutable
@@ -19,12 +19,12 @@
 //!    is called. A rejected or capacity-blocked task spends no Router tokens
 //!    and discloses nothing to a Router's provider.
 //! 3. **Auto is a reasoning decision, and the attached Router makes it.**
-//!    `reasoning = "auto"` always goes to the Pod's Reasoning Router — no
+//!    `reasoning = "auto"` always goes to the Fleet's Reasoning Router — no
 //!    provider-native-adaptive bypass, no legacy model routing, no local
 //!    keyword heuristic. A manual tier calls no Router at all.
 //! 4. **Runtime owns authority.** After exact member selection, Runtime maps
 //!    the semantic role onto its closed role policy and intersects that policy
-//!    with the live parent. Pod identity never grants or withholds project
+//!    with the live parent. Fleet identity never grants or withholds project
 //!    trust, tools, writes, network reach, shell, or delegation.
 //! 5. **Receipts are truthful and content-free.** The tier a selector picked,
 //!    the control a provider actually receives, and what a Router cost are
@@ -33,26 +33,31 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[cfg(test)]
+use codewhale_workflow::ShellCeiling;
 use codewhale_workflow::{
     CapturedReasoningRouter, CredentialReadiness, EffectiveReasoning, EndpointIdentity,
     FleetDocument, FleetRouterRef, FleetSearchRoot, FleetSnapshot, FleetSnapshotMember,
     FleetTaskReceipt, NamedFleetError, PermissionCeiling, PreflightError, PreflightedRoute,
     ProviderReasoningControl, QualifiedFleetId, ReasoningCapability, ReasoningRouterProfile,
     ReasoningTier, ResolvedReasoning, RoutePreflight, RouterAvailability, RouterCallInput,
-    RouterCallPlan, RouterIdentity, RoutingDisclosure, ShellCeiling, bounded_routing_payload,
+    RouterCallPlan, RouterIdentity, RoutingDisclosure, bounded_routing_payload,
     captured_legacy_inline_router, parse_router_decision, resolve_exact_member_reasoning,
     router_call_plan, router_system_prompt, router_user_message,
 };
 
+use super::role::{ChildAuthority, public_role_label};
+#[cfg(test)]
+use super::role::{
+    NETWORK_DENIAL_SENTINEL, NETWORK_TOOL_DENYLIST, RAW_SHELL_SENTINEL, is_posture_denial,
+    session_shell_ceiling,
+};
 use crate::config::{ApiProvider, Config};
-use crate::fleet::profile::AgentProfile;
-use crate::fleet::roster::{FleetRoster, ProfileOrigin};
 use crate::llm_client::LlmClient;
 use crate::models::Role;
-use crate::tools::subagent::public_role_label;
 use crate::tui::app::ReasoningEffort;
 
-/// Where exact Pod definitions and Reasoning Router profiles are looked up,
+/// Where exact Fleet definitions and Reasoning Router profiles are looked up,
 /// labelled so an identity can be qualified (`workspace/glm-pair`) instead of
 /// silently shadowed.
 fn personal_fleet_root() -> anyhow::Result<std::path::PathBuf> {
@@ -73,523 +78,13 @@ pub(crate) fn fleet_search_roots(workspace: &std::path::Path) -> Vec<FleetSearch
     roots
 }
 
-/// Load a Pod document by (optionally qualified) name from the standard
+/// Load a Fleet document by (optionally qualified) name from the standard
 /// roots. Ambiguity between origins is surfaced, never resolved by shadowing.
 pub(crate) fn load_fleet_document(
     name: &str,
     workspace: &std::path::Path,
 ) -> Result<(FleetDocument, QualifiedFleetId), NamedFleetError> {
     FleetDocument::load_by_name(name, &fleet_search_roots(workspace))
-}
-
-// ── Child authority: the ceiling, as the child actually experiences it ───────
-
-/// Tool names that give a model its own reach onto the network.
-///
-/// `network_tool = false` must remove **all** of them from the child's
-/// model-visible surface, not merely block them at call time — a model that can
-/// see a tool will try it, and a refusal is a worse experience than an absent
-/// capability. The child registry hides denied tools from
-/// `tools_for_model` and refuses them in `is_tool_allowed`, so one deny list
-/// covers both.
-///
-/// The `mcp*` wildcards are load-bearing: a remote MCP server's tools arrive
-/// under a runtime-generated name, so they cannot be enumerated here and must be
-/// matched by prefix. `is_tool_denied` supports `prefix*` globs for exactly this.
-pub(crate) const NETWORK_TOOL_DENYLIST: &[&str] = &[
-    // Web search / fetch / browse, and the canonical family that fronts them.
-    //
-    // The `Web` family name itself is deliberately NOT denied. Its `search`
-    // and `fetch` actions are the read-only web surface a network-denied
-    // member is entitled to (parity with an ordinary scout), and the family
-    // is classified read-only at the capability envelope, so removing the
-    // *name* from this list grants exactly those two actions and nothing
-    // else. What this list removes is every other spelling of the browsing
-    // surface: the separate `web.run` browse tool, the legacy `web_search` /
-    // `fetch_url` / `wait_for_dev_server` action aliases, and the `web_*` /
-    // `web.*` name families, so a deny list that stops at `Web` can never
-    // leave `web.run` visible and callable, which is the entire browsing
-    // capability by another spelling. The explicit names are kept because
-    // they document intent and because two of them (`fetch_url`,
-    // `wait_for_dev_server`) are not matched by either glob.
-    //
-    // The child registry's action seam (`SubAgentToolRegistry::is_action_allowed`)
-    // lets a network-denied child keep exactly `Web{search, fetch}` past the
-    // denied aliases, and the URL-input guard refuses a URL-addressed
-    // `fetch` at dispatch, so the reach stays closed.
-    "web_*",
-    "web.*",
-    "web.run",
-    "web_run",
-    "web_search",
-    "web.fetch",
-    "web_fetch",
-    "fetch_url",
-    "wait_for_dev_server",
-    "browse",
-    "browser",
-    // Networked service tools.
-    "github",
-    "finance",
-    // The RLM session family's two reaching actions.
-    //
-    // `rlm_open` accepts a `url` and fetches it by calling `FetchUrlTool`
-    // *in-process*, under its own name — so denying `fetch_url` never sees the
-    // call. `rlm_eval` runs operator-supplied Python against a live kernel,
-    // which owns a socket API no inspection of the *call* can bound.
-    //
-    // Both are denied outright rather than gated on the input. The narrower
-    // contract was considered and rejected: `rlm_open` chooses its source from
-    // *input fields* (`file_path` / `content` / `url` / `session_object`), not
-    // from the action name, and the action-policy seam
-    // ([`crate::tools::canonical_action`]) resolves names, not field shapes —
-    // it cannot prove a source is local before execution. So this fails closed.
-    // A network-denied member loses `rlm` loading and evaluation entirely,
-    // including the purely local `file_path` form, and keeps only the bounded
-    // metadata actions (`session_objects` / `configure` / `close`), which the
-    // per-action alias entries make expressible. See `docs/FLEET.md`.
-    "rlm_open",
-    "rlm_eval",
-    // Every MCP surface, including remote servers registered at runtime.
-    "mcp*",
-    "start_mcp_server",
-    "list_mcp_resources",
-    "list_mcp_resource_templates",
-    "read_mcp_resource",
-];
-
-/// The deny-list entry that stands for "this child has no network".
-///
-/// The deny list *is* how `network_tool = false` reaches a child registry
-/// (through `worker_profile.denied_tools`), so posture is read back off the
-/// list rather than carried as a second field that could disagree with it.
-/// `fetch_url` is the sentinel because every network denial installs it and no
-/// narrower deny list does — the `web_*` / `web.*` globs deliberately do not
-/// match it, which is why it is spelled out above.
-pub(crate) const NETWORK_DENIAL_SENTINEL: &str = "fetch_url";
-
-/// Tool names that mutate the workspace directly.
-///
-/// A member whose clamped ceiling says `write = false` must not merely be
-/// *labelled* read-only — the mutating tools have to be gone from the surface
-/// it can see and call. Only the action aliases are listed, never the `File`
-/// family itself: denying `File` would take `read`/`list`/`search` with it, and
-/// the registry already resolves `File{action:"write"}` through the alias table
-/// to `write_file`, so denying the alias covers both spellings.
-///
-/// `rlm_eval` is here for the same reason it is on the network list and not for
-/// a different one: the Python it runs against a live kernel calls `open(...,
-/// "w")` as readily as it opens a socket. It is a mutation primitive that
-/// happens to be spelled as an analysis tool, and leaving it on a `write =
-/// false` surface would let a read-only member rewrite the workspace while the
-/// receipt said otherwise. The rest of the family — including the local
-/// `file_path` load — survives a write denial, because reading a large file
-/// into a kernel is exactly what a read-only member is for.
-pub(crate) const MUTATING_TOOL_DENYLIST: &[&str] = &[
-    "write_file",
-    "edit_file",
-    "apply_patch",
-    "fim_edit",
-    "revert_turn",
-    "rlm_eval",
-];
-
-/// The raw shell surface — arbitrary operator-supplied commands.
-///
-/// A read-only member with `shell = "full"` is the honest-labelling problem
-/// this list exists for. `full` was saved so the member could *run checks*, but
-/// raw shell is a general mutation primitive: `rm`, `git checkout`, or a `>`
-/// redirect writes the workspace just as surely as `write_file`, while the
-/// receipt says `write=false`. Denying the raw shell entries and leaving the
-/// bounded verification surface (`Run` / `run_tests` / `run_verifiers`) intact
-/// keeps the verifier able to do its job under a contract that is true.
-/// Scout/reviewer read-only inspection selectively removes only canonical `Bash` from this
-/// deny list after the role is known; its input-specific read-only classifier
-/// remains the authority for that narrow exception.
-///
-/// That surface is bounded only in its **default** form, and the distinction is
-/// load-bearing: `run_verifiers` accepts a `commands` array of arbitrary
-/// `program` + `args` pairs, and `run_tests` accepts a raw `args` string. Either
-/// one is a general command primitive by another name — `{"program": "bash",
-/// "args": ["-lc", "..."]}` is precisely the raw shell this list just removed.
-/// Denying the tools outright would take the verifier's whole purpose with
-/// them, so the *unbounded arguments* are refused at the execution seam
-/// instead; see `reject_unbounded_verification` in
-/// [`crate::tools::subagent`]. The name deny list and that guard are one
-/// contract split across the only two places that can each see half of it.
-pub(crate) const RAW_SHELL_DENYLIST: &[&str] = &[
-    "Bash",
-    "exec_shell",
-    "exec_shell_wait",
-    "exec_wait",
-    "exec_shell_interact",
-    "exec_interact",
-    "exec_shell_cancel",
-    "task_shell_start",
-    "task_shell_wait",
-    // The persistent PTY surface registers as `terminal/run`, `terminal/send`,
-    // … — a glob, because the family is open-ended and every member of it is a
-    // raw command channel.
-    "terminal/*",
-];
-
-/// The deny-list entry that stands for "this child has no raw shell".
-///
-/// Same construction as [`NETWORK_DENIAL_SENTINEL`], and for the same reason:
-/// posture is read back off the list that enforces it rather than carried as a
-/// second field that could disagree. `exec_shell` is the sentinel because every
-/// raw-shell denial installs it and no narrower deny list does.
-///
-/// Read by the tests that assert the raw-shell denial actually landed. It is
-/// deliberately *not* what the execution envelope consults for shell
-/// authority — see [`SHELL_AUTHORITY_SENTINEL`] for why those are two
-/// different questions.
-#[allow(dead_code)]
-pub(crate) const RAW_SHELL_SENTINEL: &str = "exec_shell";
-
-/// The built-in verification surface: the workspace's own configured checks.
-///
-/// Bounded in its arguments (see [`crate::tools::execution_envelope`]) but not
-/// free of consequence — every entry forks a process. A member whose shell
-/// ceiling is narrower than `full` holds no authority to start one, so this
-/// list comes off its surface entirely. A `write = false, shell = "full"`
-/// member keeps it, because running the checks is what that preset is for.
-pub(crate) const VERIFICATION_SURFACE_DENYLIST: &[&str] = &["Run", "run_tests", "run_verifiers"];
-
-/// The deny-list entry that stands for "this child holds no shell authority".
-///
-/// Distinct from [`RAW_SHELL_SENTINEL`], and the distinction is the point.
-/// `exec_shell` is installed whenever the *raw* shell is removed, which
-/// includes the write-denied verifier that still holds shell authority — so
-/// reading shell authority off it reports every verifier as shell-less and
-/// takes the verification surface away from the one role that exists to use
-/// it. `run_tests` is installed only when the shell *ceiling* itself is
-/// narrower than `full`, which is exactly the posture that has no authority to
-/// start a process.
-pub(crate) const SHELL_AUTHORITY_SENTINEL: &str = "run_tests";
-
-/// Execution primitives that are **not** spelled as shell.
-///
-/// Every entry runs an operator-supplied program or schedules one: `gate_run`
-/// takes a command line, the mutating `automation` actions execute or schedule
-/// a stored automation with its own cwd and prompt, `start_mcp_server` spawns a
-/// process, and `pr_attempt_*` writes durable work state. They are listed here
-/// so a write-denied child never *sees* them; the authoritative refusal is
-/// capability-derived and lives in [`crate::tools::execution_envelope`], which
-/// also covers the ones no list can name — repository plugin tools and MCP
-/// server tools registered at runtime.
-///
-/// Listing the per-action alias rather than the family is deliberate and is
-/// what the canonical-action seam exists for: denying `tasks` outright would
-/// take `list`/`read` with it, and durable-task bookkeeping is exactly what a
-/// read-only member should keep.
-pub(crate) const NON_SHELL_EXECUTION_DENYLIST: &[&str] = &[
-    "task_gate_run",
-    "task_create",
-    "task_cancel",
-    "pr_attempt_record",
-    "pr_attempt_preflight",
-    "automation_run",
-    "automation_create",
-    "automation_update",
-    "automation_pause",
-    "automation_resume",
-    "automation_delete",
-    "start_mcp_server",
-];
-
-/// Whether a deny rule was installed by an **enforced posture** rather than by
-/// operator preference.
-///
-/// `inherit_disallowed_tools: false` exists so a child can start from a clean
-/// surface instead of the session's `--disallowed-tools` taste. It must not be
-/// able to drop a rule that expresses a *ceiling*: a Pod member clamped to
-/// `network_tool = false` that spawns a grandchild with
-/// `inherit_disallowed_tools: false` would otherwise hand that grandchild the
-/// network back, which is a child widening its parent's envelope by asking
-/// politely.
-#[must_use]
-pub(crate) fn is_posture_denial(rule: &str) -> bool {
-    [
-        NETWORK_TOOL_DENYLIST,
-        MUTATING_TOOL_DENYLIST,
-        RAW_SHELL_DENYLIST,
-        VERIFICATION_SURFACE_DENYLIST,
-        NON_SHELL_EXECUTION_DENYLIST,
-    ]
-    .iter()
-    .flat_map(|list| list.iter())
-    .any(|entry| entry.eq_ignore_ascii_case(rule.trim()))
-}
-
-/// A Runtime role policy intersected with the live parent and translated into
-/// the concrete knobs a child spawn actually carries.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ChildAuthority {
-    /// The clamped ceiling. Never wider than either input.
-    pub(crate) ceiling: PermissionCeiling,
-    /// `Some(list)` narrows the child's model-visible surface to exactly
-    /// `list`. `Some(vec![])` — the `tools = false` case — means *no tools at
-    /// all*, which is what the child registry's empty-allowlist path produces.
-    /// `None` means full inheritance from the parent surface.
-    pub(crate) allowed_tools: Option<Vec<String>>,
-    /// Names/globs the child must never see or call. Deny wins over allow.
-    pub(crate) disallowed_tools: Vec<String>,
-    /// Spawn write authority implied by the clamped ceiling.
-    pub(crate) write_authority: &'static str,
-    /// Nested-delegation budget, clamped.
-    pub(crate) max_depth: u32,
-    /// Canonical posture role that governs the child's tool posture.
-    pub(crate) posture_role: &'static str,
-}
-
-impl ChildAuthority {
-    /// Intersect one Runtime-requested posture with the live parent posture.
-    ///
-    /// Every field takes the more restrictive side, so a child can never widen
-    /// live authority.
-    #[must_use]
-    pub(crate) fn clamp(requested: PermissionCeiling, session: PermissionCeiling) -> Self {
-        let ceiling = requested.clamp_to(session);
-
-        // `tools = false` is total: an empty allowlist leaves the child with no
-        // model-visible tools and nothing it is permitted to call.
-        let allowed_tools = (!ceiling.tools).then(Vec::new);
-
-        // The deny list expresses the effective Runtime posture. The spawn
-        // registry separately unions it with inherited parent restrictions, so
-        // a descendant can never drop something an ancestor
-        // imposed.
-        let mut disallowed_tools = Vec::new();
-        if !ceiling.network_tool {
-            disallowed_tools.extend(NETWORK_TOOL_DENYLIST.iter().map(|name| (*name).to_string()));
-        }
-        // Raw shell requires the ceiling to *say* `shell = "full"`. Any narrower
-        // shell posture — `none` or `read_only` — loses the raw command surface
-        // outright. `from_runtime_role` may subsequently
-        // retain canonical `Bash` for a named scout/reviewer, whose concrete
-        // calls are bounded by the strict read-only classifier.
-        //
-        // This is deliberately keyed on the shell field rather than only on
-        // `write`, and that is the whole repair: the execution envelope reads
-        // its `shell` bit back off this deny list
-        // ([`RAW_SHELL_SENTINEL`]), so a ceiling whose shell posture never
-        // installed a denial was invisible to it. A clamped ceiling of
-        // `write = true, shell = none` — which any write-capable member inherits
-        // inside a session that has no shell authority — therefore reached the
-        // envelope claiming full shell authority and could start a process the
-        // ceiling had refused it.
-        if !(ceiling.write && ceiling.shell == ShellCeiling::Full) {
-            disallowed_tools.extend(RAW_SHELL_DENYLIST.iter().map(|name| (*name).to_string()));
-        }
-        // Losing the *raw* shell and holding no shell authority at all are two
-        // different postures, and only the second one loses the bounded
-        // verification surface.
-        //
-        // A `verifier`/`tester` member (`write = false, shell = "full"`) is the
-        // case that separates them: the rule above takes its raw shell away as
-        // a mutation control, but the member still holds shell authority and
-        // running the workspace's own checks is its entire purpose. A ceiling
-        // whose shell posture is narrower than `full` holds no such authority,
-        // so for it the checks are just another way to start a process.
-        if ceiling.shell != ShellCeiling::Full {
-            disallowed_tools.extend(
-                VERIFICATION_SURFACE_DENYLIST
-                    .iter()
-                    .map(|name| (*name).to_string()),
-            );
-        }
-        if !ceiling.write {
-            // `write = false` has to be a fact about the child's tool surface,
-            // not a word on a receipt, so the mutating file tools go. The raw
-            // shell is already gone by the rule above; a Runtime scout/reviewer
-            // may regain only canonical Bash in `from_runtime_role`, behind its
-            // input-specific read-only classifier. The bounded verification
-            // surface (`Run` / `run_tests` / `run_verifiers`) is deliberately
-            // left for a full-shell verifier.
-            disallowed_tools.extend(
-                MUTATING_TOOL_DENYLIST
-                    .iter()
-                    .map(|name| (*name).to_string()),
-            );
-            // Removing the shell is not enough on its own. An execution
-            // primitive spelled as bookkeeping — a verification gate that takes
-            // a command line, an automation that runs one on a schedule, an MCP
-            // server that spawns a process — mutates the workspace exactly as
-            // well as the shell just removed, while the receipt says
-            // `write=false`. These names take them off the visible surface;
-            // `crate::tools::execution_envelope` refuses them by capability,
-            // including the ones no list can name.
-            disallowed_tools.extend(
-                NON_SHELL_EXECUTION_DENYLIST
-                    .iter()
-                    .map(|name| (*name).to_string()),
-            );
-        }
-
-        Self {
-            ceiling,
-            allowed_tools,
-            disallowed_tools,
-            write_authority: if ceiling.write {
-                "workspace_write"
-            } else {
-                "read_only"
-            },
-            max_depth: ceiling.delegation_depth,
-            posture_role: posture_role_for(ceiling),
-        }
-    }
-
-    /// A stable, content-free fingerprint of the envelope this authority
-    /// actually installs.
-    ///
-    /// This is the value that turns "the Pod computed a ceiling" into
-    /// something a later layer can *check*. It covers every field a spawn
-    /// carries — allowlist, deny list, write authority, delegation budget, and
-    /// posture role — so a request that drifted between admission, routing, and
-    /// construction cannot pass for the one the Pod resolved. Two authorities
-    /// with the same fingerprint install the same child surface; that is the
-    /// whole contract.
-    ///
-    /// Deliberately human-readable rather than hashed: it appears verbatim in
-    /// the fail-closed error, and an operator debugging a refused launch should
-    /// be able to see which side differs without a lookup table.
-    #[must_use]
-    pub(crate) fn fingerprint(&self) -> String {
-        let allowed = match &self.allowed_tools {
-            None => "inherit".to_string(),
-            Some(list) if list.is_empty() => "none".to_string(),
-            Some(list) => {
-                let mut list = list.clone();
-                list.sort();
-                list.join(",")
-            }
-        };
-        let mut denied = self.disallowed_tools.clone();
-        denied.sort();
-        denied.dedup();
-        format!(
-            "v1;posture={};write={};depth={};tools={};network={};shell={};allow={};deny={}",
-            self.posture_role,
-            self.write_authority,
-            self.max_depth,
-            self.ceiling.tools,
-            self.ceiling.network_tool,
-            self.ceiling.shell.as_str(),
-            allowed,
-            denied.join(","),
-        )
-    }
-
-    /// Derive authority exclusively from Runtime policy after Pod identity
-    /// selection. Free-form semantic roles map to Runtime `custom`; neither
-    /// the Pod definition nor its legacy `permissions` key participates.
-    #[must_use]
-    pub(crate) fn from_runtime_role(role: &str, session: PermissionCeiling) -> Self {
-        let runtime_role = runtime_role_for_member(role);
-        let requested = runtime_permission_ceiling(&runtime_role);
-        let mut authority = Self::clamp(requested, session);
-        authority.posture_role = runtime_role.as_str();
-
-        if matches!(
-            runtime_role,
-            crate::tools::subagent::FleetRole::Scout
-                | crate::tools::subagent::FleetRole::Reviewer
-                | crate::tools::subagent::FleetRole::Planner
-        ) && authority.ceiling.shell != ShellCeiling::None
-        {
-            // Runtime's Scout/Reviewer policy permits classifier-bounded Bash
-            // inspection. Keep the canonical entry while all other shell and
-            // execution aliases remain denied.
-            authority
-                .disallowed_tools
-                .retain(|name| !name.eq_ignore_ascii_case("Bash"));
-        }
-        authority
-    }
-}
-
-/// The active parent's posture, expressed as the upper bound for Runtime's
-/// requested child role policy.
-///
-/// Read off the live parent runtime rather than assumed: this is the value that
-/// makes "a Pod cannot widen what the operator is currently allowed to do"
-/// true at runtime instead of on paper.
-#[must_use]
-pub(crate) fn session_permission_ceiling(
-    runtime: &crate::tools::subagent::SubAgentRuntime,
-) -> PermissionCeiling {
-    PermissionCeiling {
-        write: runtime.worker_profile.permissions.write,
-        network_tool: runtime.worker_profile.permissions.network
-            && runtime.agent_tool_surface_options.web_search_enabled,
-        shell: session_shell_ceiling(runtime.worker_profile.shell, runtime.allow_shell),
-        delegation_depth: runtime.worker_profile.max_spawn_depth,
-        // The parent side never withholds the coarse tool bit: fine-grained
-        // inherited ToolScope/deny rules are intersected again by the spawn
-        // runtime. This value only captures the dimensions represented here.
-        tools: true,
-    }
-}
-
-/// Map the Pod's open semantic role label onto Runtime's closed role policy.
-/// Unknown labels remain useful identity (`auditor`, `research-lead`, …) but
-/// execute under Runtime `custom`, whose capabilities still intersect with the
-/// live parent.
-fn runtime_role_for_member(role: &str) -> crate::tools::subagent::FleetRole {
-    crate::tools::subagent::FleetRole::from_str(role)
-        .unwrap_or(crate::tools::subagent::FleetRole::Custom)
-}
-
-fn runtime_permission_ceiling(role: &crate::tools::subagent::FleetRole) -> PermissionCeiling {
-    let profile = crate::worker_profile::WorkerRuntimeProfile::for_role(role.clone());
-    let shell = match profile.shell {
-        crate::worker_profile::ShellPolicy::None => ShellCeiling::None,
-        crate::worker_profile::ShellPolicy::ReadOnly => ShellCeiling::ReadOnly,
-        crate::worker_profile::ShellPolicy::Full => ShellCeiling::Full,
-    };
-    let tools = match profile.tools {
-        crate::worker_profile::ToolScope::Inherit => true,
-        crate::worker_profile::ToolScope::Explicit(ref tools) => !tools.is_empty(),
-    };
-    PermissionCeiling {
-        write: profile.permissions.write,
-        network_tool: profile.permissions.network,
-        shell,
-        delegation_depth: profile.max_spawn_depth,
-        tools,
-    }
-}
-
-fn session_shell_ceiling(
-    shell: crate::worker_profile::ShellPolicy,
-    allow_shell: bool,
-) -> ShellCeiling {
-    match shell {
-        crate::worker_profile::ShellPolicy::None => ShellCeiling::None,
-        crate::worker_profile::ShellPolicy::ReadOnly => ShellCeiling::ReadOnly,
-        crate::worker_profile::ShellPolicy::Full if allow_shell => ShellCeiling::Full,
-        crate::worker_profile::ShellPolicy::Full => ShellCeiling::None,
-    }
-}
-
-/// Map a permission ceiling onto the canonical posture role that governs the
-/// child's tool surface.
-#[must_use]
-pub(crate) fn posture_role_for(ceiling: PermissionCeiling) -> &'static str {
-    if !ceiling.tools {
-        // No tools at all; the narrowest posture, and the allowlist is empty
-        // anyway.
-        return "explore";
-    }
-    if ceiling.write {
-        return "implement";
-    }
-    match ceiling.shell {
-        ShellCeiling::None | ShellCeiling::ReadOnly => "explore",
-        ShellCeiling::Full => "test",
-    }
 }
 
 // ── Preflight: freeze the route, and check it while freezing ─────────────────
@@ -814,7 +309,7 @@ pub(crate) fn preflight_route(
 /// Preflight resolves a route from *configuration*; this proves the same route
 /// can be turned into a working client — the step that fails on a malformed
 /// base URL, an unusable auth mode, or a transport CodeWhale cannot construct.
-/// Doing it at Workflow start, for every member, is what stops a Pod from
+/// Doing it at Workflow start, for every member, is what stops a Fleet from
 /// paying for a Router decision and only then discovering that the worker it
 /// decided for could never have been launched.
 ///
@@ -1024,16 +519,16 @@ impl FleetRouterCaller for LiveFleetRouter {
 
 // ── The Workflow ───────────────────────────────────────────────────────────
 
-/// An exact Pod, frozen at Workflow start.
+/// An exact Fleet, frozen at Workflow start.
 ///
-/// The snapshot, the preflight, and the roster projected from them are all
-/// immutable for the life of the run: editing `fleets/<name>.toml` afterwards
-/// changes only the next Workflow.
+/// The snapshot and the preflight are immutable for the life of the run:
+/// editing `fleets/<name>.toml` afterwards changes only the next Workflow.
+/// There is no run-scoped roster projection: durable runs bind members
+/// straight from the snapshot, and in-process spawns resolve roles only.
 #[derive(Clone)]
 pub(crate) struct ExactFleetWorkflow {
     snapshot: Arc<FleetSnapshot>,
     preflight: Arc<RoutePreflight>,
-    roster: Arc<FleetRoster>,
     router: Option<Arc<dyn FleetRouterCaller>>,
     router_unavailable: Option<String>,
 }
@@ -1056,7 +551,7 @@ impl std::fmt::Debug for ExactFleetWorkflow {
 /// safely.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExactMemberBinding {
-    /// Canonical member id — the roster profile id the spawn resolves.
+    /// Canonical member id from the frozen snapshot.
     pub(crate) member_id: String,
     /// Semantic role — what gates, handoffs, and records use.
     pub(crate) member_role: String,
@@ -1096,7 +591,7 @@ pub(crate) struct ExactMemberLaunch {
 }
 
 impl ExactFleetWorkflow {
-    /// Capture a Workflow from a parsed exact Pod document.
+    /// Capture a Workflow from a parsed exact Fleet document.
     ///
     /// Everything that can fail locally fails here, before any worker is
     /// dispatched: an unresolvable provider, an unknown model, a missing
@@ -1111,7 +606,7 @@ impl ExactFleetWorkflow {
     ) -> Result<Self, String> {
         let exact = document
             .exact()
-            .ok_or_else(|| "this Pod is not an exact Pod".to_string())?;
+            .ok_or_else(|| "this Fleet is not an exact Fleet".to_string())?;
 
         // Resolve the attached Reasoning Router *reference* into the one
         // captured service both forms normalize onto.
@@ -1122,7 +617,7 @@ impl ExactFleetWorkflow {
                 let (profile, router_id) =
                     ReasoningRouterProfile::load_by_name(&name, search_roots).map_err(|error| {
                         format!(
-                            "exact Pod `{}` references reasoning router `{name}`, which could \
+                            "exact Fleet `{}` references reasoning router `{name}`, which could \
                              not be loaded: {error}",
                             id.qualified()
                         )
@@ -1146,20 +641,9 @@ impl ExactFleetWorkflow {
         // Preflight every worker route before anything else can happen.
         let (preflight, router) = Self::preflight_and_bind(&snapshot, captured_router, config)?;
 
-        let roster = Arc::new(FleetRoster::from_members(
-            snapshot
-                .members()
-                .iter()
-                .map(|member| {
-                    let route = preflight.worker(&member.id);
-                    exact_member_profile(member, route, document.source_path())
-                })
-                .collect(),
-        ));
-
         let router_unavailable = match (snapshot.router(), &router) {
             (Some(_), None) => {
-                Some("the Pod's reasoning router could not be bound on this machine".to_string())
+                Some("the Fleet's reasoning router could not be bound on this machine".to_string())
             }
             _ => None,
         };
@@ -1167,7 +651,6 @@ impl ExactFleetWorkflow {
         let workflow = Self {
             snapshot: Arc::new(snapshot),
             preflight: Arc::new(preflight),
-            roster,
             router,
             router_unavailable,
         };
@@ -1183,8 +666,8 @@ impl ExactFleetWorkflow {
     ) -> Result<(RoutePreflight, Option<Arc<dyn FleetRouterCaller>>), String> {
         let Some(config) = config else {
             return Err(format!(
-                "exact Pod `{}` cannot start: no session config is available to preflight its \
-                 members' providers and models. An exact Pod fails closed here rather than \
+                "exact Fleet `{}` cannot start: no session config is available to preflight its \
+                 members' providers and models. An exact Fleet fails closed here rather than \
                  dispatching a worker onto a route it never verified.",
                 snapshot.fleet().qualified()
             ));
@@ -1200,13 +683,13 @@ impl ExactFleetWorkflow {
             )
             .map_err(|error| {
                 format!(
-                    "exact Pod `{}` cannot start: {error}",
+                    "exact Fleet `{}` cannot start: {error}",
                     snapshot.fleet().qualified()
                 )
             })?;
             route.require_ready().map_err(|error| {
                 format!(
-                    "exact Pod `{}` cannot start: {error}",
+                    "exact Fleet `{}` cannot start: {error}",
                     snapshot.fleet().qualified()
                 )
             })?;
@@ -1221,7 +704,7 @@ impl ExactFleetWorkflow {
         for route in &workers {
             validate_route_client(route, config).map_err(|error| {
                 format!(
-                    "exact Pod `{}` cannot start: {error}",
+                    "exact Fleet `{}` cannot start: {error}",
                     snapshot.fleet().qualified()
                 )
             })?;
@@ -1236,15 +719,15 @@ impl ExactFleetWorkflow {
                     router = Some(Arc::new(live));
                 }
                 Err(error) => {
-                    // Recorded rather than raised: a Pod with no `auto`
+                    // Recorded rather than raised: a Fleet with no `auto`
                     // member does not need its router to be usable, and
                     // failing the whole Workflow for an unused service would
                     // be the wrong trade.
                     if snapshot.has_auto_member() {
                         return Err(format!(
-                            "exact Pod `{}` cannot start: member(s) {} request reasoning \
-                             `auto` but the Pod's reasoning router is unusable ({}). Fix the \
-                             router profile or pin an explicit reasoning tier — exact Pods \
+                            "exact Fleet `{}` cannot start: member(s) {} request reasoning \
+                             `auto` but the Fleet's reasoning router is unusable ({}). Fix the \
+                             router profile or pin an explicit reasoning tier — exact Fleets \
                              never fall back to legacy model routing or a local heuristic.",
                             snapshot.fleet().qualified(),
                             snapshot.auto_member_ids().join(", "),
@@ -1259,7 +742,7 @@ impl ExactFleetWorkflow {
     }
 
     /// Fail at Workflow start — not at task launch — when a member requests
-    /// `auto` and the Pod has no Router it can actually call.
+    /// `auto` and the Fleet has no Router it can actually call.
     fn reject_unusable_auto_members(&self) -> Result<(), String> {
         if !self.snapshot.has_auto_member() || self.router.is_some() {
             return Ok(());
@@ -1267,11 +750,11 @@ impl ExactFleetWorkflow {
         let reason = self
             .router_unavailable
             .clone()
-            .unwrap_or_else(|| "this Pod references no reasoning router".to_string());
+            .unwrap_or_else(|| "this Fleet references no reasoning router".to_string());
         Err(format!(
-            "exact Pod `{}` cannot start: member(s) {} request reasoning `auto` but the Pod's \
+            "exact Fleet `{}` cannot start: member(s) {} request reasoning `auto` but the Fleet's \
              reasoning router is unusable ({reason}). Attach a working reasoning router or pin an \
-             explicit reasoning tier — exact Pods never fall back to legacy model routing or a \
+             explicit reasoning tier — exact Fleets never fall back to legacy model routing or a \
              local heuristic.",
             self.snapshot.fleet().qualified(),
             self.snapshot.auto_member_ids().join(", "),
@@ -1281,14 +764,6 @@ impl ExactFleetWorkflow {
     #[must_use]
     pub(crate) fn snapshot(&self) -> &Arc<FleetSnapshot> {
         &self.snapshot
-    }
-
-    /// The run-scoped roster projected from the snapshot. Installing this on
-    /// the spawn runtime is what makes each member's exact provider/model reach
-    /// its child client through the existing provider-pin path (#4093/#4193).
-    #[must_use]
-    pub(crate) fn roster(&self) -> &Arc<FleetRoster> {
-        &self.roster
     }
 
     /// Human-readable roster listing for "unknown member" errors.
@@ -1332,7 +807,7 @@ impl ExactFleetWorkflow {
         let member = match (profile, role) {
             (None, None) => {
                 return Err(format!(
-                    "Pod `{fleet}` is an exact Pod: every task must name a member via `role` \
+                    "Fleet `{fleet}` is an exact Fleet: every task must name a member via `role` \
                      or `profile`. Members: {}",
                     self.member_names()
                 ));
@@ -1344,7 +819,7 @@ impl ExactFleetWorkflow {
                 let by_role = self.lookup(role)?;
                 if by_profile.id != by_role.id {
                     return Err(format!(
-                        "Pod `{fleet}`: task names profile `{profile}` (member `{}`) and role \
+                        "Fleet `{fleet}`: task names profile `{profile}` (member `{}`) and role \
                          `{role}` (member `{}`), which are different members. A task must name \
                          one member; the two fields cannot disagree about who ran.",
                         by_profile.id, by_role.id
@@ -1356,7 +831,7 @@ impl ExactFleetWorkflow {
 
         let route = self.preflight.worker(&member.id).ok_or_else(|| {
             format!(
-                "Pod `{fleet}`: member `{}` has no preflighted route",
+                "Fleet `{fleet}`: member `{}` has no preflighted route",
                 member.id
             )
         })?;
@@ -1374,7 +849,7 @@ impl ExactFleetWorkflow {
     fn lookup(&self, key: &str) -> Result<&FleetSnapshotMember, String> {
         self.snapshot.member_by_id_or_role(key).ok_or_else(|| {
             format!(
-                "unknown exact Pod member `{key}` in `{}`. Members: {}",
+                "unknown exact Fleet member `{key}` in `{}`. Members: {}",
                 self.snapshot.fleet().qualified(),
                 self.member_names()
             )
@@ -1402,7 +877,7 @@ impl ExactFleetWorkflow {
 
         let member = self.snapshot.member(&binding.member_id).ok_or_else(|| {
             format!(
-                "Pod `{}`: member `{}` vanished between admission and launch",
+                "Fleet `{}`: member `{}` vanished between admission and launch",
                 self.snapshot.fleet().qualified(),
                 binding.member_id
             )
@@ -1423,7 +898,7 @@ impl ExactFleetWorkflow {
         let authority = ChildAuthority::from_runtime_role(&member.role, binding.session);
         if authority != binding.authority {
             return Err(format!(
-                "Pod `{}`: member `{}` resolved a different permission envelope at launch than \
+                "Fleet `{}`: member `{}` resolved a different permission envelope at launch than \
                  at admission, so the launch is refused. admitted={} launched={}",
                 self.snapshot.fleet().qualified(),
                 binding.member_id,
@@ -1443,7 +918,7 @@ impl ExactFleetWorkflow {
         let decision = if binding.requires_router {
             let router = self.router.as_ref().ok_or_else(|| {
                 format!(
-                    "member `{}` requests reasoning `auto` but Pod `{}` has no usable reasoning \
+                    "member `{}` requests reasoning `auto` but Fleet `{}` has no usable reasoning \
                      router",
                     binding.member_id,
                     self.snapshot.fleet().qualified()
@@ -1502,7 +977,7 @@ impl ExactFleetWorkflow {
             EffectiveReasoning::NativeAdaptive => {
                 return Err(format!(
                     "member `{}` resolved to provider-native adaptive reasoning, which an exact \
-                     Pod launch cannot place on a request. Pin an explicit reasoning tier.",
+                     Fleet launch cannot place on a request. Pin an explicit reasoning tier.",
                     binding.member_id
                 ));
             }
@@ -1555,81 +1030,11 @@ impl ExactFleetWorkflow {
     }
 }
 
-/// Project one snapshot member onto the roster profile the in-process spawn
-/// path already understands.
-///
-/// Two things here are deliberate and load-bearing:
-///
-/// - The profile is keyed by **member id**, and the member's **semantic role**
-///   is carried as the display name. Role is what gates and records mean; id is
-///   what resolves a roster entry. Conflating them would make a gate keyed on
-///   `builder` silently miss a member whose id happens to be `implementer`.
-/// - Runtime's closed role policy supplies the *posture* role. Free-form Pod
-///   roles remain visible identity but map to Runtime `custom`; the profile
-///   carries no trust/permission/delegation input of its own.
-fn exact_member_profile(
-    member: &FleetSnapshotMember,
-    route: Option<&PreflightedRoute>,
-    source: Option<&std::path::Path>,
-) -> AgentProfile {
-    let runtime_role = runtime_role_for_member(&member.role);
-    let posture_role = runtime_role.as_str();
-    // The canonical wire model, so the child spawns with exactly what the
-    // receipt records.
-    let wire_model = route.map_or_else(
-        || member.route.model.clone(),
-        |route| route.wire_model.clone(),
-    );
-    let provider = route.map_or_else(
-        || member.route.provider.clone(),
-        |route| route.provider_config_id().to_string(),
-    );
-
-    let profile = codewhale_config::FleetProfile {
-        slot: codewhale_config::FleetSlot::Custom(member.role.clone()),
-        role: codewhale_config::FleetRole {
-            name: posture_role.to_string(),
-            description: Some(format!("exact Pod member `{}`", member.id)),
-            instructions: None,
-        },
-        loadout: codewhale_config::FleetLoadout::Inherit,
-        model: Some(wire_model.clone()),
-        // The exact provider pin is the whole point: it is what makes the
-        // child client bind to this member's provider instead of the
-        // session's (#4093).
-        provider: Some(provider.clone()),
-        // Reasoning is decided per task (a member may be `auto`), so it is
-        // placed on the spawn request explicitly rather than baked in here.
-        reasoning_effort: None,
-        // Compatibility-only profile fields stay neutral. Runtime derives
-        // capability, shell, trust/approval and recursion from its role policy
-        // plus the live parent after this member is selected.
-        permissions: codewhale_config::FleetProfilePermissions::default(),
-        delegation: codewhale_config::FleetDelegationHints::default(),
-    };
-
-    AgentProfile {
-        id: member.id.clone(),
-        display_name: Some(member.role.clone()),
-        description: Some(format!(
-            "Exact Pod member `{}` (role `{}`), pinned to {provider}/{wire_model}.",
-            member.id, member.role
-        )),
-        requires: Vec::new(),
-        profile,
-        source: source
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_else(|| std::path::PathBuf::from("<exact Pod>")),
-        origin: ProfileOrigin::Config,
-        plugin_authority: None,
-    }
-}
-
 // ── Test seams ──────────────────────────────────────────────────────────────
 
 /// A Router that answers with a fixed fixture string, recording what it saw.
 ///
-/// Test-only: it is how the exact-Pod reasoning path is exercised end to end
+/// Test-only: it is how the exact-Fleet reasoning path is exercised end to end
 /// without a provider call, and how "the router was never called" is asserted.
 #[cfg(test)]
 #[derive(Debug)]
@@ -1706,7 +1111,7 @@ impl ExactFleetWorkflow {
         router: Option<Arc<StaticFleetRouter>>,
         capability: ReasoningCapability,
     ) -> Self {
-        let exact = document.exact().expect("exact Pod");
+        let exact = document.exact().expect("exact Fleet");
         let captured = captured_legacy_inline_router(exact).or_else(|| {
             exact.reasoning_router.as_ref().map(|name| {
                 CapturedReasoningRouter::from_profile(
@@ -1745,23 +1150,9 @@ impl ExactFleetWorkflow {
         });
         let preflight = RoutePreflight::new(workers, router_route);
 
-        let roster = Arc::new(FleetRoster::from_members(
-            snapshot
-                .members()
-                .iter()
-                .map(|member| {
-                    exact_member_profile(
-                        member,
-                        preflight.worker(&member.id),
-                        document.source_path(),
-                    )
-                })
-                .collect(),
-        ));
         Self {
             snapshot: Arc::new(snapshot),
             preflight: Arc::new(preflight),
-            roster,
             router: router.map(|router| {
                 let router: Arc<dyn FleetRouterCaller> = router;
                 router
@@ -2024,7 +1415,7 @@ mod tests {
         EffectiveReasoningSource, ProviderEffectiveReasoning, RequestedReasoning,
     };
 
-    /// A Pod that references a saved, reusable Reasoning Router service.
+    /// A Fleet that references a saved, reusable Reasoning Router service.
     const GLM_FLEET: &str = r#"
 name = "glm-pair"
 schema = "exact"
@@ -2138,9 +1529,12 @@ permissions = "read_only"
             "the receipt records the semantic role, not the profile id"
         );
 
-        // The roster is addressed by id; the role is the display name.
-        let entry = workflow.roster().get("auditor").expect("roster entry");
-        assert_eq!(entry.display_name.as_deref(), Some("reviewer"));
+        // The snapshot is addressed by id; the role is the semantic label.
+        let member = workflow
+            .snapshot()
+            .member("auditor")
+            .expect("snapshot entry");
+        assert_eq!(member.role, "reviewer");
     }
 
     /// A task that names a profile and a role belonging to different members is
@@ -2321,7 +1715,7 @@ permissions = "read_only"
             id(),
             "no credential configured for `openai`",
         )
-        .expect_err("an unusable router must not start an auto Pod");
+        .expect_err("an unusable router must not start an auto Fleet");
 
         assert!(err.contains("cannot start"), "{err}");
         assert!(err.contains("implementer"), "{err}");
@@ -2330,36 +1724,44 @@ permissions = "read_only"
     }
 
     #[test]
-    fn the_projected_roster_pins_each_members_exact_provider_and_model() {
+    fn the_frozen_route_pins_each_members_exact_provider_and_model() {
         let workflow = workflow_with(None, GLM_FLEET);
-        let member = workflow.roster().get("implementer").expect("roster member");
+        let route = workflow
+            .preflight
+            .worker("implementer")
+            .expect("preflighted worker");
 
-        assert_eq!(member.profile.provider.as_deref(), Some("zai"));
-        assert_eq!(member.profile.model.as_deref(), Some("glm-5"));
-        assert_eq!(
-            member.profile.reasoning_effort, None,
-            "reasoning is decided per task, not baked into the projected profile"
+        assert_eq!(route.provider_id, "zai");
+        assert_eq!(route.wire_model, "glm-5");
+        let member = workflow
+            .snapshot()
+            .member("implementer")
+            .expect("snapshot entry");
+        assert!(
+            member.requested_reasoning.is_auto(),
+            "reasoning is decided per task, not baked into the frozen route"
         );
     }
 
-    /// Projection carries route and Runtime role, but no Pod-owned authority.
+    /// Binding carries route and Runtime role, but no Fleet-owned authority.
     #[test]
-    fn projected_members_use_runtime_roles_and_neutral_compatibility_fields() {
-        use crate::tools::subagent::FleetRole;
-
+    fn bound_members_use_runtime_roles_and_neutral_compatibility_fields() {
         let workflow = workflow_with(None, GLM_FLEET);
-        for (id, expected) in [
-            ("auditor", FleetRole::Reviewer),
-            ("implementer", FleetRole::Builder),
+        for (id, expected_posture, expected_write) in [
+            ("auditor", "reviewer", "read_only"),
+            ("implementer", "implement", "workspace_write"),
         ] {
-            let member = workflow.roster().get(id).expect("roster entry");
+            let binding = workflow
+                .bind_member(Some(id), None, full_session())
+                .expect("bind");
             assert_eq!(
-                crate::fleet::worker_runtime::roster_member_agent_type(member),
-                expected,
+                binding.authority.posture_role, expected_posture,
                 "{id} must resolve through Runtime's closed role policy"
             );
-            assert_eq!(member.profile.permissions, Default::default());
-            assert_eq!(member.profile.delegation, Default::default());
+            assert_eq!(
+                binding.authority.write_authority, expected_write,
+                "{id} authority comes from the role posture, never a Fleet permissions block"
+            );
         }
     }
 
@@ -2377,12 +1779,17 @@ model = "glm-5"
 permissions = "read_only"
 "#;
         let workflow = workflow_with(None, AUDIT_FLEET);
-        let member = workflow.roster().get("auditor-one").expect("roster entry");
+        let binding = workflow
+            .bind_member(Some("auditor-one"), None, full_session())
+            .expect("bind");
 
-        assert_eq!(member.display_name.as_deref(), Some("audit-lead"));
-        assert_eq!(member.profile.role.name, "custom");
-        assert_eq!(member.profile.permissions, Default::default());
-        assert_eq!(member.profile.delegation, Default::default());
+        assert_eq!(binding.member_role, "audit-lead");
+        assert_eq!(binding.authority.posture_role, "custom");
+        assert_eq!(
+            binding.authority.write_authority, "workspace_write",
+            "authority comes from Runtime custom under the session ceiling; \
+             the Fleet permissions block grants nothing"
+        );
     }
 
     // ── Permission ceilings, as the child actually experiences them ─────────
@@ -2744,10 +2151,10 @@ permissions = "read_only"
 
         let authority = ChildAuthority::clamp(member, session);
 
-        assert!(!authority.ceiling.write, "a Pod may not grant write");
+        assert!(!authority.ceiling.write, "a Fleet may not grant write");
         assert!(
             !authority.ceiling.network_tool,
-            "a Pod may not grant a network tool"
+            "a Fleet may not grant a network tool"
         );
         assert_eq!(authority.ceiling.shell, ShellCeiling::ReadOnly);
         assert_eq!(authority.ceiling.delegation_depth, 0);
@@ -3053,10 +2460,10 @@ permissions = "read_only"
 "#,
             crate::config::DEFAULT_OLLAMA_CLOUD_MODEL
         ))
-        .expect("legacy Cloud Pod parses");
+        .expect("legacy Cloud Fleet parses");
 
         // `capture` is the real Workflow-start path: it preflights readiness,
-        // constructs every worker client, and freezes the run-scoped roster.
+        // constructs every worker client, and freezes the snapshot.
         let workflow = ExactFleetWorkflow::capture(
             &document,
             id(),
@@ -3064,21 +2471,13 @@ permissions = "read_only"
             Some(&config),
             &[],
         )
-        .expect("legacy Cloud Pod starts");
+        .expect("legacy Cloud Fleet starts");
         let route = workflow
             .preflight
             .worker("cloud-worker")
             .expect("preflighted worker");
         assert_eq!(route.provider_id, "ollama-cloud");
         assert_eq!(route.provider_config_id.as_deref(), Some("ollama"));
-        assert_eq!(
-            workflow
-                .roster()
-                .get("cloud-worker")
-                .and_then(|profile| profile.profile.provider.as_deref()),
-            Some("ollama"),
-            "the child pin must rebuild the legacy table/slot even though receipts are canonical"
-        );
 
         let binding = workflow
             .bind_member(Some("cloud-worker"), None, full_session())

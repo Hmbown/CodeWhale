@@ -353,10 +353,9 @@ fn build_frame_marks(
     // Half-cycle head start: freshly opened water shows the school
     // mid-crossing instead of an empty entry beat.
     let school_clock = t.saturating_add(cycle_ms / 2);
-    let (cycle_index, cycle_step) = (
-        school_clock / cycle_ms,
-        ((school_clock % cycle_ms) / SCHOOL_CELL_MS) as i32,
-    );
+    let cycle_index = school_clock / cycle_ms;
+    let cycle_frac = (school_clock % cycle_ms) as f64 / cycle_ms as f64;
+    let cycle_step = (cycle_frac * travel as f64).round() as i32;
     let swims_right = school_swims_right(cycle_index);
     // The school has one home: the deep water just off the floor. It used to
     // alternate between an upper and a lower band, which is most of why the
@@ -473,11 +472,14 @@ fn build_frame_marks(
         // per-row dwell stays long — a jellyfish should read as drifting, not
         // as stepping.
         let rise_period = JELLY_RISE_ROW_MS.saturating_add((j as u128) * JELLY_RISE_ROW_STAGGER_MS);
-        let slot = (t.saturating_add(phase) / rise_period) % JELLY_VISIT_CYCLE_SLOTS;
-        if slot >= u128::from(JELLY_VISIT_ROWS) {
+        let cycle_duration = rise_period.saturating_mul(JELLY_VISIT_CYCLE_SLOTS);
+        let cycle_pos = t.saturating_add(phase) % cycle_duration;
+        let visit_duration = rise_period.saturating_mul(u128::from(JELLY_VISIT_ROWS));
+        if cycle_pos >= visit_duration {
             continue; // still down in the dark between visits
         }
-        let risen = slot as u16;
+        let visit_progress = cycle_pos as f64 / visit_duration as f64;
+        let risen = (visit_progress * f64::from(JELLY_VISIT_ROWS)).round() as u16;
         let y = area
             .height
             .saturating_sub(JELLY_FLOOR_GAP)
@@ -485,15 +487,17 @@ fn build_frame_marks(
         if y == 0 || !water(x, y, dome_w) {
             continue;
         }
-        let dome_brightness = jelly_glow(wave01(t, JELLY_PULSE_MS, phase));
-        let tentacle_brightness = jelly_glow(wave01(
+        let dome_pulse = wave01(t, JELLY_PULSE_MS, phase);
+        let dome_brightness = jelly_glow(dome_pulse);
+        let tentacle_pulse = wave01(
             t.saturating_sub(JELLY_TENTACLE_LAG_MS),
             JELLY_PULSE_MS,
             phase,
-        ));
-        // The dome opens/closes on the same clock as its glow; the parked
+        );
+        let tentacle_brightness = jelly_glow(tentacle_pulse);
+        // The dome opens/closes on the smooth continuous phase curve; the parked
         // pose holds the half-pulsed (contracted) frame.
-        let pulse_frame = usize::from(wave01(t, JELLY_PULSE_MS, phase) > 0.5);
+        let pulse_frame = usize::from(dome_pulse > 0.5);
         let skirt_row = y.saturating_add(1);
         let tentacle_row = y.saturating_add(2);
         // Treat the silhouette as one visual unit. The former per-row quiet
@@ -545,13 +549,9 @@ fn build_frame_marks(
         }
     }
 
-    // --- Rising bubble streams: a short run off the floor, then dissolve ---
-    // A bubble used to travel the whole column and then clamp at the top of
-    // the field, where it parked as a single unattached speck for the rest of
-    // its cycle — the `·` sitting at column 11 doing nothing in the 80×24
-    // frame. It now rises [`BUBBLE_MAX_RISE_ROWS`] rows from the floor,
-    // grows, and fades out, which is both what a bubble does and a reason for
-    // it to be exactly where it is.
+    // --- Marine snow & rising bubble streams floating upward ---
+    // Floating particles rise smoothly through the water column, dissolving
+    // gently with continuous time-based floating physics.
     for b in 0..density.bubble_streams() {
         let phase = (b as u128).saturating_mul(1_900);
         // Edge columns — avoid center brand.
@@ -567,16 +567,19 @@ fn build_frame_marks(
         } else {
             0
         };
-        let rise = ((cycle * f64::from(BUBBLE_MAX_RISE_ROWS)) as u16)
+        // Continuous horizontal floating drift
+        let drift_phase = (t.saturating_add(phase) as f64 / 2_100.0) * std::f64::consts::TAU;
+        let drift = (drift_phase.sin() * 0.6).round() as i16;
+        let col = (column as i16 + drift).clamp(0, (area.width.saturating_sub(1)) as i16) as u16;
+
+        let rise = ((cycle * f64::from(BUBBLE_MAX_RISE_ROWS)).round() as u16)
             .saturating_add(boost)
             .min(BUBBLE_MAX_RISE_ROWS);
         let y = area.height.saturating_sub(2).saturating_sub(rise);
-        if !water(column, y, 1) {
+        if !water(col, y, 1) {
             continue;
         }
-        // Size is a function of height risen, not of the clock: the old
-        // `["·", "˚", "·", "°"]` table swapped glyph every 320 ms in place,
-        // which is a flicker in peripheral vision rather than a rise.
+        // Size is a function of height risen, not of discrete clock jumps.
         let glyph = bubble_glyph(rise);
         let brightness = glint01(
             t,
@@ -586,7 +589,7 @@ fn build_frame_marks(
             phase,
         ) * bubble_dissolve(rise);
         marks.push(AmbientMark {
-            x: column.min(area.width.saturating_sub(1)),
+            x: col,
             y,
             glyph,
             jellyfish: None,
@@ -609,9 +612,13 @@ fn build_frame_marks(
             if phase == WhaleCameoPhase::Hidden {
                 continue;
             }
+            // Smooth continuous forward swimming drift across cameo
+            let cameo_frac = pod_cameo_ms as f64 / WHALE_CAMEO_MS as f64;
+            let drift = (cameo_frac * 3.0).round() as u16;
             let ax = whale
                 .anchor_x
                 .saturating_add_signed(*offset)
+                .saturating_add(drift)
                 .saturating_sub(area.x)
                 .min(area.width.saturating_sub(4));
             let ay = whale
@@ -625,6 +632,10 @@ fn build_frame_marks(
                 WhaleCameoPhase::Submerge => ("·", 1),
                 WhaleCameoPhase::Hidden => ("", 0),
             };
+            let whale_glow = {
+                let s = (cameo_frac * std::f64::consts::PI).sin();
+                (0.65 + 0.35 * s) as f32
+            };
             if !glyph.is_empty() {
                 marks.push(AmbientMark {
                     x: ax,
@@ -633,7 +644,7 @@ fn build_frame_marks(
                     jellyfish: None,
                     depth: Depth::Foreground,
                     style_mod: None,
-                    brightness: None,
+                    brightness: Some(whale_glow),
                 });
                 if phase == WhaleCameoPhase::Spout && ay > 0 {
                     marks.push(AmbientMark {
@@ -643,7 +654,7 @@ fn build_frame_marks(
                         jellyfish: None,
                         depth: Depth::Foreground,
                         style_mod: Some(Modifier::DIM),
-                        brightness: None,
+                        brightness: Some(whale_glow),
                     });
                 }
             }

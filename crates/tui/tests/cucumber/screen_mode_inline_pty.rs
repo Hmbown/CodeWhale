@@ -24,10 +24,11 @@ const ROWS: u16 = 24;
 const COLS: u16 = 80;
 const STARTUP_WAIT: Duration = Duration::from_secs(15);
 const SETTLE_WAIT: Duration = Duration::from_secs(5);
-/// Stable proof the live shell repainted after a screen change: the context
-/// meter's label on the info line, which every live-shell frame paints
-/// regardless of composer state (and survives the wordmark's removal).
-const LIVE_SHELL_SENTINEL: &str = "ctx ";
+/// Stable proof the live shell repainted after a screen change: the composer
+/// placeholder, which every live-shell frame paints in both screen modes.
+/// The old `ctx` label no longer qualifies — it stays silent with no model
+/// connected, and the workspace caption only paints in the inline stage.
+const LIVE_SHELL_SENTINEL: &str = "Type a message";
 
 #[test]
 fn inline_start_never_takes_the_alternate_screen_and_screen_commands_switch_it() {
@@ -141,7 +142,7 @@ fn enter_live_shell(tui: &mut Harness) {
         .expect("choose Explore Offline");
     wait_or_panic(tui, "You're ready.", SETTLE_WAIT, "offline explore ready");
     tui.send(keys::key::enter()).expect("leave onboarding");
-    wait_or_panic(tui, "New worktree", STARTUP_WAIT, "launch card");
+    wait_or_panic(tui, "New session", STARTUP_WAIT, "launch card");
     // Typing goes straight to the composer; Enter sends the first message
     // and the session begins (the card dissolved on the first keystroke).
     tui.send("start the session")

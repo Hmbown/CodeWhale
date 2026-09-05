@@ -1267,7 +1267,7 @@ pub(crate) fn provider_scoped_model_completion_ids(app: &App) -> Vec<String> {
 }
 
 /// The pins the picker sorts and labels by: the fleet's models first (the
-/// selected Pod's operator and every pinned member, labelled with the roles
+/// selected Fleet's operator and every pinned member, labelled with the roles
 /// each fills — design §10 F1), then the person's own pins.
 fn picker_pins_for_app(app: &App) -> Vec<PinnedModel> {
     // A selected fleet that cannot be read contributes no pins; ⇧F on any
@@ -1369,7 +1369,7 @@ fn picker_model_rows_for_app(app: &App, config: &Config) -> Vec<ModelPickerRow> 
     }
 
     // The fleet comes first (design §10 F1): every model the person added
-    // to the selected Pod rides the pin machinery ahead of their own pins,
+    // to the selected Fleet rides the pin machinery ahead of their own pins,
     // labelled with the roles it fills, so the list leads with what they
     // chose rather than with a provider's alphabet.
     let pins = picker_pins_for_app(app);

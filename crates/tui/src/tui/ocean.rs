@@ -2,55 +2,18 @@
 //!
 //! The field is atmosphere, never content: ordinary shell cells share its
 //! water column while semantic surfaces such as selections, errors, and code
-//! keep their own backgrounds. It is an explicit treatment, rather than a
-//! layer forced onto every terminal.
+//! keep their own backgrounds. It belongs to the `underwater` theme alone
+//! (`ThemeId::Underwater`); every other theme leaves the terminal's ground
+//! untouched. Motion inside the field remains governed separately by
+//! `low_motion`/`fancy_animations`.
 
 use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 
-use crate::palette::{PaletteMode, UiTheme};
+use crate::palette::UiTheme;
 use crate::tui::underwater::ShellPhase;
 
-/// Appearance treatment for the underwater shell.
-///
-/// Parsed once from persisted settings so rendering and scheduling code can
-/// branch on typed state instead of scattered string comparisons. `Deepsea` is
-/// the opt-in underwater scene; `Flat` leaves the host/theme surface alone.
-/// Motion inside the selected scene remains governed separately by
-/// `low_motion`/`fancy_animations`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OceanTreatment {
-    /// State-reactive water column painted from the theme's [`OceanRamp`].
-    Deepsea,
-    /// Plain theme surface with no atmospheric treatment. This is the
-    /// terminal-respecting default; the host owns the background.
-    #[default]
-    Flat,
-}
-
-impl OceanTreatment {
-    #[must_use]
-    pub fn parse(value: &str) -> Self {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "deepsea" | "underwater" | "ombre" | "gradient" | "classic" => Self::Deepsea,
-            // Invalid persisted values must never opt the user into a painted
-            // surface. The settings editor validates new values before save.
-            _ => Self::Flat,
-        }
-    }
-
-    #[must_use]
-    pub fn is_deepsea(self) -> bool {
-        self == Self::Deepsea
-    }
-
-    #[must_use]
-    pub fn is_flat(self) -> bool {
-        self == Self::Flat
-    }
-}
-
 /// Minimum empty-water size that earns decorative ambient life when the
-/// underwater treatment is selected. Below this, content and controls own
+/// underwater theme is selected. Below this, content and controls own
 /// every cell. Shared by the renderer and idle animation scheduler so redraws
 /// are never scheduled for invisible life.
 pub const AMBIENT_MIN_WIDTH: u16 = 40;
@@ -78,9 +41,9 @@ pub fn ambient_inks_for_activity(
         AmbientActivity::Subagents => (0.34, 0.22),
         AmbientActivity::Verifying | AmbientActivity::Baseline => (0.42, 0.28),
     };
-    // The built-in Whale pair deliberately leaves its Flat shell at Reset.
-    // When Deepsea is selected, use the authored column as the color-mixing
-    // base so its ambient life retains depth and activity-specific inks.
+    // Only the underwater theme owns a painted base column; everywhere else
+    // the terminal's own ground (Color::Reset) is the base and the inks fall
+    // back to the theme's info lane.
     let mix_base = rgb(theme.surface_bg)
         .or_else(|| OceanRamp::for_theme(theme).and_then(|ramp| rgb(ramp.middle)));
     match mix_base {
@@ -182,6 +145,7 @@ pub struct OceanColumn {
     animated: bool,
     /// Fixed-point (0..=1000) life presence; keeps `Eq` derivable.
     presence: u16,
+    context_percent: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +157,7 @@ struct OceanRampCacheIdentity {
     animated: bool,
     completion_active: bool,
     presence: u16,
+    context_percent: u8,
 }
 
 impl OceanRampCacheIdentity {
@@ -213,6 +178,7 @@ impl OceanRampCacheIdentity {
             u32::from(self.animated),
             u32::from(self.completion_active),
             u32::from(self.presence),
+            u32::from(self.context_percent),
         ]
         .into_iter()
         .flat_map(u32::to_le_bytes)
@@ -247,6 +213,9 @@ fn color_cache_code(value: Color) -> u32 {
 }
 
 impl OceanColumn {
+    // Eight args mirroring the eight column fields; a params struct would
+    // only rename the call sites without removing a single decision.
+    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
         ramp: OceanRamp,
@@ -256,6 +225,7 @@ impl OceanColumn {
         phase: ShellPhase,
         animated: bool,
         presence: u16,
+        context_percent: u8,
     ) -> Self {
         Self {
             ramp,
@@ -266,6 +236,7 @@ impl OceanColumn {
             phase,
             animated,
             presence,
+            context_percent: context_percent.min(100),
         }
     }
 
@@ -273,7 +244,8 @@ impl OceanColumn {
     pub fn color_at_y(self, y: u16) -> Color {
         let row = y.saturating_sub(self.top).min(self.height - 1);
         if let Some(elapsed) = self.completion_elapsed_ms {
-            self.ramp.color_at_completion(row, self.height, elapsed)
+            self.ramp
+                .color_at_completion_context(row, self.height, elapsed, self.context_percent)
         } else {
             // Attention states tint the water itself, independent of life
             // presence: a session blocked on approval or ended in failure
@@ -284,15 +256,26 @@ impl OceanColumn {
                 self.phase,
                 ShellPhase::Waiting | ShellPhase::Approval | ShellPhase::Failed
             ) {
-                return self.ramp.color_at_attention(row, self.height, self.phase);
+                return self.ramp.color_at_attention_context(
+                    row,
+                    self.height,
+                    self.phase,
+                    self.context_percent,
+                );
             }
             // Ease between the static gradient and the phase treatment by
             // life presence, so mood/activity changes blend instead of snap.
-            let static_color = self.ramp.color_at(row, self.height);
+            let static_color = self
+                .ramp
+                .color_at_context(row, self.height, self.context_percent);
             if self.animated || self.presence > 0 {
-                let phase_color =
-                    self.ramp
-                        .color_at_phase(row, self.height, self.elapsed_ms, self.phase);
+                let phase_color = self.ramp.color_at_phase_context(
+                    row,
+                    self.height,
+                    self.elapsed_ms,
+                    self.phase,
+                    self.context_percent,
+                );
                 mix_colors(static_color, phase_color, self.presence_f32())
             } else {
                 static_color
@@ -337,6 +320,7 @@ impl OceanColumn {
             animated: self.animated,
             completion_active: self.completion_elapsed_ms.is_some(),
             presence: self.presence,
+            context_percent: self.context_percent,
         }
     }
 
@@ -373,110 +357,69 @@ impl OceanColumn {
 impl OceanRamp {
     #[must_use]
     pub fn for_theme(theme: &UiTheme) -> Option<Self> {
-        // Solarized Light's canonical Base3 (#fdf6e3) background is part of
-        // the named palette's contract. Tinting it with the underwater field
-        // turns the shell green-grey and no longer renders Solarized Light
-        // (#4457). A non-canonical user-supplied background is a separate
-        // contract and must keep the configured Deepsea treatment.
-        if theme.mode == PaletteMode::SolarizedLight
-            && theme.surface_bg == crate::palette::SOLARIZED_LIGHT_UI_THEME.surface_bg
-        {
+        // The painted field exists only under the underwater theme; every
+        // other theme leaves the terminal's ground alone. A user-supplied
+        // `background_color` rewrites the underwater surfaces through
+        // `with_background_color` and remains the source of truth there.
+        if theme.name != crate::palette::UNDERWATER_UI_THEME.name {
             return None;
         }
 
-        // The canonical Whale pair gets the authored Codewhale water column.
-        // Match both name and surface so a user-supplied `background_color`
-        // remains the source of truth and still receives the generic ramp.
-        if theme.name == crate::palette::UI_THEME.name
-            && theme.surface_bg == crate::palette::UI_THEME.surface_bg
-        {
-            return Some(Self {
-                // Keep the authored Whale column unmistakably blue all the
-                // way to the floor. These restrained ocean shades sit between
-                // the shell's ink surfaces and its ambient blue: the empty
-                // field gains depth without becoming a saturated blue panel.
-                surface: Color::Rgb(0x10, 0x2a, 0x45),
-                middle: Color::Rgb(0x0a, 0x1e, 0x33),
-                deep: Color::Rgb(0x06, 0x13, 0x20),
-                ambient: Color::Rgb(0x26, 0x48, 0x66),
-                attention: theme.warning,
-                failure: theme.error_fg,
-            });
-        }
-        if theme.name == crate::palette::LIGHT_UI_THEME.name
-            && theme.surface_bg == crate::palette::LIGHT_UI_THEME.surface_bg
-        {
-            return Some(Self {
-                surface: Color::Rgb(0xff, 0xfd, 0xf8),
-                middle: Color::Rgb(0xf4, 0xf7, 0xfb),
-                deep: Color::Rgb(0xf0, 0xf4, 0xf9),
-                ambient: Color::Rgb(0x9a, 0xb8, 0xe0),
-                attention: theme.warning,
-                failure: theme.error_fg,
-            });
-        }
-
-        let base = rgb(theme.surface_bg)?;
-        let seafoam = rgb(theme.accent_secondary).unwrap_or((79, 209, 197));
-
-        let (surface, middle, deep) = match theme.mode {
-            PaletteMode::Light | PaletteMode::SolarizedLight => (
-                mix(base, seafoam, 0.07),
-                mix(base, seafoam, 0.13),
-                mix(base, (70, 139, 196), 0.18),
-            ),
-            PaletteMode::Dark | PaletteMode::Grayscale => (
-                mix(base, (30, 71, 103), 0.24),
-                mix(base, (7, 30, 54), 0.40),
-                mix(base, (2, 9, 24), 0.64),
-            ),
-        };
-
         Some(Self {
-            surface: color(surface),
-            middle: color(middle),
-            deep: color(deep),
-            ambient: color(mix(seafoam, base, 0.42)),
+            // The authored Codewhale water column: unmistakably blue all the
+            // way to the floor. These restrained ocean shades sit between the
+            // shell's ink surfaces and its ambient blue, so the field gains
+            // depth without becoming a saturated blue panel.
+            surface: Color::Rgb(0x10, 0x2a, 0x45),
+            middle: Color::Rgb(0x0a, 0x1e, 0x33),
+            deep: Color::Rgb(0x06, 0x13, 0x20),
+            ambient: Color::Rgb(0x26, 0x48, 0x66),
             attention: theme.warning,
             failure: theme.error_fg,
         })
     }
 
+    /// Abyss Depth effect: wires context fullness (0..=100) into the water
+    /// column gradient calculation so that as context fills up, the dark
+    /// abyssal deep rises up to consume the sunlit surface gradient.
     #[must_use]
-    pub fn color_at(self, row: u16, height: u16) -> Color {
+    pub fn color_at_context(self, row: u16, height: u16, context_percent: u8) -> Color {
         if height <= 1 {
-            return self.surface;
+            let abyss = f32::from(context_percent.min(100)) / 100.0;
+            return mix_colors(self.surface, self.deep, abyss);
         }
-        let position = f32::from(row.min(height - 1)) / f32::from(height - 1);
+        let base_position = f32::from(row.min(height - 1)) / f32::from(height - 1);
+        let abyss_rise = f32::from(context_percent.min(100)) / 100.0;
+        let position = (base_position + abyss_rise).min(1.0);
         // One continuous darkening curve (quadratic Bézier through
-        // surface → middle → deep, via de Casteljau). The former two eased
-        // segments met at a 0.42 anchor where the color velocity dropped to
-        // zero on both sides — on a tall window that shelf of unchanging
-        // middle color read as a horizontal seam across the water.
+        // surface → middle → deep, via de Casteljau).
         let toward_middle = mix_colors(self.surface, self.middle, position);
         let toward_deep = mix_colors(self.middle, self.deep, position);
         mix_colors(toward_middle, toward_deep, position)
     }
 
     #[must_use]
-    pub fn color_at_phase(
+    pub fn color_at_phase_context(
         self,
         row: u16,
         height: u16,
         elapsed_ms: u128,
         phase: ShellPhase,
+        context_percent: u8,
     ) -> Color {
-        let base = self.color_at(row, height);
+        let base = self.color_at_context(row, height, context_percent);
         let depth = if height <= 1 {
             0.0
         } else {
-            f32::from(row.min(height - 1)) / f32::from(height - 1)
+            let base_depth = f32::from(row.min(height - 1)) / f32::from(height - 1);
+            let abyss_rise = f32::from(context_percent.min(100)) / 100.0;
+            (base_depth + abyss_rise).min(1.0)
         };
         if matches!(
             phase,
             ShellPhase::Waiting | ShellPhase::Approval | ShellPhase::Failed
         ) {
-            return self.color_at_attention(row, height, phase);
+            return self.color_at_attention_context(row, height, phase, context_percent);
         }
         let cycle = (elapsed_ms % 90_000) as f32 / 90_000.0;
         let breath = (cycle * std::f32::consts::TAU).sin() * 0.5 + 0.5;
@@ -492,18 +435,21 @@ impl OceanRamp {
     }
 
     /// Water tint for the states that need to read from across the room.
-    ///
-    /// Waiting/Approval warm the field toward `attention`, concentrated near
-    /// the surface where the eye lands first; Failed casts a steady `failure`
-    /// tone. Deliberately time-invariant: the color itself is the signal, and
-    /// a slow breath read as flicker rather than intent.
     #[must_use]
-    pub fn color_at_attention(self, row: u16, height: u16, phase: ShellPhase) -> Color {
-        let base = self.color_at(row, height);
+    pub fn color_at_attention_context(
+        self,
+        row: u16,
+        height: u16,
+        phase: ShellPhase,
+        context_percent: u8,
+    ) -> Color {
+        let base = self.color_at_context(row, height, context_percent);
         let depth = if height <= 1 {
             0.0
         } else {
-            f32::from(row.min(height - 1)) / f32::from(height - 1)
+            let base_depth = f32::from(row.min(height - 1)) / f32::from(height - 1);
+            let abyss_rise = f32::from(context_percent.min(100)) / 100.0;
+            (base_depth + abyss_rise).min(1.0)
         };
         match phase {
             ShellPhase::Waiting | ShellPhase::Approval => {
@@ -515,8 +461,14 @@ impl OceanRamp {
     }
 
     #[must_use]
-    pub fn color_at_completion(self, row: u16, height: u16, elapsed_ms: u128) -> Color {
-        let base = self.color_at(row, height);
+    pub fn color_at_completion_context(
+        self,
+        row: u16,
+        height: u16,
+        elapsed_ms: u128,
+        context_percent: u8,
+    ) -> Color {
+        let base = self.color_at_context(row, height, context_percent);
         let elapsed = elapsed_ms.min(800) as f32 / 800.0;
         let brightness = if elapsed <= 0.4 {
             0.88 + (1.12 - 0.88) * (elapsed / 0.4)

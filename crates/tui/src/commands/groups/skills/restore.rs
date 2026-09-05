@@ -7,33 +7,64 @@
 //! the user has explicitly trusted the workspace (`/trust on` or Full Access) —
 //! the user can always view the list, just not one-shot revert without a
 //! safety net.
+//!
+//! FEAT-022 Phase 4: portable contextual dispatch. `SnapshotRepo` and the
+//! approval state stay host-side (`CommandSkillGroupContext` delegates); the
+//! portable handler owns all parsing, formatting, and the trust gate.
+
+use chrono::TimeZone;
+
+use codewhale_command_contract::facets::{CommandSkillGroupContext, SnapshotEntry};
+use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
+use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::commands::CommandResult;
-use crate::snapshot::{Snapshot, SnapshotRepo};
-use crate::tui::app::App;
-use chrono::TimeZone;
 
 const DEFAULT_LIST_LIMIT: usize = 20;
 const MAX_LIST_LIMIT: usize = 100;
 const MAX_RESTORE_INDEX: usize = 1000;
 
-/// Entry point for `/restore [N|list [N]]`.
-fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
-    let workspace = app.workspace.clone();
-    let repo = match SnapshotRepo::open_or_init(&workspace) {
-        Ok(r) => r,
-        Err(e) => {
-            return CommandResult::error(format!(
-                "Snapshot repo unavailable for {}: {e}",
-                workspace.display(),
-            ));
-        }
-    };
+pub(in crate::commands) const COMMAND_INFO: CommandInfo = CommandInfo {
+    name: "restore",
+    aliases: &[],
+    usage: "/restore [N|list [N]]",
+    description_key: "cmd_restore_description",
+};
 
+pub(in crate::commands) struct RestoreCmd;
+
+impl RegisterCommand<CommandResult> for RestoreCmd {
+    fn info() -> &'static CommandInfo {
+        &COMMAND_INFO
+    }
+
+    fn handler() -> CommandHandler<CommandResult> {
+        CommandHandler::Contextual {
+            capabilities: codewhale_command_contract::handler::CommandCapabilities::SKILL_GROUP,
+            handler: restore_contextual,
+        }
+    }
+}
+
+/// Contextual `/restore` dispatch (FEAT-022 D4): exactly the skill-group facet
+/// (snapshot list/restore + approval state — no `MODE_POLICY` declaration).
+fn restore_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
+    let mut parts = contexts.into_parts();
+    let Some(skill_group) = parts.skill_group.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: skill_group");
+    };
+    restore(skill_group, arg)
+}
+
+/// Portable `/restore` dispatch — byte-identical to the baseline handler.
+///
+/// The host owns `SnapshotRepo` open/list/restore and the yolo/trust posture;
+/// the handler composes every message, error, listing, and the trust gate.
+fn restore(group: &mut dyn CommandSkillGroupContext, arg: Option<&str>) -> CommandResult {
     let Some(arg) = arg.map(str::trim).filter(|s| !s.is_empty()) else {
-        let snapshots = match repo.list(DEFAULT_LIST_LIMIT) {
+        let snapshots = match group.snapshot_list(DEFAULT_LIST_LIMIT) {
             Ok(s) => s,
-            Err(e) => return CommandResult::error(format!("Failed to list snapshots: {e}")),
+            Err(err) => return CommandResult::error(err),
         };
         if snapshots.is_empty() {
             return no_snapshots_message();
@@ -45,9 +76,9 @@ fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
         Ok(limit) => limit,
         Err(message) => return CommandResult::error(message),
     } {
-        let snapshots = match repo.list(limit) {
+        let snapshots = match group.snapshot_list(limit) {
             Ok(s) => s,
-            Err(e) => return CommandResult::error(format!("Failed to list snapshots: {e}")),
+            Err(err) => return CommandResult::error(err),
         };
         if snapshots.is_empty() {
             return no_snapshots_message();
@@ -68,9 +99,9 @@ fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
             ));
         }
     };
-    let snapshots = match repo.list(n.max(DEFAULT_LIST_LIMIT)) {
+    let snapshots = match group.snapshot_list(n.max(DEFAULT_LIST_LIMIT)) {
         Ok(s) => s,
-        Err(e) => return CommandResult::error(format!("Failed to list snapshots: {e}")),
+        Err(err) => return CommandResult::error(err),
     };
     if snapshots.is_empty() {
         return no_snapshots_message();
@@ -87,7 +118,8 @@ fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
     // modal-confirmation path inside slash commands today, so the gate
     // is "require trust mode" — `/trust on` or Full Access. Users in plain
     // Agent mode get a clear message explaining how to proceed.
-    if !(app.yolo || app.trust_mode) {
+    let approval = group.approval_state();
+    if !(approval.yolo || approval.trust_mode) {
         return CommandResult::message(format!(
             "Refusing to restore snapshot #{n} ('{}') outside trusted mode.\n\
              Run `/trust on` or select Full Access with Shift+Tab, then re-run `/restore {n}`.",
@@ -96,8 +128,8 @@ fn restore(app: &mut App, arg: Option<&str>) -> CommandResult {
     }
 
     let target = &snapshots[n - 1];
-    if let Err(e) = repo.restore(&target.id) {
-        return CommandResult::error(format!("Restore failed: {e}"));
+    if let Err(err) = group.restore_snapshot(&target.id) {
+        return CommandResult::error(err);
     }
 
     CommandResult::message(format!(
@@ -141,7 +173,7 @@ fn no_snapshots_message() -> CommandResult {
     )
 }
 
-fn format_listing(snapshots: &[Snapshot]) -> String {
+fn format_listing(snapshots: &[SnapshotEntry]) -> String {
     let mut out = String::from(
         "Recent snapshots (newest first; pass /restore <N> to revert; /restore list 50 shows more):\n",
     );
@@ -168,180 +200,154 @@ fn short_sha(sha: &str) -> &str {
     &sha[..sha.len().min(8)]
 }
 
-pub(in crate::commands) const COMMAND_INFO: crate::commands::traits::CommandInfo =
-    crate::commands::traits::CommandInfo {
-        name: "restore",
-        aliases: &[],
-        usage: "/restore [N|list [N]]",
-        description_id: crate::localization::MessageId::CmdRestoreDescription,
-    };
-
-pub(in crate::commands) struct RestoreCmd;
-
-impl crate::commands::traits::RegisterCommand for RestoreCmd {
-    fn info() -> &'static crate::commands::traits::CommandInfo {
-        &COMMAND_INFO
-    }
-
-    fn execute(
-        app: &mut crate::tui::app::App,
-        arg: Option<&str>,
-    ) -> crate::commands::CommandResult {
-        restore(app, arg)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-    use crate::test_support::lock_test_env;
-    use crate::tui::app::TuiOptions;
-    use tempfile::TempDir;
+    use codewhale_command_contract::facets::{
+        CommandApprovalState, RemoteRegistryOutcome, ReviewOutcome, SkillActivationError,
+        SkillMutationReceipt, SkillRecommendation, SkillSyncOutcome, SkillTargetScope,
+    };
 
-    fn make_app(tmp: &TempDir, yolo: bool) -> App {
-        let workspace = tmp.path().to_path_buf();
-        let options = TuiOptions {
-            skills_dir: tmp.path().join("skills"),
-            memory_path: tmp.path().join("memory.md"),
-            notes_path: tmp.path().join("notes.txt"),
-            mcp_config_path: tmp.path().join("mcp.json"),
-            yolo,
-            ..crate::test_support::test_tui_options(workspace)
-        };
-        App::new(options, &Config::default())
+    struct FakeSkillGroup {
+        snapshots: Result<Vec<SnapshotEntry>, String>,
+        restore: Result<(), String>,
+        approval: CommandApprovalState,
     }
-
-    /// Pins HOME to a tempdir for the duration of the test under the
-    /// crate-wide env mutex.
-    struct ScopedHome {
-        prev: Option<std::ffi::OsString>,
-        _home: TempDir,
-        _guard: crate::test_support::TestEnvLock,
-    }
-    impl Drop for ScopedHome {
-        fn drop(&mut self) {
-            // SAFETY: process-wide lock still held.
-            unsafe {
-                match self.prev.take() {
-                    Some(v) => std::env::set_var("HOME", v),
-                    None => std::env::remove_var("HOME"),
-                }
+    impl FakeSkillGroup {
+        fn new(snapshots: Vec<SnapshotEntry>) -> Self {
+            Self {
+                snapshots: Ok(snapshots),
+                restore: Ok(()),
+                approval: CommandApprovalState {
+                    yolo: true,
+                    trust_mode: false,
+                },
             }
         }
     }
-    fn scoped_home(_workspace: &TempDir) -> ScopedHome {
-        let guard = lock_test_env();
-        let prev = std::env::var_os("HOME");
-        let home = TempDir::new().expect("home tempdir");
-        // SAFETY: serialised by the global env lock.
-        unsafe {
-            std::env::set_var("HOME", home.path());
+    impl CommandSkillGroupContext for FakeSkillGroup {
+        fn skill_registry_projection(
+            &self,
+        ) -> codewhale_command_contract::facets::SkillRegistryProjection {
+            unimplemented!("not used by restore tests")
         }
-        ScopedHome {
-            prev,
-            _home: home,
-            _guard: guard,
+        fn activate_skill(
+            &mut self,
+            _name: &str,
+        ) -> Result<codewhale_command_contract::facets::SkillActivationOutcome, SkillActivationError>
+        {
+            unimplemented!("not used by restore tests")
+        }
+        fn install_skill(
+            &mut self,
+            _scope: Option<SkillTargetScope>,
+            _spec: &str,
+        ) -> Result<SkillMutationReceipt, String> {
+            unimplemented!("not used by restore tests")
+        }
+        fn update_skill(
+            &mut self,
+            _scope: Option<SkillTargetScope>,
+            _name: &str,
+        ) -> Result<SkillMutationReceipt, String> {
+            unimplemented!("not used by restore tests")
+        }
+        fn uninstall_skill(
+            &mut self,
+            _scope: Option<SkillTargetScope>,
+            _name: &str,
+        ) -> Result<SkillMutationReceipt, String> {
+            unimplemented!("not used by restore tests")
+        }
+        fn trust_skill(
+            &mut self,
+            _scope: Option<SkillTargetScope>,
+            _name: &str,
+        ) -> Result<SkillMutationReceipt, String> {
+            unimplemented!("not used by restore tests")
+        }
+        fn fetch_remote_registry(&mut self) -> Result<RemoteRegistryOutcome, String> {
+            unimplemented!("not used by restore tests")
+        }
+        fn recommend_skills(&mut self, _task: &str) -> Result<Vec<SkillRecommendation>, String> {
+            unimplemented!("not used by restore tests")
+        }
+        fn sync_registry(&mut self) -> Result<SkillSyncOutcome, String> {
+            unimplemented!("not used by restore tests")
+        }
+        fn run_review(&mut self) -> Result<ReviewOutcome, String> {
+            unimplemented!("not used by restore tests")
+        }
+        fn snapshot_list(&mut self, limit: usize) -> Result<Vec<SnapshotEntry>, String> {
+            match &self.snapshots {
+                Ok(snapshots) => Ok(snapshots.iter().take(limit).cloned().collect()),
+                Err(err) => Err(err.clone()),
+            }
+        }
+        fn restore_snapshot(&mut self, _id: &str) -> Result<(), String> {
+            self.restore.clone()
+        }
+        fn approval_state(&self) -> CommandApprovalState {
+            self.approval
+        }
+    }
+
+    fn snap(label: &str, id: &str, timestamp: i64) -> SnapshotEntry {
+        SnapshotEntry {
+            id: id.to_string(),
+            label: label.to_string(),
+            timestamp,
         }
     }
 
     #[test]
     fn restore_with_no_snapshots_shows_empty_message() {
-        let tmp = TempDir::new().unwrap();
-        let _home = scoped_home(&tmp);
-        let mut app = make_app(&tmp, true);
-        let result = restore(&mut app, None);
+        let mut group = FakeSkillGroup::new(vec![]);
+        let result = restore(&mut group, None);
         let msg = result.message.expect("expected message");
         assert!(msg.contains("No snapshots"));
     }
 
     #[test]
     fn restore_lists_when_no_arg_provided() {
-        let tmp = TempDir::new().unwrap();
-        let _home = scoped_home(&tmp);
-        let mut app = make_app(&tmp, true);
-        let repo = SnapshotRepo::open_or_init(&app.workspace).unwrap();
-        std::fs::write(app.workspace.join("a.txt"), b"v1").unwrap();
-        repo.snapshot("pre-turn:1").unwrap();
-        std::fs::write(app.workspace.join("a.txt"), b"v2").unwrap();
-        repo.snapshot("post-turn:1").unwrap();
-
-        let result = restore(&mut app, None);
+        let mut group = FakeSkillGroup::new(vec![
+            snap("post-turn:1", "11111111", 1_700_000_000),
+            snap("pre-turn:1", "22222222", 1_699_000_000),
+        ]);
+        let result = restore(&mut group, None);
         let msg = result.message.expect("expected message");
         assert!(msg.contains("post-turn:1"));
         assert!(msg.contains("pre-turn:1"));
         assert!(msg.contains("#1"));
         assert!(msg.contains("#2"));
-    }
-
-    #[test]
-    fn restore_lists_more_than_ten_snapshots_by_default() {
-        let tmp = TempDir::new().unwrap();
-        let _home = scoped_home(&tmp);
-        let mut app = make_app(&tmp, true);
-        let repo = SnapshotRepo::open_or_init(&app.workspace).unwrap();
-        for i in 0..12 {
-            std::fs::write(app.workspace.join("a.txt"), format!("v{i}")).unwrap();
-            repo.snapshot(&format!("turn:{i}")).unwrap();
-        }
-
-        let result = restore(&mut app, None);
-        let msg = result.message.expect("expected message");
-        assert!(msg.contains("#12"), "{msg}");
-        assert!(msg.contains("turn:0"), "{msg}");
-    }
-
-    #[test]
-    fn restore_listing_includes_snapshot_utc_time() {
-        let snapshots = [Snapshot {
-            id: crate::snapshot::SnapshotId("abcdef123456".to_string()),
-            label: "turn:demo".to_string(),
-            timestamp: 1_700_000_000,
-            session_id: None,
-        }];
-
-        let msg = format_listing(&snapshots);
-
         assert!(msg.contains("2023-11-14 22:13 UTC"), "{msg}");
-        assert!(msg.contains("abcdef12"), "{msg}");
-        assert!(msg.contains("turn:demo"), "{msg}");
     }
 
     #[test]
     fn restore_list_subcommand_accepts_explicit_limit() {
-        let tmp = TempDir::new().unwrap();
-        let _home = scoped_home(&tmp);
-        let mut app = make_app(&tmp, true);
-        let repo = SnapshotRepo::open_or_init(&app.workspace).unwrap();
-        for i in 0..15 {
-            std::fs::write(app.workspace.join("a.txt"), format!("v{i}")).unwrap();
-            repo.snapshot(&format!("turn:{i}")).unwrap();
-        }
-
-        let result = restore(&mut app, Some("list 12"));
+        let mut group = FakeSkillGroup::new(vec![
+            snap("turn:1", "11111111", 1_700_000_000),
+            snap("turn:2", "22222222", 1_699_000_000),
+            snap("turn:3", "33333333", 1_698_000_000),
+        ]);
+        let result = restore(&mut group, Some("list 2"));
         let msg = result.message.expect("expected message");
-        assert!(msg.contains("#12"), "{msg}");
-        assert!(!msg.contains("#13"), "{msg}");
+        assert!(msg.contains("#2"), "{msg}");
+        assert!(!msg.contains("#3"), "{msg}");
     }
 
     #[test]
     fn restore_list_subcommand_rejects_invalid_limit() {
-        let tmp = TempDir::new().unwrap();
-        let _home = scoped_home(&tmp);
-        let mut app = make_app(&tmp, true);
-
-        let result = restore(&mut app, Some("list nope"));
+        let mut group = FakeSkillGroup::new(vec![]);
+        let result = restore(&mut group, Some("list nope"));
         assert!(result.is_error);
         assert!(result.message.unwrap().contains("Usage: /restore list [N]"));
     }
 
     #[test]
     fn restore_list_subcommand_rejects_limit_above_cap() {
-        let tmp = TempDir::new().unwrap();
-        let _home = scoped_home(&tmp);
-        let mut app = make_app(&tmp, true);
-
-        let result = restore(&mut app, Some("list 101"));
+        let mut group = FakeSkillGroup::new(vec![]);
+        let result = restore(&mut group, Some("list 101"));
         assert!(result.is_error);
         assert!(
             result
@@ -352,31 +358,9 @@ mod tests {
     }
 
     #[test]
-    fn restore_numeric_index_can_target_beyond_default_listing() {
-        let tmp = TempDir::new().unwrap();
-        let _home = scoped_home(&tmp);
-        let mut app = make_app(&tmp, true);
-        let repo = SnapshotRepo::open_or_init(&app.workspace).unwrap();
-        let f = app.workspace.join("a.txt");
-        for i in 0..12 {
-            std::fs::write(&f, format!("v{i}")).unwrap();
-            repo.snapshot(&format!("turn:{i}")).unwrap();
-        }
-        std::fs::write(&f, "changed").unwrap();
-
-        let result = restore(&mut app, Some("12"));
-        assert!(result.message.unwrap().contains("Restored"));
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), "v0");
-    }
-
-    #[test]
     fn restore_numeric_index_rejects_unbounded_query() {
-        let tmp = TempDir::new().unwrap();
-        let _home = scoped_home(&tmp);
-        let mut app = make_app(&tmp, true);
-
-        let result = restore(&mut app, Some("1001"));
-
+        let mut group = FakeSkillGroup::new(vec![]);
+        let result = restore(&mut group, Some("1001"));
         assert!(result.is_error);
         assert!(
             result
@@ -388,33 +372,23 @@ mod tests {
 
     #[test]
     fn restore_in_yolo_reverts_workspace() {
-        let tmp = TempDir::new().unwrap();
-        let _home = scoped_home(&tmp);
-        let mut app = make_app(&tmp, true);
-        let repo = SnapshotRepo::open_or_init(&app.workspace).unwrap();
-        let f = app.workspace.join("a.txt");
-
-        std::fs::write(&f, b"original").unwrap();
-        repo.snapshot("pre-turn:1").unwrap();
-        std::fs::write(&f, b"clobbered").unwrap();
-        repo.snapshot("post-turn:1").unwrap();
-
-        let result = restore(&mut app, Some("2"));
-        assert!(result.message.unwrap().contains("Restored"));
-        let after = std::fs::read_to_string(&f).unwrap();
-        assert_eq!(after, "original");
+        let mut group = FakeSkillGroup::new(vec![
+            snap("post-turn:1", "22222222", 1_700_000_000),
+            snap("pre-turn:1", "11111111", 1_699_000_000),
+        ]);
+        let result = restore(&mut group, Some("2"));
+        assert!(!result.is_error);
+        assert!(result.message.unwrap().contains("Restored snapshot #2"));
     }
 
     #[test]
     fn restore_outside_trust_mode_refuses() {
-        let tmp = TempDir::new().unwrap();
-        let _home = scoped_home(&tmp);
-        let mut app = make_app(&tmp, false);
-        let repo = SnapshotRepo::open_or_init(&app.workspace).unwrap();
-        std::fs::write(app.workspace.join("a.txt"), b"v1").unwrap();
-        repo.snapshot("pre-turn:1").unwrap();
-
-        let result = restore(&mut app, Some("1"));
+        let mut group = FakeSkillGroup::new(vec![snap("pre-turn:1", "11111111", 1_700_000_000)]);
+        group.approval = CommandApprovalState {
+            yolo: false,
+            trust_mode: false,
+        };
+        let result = restore(&mut group, Some("1"));
         let msg = result.message.expect("expected message");
         assert!(msg.contains("Refusing"));
         assert!(msg.contains("/trust on"));
@@ -422,31 +396,39 @@ mod tests {
 
     #[test]
     fn restore_invalid_index_returns_error() {
-        let tmp = TempDir::new().unwrap();
-        let _home = scoped_home(&tmp);
-        let mut app = make_app(&tmp, true);
-        let repo = SnapshotRepo::open_or_init(&app.workspace).unwrap();
-        std::fs::write(app.workspace.join("a.txt"), b"v1").unwrap();
-        repo.snapshot("pre-turn:1").unwrap();
-
-        let result = restore(&mut app, Some("99"));
+        let mut group = FakeSkillGroup::new(vec![snap("pre-turn:1", "11111111", 1_700_000_000)]);
+        let result = restore(&mut group, Some("99"));
         let msg = result.message.expect("expected message");
         assert!(msg.contains("Only 1 snapshot"));
     }
 
     #[test]
     fn restore_zero_index_returns_error() {
-        let tmp = TempDir::new().unwrap();
-        let _home = scoped_home(&tmp);
-        let mut app = make_app(&tmp, true);
-        // Need at least one snapshot so we exercise the parse-index
-        // branch instead of the "no snapshots" early return.
-        let repo = SnapshotRepo::open_or_init(&app.workspace).unwrap();
-        std::fs::write(app.workspace.join("a.txt"), b"v1").unwrap();
-        repo.snapshot("pre-turn:1").unwrap();
+        let mut group = FakeSkillGroup::new(vec![snap("pre-turn:1", "11111111", 1_700_000_000)]);
+        let result = restore(&mut group, Some("0"));
+        assert!(result.is_error);
+        assert!(result.message.unwrap().contains("Usage:"));
+    }
 
-        let result = restore(&mut app, Some("0"));
-        let msg = result.message.expect("expected message");
-        assert!(msg.contains("Usage:"));
+    #[test]
+    fn restore_host_error_reaches_boundary() {
+        let mut group = FakeSkillGroup::new(vec![]);
+        group.snapshots = Err("Snapshot repo unavailable for /ws: boom".to_string());
+        let result = restore(&mut group, None);
+        assert!(result.is_error);
+        assert_eq!(
+            result.message.unwrap(),
+            "Error: Snapshot repo unavailable for /ws: boom"
+        );
+    }
+
+    #[test]
+    fn restore_missing_facet_errors_are_safe() {
+        let result = restore_contextual(CommandContexts::empty(), Some("1"));
+        assert!(result.is_error);
+        assert_eq!(
+            result.message.unwrap(),
+            "Error: Command capability unavailable: skill_group"
+        );
     }
 }

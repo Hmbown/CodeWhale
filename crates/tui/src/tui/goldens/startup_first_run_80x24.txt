@@ -4,14 +4,14 @@
                                                                                 
                                                                                 
                                                                                 
+                                                                                
         ╭──────────────────────────────────────────────────────────────╮        
-        │         Codewhale v0.9.12                                    │        
-        │ ⣠⡾⠛⠷⠄   ⚠ no model connected · run /provider                 │        
-        │ ⣿⣄⣠⣤⣶⠶⡆ ▸ New worktree                                ctrl+n │        
-        │ ⠙⠿⣯⣿⡡⠞    Resume session                              ctrl+r │        
-        │           Changelog                                   ctrl+l │        
-        │           Quit                                        ctrl+q │        
+        │ ⢠⡶⠛⠧⠄   codewhale v0.9.12                                    │        
+        │ ⣿⣄⣠⣤⣶⠶⠆ ⚠ no model connected · run /provider                 │        
+        │ ⠘⠻⣿⣗⠡⠊    New session                                        │        
+        │         No recent sessions yet — type below to start.        │        
         ╰──────────────────────────────────────────────────────────────╯        
+                                                                                
                                                                                 
                                                                                 
                                                                                 

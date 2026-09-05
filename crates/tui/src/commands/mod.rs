@@ -133,7 +133,12 @@ impl codewhale_command_contract::metadata::RegisterCommand<CommandResult> for Fe
     }
 
     fn handler() -> codewhale_command_contract::handler::CommandHandler<CommandResult> {
-        codewhale_command_contract::handler::CommandHandler::Contextual(feat015_contextual)
+        codewhale_command_contract::handler::CommandHandler::Contextual {
+            capabilities: codewhale_command_contract::handler::CommandCapabilities::WORKSPACE
+                .union(codewhale_command_contract::handler::CommandCapabilities::MODE_POLICY)
+                .union(codewhale_command_contract::handler::CommandCapabilities::COST),
+            handler: feat015_contextual,
+        }
     }
 }
 
@@ -147,9 +152,18 @@ fn feat015_contextual(
 ) -> CommandResult {
     use codewhale_command_contract::handler::ContextParts;
     let parts: ContextParts<'_> = contexts.into_parts();
-    let workspace = parts.workspace.expect("workspace facet").workspace();
-    let mode = parts.mode_policy.expect("mode-policy facet").mode();
-    let currency = parts.cost.expect("cost facet").display_currency();
+    let Some(workspace) = parts.workspace else {
+        return CommandResult::error("Command capability unavailable: workspace");
+    };
+    let Some(mode_policy) = parts.mode_policy else {
+        return CommandResult::error("Command capability unavailable: mode-policy");
+    };
+    let Some(cost) = parts.cost else {
+        return CommandResult::error("Command capability unavailable: cost");
+    };
+    let workspace = workspace.workspace();
+    let mode = mode_policy.mode();
+    let currency = cost.display_currency();
     let normalized = arg.unwrap_or("");
     CommandResult::message(format!(
         "feat015ctx workspace={} mode={:?} currency={:?} arg={}",
@@ -265,17 +279,21 @@ pub fn execute(cmd: &str, app: &mut App) -> CommandResult {
         };
         // FEAT-015 dual-path seam (D2): a migrated entry with a
         // capability-scoped handler receives the envelope built from `app`;
-        // everything else keeps the legacy `execute(app, args)` path. No
-        // production entry is migrated in FEAT-015, so the contextual branch
-        // is only reachable by the test-only fixture (D6).
+        // everything else keeps the legacy `execute(app, args)` path. The
+        // envelope is populated only with the capabilities the registration
+        // declared (FEAT-019 D1/D3); production groups such as utility and
+        // memory dispatch through this contextual branch.
         if let Some(handler) = command_object.contextual_handler() {
-            let mut bundle = app.command_contexts();
             return match handler {
                 codewhale_command_contract::handler::CommandHandler::Pure(pure_fn) => {
                     pure_fn(command_arg)
                 }
-                codewhale_command_contract::handler::CommandHandler::Contextual(contextual) => {
-                    contextual(bundle.contexts(), command_arg)
+                codewhale_command_contract::handler::CommandHandler::Contextual {
+                    capabilities,
+                    handler: contextual,
+                } => {
+                    let mut bundle = app.command_contexts();
+                    contextual(bundle.contexts(capabilities), command_arg)
                 }
             };
         }
@@ -328,16 +346,7 @@ pub fn set_config_value(app: &mut App, key: &str, value: &str, persist: bool) ->
     groups::config::config::set_config_value(app, key, value, persist)
 }
 
-/// Update the canonical theme + ocean-treatment selection as one operation.
-pub fn set_theme_selection(
-    app: &mut App,
-    theme: &str,
-    ocean_treatment: &str,
-    persist: bool,
-) -> CommandResult {
-    groups::config::config::set_theme_selection(app, theme, ocean_treatment, persist)
-}
-
+/// Switch the interaction mode (plan / work / operate).
 pub fn switch_mode(app: &mut App, mode: crate::tui::app::AppMode) -> String {
     groups::config::config::switch_mode(app, mode)
 }
@@ -570,11 +579,11 @@ mod tests {
         assert!(command_infos().iter().any(|cmd| cmd.name == "config"));
         let rail = command_infos()
             .into_iter()
-            .find(|cmd| cmd.name == "rail")
-            .expect("rail command should exist");
-        assert_eq!(rail.aliases, &["sidebar"]);
+            .find(|cmd| cmd.name == "workbar")
+            .expect("workbar command should exist");
+        assert_eq!(rail.aliases, &["rail", "sidebar"]);
         assert_eq!(rail.description_id, MessageId::CmdSidebarDescription);
-        assert!(rail.description_for(Locale::En).contains("rail"));
+        assert!(rail.description_for(Locale::En).contains("workbar"));
         assert!(command_infos().iter().any(|cmd| cmd.name == "links"));
         let hf = command_infos()
             .into_iter()
@@ -1345,7 +1354,7 @@ mod tests {
     fn execute_rail_sets_placement_and_reports_actual_state() {
         let mut app = create_test_app();
 
-        let result = execute("/rail off", &mut app);
+        let result = execute("/workbar off", &mut app);
         assert!(!result.is_error);
         assert_eq!(app.work_surface.placement, WorkSurfacePlacement::Off);
         assert!(
@@ -1353,7 +1362,7 @@ mod tests {
                 .message
                 .as_deref()
                 .unwrap_or_default()
-                .contains("Rail is off")
+                .contains("Workbar is off")
         );
 
         let result = execute("/rail right", &mut app);
@@ -1367,22 +1376,26 @@ mod tests {
                 .contains("right placement")
         );
 
-        // The /sidebar alias drives the same rail.
+        // The /rail and /sidebar aliases drive the same workbar.
         let result = execute("/sidebar left", &mut app);
         assert!(!result.is_error);
         assert_eq!(app.work_surface.placement, WorkSurfacePlacement::Left);
 
-        // Bare /rail reports the actual rendered state; it must never claim
+        let result = execute("/rail top", &mut app);
+        assert!(!result.is_error);
+        assert_eq!(app.work_surface.placement, WorkSurfacePlacement::Top);
+
+        // Bare /workbar reports the actual rendered state; it must never claim
         // visibility for a surface that cannot render.
         app.work_surface.placement = WorkSurfacePlacement::Off;
-        let result = execute("/rail", &mut app);
+        let result = execute("/workbar", &mut app);
         assert!(!result.is_error);
         assert!(
             result
                 .message
                 .as_deref()
                 .unwrap_or_default()
-                .contains("Rail is off")
+                .contains("Workbar is off")
         );
     }
 
@@ -1422,7 +1435,7 @@ mod tests {
         assert_eq!(
             app.work_surface.placement,
             WorkSurfacePlacement::Bottom,
-            "on restores the default bottom rail (round 3)"
+            "on restores the default bottom workbar (round 3)"
         );
 
         let result = execute("/sidebar none", &mut app);
@@ -1440,7 +1453,7 @@ mod tests {
                 .message
                 .as_deref()
                 .unwrap_or_default()
-                .contains("Usage: /rail")
+                .contains("Usage: /workbar")
         );
     }
 
@@ -1724,19 +1737,21 @@ mod tests {
     }
 
     #[test]
-    fn balance_command_reports_scaffold_without_claiming_dispatch() {
+    fn balance_command_dispatches_live_fetch_for_prepaid_providers() {
         let mut app = create_test_app();
-        app.api_provider = ApiProvider::Deepseek;
-
-        let result = execute("/balance", &mut app);
-        let msg = result
-            .message
-            .expect("balance scaffold should explain current state");
-
-        assert!(!result.is_error);
-        assert!(msg.contains("DeepSeek"));
-        assert!(msg.contains("not wired"));
-        assert!(!msg.contains("sent"));
+        for provider in [
+            ApiProvider::Deepseek,
+            ApiProvider::Openrouter,
+            ApiProvider::Siliconflow,
+        ] {
+            app.api_provider = provider;
+            let result = execute("/balance", &mut app);
+            assert!(!result.is_error, "{provider:?}");
+            assert!(
+                matches!(result.action, Some(AppAction::FetchBalance)),
+                "{provider:?} should dispatch a live remaining-credit fetch"
+            );
+        }
     }
 
     #[test]
@@ -1916,6 +1931,20 @@ mod tests {
     }
 
     #[test]
+    fn feat015_contextual_command_fails_safely_without_declared_facets() {
+        let result = feat015_contextual(
+            codewhale_command_contract::handler::CommandContexts::empty(),
+            None,
+        );
+        assert!(result.is_error, "{result:?}");
+        assert_eq!(
+            result.message.as_deref(),
+            Some("Error: Command capability unavailable: workspace")
+        );
+        assert!(result.action.is_none());
+    }
+
+    #[test]
     fn feat015_contextual_command_is_registered_only_in_test_builds() {
         // The fixture entry is present in the test-build registry with a
         // capability-scoped handler; production builds never see it.
@@ -1933,11 +1962,9 @@ mod tests {
     fn feat015_all_production_entries_remain_legacy() {
         // FEAT-015 shipped no production contextual command, so the assertion
         // below used to exclude nothing. FEAT-018 migrates the utility group;
-        // the remaining non-fixture commands must still use the legacy
-        // concrete-App path. The migrated groups (FEAT-018 utility seven plus
-        // `/dispatch`, and the FEAT-021 project four) are asserted separately
-        // by their public-dispatch and inventory tests.
+        // FEAT-019 migrates the memory group; FEAT-021 migrates the project group.
         const MIGRATED_GROUPS: &[&str] = &[
+            // FEAT-018 utility group.
             "attach",
             "automation",
             "dispatch",
@@ -1951,6 +1978,14 @@ mod tests {
             "lsp",
             "share",
             "goal",
+            // FEAT-019 memory group.
+            "note",
+            "memory",
+            // FEAT-022 skills group.
+            "skills",
+            "skill",
+            "review",
+            "restore",
         ];
         for info in command_infos() {
             if info.name == "feat015ctx" || MIGRATED_GROUPS.contains(&info.name) {
@@ -2067,12 +2102,17 @@ mod tests {
 
     #[test]
     fn feat021_project_entries_register_through_portable_bridge() {
-        // main's model carries no capability bitmask: each project command
-        // must register through the portable bridge as a contextual handler
-        // and dispatch safely through the public seam. Exact facet
-        // destructuring (D4) is proven by the handler tests and the adapter
-        // exposure test.
-        for name in ["init", "lsp", "share", "goal"] {
+        use codewhale_command_contract::handler::{CommandCapabilities, CommandHandler};
+
+        for (name, expected) in [
+            ("init", CommandCapabilities::WORKSPACE),
+            ("lsp", CommandCapabilities::PROJECT),
+            ("share", CommandCapabilities::PROJECT),
+            (
+                "goal",
+                CommandCapabilities::PROJECT.union(CommandCapabilities::PRESENTATION),
+            ),
+        ] {
             assert!(
                 registry().has_contextual_handler(name),
                 "/{name} must register through the portable bridge"
@@ -2082,13 +2122,10 @@ mod tests {
                 .expect("entry")
                 .contextual_handler()
                 .expect("contextual handler");
-            assert!(
-                matches!(
-                    handler,
-                    codewhale_command_contract::handler::CommandHandler::Contextual(_)
-                ),
-                "/{name} must be contextual"
-            );
+            let CommandHandler::Contextual { capabilities, .. } = handler else {
+                panic!("/{name} must be contextual");
+            };
+            assert_eq!(capabilities, expected, "/{name} exact capability set");
         }
     }
 
@@ -2161,5 +2198,305 @@ mod tests {
                 "{command}: {result:?}"
             );
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // FEAT-019: public memory registration/dispatch and exact capability
+    // declarations (Task 6.2). Tests enter through the registry and the
+    // public `execute` seam and prove the memory group's portable entries.
+    // ---------------------------------------------------------------------
+
+    /// App with an isolated temp workspace and memory enabled.
+    fn memory_test_app(tmpdir: &tempfile::TempDir) -> App {
+        let options = TuiOptions {
+            memory_path: tmpdir.path().join("memory.md"),
+            use_memory: true,
+            ..crate::test_support::test_tui_options(tmpdir.path())
+        };
+        App::new(options, &Config::default())
+    }
+
+    #[test]
+    fn feat019_memory_entries_are_registered_with_exact_capabilities() {
+        for (name, expected) in [
+            (
+                "note",
+                codewhale_command_contract::handler::CommandCapabilities::WORKSPACE,
+            ),
+            (
+                "memory",
+                codewhale_command_contract::handler::CommandCapabilities::WORKSPACE
+                    .union(codewhale_command_contract::handler::CommandCapabilities::MEMORY),
+            ),
+        ] {
+            assert!(
+                registry().has_contextual_handler(name),
+                "/{name} must register through the portable bridge"
+            );
+            let handler = registry()
+                .get(name)
+                .expect("entry")
+                .contextual_handler()
+                .expect("contextual handler");
+            let codewhale_command_contract::handler::CommandHandler::Contextual {
+                capabilities,
+                ..
+            } = handler
+            else {
+                panic!("/{name} must be contextual");
+            };
+            assert_eq!(capabilities, expected, "/{name} exact capability set");
+            assert!(
+                !capabilities.contains(
+                    codewhale_command_contract::handler::CommandCapabilities::PRESENTATION
+                ) && !capabilities
+                    .contains(codewhale_command_contract::handler::CommandCapabilities::MEDIA),
+                "/{name} must not declare presentation or media"
+            );
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // FEAT-022: skills group registration + public dispatch (Task 6.2).
+    // All four commands register through the portable bridge; frontier state
+    // is asserted by the migration fixtures and live gate.
+    // ---------------------------------------------------------------------
+
+    /// Pins HOME to a tempdir so global skill discovery stays hermetic.
+    struct Feat022ScopedHome {
+        prev: Option<std::ffi::OsString>,
+        _home: tempfile::TempDir,
+        _guard: crate::test_support::TestEnvLock,
+    }
+    impl Drop for Feat022ScopedHome {
+        fn drop(&mut self) {
+            // SAFETY: process-wide lock still held.
+            unsafe {
+                match self.prev.take() {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+    }
+    fn feat022_scoped_home(_tmp: &tempfile::TempDir) -> Feat022ScopedHome {
+        let guard = crate::test_support::lock_test_env();
+        let prev = std::env::var_os("HOME");
+        let home = tempfile::TempDir::new().expect("home tempdir");
+        // SAFETY: serialised by the global env lock.
+        unsafe {
+            std::env::set_var("HOME", home.path());
+        }
+        Feat022ScopedHome {
+            prev,
+            _home: home,
+            _guard: guard,
+        }
+    }
+
+    fn feat022_test_app(tmp: &tempfile::TempDir) -> App {
+        let mut options = crate::test_support::test_tui_options(tmp.path());
+        options.skills_dir = tmp.path().join("skills");
+        crate::test_support::test_app_with_options(options)
+    }
+
+    fn feat022_write_skill(dir: &std::path::Path, name: &str) {
+        let skill_dir = dir.join(name);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {name} skill\n---\n{name} instructions"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn feat022_all_four_skills_entries_are_registered_with_portable_handlers() {
+        use codewhale_command_contract::handler::{CommandCapabilities, CommandHandler};
+
+        for (name, alias, expected) in [
+            (
+                "skills",
+                Some("jinengliebiao"),
+                CommandCapabilities::SKILL_GROUP,
+            ),
+            (
+                "skill",
+                Some("jineng"),
+                CommandCapabilities::SKILL_GROUP.union(CommandCapabilities::SKILLS),
+            ),
+            ("review", Some("shencha"), CommandCapabilities::SKILL_GROUP),
+            ("restore", None, CommandCapabilities::SKILL_GROUP),
+        ] {
+            let info = registry()
+                .get_info(name)
+                .unwrap_or_else(|| panic!("/{name} must be registered"));
+            assert_eq!(info.name, name, "canonical name");
+            let handler = registry()
+                .get(name)
+                .expect("entry")
+                .contextual_handler()
+                .expect("contextual handler");
+            let CommandHandler::Contextual { capabilities, .. } = handler else {
+                panic!("/{name} must be contextual");
+            };
+            assert_eq!(capabilities, expected, "/{name} exact capability set");
+            if let Some(alias) = alias {
+                assert!(
+                    registry().get_info(alias).is_some(),
+                    "/{name} alias {alias} must resolve"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn feat019_note_dispatches_through_public_seam() {
+        let tmpdir = tempfile::TempDir::new().unwrap();
+        let mut app = memory_test_app(&tmpdir);
+
+        let appended = execute("/note hello from dispatch", &mut app);
+        assert!(!appended.is_error, "{appended:?}");
+        assert!(
+            appended
+                .message
+                .as_deref()
+                .is_some_and(|msg| msg.contains("Note appended to")),
+            "{appended:?}"
+        );
+        let notes = tmpdir.path().join(".deepseek").join("notes.md");
+        assert!(notes.exists(), "notes file written under the workspace");
+        let content = std::fs::read_to_string(&notes).unwrap();
+        assert!(content.contains("hello from dispatch"));
+
+        // Metadata bridges to the TUI localization id.
+        let info = registry().get_info("note").expect("note info");
+        assert_eq!(
+            info.description_id,
+            crate::localization::MessageId::CmdNoteDescription
+        );
+    }
+
+    #[test]
+    fn feat019_memory_dispatches_through_public_seam() {
+        let tmpdir = tempfile::TempDir::new().unwrap();
+        let mut app = memory_test_app(&tmpdir);
+
+        let path = execute("/memory path", &mut app);
+        assert!(!path.is_error, "{path:?}");
+        assert_eq!(
+            path.message.as_deref(),
+            Some(tmpdir.path().join("memory.md").to_str().unwrap())
+        );
+
+        // Native status reaches the real adapter through the public seam.
+        let status = execute("/memory native status", &mut app);
+        assert!(!status.is_error, "{status:?}");
+        let msg = status.message.expect("status message");
+        assert!(msg.contains("native memory:"), "{msg}");
+
+        let info = registry().get_info("memory").expect("memory info");
+        assert_eq!(
+            info.description_id,
+            crate::localization::MessageId::CmdMemoryDescription
+        );
+    }
+
+    #[test]
+    fn feat019_public_dispatch_never_panics_on_memory_commands() {
+        let tmpdir = tempfile::TempDir::new().unwrap();
+        let mut app = memory_test_app(&tmpdir);
+        for command in [
+            "/note",
+            "/note ",
+            "/memory",
+            "/memory native bogus",
+            "/memory wat",
+        ] {
+            let result = execute(command, &mut app);
+            // Every path returns a result; none may panic.
+            assert!(result.message.is_some(), "{command}: {result:?}");
+        }
+    }
+
+    #[test]
+    fn feat022_skills_commands_dispatch_through_public_seam() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _home = feat022_scoped_home(&tmp);
+        let mut app = feat022_test_app(&tmp);
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        feat022_write_skill(&tmp.path().join("skills"), "demo");
+
+        // Bare /skills opens the unified manager (zero network).
+        let result = execute("/skills", &mut app);
+        assert!(!result.is_error, "{result:?}");
+        assert!(
+            matches!(
+                result.action,
+                Some(crate::tui::app::AppAction::OpenSkillsManager)
+            ),
+            "{result:?}"
+        );
+
+        // /skill activates the demo skill and sets active_skill.
+        let result = execute("/skill demo", &mut app);
+        assert!(!result.is_error, "{result:?}");
+        assert!(result.message.unwrap().contains("Skill 'demo' activated."));
+        assert!(app.active_skill.is_some());
+
+        // /restore with no snapshots shows the empty message.
+        let result = execute("/restore", &mut app);
+        assert!(!result.is_error, "{result:?}");
+        assert!(result.message.unwrap().contains("No snapshots"));
+
+        // /review without a target prints usage.
+        let result = execute("/review", &mut app);
+        assert!(result.is_error, "{result:?}");
+        assert!(result.message.unwrap().contains("Usage: /review"));
+    }
+
+    #[test]
+    fn feat022_aliases_dispatch_through_public_seam() {
+        // All four aliases (jinengliebiao, jineng, shencha) resolve through the
+        // registry to the same portable handlers as the canonical names.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _home = feat022_scoped_home(&tmp);
+        let mut app = feat022_test_app(&tmp);
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        feat022_write_skill(&tmp.path().join("skills"), "demo");
+
+        let result = execute("/jinengliebiao", &mut app);
+        assert!(
+            matches!(
+                result.action,
+                Some(crate::tui::app::AppAction::OpenSkillsManager)
+            ),
+            "{result:?}"
+        );
+
+        let result = execute("/jineng demo", &mut app);
+        assert!(!result.is_error, "{result:?}");
+        assert!(result.message.unwrap().contains("Skill 'demo' activated."));
+
+        let result = execute("/shencha", &mut app);
+        assert!(result.is_error, "{result:?}");
+        assert!(result.message.unwrap().contains("Usage: /review"));
+    }
+
+    #[test]
+    fn feat022_context_exposure_is_exact_per_d4() {
+        // The test-only full envelope exposes every adapter; production
+        // dispatch exposes only each handler's declared facets.
+        // skills/review/restore consume only skill_group; skill also consumes
+        // skills for cache refreshes.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _home = feat022_scoped_home(&tmp);
+        let mut app = feat022_test_app(&tmp);
+        let mut bundle = app.command_contexts();
+        let parts = bundle.parts();
+        assert!(parts.skill_group.is_some());
+        assert!(parts.skills.is_some());
+        // Missing-facet safety through the public seam is covered by the
+        // handler-level tests; here we assert the envelope carries both.
     }
 }

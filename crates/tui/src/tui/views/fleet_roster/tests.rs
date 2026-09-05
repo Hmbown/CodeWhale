@@ -68,6 +68,7 @@ fn view_with_overrides() -> FleetRosterView {
         detail_scroll: 0,
         row_hitboxes: RefCell::new(Vec::new()),
         last_mouse_selected: None,
+        hovered_row: Cell::new(None),
         surface_bg: palette::UI_THEME.surface_bg,
         locale: Locale::En,
     }
@@ -87,7 +88,7 @@ fn session_subagent_tab_is_named_workers_not_durable_runs() {
     assert_eq!(
         tr(Locale::En, MessageId::FleetRosterWorkers),
         "workers",
-        "the w tab opens current-session sub-agents; durable runs belong to /pod runs"
+        "the w tab opens current-session sub-agents; durable runs belong to /fleet runs"
     );
 }
 
@@ -252,6 +253,41 @@ fn mouse_selection_reveals_details_then_activates_the_same_member_as_enter() {
     let keyboard_member =
         setup_member_id(keyboard.handle_key(key(KeyCode::Enter))).expect("Enter activates");
     assert_eq!(mouse_member, keyboard_member);
+}
+
+#[test]
+fn hover_tints_roster_row_without_moving_selection() {
+    let area = Rect::new(0, 0, 100, 30);
+    let mut view = built_in_view();
+    let mut buf = Buffer::empty(area);
+    view.render(area, &mut buf);
+    assert_eq!(view.selected, 0);
+    let manager_row = view
+        .row_hitboxes
+        .borrow()
+        .iter()
+        .find_map(|(rect, action)| (action.row() == 1).then_some(*rect))
+        .expect("manager row hitbox");
+
+    assert!(matches!(
+        view.handle_mouse(mouse(MouseEventKind::Moved, manager_row)),
+        ViewAction::None
+    ));
+    assert_eq!(view.hovered_row.get(), Some(1));
+    assert_eq!(view.selected, 0);
+
+    // Repaint: the hovered row wears the shared hover band on its text.
+    let mut hovered_buf = Buffer::empty(area);
+    view.render(area, &mut hovered_buf);
+    assert_eq!(
+        hovered_buf[(manager_row.x, manager_row.y)].bg,
+        crate::palette::SURFACE_ELEVATED,
+        "hovered roster row must show the shared hover band"
+    );
+
+    // Keyboard motion clears the tint so a stale row never glows.
+    view.handle_key(key(KeyCode::Down));
+    assert_eq!(view.hovered_row.get(), None);
 }
 
 #[test]

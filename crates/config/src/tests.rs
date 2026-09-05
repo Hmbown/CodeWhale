@@ -29,34 +29,24 @@ fn network_policy_toml_deserializes_proxy_hosts() {
 }
 
 #[test]
-fn verifier_config_defaults_to_hunt_verdict_policy() {
+fn retired_verifier_verdict_policy_is_accepted_and_dropped_on_load() {
+    // `verdict_policy` was a single-value setting retired with the
+    // verifier-preview schema cleanup. Old configs that still carry it must
+    // keep loading; the key is read-only dropped (never written back).
     let config: ConfigToml = toml::from_str(
         r#"
         [verifier]
         enabled = true
+        verdict_policy = "hunt"
+
+        [verifier.unknown_extra]
+        key = "value"
         "#,
     )
-    .expect("verifier config toml");
+    .expect("a legacy verifier table must still parse");
 
     let verifier = config.verifier.expect("verifier table");
     assert!(verifier.enabled);
-    assert_eq!(verifier.verdict_policy, VerifierVerdictPolicy::Hunt);
-}
-
-#[test]
-fn verifier_config_rejects_unknown_verdict_policy() {
-    let err = toml::from_str::<ConfigToml>(
-        r#"
-        [verifier]
-        verdict_policy = "strict"
-        "#,
-    )
-    .expect_err("only the shipped hunt policy should parse");
-
-    assert!(
-        err.message().contains("unknown variant"),
-        "unexpected error: {err}"
-    );
 }
 
 #[test]
@@ -129,6 +119,48 @@ fn lifecycle_outbox_toml_webhook_is_optional() {
         Some("https://example.com/hooks/codewhale")
     );
     assert!(outbox.webhook_token.is_none());
+}
+
+#[test]
+fn control_socket_toml_is_off_by_default_and_parses_when_enabled() {
+    // Unset = feature OFF: the table is absent and the field is None.
+    let absent: ConfigToml = toml::from_str("model = \"demo\"\n").expect("minimal config");
+    assert!(
+        absent.control_socket.is_none(),
+        "unset [control_socket] must leave the feature off"
+    );
+
+    // An empty table is also off: enabled defaults to false.
+    let empty: ConfigToml =
+        toml::from_str("[control_socket]\n").expect("empty control_socket table");
+    let socket = empty.control_socket.expect("table should parse");
+    assert!(!socket.enabled, "empty table must leave the socket off");
+
+    // Explicit enable.
+    let enabled: ConfigToml = toml::from_str(
+        r#"
+        [control_socket]
+        enabled = true
+        "#,
+    )
+    .expect("enabled control_socket table");
+    assert!(
+        enabled.control_socket.expect("table should parse").enabled,
+        "enabled = true must turn the socket on"
+    );
+
+    // Explicit disable stays off.
+    let disabled: ConfigToml = toml::from_str(
+        r#"
+        [control_socket]
+        enabled = false
+        "#,
+    )
+    .expect("disabled control_socket table");
+    assert!(
+        !disabled.control_socket.expect("table should parse").enabled,
+        "enabled = false must keep the socket off"
+    );
 }
 
 #[test]
@@ -509,36 +541,6 @@ action = "session.compact"
     let round_tripped: ConfigToml =
         toml::from_str(&serialized).expect("deserialize serialized config");
     assert_eq!(round_tripped.hotbar, config.hotbar);
-}
-
-#[test]
-fn legacy_pod_hotbar_action_resolves_to_canonical_fleet_without_rewriting_disk() {
-    let config: ConfigToml = toml::from_str(
-        r#"
-[[hotbar]]
-slot = 3
-action = "slash.pod"
-label = "fleet"
-"#,
-    )
-    .expect("parse legacy hotbar binding");
-
-    let resolved = config.resolve_hotbar_bindings(&["slash.fleet"]);
-
-    assert_eq!(resolved.warnings, Vec::new());
-    assert_eq!(
-        resolved.bindings,
-        vec![HotbarBinding {
-            slot: 3,
-            action: "slash.fleet".to_string(),
-            label: Some("fleet".to_string()),
-        }]
-    );
-    assert_eq!(
-        config.hotbar.as_ref().unwrap()[0].action,
-        "slash.pod",
-        "read-time compatibility must not mutate the parsed on-disk value"
-    );
 }
 
 #[test]
@@ -1975,6 +1977,53 @@ fn http_headers_env_overrides_config() {
             .map(String::as_str),
         Some("from-env")
     );
+}
+
+#[test]
+fn yolo_env_var_prefers_codewhale_and_keeps_deepseek_alias() {
+    let _lock = env_lock();
+    let _env = EnvGuard::without_deepseek_runtime_overrides();
+    let codewhale_prev = env::var_os("CODEWHALE_YOLO");
+    let deepseek_prev = env::var_os("DEEPSEEK_YOLO");
+    let config = ConfigToml::default();
+
+    // Only the canonical name is set.
+    unsafe {
+        env::set_var("CODEWHALE_YOLO", "true");
+        env::remove_var("DEEPSEEK_YOLO");
+    }
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(
+        resolved.yolo,
+        Some(true),
+        "CODEWHALE_YOLO=true must enable the yolo posture"
+    );
+
+    // Only the deprecated alias is set: it must keep working through 0.9.x.
+    unsafe {
+        env::remove_var("CODEWHALE_YOLO");
+        env::set_var("DEEPSEEK_YOLO", "true");
+    }
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(
+        resolved.yolo,
+        Some(true),
+        "DEEPSEEK_YOLO remains a read-only deprecated alias until 0.10 (#5443)"
+    );
+
+    // Both set: the canonical name wins.
+    unsafe { env::set_var("CODEWHALE_YOLO", "false") };
+    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
+    assert_eq!(
+        resolved.yolo,
+        Some(false),
+        "CODEWHALE_YOLO must win over the deprecated DEEPSEEK_YOLO alias"
+    );
+
+    unsafe {
+        EnvGuard::restore_var("CODEWHALE_YOLO", codewhale_prev);
+        EnvGuard::restore_var("DEEPSEEK_YOLO", deepseek_prev);
+    }
 }
 
 #[test]
@@ -8062,281 +8111,6 @@ fn fallback_providers_do_not_change_runtime_resolution() {
     let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
 
     assert_eq!(resolved.provider, ProviderKind::NvidiaNim);
-}
-
-#[test]
-fn harness_posture_default_is_standard() {
-    let posture = HarnessPosture::default();
-
-    assert_eq!(
-        posture,
-        HarnessPosture {
-            kind: HarnessPostureKind::Standard,
-            max_subagents: 0,
-            prefer_codebase_search: false,
-            compaction_strategy: HarnessCompactionStrategy::Default,
-            tool_surface: HarnessToolSurface::Full,
-            safety_posture: HarnessSafetyPosture::Standard,
-        }
-    );
-}
-
-#[test]
-fn harness_posture_factories_are_typed() {
-    assert_eq!(
-        HarnessPosture::cache_heavy(),
-        HarnessPosture {
-            kind: HarnessPostureKind::CacheHeavy,
-            max_subagents: 10,
-            prefer_codebase_search: false,
-            compaction_strategy: HarnessCompactionStrategy::PrefixCache,
-            tool_surface: HarnessToolSurface::Full,
-            safety_posture: HarnessSafetyPosture::Standard,
-        }
-    );
-    assert_eq!(
-        HarnessPosture::lean(),
-        HarnessPosture {
-            kind: HarnessPostureKind::Lean,
-            max_subagents: 20,
-            prefer_codebase_search: true,
-            compaction_strategy: HarnessCompactionStrategy::Aggressive,
-            tool_surface: HarnessToolSurface::Full,
-            safety_posture: HarnessSafetyPosture::Standard,
-        }
-    );
-}
-
-#[test]
-fn harness_profile_serde_round_trips_as_a_whole_struct() {
-    let profile = HarnessProfile {
-        provider_route: "deepseek".to_string(),
-        model_pattern: "deepseek-v4.*".to_string(),
-        posture: HarnessPosture::cache_heavy(),
-    };
-
-    let json = serde_json::to_string(&profile).expect("serialize profile");
-    let round_tripped: HarnessProfile = serde_json::from_str(&json).expect("deserialize profile");
-
-    assert_eq!(round_tripped, profile);
-}
-
-#[test]
-fn config_toml_accepts_harness_profiles() {
-    let config: ConfigToml = toml::from_str(
-        r#"
-provider = "deepseek"
-model = "deepseek-v4-pro"
-
-[[harness_profiles]]
-provider_route = "deepseek"
-model_pattern = "deepseek-v4.*"
-
-[harness_profiles.posture]
-kind = "cache-heavy"
-max_subagents = 10
-compaction_strategy = "prefix-cache"
-tool_surface = "read-only"
-safety_posture = "strict"
-"#,
-    )
-    .expect("parse harness profiles");
-
-    assert_eq!(
-        config.harness_profiles,
-        vec![HarnessProfile {
-            provider_route: "deepseek".to_string(),
-            model_pattern: "deepseek-v4.*".to_string(),
-            posture: HarnessPosture {
-                kind: HarnessPostureKind::CacheHeavy,
-                max_subagents: 10,
-                prefer_codebase_search: false,
-                compaction_strategy: HarnessCompactionStrategy::PrefixCache,
-                tool_surface: HarnessToolSurface::ReadOnly,
-                safety_posture: HarnessSafetyPosture::Strict,
-            },
-        }]
-    );
-}
-
-#[test]
-fn harness_profile_matches_provider_alias_and_model_wildcard() {
-    let profile = HarnessProfile {
-        provider_route: "xiaomi-mimo".to_string(),
-        model_pattern: "mimo-v2.?-pro".to_string(),
-        posture: HarnessPosture::cache_heavy(),
-    };
-
-    assert!(profile.matches_route("mimo", "mimo-v2.5-pro"));
-    assert!(!profile.matches_route("mimo", "mimo-v2.50-pro"));
-    assert!(!profile.matches_route("deepseek", "mimo-v2.5-pro"));
-}
-
-#[test]
-fn resolve_harness_profile_returns_first_matching_profile() {
-    let config = ConfigToml {
-        harness_profiles: vec![
-            HarnessProfile {
-                provider_route: "deepseek".to_string(),
-                model_pattern: "deepseek-v4-flash".to_string(),
-                posture: HarnessPosture::lean(),
-            },
-            HarnessProfile {
-                provider_route: "deepseek".to_string(),
-                model_pattern: "deepseek-v4-*".to_string(),
-                posture: HarnessPosture::cache_heavy(),
-            },
-        ],
-        ..ConfigToml::default()
-    };
-
-    let flash = config
-        .resolve_harness_profile("deepseek-cn", "deepseek-v4-flash")
-        .expect("exact profile should match first");
-    assert_eq!(flash.posture.kind, HarnessPostureKind::Lean);
-
-    let pro = config
-        .resolve_harness_profile("deepseek", "deepseek-v4-pro")
-        .expect("wildcard profile should match pro model");
-    assert_eq!(pro.posture.kind, HarnessPostureKind::CacheHeavy);
-}
-
-#[test]
-fn resolve_harness_profile_uses_built_in_seed_when_config_has_no_match() {
-    let config = ConfigToml::default();
-
-    let xiaomi = config
-        .resolve_harness_profile("xiaomi", "mimo-v2.5-pro")
-        .expect("direct Xiaomi MiMo seed should resolve");
-    assert_eq!(xiaomi.provider_route, "xiaomi-mimo");
-    assert_eq!(xiaomi.posture.kind, HarnessPostureKind::CacheHeavy);
-
-    let arcee = config
-        .resolve_harness_profile("arcee", "trinity-large-thinking")
-        .expect("direct Arcee seed should resolve");
-    assert_eq!(arcee.posture.kind, HarnessPostureKind::CacheHeavy);
-
-    let local = config
-        .resolve_harness_profile("vllm", "Qwen/Qwen3.6-Coder")
-        .expect("local seed should resolve");
-    assert_eq!(local.posture.kind, HarnessPostureKind::Lean);
-    assert!(local.posture.prefer_codebase_search);
-}
-
-#[test]
-fn configured_harness_profile_overrides_built_in_seed() {
-    let config = ConfigToml {
-        harness_profiles: vec![HarnessProfile {
-            provider_route: "xiaomi-mimo".to_string(),
-            model_pattern: "mimo-v2.5-pro".to_string(),
-            posture: HarnessPosture {
-                kind: HarnessPostureKind::Custom,
-                max_subagents: 3,
-                prefer_codebase_search: true,
-                compaction_strategy: HarnessCompactionStrategy::Default,
-                tool_surface: HarnessToolSurface::Auto,
-                safety_posture: HarnessSafetyPosture::Strict,
-            },
-        }],
-        ..ConfigToml::default()
-    };
-
-    let profile = config
-        .resolve_harness_profile("xiaomi-mimo", "mimo-v2.5-pro")
-        .expect("configured profile should match first");
-
-    assert_eq!(profile.posture.kind, HarnessPostureKind::Custom);
-    assert_eq!(profile.posture.max_subagents, 3);
-    assert_eq!(profile.posture.tool_surface, HarnessToolSurface::Auto);
-    assert_eq!(profile.posture.safety_posture, HarnessSafetyPosture::Strict);
-}
-
-#[test]
-fn resolve_harness_profile_returns_none_when_route_or_model_misses() {
-    let config = ConfigToml {
-        harness_profiles: vec![HarnessProfile {
-            provider_route: "huggingface".to_string(),
-            model_pattern: "deepseek-ai/*".to_string(),
-            posture: HarnessPosture::lean(),
-        }],
-        ..ConfigToml::default()
-    };
-
-    assert!(
-        config
-            .resolve_harness_profile("openrouter", "deepseek-ai/DeepSeek-V4-Pro")
-            .is_none()
-    );
-    assert!(
-        config
-            .resolve_harness_profile("deepseek", "Qwen/Qwen3.6-Coder")
-            .is_none()
-    );
-    assert!(
-        config
-            .resolve_harness_profile("openai", "mimo-v2.5-pro")
-            .is_none()
-    );
-}
-
-#[test]
-fn resolving_harness_profile_does_not_change_runtime_options() {
-    let _lock = env_lock();
-    let _env = EnvGuard::without_deepseek_runtime_overrides();
-    let config = ConfigToml {
-        provider: ProviderKind::Deepseek,
-        model: Some("deepseek-v4-pro".to_string()),
-        harness_profiles: vec![HarnessProfile {
-            provider_route: "deepseek".to_string(),
-            model_pattern: "deepseek-v4-*".to_string(),
-            posture: HarnessPosture::lean(),
-        }],
-        ..ConfigToml::default()
-    };
-
-    let profile = config
-        .resolve_harness_profile("deepseek", "deepseek-v4-pro")
-        .expect("profile should resolve for display/future runtime");
-    assert_eq!(profile.posture.kind, HarnessPostureKind::Lean);
-
-    let resolved = config.resolve_runtime_options(&CliRuntimeOverrides::default());
-    assert_eq!(resolved.provider, ProviderKind::Deepseek);
-    assert_eq!(resolved.model, "deepseek-v4-pro");
-}
-
-#[test]
-fn harness_posture_kind_rejects_unknown_values() {
-    let err = toml::from_str::<ConfigToml>(
-        r#"
-[[harness_profiles]]
-provider_route = "deepseek"
-model_pattern = "deepseek-v4.*"
-
-[harness_profiles.posture]
-kind = "cahce-heavy"
-"#,
-    )
-    .expect_err("misspelled kind should not deserialize as custom");
-
-    assert!(err.to_string().contains("cahce-heavy"));
-}
-
-#[test]
-fn harness_posture_rejects_unknown_policy_keys() {
-    let err = toml::from_str::<ConfigToml>(
-        r#"
-[[harness_profiles]]
-provider_route = "deepseek"
-model_pattern = "deepseek-v4.*"
-
-[harness_profiles.posture]
-kind = "custom"
-unknown_policy = "surprise"
-"#,
-    )
-    .expect_err("unknown posture keys should not be ignored");
-
-    assert!(err.to_string().contains("unknown_policy"));
 }
 
 #[test]

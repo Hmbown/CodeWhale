@@ -1,7 +1,7 @@
-//! The saved named Pod — the single configuration concept for the whole
-//! Pod surface. Its v2 compatibility storage keeps `schema = "fleet"`.
+//! The saved named Fleet — the single configuration concept for the whole
+//! Fleet surface. Its v2 compatibility storage keeps `schema = "fleet"`.
 //!
-//! A Pod is one self-contained TOML file. It owns:
+//! A Fleet is one self-contained TOML file. It owns:
 //!
 //! - its **operator** route (provider + exact model + reasoning), or the
 //!   explicit absence of one ("inherit the session route");
@@ -16,13 +16,13 @@
 //! (`~/.codewhale/agents/*.toml`, `.codewhale/agents/*.toml`,
 //! `[fleet.profiles]`) and the workflow crate's `exact`/legacy named-fleet
 //! files are migration/compat input only — read here, never shadowed, never
-//! the runtime winner alongside a v2 Pod.
+//! the runtime winner alongside a v2 Fleet.
 //!
 //! Selection is a scope-explicit file: `fleets/selected` under the personal
 //! root is the user-global default; the same file under the workspace root is
 //! an intentional workspace selection. Workspace selection wins; both are
 //! labeled in the UI. A workspace selection can never hide or rewrite a
-//! personal Pod.
+//! personal Fleet.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -43,7 +43,7 @@ const MAX_MEMBER_DISPLAY_NAME_CHARS: usize = 80;
 pub const FLEET_DIR: &str = "fleets";
 pub const SELECTED_FILE: &str = "selected";
 
-/// Where a Pod was saved. This is the pin target: personal = user-global,
+/// Where a Fleet was saved. This is the pin target: personal = user-global,
 /// workspace = folder-scoped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -79,7 +79,7 @@ impl FleetScope {
     }
 }
 
-/// A Pod's own operator route. Absent = inherit the live session route.
+/// A Fleet's own operator route. Absent = inherit the live session route.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FleetOperator {
@@ -119,7 +119,7 @@ impl MemberCapability {
     }
 }
 
-/// One roster member of a Pod.
+/// One roster member of a Fleet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FleetMember {
@@ -157,7 +157,7 @@ pub struct FleetMember {
     pub requires: Vec<String>,
 }
 
-/// The saved named Pod document (compatibility `schema = "fleet"`, revision 2).
+/// The saved named Fleet document (compatibility `schema = "fleet"`, revision 2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FleetFile {
@@ -351,7 +351,7 @@ pub(crate) fn slugify(name: &str) -> String {
     }
 }
 
-/// One entry in the Pod list: name, scope, exact path, and health.
+/// One entry in the Fleet list: name, scope, exact path, and health.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FleetEntry {
     pub name: String,
@@ -365,7 +365,7 @@ pub struct FleetEntry {
     pub legacy: bool,
 }
 
-/// The resolved selection: which Pod a session should start on, and which
+/// The resolved selection: which Fleet a session should start on, and which
 /// scope made the choice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectedFleet {
@@ -768,7 +768,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), FleetStoreError> {
 }
 
 /// One row of the migration receipt: how a legacy role profile maps into the
-/// new Pod.
+/// new Fleet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationRow {
     /// Role id, e.g. `scout`.

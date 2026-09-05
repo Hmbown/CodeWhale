@@ -1,0 +1,1 @@
+{"mcpServers": {"computer": {"args": ["server/server.py"], "command": "python3", "cwd": ".", "type": "stdio"}}}

@@ -66,7 +66,7 @@ pub const REDACTED: &str = "[redacted]";
 pub const HIDDEN_DETAILS: &str = "[details hidden]";
 
 /// Fallback headline when sanitization leaves nothing behind.
-const FALLBACK_HEADLINE: &str = "Codewhale";
+const FALLBACK_HEADLINE: &str = "codewhale";
 
 /// The closed set of events that can produce a desktop notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

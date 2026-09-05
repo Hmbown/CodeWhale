@@ -107,9 +107,10 @@ impl CostEstimate {
     }
 }
 
-// === DeepSeek Account Balance ===
+// === Provider Account Balance ===
 
-/// Response from `GET https://api.deepseek.com/user/balance`.
+/// Response from DeepSeek `GET /user/balance`. Other prepaid providers are
+/// mapped onto [`BalanceInfo`] at the fetch seam.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct BalanceResponse {
     #[allow(dead_code)]
@@ -117,28 +118,64 @@ pub struct BalanceResponse {
     pub balance_infos: Vec<BalanceInfo>,
 }
 
-/// Per-currency balance entry from the balance API.
+/// Per-currency remaining-credit entry shown by `/balance` and the status chip.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct BalanceInfo {
-    // Wire fields of the live `GET /user/balance` response deserialized in
-    // `tui::ui::fetch_deepseek_balance` and parked in `App::balance_cell`.
-    // Nothing renders them today — the footer balance chip went with the
-    // legacy FooterWidget — so `dead_code` cannot see the producer. Kept
-    // because they are the API contract, matching the sibling fields below.
-    #[allow(dead_code)]
     pub currency: String,
     #[serde(default)]
-    #[allow(dead_code)]
     pub total_balance: String,
     #[serde(default)]
-    #[allow(dead_code)]
     pub topped_up_balance: String,
     #[serde(default)]
-    #[allow(dead_code)]
     pub granted_balance: String,
 }
 
-impl BalanceInfo {}
+impl BalanceInfo {
+    /// Compact ledger chip, e.g. `$12.50` or `¥123.45`.
+    #[must_use]
+    pub fn chip_label(&self) -> Option<String> {
+        let amount = self.total_balance.trim();
+        if amount.is_empty() {
+            return None;
+        }
+        Some(format_balance_amount(amount, &self.currency))
+    }
+
+    /// Full `/balance` report for one prepaid provider.
+    #[must_use]
+    pub fn report(&self, provider_name: &str) -> String {
+        let amount = self
+            .chip_label()
+            .unwrap_or_else(|| self.total_balance.trim().to_string());
+        let mut report = if amount.is_empty() {
+            format!("{provider_name} account balance is unknown")
+        } else {
+            format!("{provider_name} account balance: {amount}")
+        };
+        let topped = self.topped_up_balance.trim();
+        let granted = self.granted_balance.trim();
+        if !topped.is_empty() || !granted.is_empty() {
+            let mut parts = Vec::new();
+            if !topped.is_empty() {
+                parts.push(format!("topped up {topped}"));
+            }
+            if !granted.is_empty() {
+                parts.push(format!("granted {granted}"));
+            }
+            report.push_str(&format!(" ({})", parts.join(", ")));
+        }
+        report
+    }
+}
+
+fn format_balance_amount(amount: &str, currency: &str) -> String {
+    match currency.trim().to_ascii_uppercase().as_str() {
+        "CNY" | "RMB" | "¥" => format!("¥{amount}"),
+        "USD" | "US$" | "$" => format!("${amount}"),
+        "" => amount.to_string(),
+        other => format!("{amount} {other}"),
+    }
+}
 
 /// How a hand-sourced row bills cache-creation (cache-write) tokens.
 ///
@@ -4745,5 +4782,33 @@ mod tests {
         assert!(resp.balance_infos.is_empty());
     }
 
-    // ── BalanceInfo::total_balance_f64 ─────────────────────────────
+    #[test]
+    fn balance_info_chip_label_uses_currency_prefix() {
+        let cny = BalanceInfo {
+            currency: "CNY".to_string(),
+            total_balance: "123.45".to_string(),
+            ..BalanceInfo::default()
+        };
+        assert_eq!(cny.chip_label().as_deref(), Some("¥123.45"));
+        let usd = BalanceInfo {
+            currency: "USD".to_string(),
+            total_balance: "12.50".to_string(),
+            ..BalanceInfo::default()
+        };
+        assert_eq!(usd.chip_label().as_deref(), Some("$12.50"));
+        assert_eq!(
+            usd.report("OpenRouter"),
+            "OpenRouter account balance: $12.50"
+        );
+        let deepseek = BalanceInfo {
+            currency: "CNY".to_string(),
+            total_balance: "123.45".to_string(),
+            topped_up_balance: "100.00".to_string(),
+            granted_balance: "23.45".to_string(),
+        };
+        assert_eq!(
+            deepseek.report("DeepSeek"),
+            "DeepSeek account balance: ¥123.45 (topped up 100.00, granted 23.45)"
+        );
+    }
 }

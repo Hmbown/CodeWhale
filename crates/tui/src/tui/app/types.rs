@@ -63,7 +63,7 @@ impl AppModeUi for AppMode {
         tr(
             locale,
             match self {
-                AppMode::Agent | AppMode::Auto | AppMode::Yolo => MessageId::AppModeAgent,
+                AppMode::Agent => MessageId::AppModeAgent,
                 AppMode::Plan => MessageId::AppModePlan,
                 AppMode::Operate => MessageId::AppModeOperate,
             },
@@ -75,7 +75,7 @@ impl AppModeUi for AppMode {
         tr(
             locale,
             match self {
-                AppMode::Agent | AppMode::Auto | AppMode::Yolo => MessageId::AppModeAgentHint,
+                AppMode::Agent => MessageId::AppModeAgentHint,
                 AppMode::Plan => MessageId::AppModePlanHint,
                 AppMode::Operate => MessageId::AppModeOperateHint,
             },
@@ -746,6 +746,10 @@ pub struct QueuedMessage {
     pub display: String,
     pub skill_instruction: Option<String>,
     pub skill_provenance: Option<crate::plugins::types::PluginAuthority>,
+    /// True once this turn has been painted into `history` as `HistoryCell::User`.
+    /// Queue/offline submit echoes before the model runs; Immediate prepare skips
+    /// a second paint when this is set so drained queued turns do not double.
+    pub history_echoed: bool,
 }
 
 /// Prefix for the bounded, tool-less model turn produced by `/workflow`.
@@ -826,6 +830,7 @@ impl QueuedMessage {
             display,
             skill_instruction,
             skill_provenance: None,
+            history_echoed: false,
         }
     }
 
@@ -1017,9 +1022,9 @@ pub enum AppAction {
     OpenExtensions {
         tab: crate::tui::views::extensions::ExtensionsTab,
     },
-    /// Open `/pod` — the saved named-Fleet list (the primary Pod surface).
+    /// Open `/fleet` — the saved named-Fleet list (the primary Fleet surface).
     OpenFleetList,
-    /// Open the `/pod` roster — the saved-party view of the agent team.
+    /// Open the `/fleet` roster — the saved-party view of the agent team.
     OpenFleetRoster,
     /// Open the selected v2 Fleet editor, or legacy profile setup when no
     /// named Fleet is selected.
@@ -1108,6 +1113,8 @@ pub enum AppAction {
         title: String,
         content: String,
     },
+    /// Live remaining-credit lookup for prepaid providers (`/balance`).
+    FetchBalance,
     FetchModels,
     /// Force a Models.dev live-catalog refresh into ProviderLake (#4187).
     RefreshModelsDevCatalog,

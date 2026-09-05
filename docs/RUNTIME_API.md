@@ -49,7 +49,7 @@ CLI/API surfaces are not implemented yet.
 |---|---|---|
 | `codewhale web [--port 7878]` | HTTP/SSE on `127.0.0.1:7878` + embedded client | First-class loopback-only browser client; opens the default browser |
 | `codewhale app-server --http` | HTTP/SSE on `127.0.0.1:7878` | Full `/v1/*` runtime API (canonical) |
-| `codewhale app-server --mobile` | HTTP/SSE on `0.0.0.0:7878` + `/mobile` | Runtime API + phone control page |
+| `codewhale app-server --mobile` | HTTP/SSE on loopback + `/mobile` | Runtime API + local mobile control page |
 | `codewhale app-server --stdio` | JSON-RPC 2.0 over stdio | Local SDK / control probe (no listener) |
 | `codewhale app-server --socket [--socket-path P]` | JSON-RPC 2.0 over a `0600` unix domain socket | Desktop daemon: multi-client, peer-uid checked, `daemon/attach` claim handshake (macOS/Linux; Windows named pipe reserved, not implemented) |
 | `codewhale app-server` | HTTP on `127.0.0.1:8787` | Legacy in-process app-server (`/healthz`, `/thread`, `/app`, `/prompt`, `/tool`, `/jobs`); `/prompt` and `/thread` messages execute real turns via the runtime bridge |
@@ -408,8 +408,8 @@ codewhale doctor --json
 
 ```bash
 codewhale app-server --http [--host 127.0.0.1] [--port 7878] [--workers 2] [--auth-token TOKEN] [--insecure-no-auth]
-codewhale app-server --mobile [--host 0.0.0.0] [--port 7878] [--auth-token TOKEN]
-codewhale app-server --mobile --host 127.0.0.1 [--port 7878] [--insecure-no-auth]
+codewhale app-server --mobile [--host 127.0.0.1] [--port 7878] [--auth-token TOKEN]
+codewhale app-server --mobile --host ::1 [--port 7878] [--insecure-no-auth]
 codewhale web [--port 7878]
 
 # Compatibility aliases — identical server, serve flag names:
@@ -423,11 +423,10 @@ The server binds to `localhost` by default. Configuration is via CLI flags —
 there is no `[app_server]` config section.
 
 `/v1/*` routes require a bearer token unless `codewhale app-server` is started
-with `--insecure-no-auth` on a loopback bind such as `127.0.0.1`. Do not combine
-no-auth mode with the `--mobile` default host `0.0.0.0`; use a token for LAN
-mobile access, or add `--host 127.0.0.1` for local-only no-auth testing. The
-`codewhale serve` compatibility aliases use `--insecure` for the same loopback
-escape hatch.
+with `--insecure-no-auth` on a loopback bind such as `127.0.0.1`. Mobile mode
+is loopback-only: non-loopback hosts are rejected until Runtime has a TLS or
+verified-overlay transport boundary. The `codewhale serve` compatibility aliases
+use `--insecure` for the same loopback escape hatch.
 Pass `--auth-token TOKEN` or set `CODEWHALE_RUNTIME_TOKEN=TOKEN` before starting
 the server; `DEEPSEEK_RUNTIME_TOKEN` remains a compatibility alias. If neither
 is set, the process generates a Runtime token for that process and does **not**
@@ -438,8 +437,8 @@ the unchanged static shell when it is enabled.
 
 Authenticated clients can provide the token as `Authorization: Bearer TOKEN`,
 `X-Codewhale-Runtime-Token: TOKEN`, the legacy
-`X-DeepSeek-Runtime-Token: TOKEN`, or the `codewhale_runtime_token` cookie.
-Query-string authentication is not supported.
+`X-DeepSeek-Runtime-Token: TOKEN`. Query-string and raw Runtime-token cookie
+authentication are not supported.
 
 ### Local browser client
 
@@ -494,19 +493,23 @@ explicit contracts for them.
 ### Mobile control page
 
 `codewhale serve --mobile` starts the same HTTP/SSE runtime API and serves a
-phone-friendly control page at `/mobile`. When the bind host is left at the
-default, mobile mode binds to `0.0.0.0`, prints a warning, and prints local/LAN
-URLs. Pass `--host 127.0.0.1` to keep the mobile page loopback-only. The static
-HTML page contains no secrets and is not itself token-gated. Its calls to
-`/v1/*` are authenticated: for LAN use, start with an explicit Runtime token
-and enter it in the page. Generated Runtime tokens are deliberately unprinted,
-so they cannot be copied into another device.
+phone-friendly control page at `/mobile`. It binds only to loopback
+(`127.0.0.1` or `::1`); a non-loopback host is rejected because this Runtime
+surface does not yet provide TLS or a verified overlay transport. The static
+HTML page contains no Runtime bearer and is not itself token-gated. When
+Runtime auth is enabled, the CLI prints a short-lived, single-use loopback
+bootstrap URL. That capability creates a 30-minute, process-local
+`Max-Age=1800; HttpOnly; SameSite=Strict` mobile session cookie plus origin-scoped browser
+proofs. A sibling port that receives the host-scoped cookie cannot use it by
+itself. The page can also exchange an explicitly entered bearer once, then
+clears it rather than storing it in browser storage or a cookie. EventSource
+connections use separate short-lived, single-use stream tickets.
 
 The mobile page can list/create threads, send prompts, follow live SSE events,
 steer or interrupt an active turn, and resolve normal tool approvals through
-`POST /v1/approvals/{approval_id}`. It is still a local/LAN convenience surface:
-do not expose it directly to the public internet without TLS and a trusted
-fronting layer.
+`POST /v1/approvals/{approval_id}`. It is a local-only convenience surface;
+do not expose it directly to another device or public network until Runtime has
+a TLS or verified transport boundary.
 
 ### Endpoints
 
@@ -524,8 +527,8 @@ fronting layer.
 
 Sessions and threads answer the same `include_archived` / `archived_only` pair
 with the same meaning, and `search` is the same fuzzy match (title, id,
-workspace — substring, then subsequence) the TUI session picker and the sidebar
-Sessions rail use. All three surfaces run one projection
+workspace — substring, then subsequence) the TUI session picker and the workbar
+Sessions list use. All three surfaces run one projection
 (`crates/tui/src/session_projection.rs`), so a listing cannot differ between
 the terminal and the dashboard.
 
@@ -1127,11 +1130,9 @@ clients and does not grant or persist permissions.
 ## Security boundary
 
 - **Localhost by default**. The server binds to `127.0.0.1` by default.
-  `--mobile` binds to `0.0.0.0` when no host is supplied so phones on the same
-  LAN can reach it, and the CLI prints a warning for that rebind. Pass
-  `--host 127.0.0.1` for a loopback-only mobile page. Set a non-loopback host
-  only when you trust the network path or have a reverse-proxy / VPN that
-  authenticates. The runtime does not provide user isolation or TLS.
+  `--mobile` is also loopback-only and rejects a non-loopback host until a TLS
+  or verified-overlay transport boundary exists. The runtime does not provide
+  user isolation or TLS.
 - **Optional token guard**. `--auth-token` or `DEEPSEEK_RUNTIME_TOKEN`
   requires a matching bearer token for `/v1/*` routes. This is a local
   convenience guard, not a replacement for TLS, VPN, or a trusted reverse

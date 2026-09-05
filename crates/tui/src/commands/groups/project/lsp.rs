@@ -25,7 +25,10 @@ impl RegisterCommand<CommandResult> for LspCmd {
     }
 
     fn handler() -> CommandHandler<CommandResult> {
-        CommandHandler::Contextual(lsp_contextual)
+        CommandHandler::Contextual {
+            capabilities: codewhale_command_contract::handler::CommandCapabilities::PROJECT,
+            handler: lsp_contextual,
+        }
     }
 }
 

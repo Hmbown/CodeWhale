@@ -26,14 +26,14 @@ Global key chords are not yet user-configurable — tracked for a future release
 | `Ctrl-O`             | Open the reasoning detail for the selected or current turn, regardless of composer contents |
 | `Ctrl-Alt-O`         | Open the whole-turn Turn Inspector, regardless of composer contents |
 | `Alt-V` / `Option-V` (macOS) | Open the details pager for the selected, visible, or most recent tool/sub-agent card; terminals that emit the legacy Option-V glyph are also handled |
-| `Ctrl-Shift-E` / `Cmd-Shift-E` | Toggle the file-tree sidebar                          |
+| `Ctrl-Shift-E` / `Cmd-Shift-E` | Toggle the file tree in the workbar                   |
 | `Alt-G` / `Alt-Shift-G` | Scroll transcript to top / bottom when the composer is empty |
 | `Alt-1`-`Alt-8`      | Dispatch Hotbar slots 1-8 when no modal or inline picker is open |
-| `Alt-!` / `Alt-@` / `Alt-#` / `Alt-$` | Select the work-bar panel: Tasks / Agents / Context / Pinned |
-| `Ctrl-Alt-0`         | Toggle the work bar off / back to the top placement             |
+| `Alt-!` / `Alt-@` / `Alt-#` / `Alt-$` | Select the workbar panel: Tasks / Agents / Context / Files |
+| `Ctrl-Alt-0`         | Toggle the workbar off / back to the bottom placement          |
 | `Alt-L`              | Open the pager for the last message (composer empty)             |
 | `Alt-P` / `Alt-A` / `Alt-Y` | Jump to Plan / Work, or request Full Access (`Alt-Y` is the legacy permission channel — Work + Full Access — not a separate mode; it honors a locked approval policy) |
-| `Ctrl-X` (Activity sidebar) | Cancel all running background shell jobs                  |
+| `Ctrl-X` (Activity workbar) | Cancel all running background shell jobs                  |
 | `Esc`                | Close topmost modal · cancel slash menu · dismiss toast        |
 
 ## Composer
@@ -120,7 +120,7 @@ Since #3807 a missing `hotbar` key renders **no bar** — fresh configs show no 
 | Focus state | Hotbar behavior |
 |-------------|-----------------|
 | Composer empty, text, or whitespace | `Alt-1`-`Alt-8` dispatches a configured slot |
-| Sidebar focused, hidden, or auto | `Alt-1`-`Alt-8` still dispatches a configured slot |
+| Workbar focused, hidden, or auto | `Alt-1`-`Alt-8` still dispatches a configured slot |
 | Slash menu or history search open | Blocked; the inline selector owns the key event |
 | Command palette, help, approval, file picker, session picker, Fleet setup, or any modal stack | Blocked; the modal owns the key event |
 | Onboarding | Blocked; onboarding owns numeric choices |

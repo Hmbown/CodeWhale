@@ -10,6 +10,12 @@ use ratatui::{
 use crate::tui::ocean;
 
 /// Kind of interactive surface under the pointer.
+///
+/// Slice G central registry: every clickable primitive family has a kind so
+/// per-screen renderers register one rect and the shared
+/// [`crate::tui::hover_layer`] paints the feedback. Selection (keyboard)
+/// styling stays in [`crate::tui::menu_style`]; these kinds only drive the
+/// pointer layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HoverTargetKind {
     Link,
@@ -96,5 +102,40 @@ mod tests {
     #[test]
     fn copy_affordance_is_stable() {
         assert_eq!(copy_affordance(), "⧉ copy");
+    }
+
+    #[test]
+    fn every_kind_hit_tests_through_the_shared_registry() {
+        // Each registered kind must resolve through the same topmost-wins
+        // hit-test so per-screen registration is one call.
+        for kind in [HoverTargetKind::Link, HoverTargetKind::TruncatedText] {
+            let targets = vec![HoverHit {
+                kind,
+                area: Rect::new(4, 1, 12, 1),
+                label: "control".into(),
+                copyable: false,
+            }];
+            let hit = hit_test(6, 1, &targets).expect("hit");
+            assert_eq!(hit.kind, kind);
+        }
+        let targets = vec![
+            HoverHit {
+                kind: HoverTargetKind::TruncatedText,
+                area: Rect::new(0, 0, 20, 1),
+                label: "row".into(),
+                copyable: false,
+            },
+            HoverHit {
+                kind: HoverTargetKind::Link,
+                area: Rect::new(2, 0, 6, 1),
+                label: "button".into(),
+                copyable: false,
+            },
+        ];
+        assert_eq!(
+            hit_test(3, 0, &targets).expect("hit").kind,
+            HoverTargetKind::Link,
+            "topmost (last registered) control wins"
+        );
     }
 }

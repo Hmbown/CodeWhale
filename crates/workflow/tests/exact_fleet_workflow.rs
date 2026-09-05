@@ -439,7 +439,9 @@ fn legacy_fleet_files_still_load_through_the_same_store() {
     assert_eq!(id.qualified(), "workspace/stopship");
     let legacy = document.legacy().expect("legacy body");
     legacy.validate_stopship_roles().expect("required roles");
-    assert_eq!(legacy.resolve("release_lead").unwrap(), "manager");
+    // The stopship fixture binds release_lead to the canonical advisor role
+    // (role-only world: no saved manager member to bind).
+    assert_eq!(legacy.resolve("release_lead").unwrap(), "advisor");
 }
 
 /// A personal `~/.codewhale` Fleet must not silently shadow — or be shadowed

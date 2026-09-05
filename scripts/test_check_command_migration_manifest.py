@@ -362,12 +362,11 @@ class LiveGateTests(unittest.TestCase):
         frontier = doc["frontier"]
         self.assertEqual(frontier, sorted(frontier))
         self.assertEqual(len(frontier), len(set(frontier)))
-        # FEAT-018 removed the utility group from the frontier (Stage B first
-        # slice); FEAT-021 removed the project group; the remaining seven
-        # groups stay pending.
+        # FEAT-018 removed utility, FEAT-019 removed memory, FEAT-021 removed project,
+        # and FEAT-022 removed skills; the remaining five groups stay pending.
         self.assertEqual(
             set(frontier),
-            {"memory", "plugins", "skills", "session", "config", "debug", "core"},
+            {"plugins", "session", "config", "debug", "core"},
         )
 
 
@@ -513,6 +512,75 @@ class SourceScanTests(unittest.TestCase):
             )
             violations = mod.check_source_frontier(doc["topology"], ["session", "utility"], root)
             self.assertTrue(any("stale-entry" in str(v) for v in violations))
+
+    def test_retained_host_exempts_declared_machinery_from_stale_removal(self) -> None:
+        """A migrated group may declare dispatcher host machinery (FEAT-042)
+        that keeps `&mut App`; the gate exempts it and flags the rest."""
+        topology = {
+            "alpha": {
+                "kind": "group",
+                "scope": ["alpha/mod.rs"],
+                "slices": [],
+            }
+        }
+        frontier: list[str] = []
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "alpha").mkdir(parents=True, exist_ok=True)
+            (root / "alpha" / "mod.rs").write_text(
+                "use crate::tui::app::App;\n"
+                "fn retained(app: &mut App, arg: Option<&str>) {} \n"
+                "fn stale(app: &mut App, arg: Option<&str>) {} \n",
+                encoding="utf-8",
+            )
+            # stub RETAINED_HOST_MACHINERY for the hermetic group
+            original = mod.RETAINED_HOST_MACHINERY
+            try:
+                mod.RETAINED_HOST_MACHINERY = {
+                    "alpha": [
+                        {"kind": "free", "item": ["crate", "commands", "groups", "alpha", "retained"]}
+                    ]
+                }
+                violations = mod.check_source_frontier(topology, frontier, root)
+            finally:
+                mod.RETAINED_HOST_MACHINERY = original
+            kinds = [v.category for v in violations]
+            self.assertNotIn("retained-host", kinds)
+            self.assertEqual(kinds.count("stale-removal"), 1, violations)
+
+    def test_retained_host_fails_closed_when_signature_lost(self) -> None:
+        """If retained machinery loses its concrete-App signature, the gate fails."""
+        topology = {
+            "alpha": {
+                "kind": "group",
+                "scope": ["alpha/mod.rs"],
+                "slices": [],
+            }
+        }
+        frontier: list[str] = []
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "alpha").mkdir(parents=True, exist_ok=True)
+            (root / "alpha" / "mod.rs").write_text(
+                "fn retained(arg: Option<&str>) {} \n",
+                encoding="utf-8",
+            )
+            original = mod.RETAINED_HOST_MACHINERY
+            try:
+                mod.RETAINED_HOST_MACHINERY = {
+                    "alpha": [
+                        {"kind": "free", "item": ["crate", "commands", "groups", "alpha", "retained"]}
+                    ]
+                }
+                violations = mod.check_source_frontier(topology, frontier, root)
+            finally:
+                mod.RETAINED_HOST_MACHINERY = original
+            self.assertTrue(
+                any(v.category == "retained-host" for v in violations),
+                f"expected retained-host violation, got {violations}",
+            )
 
     def test_live_source_gate_passes(self) -> None:
         doc = mod.load_topology()

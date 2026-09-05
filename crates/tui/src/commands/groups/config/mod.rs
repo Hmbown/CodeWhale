@@ -72,10 +72,11 @@ static AUTH_INFO: CommandInfo = CommandInfo {
     description_id: MessageId::CmdAuthDescription,
 };
 static RAIL_INFO: CommandInfo = CommandInfo {
-    name: "rail",
-    // /sidebar is the name users already know; it now drives the one rail.
-    aliases: &["sidebar"],
-    usage: "/rail [top|left|right|off|tasks|agents|context|pinned] [--save]",
+    name: "workbar",
+    // /rail and /sidebar are the names users already know; both now drive
+    // the one workbar.
+    aliases: &["rail", "sidebar"],
+    usage: "/workbar [bottom|top|left|right|off|tasks|agents|context|pinned] [--save]",
     description_id: MessageId::CmdSidebarDescription,
 };
 static SETTINGS_INFO: CommandInfo = CommandInfo {
@@ -117,7 +118,7 @@ static INLINE_INFO: CommandInfo = CommandInfo {
 static THEME_INFO: CommandInfo = CommandInfo {
     name: "theme",
     aliases: &[],
-    usage: "/theme [name|custom:<name>|schema|path]",
+    usage: "/theme [name|underwater|custom:<name>|schema|path]",
     description_id: MessageId::CmdThemeDescription,
 };
 static VERBOSE_INFO: CommandInfo = CommandInfo {
@@ -158,7 +159,7 @@ fn run_auth(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "auth", arg)
 }
 fn run_rail(app: &mut App, arg: Option<&str>) -> CommandResult {
-    run_registered(app, "rail", arg)
+    run_registered(app, "workbar", arg)
 }
 fn run_settings(app: &mut App, arg: Option<&str>) -> CommandResult {
     run_registered(app, "settings", arg)
@@ -213,7 +214,7 @@ pub(in crate::commands) fn dispatch(
             }
             _ => CommandResult::error("Usage: /auth xai-device|chatgpt|chatgpt-revoke"),
         },
-        "rail" | "sidebar" => config::sidebar(app, arg),
+        "workbar" | "rail" | "sidebar" => config::sidebar(app, arg),
         "settings" => config::settings_command(app, arg),
         "status" => status::status(app),
         "statusline" => config::status_line(app),

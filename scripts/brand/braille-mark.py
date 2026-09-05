@@ -1,38 +1,53 @@
 #!/usr/bin/env python3
-"""Render brand/mark.svg as braille cells (2x4 dots per cell) for the TUI.
+"""Derive the TUI launch-mark assets from the founder raster (PRD section 6).
 
 The launch mark in `crates/tui/src/tui/mark.rs` is generated here, never
-hand-drawn (shell design §2.0 item 4: "the mark is the real logo, in dots").
+hand-drawn. The canonical product mark is the founder-supplied raster
+`brand/codewhalemarkfinal.png` (1254 x 1254 brand sheet: navy hero whale on
+white, sizing row, the white-on-navy app icon, colour/mono/reversed rows).
+Both TUI tiers are proportional/braille derivatives of that file — no
+redraws, no traced SVG:
 
-Pipeline: substitute `currentColor`, rasterise with ImageMagick at a high
-density, crop to the glyph's bounding box, box-filter the alpha coverage down
-to a (cols*2) x (rows*4) dot grid that preserves the glyph's aspect ratio
-(centred inside the box), threshold, and pack each 2x4 block into one braille
-codepoint (U+2800 + dot bits). Blank cells are emitted as a space so the
-renderer can leave the field behind them untouched, and all-blank edge
-columns are trimmed so the emitted footprint is the ink's, not the box's.
+- braille rows <- the hero whale (navy on white, top of the sheet),
+  navy darkness box-filtered to a dot grid, aspect preserved and centred
+  in the rung's box, all-blank edge columns trimmed, the eye carved as one
+  cleared dot;
+- kitty/sixel PNGs <- the app-icon panel (white whale on the navy rounded
+  square), auto-located as the largest navy blob in the sheet's right
+  middle band, squared, sheet-white keyed to transparent, proportionally
+  resized.
 
-    scripts/brand/braille-mark.py                   # print + Rust consts
-    scripts/brand/braille-mark.py --png out.png --px 96 --color 5B9BFF
+    scripts/brand/braille-mark.py                 # print + Rust consts
+    scripts/brand/braille-mark.py --png crates/tui/assets/mark-96.png --px 96
 
-The `--png` form writes the same glyph as a coloured PNG on a transparent
-ground for the kitty-graphics tier (`crates/tui/assets/mark-*.png`).
-
-Requires `magick` (ImageMagick 7). No other dependencies.
+Requires `pillow` (`pip install pillow`). No other dependencies.
 """
 
 from __future__ import annotations
 
 import argparse
+import collections
 import pathlib
-import re
-import subprocess
 import sys
-import tempfile
+
+try:
+    from PIL import Image
+except ImportError:
+    raise SystemExit("braille-mark.py requires pillow (`pip install pillow`)")
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-SVG = ROOT / "brand" / "mark.svg"
+RASTER = ROOT / "brand" / "codewhalemarkfinal.png"
 
+# Search bands as fractions of the sheet, so the boxes track the layout
+# rather than absolute pixels. The app-icon caption ("APP ICON", navy text)
+# sits above the icon band; the band starts below it.
+HERO_BAND = (0.0, 1.0, 0.0, 0.52)  # x0, x1, y0, y1
+ICON_BAND = (0.65, 1.0, 0.55, 0.78)
+HERO_MARGIN = 12
+ICON_PAD = 10
+# Sheet background (and the icon's drop shadow, darkest ~211) keys out;
+# founder navy (~15,33,65) never approaches this.
+BG_CUTOFF = 200
 # Braille dot bit for (dot_row, dot_col) inside one cell — U+2800 layout:
 # dots 1,2,3 are column 0 rows 0..2 (bits 0..2), dots 4,5,6 column 1 rows
 # 0..2 (bits 3..5), dots 7,8 are row 3 (bits 6,7).
@@ -48,42 +63,143 @@ DOT_BITS = {
 }
 
 
-def svg_with_fill(color: str) -> bytes:
-    text = SVG.read_text(encoding="utf-8")
-    return text.replace("currentColor", color).encode("utf-8")
+def is_navy(pixel: tuple[int, int, int]) -> bool:
+    r, g, b = pixel
+    return b > 60 and b > r + 25 and r < 110 and g < 150
 
 
-def rasterise_alpha(density: int) -> tuple[int, int, list[list[float]]]:
-    """Return (width, height, coverage[y][x] in 0..1) of the trimmed glyph."""
-    with tempfile.TemporaryDirectory() as tmp:
-        svg = pathlib.Path(tmp) / "mark.svg"
-        svg.write_bytes(svg_with_fill("#000000"))
-        pgm = subprocess.run(
-            [
-                "magick",
-                "-background",
-                "none",
-                "-density",
-                str(density),
-                str(svg),
-                "-trim",
-                "+repage",
-                "-alpha",
-                "extract",
-                "-compress",
-                "none",
-                "pgm:-",
-            ],
-            check=True,
-            capture_output=True,
-        ).stdout
-    tokens = re.split(rb"\s+", pgm.strip())
-    if tokens[0] != b"P2":
-        raise SystemExit("magick did not emit an ASCII PGM")
-    width, height, maxval = int(tokens[1]), int(tokens[2]), int(tokens[3])
-    values = [int(v) / maxval for v in tokens[4 : 4 + width * height]]
-    rows = [values[y * width : (y + 1) * width] for y in range(height)]
-    return width, height, rows
+def load_sheet() -> Image.Image:
+    if not RASTER.exists():
+        raise SystemExit(f"founder raster missing: {RASTER}")
+    image = Image.open(RASTER).convert("RGB")
+    width, height = image.size
+    if width != height or width < 800:
+        raise SystemExit(f"unexpected founder sheet geometry: {image.size}")
+    return image
+
+
+def band_box(image: Image.Image, band: tuple[float, float, float, float]):
+    width, height = image.size
+    return (
+        int(band[0] * width),
+        int(band[1] * width),
+        int(band[2] * height),
+        int(band[3] * height),
+    )
+
+
+def hero_coverage(image: Image.Image) -> tuple[int, int, list[list[float]]]:
+    """Navy-darkness coverage of the hero whale crop, each in 0..1."""
+    width, height = image.size
+    x0, x1, y0, _ = band_box(image, HERO_BAND)
+    pixels = image.load()
+    xs, ys = [], []
+    for y in range(y0, int(HERO_BAND[3] * height)):
+        for x in range(x0, x1):
+            if is_navy(pixels[x, y]):
+                xs.append(x)
+                ys.append(y)
+    if not xs:
+        raise SystemExit("no navy hero whale found in the founder sheet")
+    box = (
+        max(0, min(xs) - HERO_MARGIN),
+        max(0, min(ys) - HERO_MARGIN),
+        min(width, max(xs) + HERO_MARGIN + 1),
+        min(height, max(ys) + HERO_MARGIN + 1),
+    )
+    crop = image.crop(box)
+    cover = crop.load()
+    cw, ch = crop.size
+    coverage = []
+    for y in range(ch):
+        row = []
+        for x in range(cw):
+            r, g, b = cover[x, y]
+            row.append(max(0.0, min(1.0, (180.0 - (r + g + b) / 3.0) / 120.0)))
+        coverage.append(row)
+    print(f"// hero whale box {box[0]},{box[1]}-{box[2]},{box[3]}", file=sys.stderr)
+    return cw, ch, coverage
+
+
+def icon_square(image: Image.Image) -> Image.Image:
+    """The app-icon panel squared: white whale on the navy rounded square
+    with the sheet background keyed to transparent. Located as the largest
+    navy blob in the icon band, so the caption text (separate small blobs)
+    can never be mistaken for the mark."""
+    width, height = image.size
+    x0, x1, y0, y1 = band_box(image, ICON_BAND)
+    pixels = image.load()
+    seen = bytearray(width * height)
+    best: list[tuple[int, int]] = []
+    for sy in range(y0, y1):
+        for sx in range(x0, x1):
+            if not is_navy(pixels[sx, sy]) or seen[sy * width + sx]:
+                continue
+            blob, stack = [], collections.deque([(sx, sy)])
+            seen[sy * width + sx] = 1
+            while stack:
+                x, y = stack.pop()
+                blob.append((x, y))
+                for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                    if (
+                        x0 <= nx < x1
+                        and y0 <= ny < y1
+                        and not seen[ny * width + nx]
+                        and is_navy(pixels[nx, ny])
+                    ):
+                        seen[ny * width + nx] = 1
+                        stack.append((nx, ny))
+            if len(blob) > len(best):
+                best = blob
+    if len(best) < 10_000:
+        raise SystemExit("app-icon blob not found in the founder sheet")
+    bx0 = min(x for x, _ in best)
+    bx1 = max(x for x, _ in best)
+    by0 = min(y for _, y in best)
+    by1 = max(y for _, y in best)
+    # The white whale cuts the blob's left side, but its full height shows:
+    # the icon is square, so the edge is the height.
+    edge = by1 - by0 + 1
+    if not 150 <= edge <= 260:
+        raise SystemExit(f"app-icon blob has unexpected height: {edge}")
+    cx = (bx0 + bx1) // 2
+    cy = (by0 + by1) // 2
+    half = edge // 2 + ICON_PAD
+    box = (cx - half, cy - half, cx + half, cy + half)
+    print(
+        f"// app-icon navy blob x {bx0}-{bx1} y {by0}-{by1}, "
+        f"square crop {box[0]},{box[1]}-{box[2]},{box[3]}",
+        file=sys.stderr,
+    )
+    square = image.crop(box).convert("RGBA")
+    sw, sh = square.size
+    ink = square.load()
+    flood = bytearray(sw * sh)
+
+    def is_bg(x: int, y: int) -> bool:
+        r, g, b = ink[x, y][:3]
+        return min(r, g, b) > BG_CUTOFF
+
+    queue = collections.deque()
+    for x in range(sw):
+        for y in (0, sh - 1):
+            if is_bg(x, y):
+                queue.append((x, y))
+                flood[y * sw + x] = 1
+    for y in range(sh):
+        for x in (0, sw - 1):
+            if is_bg(x, y) and not flood[y * sw + x]:
+                queue.append((x, y))
+                flood[y * sw + x] = 1
+    while queue:
+        x, y = queue.popleft()
+        r, g, b, _ = ink[x, y]
+        ink[x, y] = (r, g, b, 0)
+        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if 0 <= nx < sw and 0 <= ny < sh and not flood[ny * sw + nx] and is_bg(nx, ny):
+                flood[ny * sw + nx] = 1
+                queue.append((nx, ny))
+    return square
 
 
 def downsample(
@@ -113,10 +229,11 @@ def downsample(
 
 
 def eye_hole(coverage: list[list[float]], width: int, height: int) -> tuple[float, float] | None:
-    """Locate the eye: the smallest enclosed hole in the glyph (the belly
-    lines are the other holes, but they are long). Returns its centroid as a
-    fraction of the glyph's width and height, or None when nothing is
-    enclosed. Works on a coarse copy so the flood fill stays cheap."""
+    """Locate the eye: the smallest enclosed hole in the glyph above the
+    raster-speck noise floor (the belly white is the other, far larger,
+    hole). Returns its centroid as a fraction of the glyph's width and
+    height, or None when nothing is enclosed. Works on a coarse copy so
+    the flood fill stays cheap."""
     scale = max(1, width // 220)
     cw, ch = width // scale, height // scale
     solid = [
@@ -139,7 +256,7 @@ def eye_hole(coverage: list[list[float]], width: int, height: int) -> tuple[floa
                     if 0 <= nx < cw and 0 <= ny < ch and not solid[ny][nx] and not seen[ny][nx]:
                         seen[ny][nx] = True
                         stack.append((nx, ny))
-            if not touches_edge:
+            if not touches_edge and len(cells) >= 4:
                 holes.append(cells)
     if not holes:
         return None
@@ -192,35 +309,10 @@ def rust_const(name: str, lines: list[str]) -> str:
     return f"const {name}: [&str; {len(lines)}] = [\n{body}\n];"
 
 
-def write_png(out: pathlib.Path, px: int, color: str) -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        svg = pathlib.Path(tmp) / "mark.svg"
-        svg.write_bytes(svg_with_fill(f"#{color}"))
-        subprocess.run(
-            [
-                "magick",
-                "-background",
-                "none",
-                "-density",
-                "600",
-                str(svg),
-                "-trim",
-                "+repage",
-                "-resize",
-                f"{px}x{px}",
-                "-gravity",
-                "center",
-                "-extent",
-                f"{px}x{px}",
-                "-depth",
-                "8",
-                "-define",
-                "png:color-type=6",
-                "-strip",
-                str(out),
-            ],
-            check=True,
-        )
+def write_png(out: pathlib.Path, px: int) -> None:
+    square = icon_square(load_sheet())
+    square.resize((px, px), Image.LANCZOS).save(out)
+    print(f"wrote {out} ({px}x{px}, founder app-icon derivative)")
 
 
 def main() -> int:
@@ -230,27 +322,24 @@ def main() -> int:
         action="append",
         default=None,
         metavar="NAME:COLSxROWS",
-        help="cell box to render, e.g. SMALL:11x3 (default: MEDIUM:22x5 SMALL:11x3 TINY:8x2)",
+        help="cell box to render, e.g. SMALL:11x3 (default: SMALL:11x3 TINY:8x2)",
     )
     parser.add_argument("--threshold", type=float, default=0.3, help="dot coverage threshold")
-    parser.add_argument("--density", type=int, default=400, help="rasterisation DPI")
     parser.add_argument("--no-eye", action="store_true", help="do not carve the eye dot")
-    parser.add_argument("--png", type=pathlib.Path, help="write a coloured PNG instead")
+    parser.add_argument("--png", type=pathlib.Path, help="write an app-icon PNG instead")
     parser.add_argument("--px", type=int, default=96, help="PNG edge in pixels")
-    parser.add_argument("--color", default="5B9BFF", help="PNG fill colour (hex, no #)")
     args = parser.parse_args()
 
     if args.png:
-        write_png(args.png, args.px, args.color)
-        print(f"wrote {args.png} ({args.px}x{args.px}, #{args.color})")
+        write_png(args.png, args.px)
         return 0
 
-    rungs = args.rung or ["MEDIUM:22x5", "SMALL:11x3", "TINY:8x2"]
-    width, height, coverage = rasterise_alpha(args.density)
+    rungs = args.rung or ["SMALL:11x3", "TINY:8x2"]
+    width, height, coverage = hero_coverage(load_sheet())
     eye = None if args.no_eye else eye_hole(coverage, width, height)
-    print(f"// generated by scripts/brand/braille-mark.py from brand/mark.svg")
+    print("// generated by scripts/brand/braille-mark.py from brand/codewhalemarkfinal.png")
     print(
-        f"// (density {args.density}, glyph bbox {width}x{height}px, "
+        f"// (founder hero whale {width}x{height}px, "
         f"threshold {args.threshold}, aspect preserved, edge columns trimmed, "
         f"eye {'carved' if eye else 'not found'})"
     )

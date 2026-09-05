@@ -241,6 +241,12 @@ impl ReportBuilder {
 }
 
 pub fn build_context_report(app: &App) -> PromptSourceMap {
+    // The host still stores the rung apart from the number; pair them against
+    // the same route limits the pressure meter reads.
+    let context_window = crate::route_runtime::ContextWindowResolution {
+        tokens: route_context_window_tokens(app.api_provider, &app.model, app.active_route_limits),
+        source: app.active_context_window_source,
+    };
     let mut builder = base_source_entries(
         &app.model,
         &app.workspace,
@@ -250,16 +256,11 @@ pub fn build_context_report(app: &App) -> PromptSourceMap {
         app.ui_locale.tag(),
         app.mode,
         Some(app.plugin_registry.as_ref()),
+        Some(context_window.tokens),
     );
     add_app_runtime_entries(&mut builder, app);
     let active_context_estimated_tokens =
         estimate_input_tokens_conservative(&app.api_messages, app.system_prompt.as_ref());
-    // The host still stores the rung apart from the number; pair them against
-    // the same route limits the pressure meter reads.
-    let context_window = crate::route_runtime::ContextWindowResolution {
-        tokens: route_context_window_tokens(app.api_provider, &app.model, app.active_route_limits),
-        source: app.active_context_window_source,
-    };
     builder.finish(
         context_window,
         active_context_estimated_tokens,
@@ -337,6 +338,7 @@ pub fn build_headless_context_report(config: &Config, workspace: &Path) -> Promp
         "en",
         crate::tui::app::AppMode::Agent,
         None,
+        Some(context_window.tokens),
     );
     let memory_path = config.memory_path();
     let memory_enabled = config.memory_enabled();
@@ -401,6 +403,7 @@ fn base_source_entries(
     locale_tag: &str,
     mode: crate::tui::app::AppMode,
     plugin_registry: Option<&crate::plugins::PluginRegistry>,
+    context_window_tokens: Option<u32>,
 ) -> ReportBuilder {
     let mut builder = ReportBuilder::new();
 
@@ -530,6 +533,7 @@ fn base_source_entries(
 
     let skill_discovery_mode =
         crate::skills::SkillDiscoveryMode::from_codewhale_only(skills_scan_codewhale_only);
+    let skills_budget = crate::skills::skills_prompt_budget_chars(context_window_tokens);
     let skills_block = match skills_dir {
         Some(dir) => crate::skills::render_available_skills_context_for_workspace_and_dir_with_mode_and_plugins(
             workspace,
@@ -537,12 +541,14 @@ fn base_source_entries(
             skill_discovery_mode,
             locale_tag,
             plugin_registry,
+            skills_budget,
         ),
         None => crate::skills::render_available_skills_context_for_workspace_with_mode_and_plugins(
             workspace,
             skill_discovery_mode,
             locale_tag,
             plugin_registry,
+            skills_budget,
         ),
     };
     if let Some(block) = skills_block {

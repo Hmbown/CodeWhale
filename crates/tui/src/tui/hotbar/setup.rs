@@ -1214,7 +1214,7 @@ mod tests {
             "empty",
             "Work mode",
             "Command palette",
-            "Toggle sidebar",
+            "Toggle workbar",
             "Switch the conversation",
         ] {
             assert!(

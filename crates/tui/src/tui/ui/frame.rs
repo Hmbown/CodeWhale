@@ -60,7 +60,7 @@ fn output_figures(app: &App) -> Option<(u64, Option<f64>)> {
 /// context, cost, time to first token, output rate, output tokens.
 ///
 /// Repository and branch left this row (2026-09-02): the launch header and
-/// the git bottom view own them. Pod, whale and automation counts left too —
+/// the git bottom view own them. Fleet, whale and automation counts left too —
 /// the posture bar's live counts own activity.
 pub(crate) fn info_segments(app: &App, width: u16) -> Vec<InfoSegment> {
     use crate::localization::MessageId;
@@ -93,20 +93,23 @@ pub(crate) fn info_segments(app: &App, width: u16) -> Vec<InfoSegment> {
         ));
     }
 
-    // The context reading: painted here and nowhere else. At the 80% cap
-    // the whole reading turns to the error token — it is the one fact on
+    // The context reading: painted here and nowhere else. Only displayed
+    // when context fullness >= 50%; below 50% it remains silent. At the 80%
+    // cap the whole reading turns to the error token — it is the one fact on
     // this row that becomes a problem rather than a status.
     let pct = info_context_percent(app);
-    segments.push(InfoSegment::new(
-        InfoSegmentId::Context,
-        app.tr(MessageId::InfoLineContext).as_ref(),
-        format!("{pct}%"),
-        if pct >= 80 {
-            ChromeInk::Failure
-        } else {
-            ChromeInk::Info
-        },
-    ));
+    if pct >= 50 {
+        segments.push(InfoSegment::new(
+            InfoSegmentId::Context,
+            app.tr(MessageId::InfoLineContext).as_ref(),
+            format!("{pct}%"),
+            if pct >= 80 {
+                ChromeInk::Failure
+            } else {
+                ChromeInk::Info
+            },
+        ));
+    }
 
     let cost = session_cost_label(app);
     if !cost.is_empty() {
@@ -142,12 +145,43 @@ pub(crate) fn info_segments(app: &App, width: u16) -> Vec<InfoSegment> {
                 ChromeInk::MetadataValue,
             ));
         }
+        let hit = u64::from(app.session.displayed_total_cache_hit_tokens());
+        let miss = u64::from(app.session.displayed_total_cache_miss_tokens());
+        let cache_total = hit + miss;
+        if cache_total > 0 {
+            let cache_pct = (hit * 100 + cache_total / 2)
+                .checked_div(cache_total)
+                .and_then(|pct| u8::try_from(pct).ok())
+                .unwrap_or(100);
+            segments.push(InfoSegment::new(
+                InfoSegmentId::Cache,
+                "cache",
+                format!("{cache_pct}%"),
+                ChromeInk::MetadataValue,
+            ));
+        }
         segments.push(InfoSegment::new(
             InfoSegmentId::OutputTokens,
             "↓",
             crate::tui::session_metrics::format_tokens(tokens),
             ChromeInk::MetadataValue,
         ));
+    } else {
+        let hit = u64::from(app.session.displayed_total_cache_hit_tokens());
+        let miss = u64::from(app.session.displayed_total_cache_miss_tokens());
+        let cache_total = hit + miss;
+        if cache_total > 0 {
+            let cache_pct = (hit * 100 + cache_total / 2)
+                .checked_div(cache_total)
+                .and_then(|pct| u8::try_from(pct).ok())
+                .unwrap_or(100);
+            segments.push(InfoSegment::new(
+                InfoSegmentId::Cache,
+                "cache",
+                format!("{cache_pct}%"),
+                ChromeInk::MetadataValue,
+            ));
+        }
     }
 
     segments
@@ -183,7 +217,7 @@ fn render_info_row(f: &mut Frame, app: &mut App, area: Rect) -> InfoLineInteract
             .last_infoline_hitboxes
             .iter()
             .find(|hb| {
-                hb.id == InfoSegmentId::Model
+                matches!(hb.id, InfoSegmentId::Model | InfoSegmentId::Context)
                     && hb.area.x <= mx
                     && mx < hb.area.right()
                     && hb.area.y == my
@@ -393,6 +427,7 @@ pub(crate) async fn build_preview_request_inputs(
         display: prompt.clone(),
         skill_instruction: app.active_skill.clone(),
         skill_provenance: app.active_skill_provenance.clone(),
+        history_echoed: false,
     };
     let mut git_cache = crate::tui::git_mention::GitMentionCache::default();
     // Same failure surface as a real submit: a plugin-skill authority mismatch
@@ -964,6 +999,11 @@ pub(crate) fn build_pending_input_preview(app: &App) -> PendingInputPreview {
 
 pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(u16, u16)> {
     let size = f.area();
+    // The sixel block is re-reserved by the launch paint below when the
+    // sixel tier is active; resetting first means any other screen (or a
+    // dissolved card) reads as "no block" and the reconciler clears a
+    // stranded image instead of re-emitting it.
+    app.launch.sixel_mark_area = None;
     // Hover targets belong to the whole composed frame. Resetting inside the
     // transcript erased targets registered later by the composer and modals.
     crate::tui::hover_layer::begin_frame();
@@ -1041,12 +1081,21 @@ pub(crate) fn render(f: &mut Frame, app: &mut App, _config: &Config) -> Option<(
         let footer_area = areas.get(1).copied().unwrap_or_default();
         let info_area = areas.get(2).copied().unwrap_or_default();
         let startup = crate::tui::underwater::tideline_startup_from_app(app);
-        let hitboxes = if startup.composer.enclosed {
+        let mut hitboxes = if startup.composer.enclosed {
             crate::tui::underwater::tideline_startup_hitboxes(stage_area)
         } else {
             crate::tui::underwater::tideline_startup_hitboxes_with_composer(stage_area, false)
         };
-        crate::tui::underwater::render_tideline_startup(stage_area, f.buffer_mut(), &startup);
+        // The card's clickable rows share the painter's plan geometry, so
+        // hover and click rects match painted cells.
+        hitboxes.rows = crate::tui::underwater::tideline_startup_row_hitboxes(stage_area, &startup);
+        let sixel_area =
+            crate::tui::underwater::render_tideline_startup(stage_area, f.buffer_mut(), &startup);
+        app.launch.sixel_mark_area = if sixel_area.width > 0 {
+            Some(sixel_area)
+        } else {
+            None
+        };
         // The completion popup paints above the docked composer's input row,
         // over the stage rows it needs — the same caller-computed entries
         // the session popup rides.
@@ -1589,6 +1638,63 @@ pub(super) fn finish_frame_cursor<B: ratatui::backend::Backend>(
 ///
 /// When `full_repaint` is false, only the diff from the previous draw is
 /// written (normal incremental update path).
+/// Reconcile the sixel tier's live image with this frame's reservation, in
+/// the frame's own synchronized update so the pixels land atomically with
+/// the cells around them. Steady state (same block as last frame) emits no
+/// bytes at all: ratatui never rewrites the reserved blank cells, so the
+/// image survives redraws untouched. A move clears the old block first;
+/// a tier exit clears and stops. Write errors are logged, never fatal —
+/// the blank block simply stays blank until the next frame retries.
+pub(crate) fn reconcile_launch_sixel(writer: &mut impl std::io::Write, app: &mut App) {
+    use crate::tui::mark;
+    let field_bg = mark::sixel_field_bg(&app.ui_theme, app.launch.sixel_terminal_bg);
+    // Fullscreen stage coordinates already are screen cells (both 0-based;
+    // the 1-based CUP shift happens in the sequence builders). Inline
+    // viewports have no stable origin, so the tier never reserves there
+    // and this maps nothing.
+    let want = if mark::sixel_graphics_supported() && app.use_alt_screen() && field_bg.is_some() {
+        app.launch.sixel_mark_area
+    } else {
+        None
+    };
+    if want == app.launch.sixel_emitted {
+        return;
+    }
+    let Some(bg) = field_bg else {
+        // No exact field colour to paint with: hold the current image and
+        // retry next frame rather than flashing a wrong background.
+        tracing::debug!(target: "sixel_graphics", "no RGB field; holding sixel state");
+        return;
+    };
+    if let Some(old) = app.launch.sixel_emitted {
+        let bytes = mark::sixel_clear_sequence(old, bg);
+        if writer.write_all(&bytes).is_err() {
+            tracing::debug!(target: "sixel_graphics", "sixel clear failed");
+            return;
+        }
+        app.launch.sixel_emitted = None;
+    }
+    if let Some(block) = want {
+        let sequence = app
+            .launch
+            .sixel_cell_px
+            .and_then(|cell_px| mark::sixel_mark_sequence(bg, cell_px));
+        if let Some(sequence) = sequence {
+            let bytes = mark::sixel_positioned_sequence(block, &sequence);
+            if writer.write_all(&bytes).is_err() {
+                tracing::debug!(target: "sixel_graphics", "sixel emission failed");
+                return;
+            }
+            app.launch.sixel_emitted = Some(block);
+        } else {
+            tracing::debug!(
+                target: "sixel_graphics",
+                "sixel raster unavailable; the blank block holds"
+            );
+        }
+    }
+}
+
 pub(crate) fn draw_app_frame_inner(
     terminal: &mut AppTerminal,
     app: &mut App,
@@ -1619,10 +1725,16 @@ pub(crate) fn draw_app_frame_inner(
         if full_repaint {
             terminal.backend_mut().write_all(TERMINAL_ORIGIN_RESET)?;
             terminal.clear()?;
+            // A repaint wipes sixel pixels with everything else; forget the
+            // live image so the reconciler below re-emits it this frame.
+            app.launch.sixel_emitted = None;
         }
         let mut cursor_pos = None;
         terminal.draw(|f| cursor_pos = render(f, app, config))?;
         finish_frame_cursor(terminal, cursor_pos)?;
+        // Inside the synchronized update: the pixels land atomically with
+        // the cells. Steady state emits nothing.
+        reconcile_launch_sixel(terminal.backend_mut(), app);
         Ok(())
     })();
 

@@ -1,4 +1,4 @@
-POD LEDGER                                                                                                                                                      
+FLEET LEDGER                                                                                                                                                    
   WHALE     │ASSIGNMENT                                                                                                │STATE       │ELAPSED │RECEIPTS│LAST UP… 
 ▶ whale-1   │restyle the footer band                                                                                   │● working   │1m 15s  │12      │14:42:18 
   whale-2   │golden buffers for the ledger                                                                             │✓ done      │2m 03s  │34      │14:39:02 

@@ -977,3 +977,18 @@ pub(crate) fn tideline_footer_from_app(app: &mut App, width: u16) -> TidelineFoo
 
 #[cfg(test)]
 mod tideline_tests;
+
+#[cfg(test)]
+mod neutrality_tests {
+    #[test]
+    fn session_metrics_strip_is_on_by_default() {
+        assert!(
+            crate::config::StatusItem::default_footer()
+                .contains(&crate::config::StatusItem::SessionMetrics)
+        );
+        assert_eq!(
+            crate::config::StatusItem::from_key("session_metrics"),
+            Some(crate::config::StatusItem::SessionMetrics)
+        );
+    }
+}

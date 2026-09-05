@@ -4215,6 +4215,12 @@ pub(crate) use prepared::{
 };
 pub(crate) use provider_native_search::{ProviderNativeSearchClient, ProviderNativeSearchRequest};
 
+/// Whether a route speaks ordinary `/chat/completions` (not Messages or Responses).
+#[must_use]
+pub(crate) fn provider_speaks_chat_completions(api_provider: ApiProvider) -> bool {
+    provider_default_wire_format(api_provider) == WireFormat::ChatCompletions
+}
+
 pub(crate) fn inspect_prompt_for_request(request: &MessageRequest) -> PromptInspection {
     chat::inspect_prompt_for_request(request)
 }
@@ -6007,13 +6013,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_message_request_json_honors_exact_k3_route_boundaries() {
-        assert_k3_request_json_route_boundaries(false).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_stream_request_json_honors_exact_k3_route_boundaries() {
-        assert_k3_request_json_route_boundaries(true).await;
+    async fn create_message_scenario() {
+        // Scenario consolidation of: create_message_request_json_honors_exact_k3_route_boundaries, create_message_stream_request_json_honors_exact_k3_route_boundaries, create_message_request_json_keeps_zai_effort_route_exact, create_message_stream_request_json_keeps_zai_effort_route_exact, create_message_request_json_keeps_minimax_token_dialect_exact, create_message_stream_request_json_keeps_minimax_token_dialect_exact, create_message_request_json_keeps_modelstudio_enable_thinking_exact, create_message_stream_request_json_keeps_modelstudio_enable_thinking_exact
+        // from create_message_request_json_honors_exact_k3_route_boundaries
+        {
+            assert_k3_request_json_route_boundaries(false).await;
+        }
+        // from create_message_stream_request_json_honors_exact_k3_route_boundaries
+        {
+            assert_k3_request_json_route_boundaries(true).await;
+        }
+        // from create_message_request_json_keeps_zai_effort_route_exact
+        {
+            assert_zai_request_truth(false).await;
+        }
+        // from create_message_stream_request_json_keeps_zai_effort_route_exact
+        {
+            assert_zai_request_truth(true).await;
+        }
+        // from create_message_request_json_keeps_minimax_token_dialect_exact
+        {
+            assert_minimax_request_truth(false).await;
+        }
+        // from create_message_stream_request_json_keeps_minimax_token_dialect_exact
+        {
+            assert_minimax_request_truth(true).await;
+        }
+        // from create_message_request_json_keeps_modelstudio_enable_thinking_exact
+        {
+            assert_modelstudio_request_truth(false).await;
+        }
+        // from create_message_stream_request_json_keeps_modelstudio_enable_thinking_exact
+        {
+            assert_modelstudio_request_truth(true).await;
+        }
     }
 
     #[tokio::test]
@@ -6084,83 +6117,61 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_message_request_json_keeps_zai_effort_route_exact() {
-        assert_zai_request_truth(false).await;
+    async fn create_message_scenario_2() {
+        // Scenario consolidation of: create_message_routes_only_strict_deepseek_tools_to_beta, create_message_stream_routes_only_strict_deepseek_tools_to_beta, create_message_request_replays_kimi_code_history_for_raw_off, create_message_stream_replays_kimi_code_history_for_raw_off, create_message_request_sends_mfjs_compatible_apply_patch_schema, create_message_stream_sends_mfjs_compatible_apply_patch_schema, create_message_request_drops_invalid_kimi_root_ref_tool, create_message_stream_drops_invalid_kimi_root_ref_tool
+        // from create_message_routes_only_strict_deepseek_tools_to_beta
+        {
+            assert_deepseek_strict_request_route_boundary(false).await;
+        }
+        // from create_message_stream_routes_only_strict_deepseek_tools_to_beta
+        {
+            assert_deepseek_strict_request_route_boundary(true).await;
+        }
+        // from create_message_request_replays_kimi_code_history_for_raw_off
+        {
+            assert_kimi_code_raw_off_replays_tool_history(false).await;
+        }
+        // from create_message_stream_replays_kimi_code_history_for_raw_off
+        {
+            assert_kimi_code_raw_off_replays_tool_history(true).await;
+        }
+        // from create_message_request_sends_mfjs_compatible_apply_patch_schema
+        {
+            assert_kimi_code_apply_patch_schema_is_mfjs_compatible(false).await;
+        }
+        // from create_message_stream_sends_mfjs_compatible_apply_patch_schema
+        {
+            assert_kimi_code_apply_patch_schema_is_mfjs_compatible(true).await;
+        }
+        // from create_message_request_drops_invalid_kimi_root_ref_tool
+        {
+            assert_kimi_code_invalid_root_ref_drops_only_that_tool(false).await;
+        }
+        // from create_message_stream_drops_invalid_kimi_root_ref_tool
+        {
+            assert_kimi_code_invalid_root_ref_drops_only_that_tool(true).await;
+        }
     }
 
     #[tokio::test]
-    async fn create_message_stream_request_json_keeps_zai_effort_route_exact() {
-        assert_zai_request_truth(true).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_request_json_keeps_minimax_token_dialect_exact() {
-        assert_minimax_request_truth(false).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_stream_request_json_keeps_minimax_token_dialect_exact() {
-        assert_minimax_request_truth(true).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_request_json_keeps_modelstudio_enable_thinking_exact() {
-        assert_modelstudio_request_truth(false).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_stream_request_json_keeps_modelstudio_enable_thinking_exact() {
-        assert_modelstudio_request_truth(true).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_routes_only_strict_deepseek_tools_to_beta() {
-        assert_deepseek_strict_request_route_boundary(false).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_stream_routes_only_strict_deepseek_tools_to_beta() {
-        assert_deepseek_strict_request_route_boundary(true).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_request_replays_kimi_code_history_for_raw_off() {
-        assert_kimi_code_raw_off_replays_tool_history(false).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_stream_replays_kimi_code_history_for_raw_off() {
-        assert_kimi_code_raw_off_replays_tool_history(true).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_request_sends_mfjs_compatible_apply_patch_schema() {
-        assert_kimi_code_apply_patch_schema_is_mfjs_compatible(false).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_stream_sends_mfjs_compatible_apply_patch_schema() {
-        assert_kimi_code_apply_patch_schema_is_mfjs_compatible(true).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_request_drops_invalid_kimi_root_ref_tool() {
-        assert_kimi_code_invalid_root_ref_drops_only_that_tool(false).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_stream_drops_invalid_kimi_root_ref_tool() {
-        assert_kimi_code_invalid_root_ref_drops_only_that_tool(true).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_request_drops_untyped_kimi_default_tool() {
-        assert_kimi_code_untyped_default_drops_only_that_tool(false).await;
-    }
-
-    #[tokio::test]
-    async fn create_message_stream_drops_untyped_kimi_default_tool() {
-        assert_kimi_code_untyped_default_drops_only_that_tool(true).await;
+    async fn create_message_scenario_3() {
+        // Scenario consolidation of: create_message_request_drops_untyped_kimi_default_tool, create_message_stream_drops_untyped_kimi_default_tool, create_message_stream_sends_mfjs_safe_deferred_dynamic_tool, create_message_captures_exact_mfjs_safe_general_child_catalog
+        // from create_message_request_drops_untyped_kimi_default_tool
+        {
+            assert_kimi_code_untyped_default_drops_only_that_tool(false).await;
+        }
+        // from create_message_stream_drops_untyped_kimi_default_tool
+        {
+            assert_kimi_code_untyped_default_drops_only_that_tool(true).await;
+        }
+        // from create_message_stream_sends_mfjs_safe_deferred_dynamic_tool
+        {
+            assert_kimi_code_streams_mfjs_safe_deferred_dynamic_tool().await;
+        }
+        // from create_message_captures_exact_mfjs_safe_general_child_catalog
+        {
+            assert_kimi_code_captures_exact_general_child_catalog().await;
+        }
     }
 
     #[tokio::test]
@@ -6339,16 +6350,6 @@ mod tests {
             !body.to_string().contains("private-regex-9901"),
             "omitted schema values must not reach the wire: {body}"
         );
-    }
-
-    #[tokio::test]
-    async fn create_message_stream_sends_mfjs_safe_deferred_dynamic_tool() {
-        assert_kimi_code_streams_mfjs_safe_deferred_dynamic_tool().await;
-    }
-
-    #[tokio::test]
-    async fn create_message_captures_exact_mfjs_safe_general_child_catalog() {
-        assert_kimi_code_captures_exact_general_child_catalog().await;
     }
 
     fn concentrate_client(server: &MockServer, model: &str) -> DeepSeekClient {
@@ -7040,25 +7041,38 @@ mod tests {
     }
 
     #[test]
-    fn model_bound_request_redacts_configured_secrets_and_bare_active_key() {
-        let client = client_with_config_secret_sentinels();
-        let config_dump = format!(
-            "api_key = \"{}\"\n[providers.arcee]\napi_key = \"{}\"\n\
-             ordinary_setting = \"keep-me\"\nall bare values: {}",
-            CONFIG_SECRET_SENTINELS[0],
-            CONFIG_SECRET_SENTINELS[1],
-            CONFIG_SECRET_SENTINELS.join(" ")
-        );
+    fn model_bound_scenario() {
+        // Scenario consolidation of: model_bound_request_redacts_configured_secrets_and_bare_active_key, model_bound_request_leaves_ordinary_tool_output_unchanged
+        // from model_bound_request_redacts_configured_secrets_and_bare_active_key
+        {
+            let client = client_with_config_secret_sentinels();
+            let config_dump = format!(
+                "api_key = \"{}\"\n[providers.arcee]\napi_key = \"{}\"\n\
+                 ordinary_setting = \"keep-me\"\nall bare values: {}",
+                CONFIG_SECRET_SENTINELS[0],
+                CONFIG_SECRET_SENTINELS[1],
+                CONFIG_SECRET_SENTINELS.join(" ")
+            );
 
-        let prepared = client.prepare_model_bound_request(request_with_tool_result(config_dump));
-        let content = tool_result_content(&prepared);
+            let prepared =
+                client.prepare_model_bound_request(request_with_tool_result(config_dump));
+            let content = tool_result_content(&prepared);
 
-        for secret in CONFIG_SECRET_SENTINELS {
-            assert!(!content.contains(secret), "secret survived redaction");
+            for secret in CONFIG_SECRET_SENTINELS {
+                assert!(!content.contains(secret), "secret survived redaction");
+            }
+            assert!(content.contains(codewhale_config::persistence::REDACTED));
+            assert!(content.contains("ordinary_setting"));
+            assert!(content.contains("keep-me"));
         }
-        assert!(content.contains(codewhale_config::persistence::REDACTED));
-        assert!(content.contains("ordinary_setting"));
-        assert!(content.contains("keep-me"));
+        // from model_bound_request_leaves_ordinary_tool_output_unchanged
+        {
+            let client = client_with_config_secret_sentinels();
+            let ordinary = "tests passed: 42\nREADME.md updated\n";
+            let prepared =
+                client.prepare_model_bound_request(request_with_tool_result(ordinary.to_string()));
+            assert_eq!(tool_result_content(&prepared), ordinary);
+        }
     }
 
     #[test]
@@ -7153,15 +7167,6 @@ mod tests {
                 .any(|value| value == "ambient-redaction-secret-sentinel"),
             "whitespace must not opt tests into reading the ambient secret store"
         );
-    }
-
-    #[test]
-    fn model_bound_request_leaves_ordinary_tool_output_unchanged() {
-        let client = client_with_config_secret_sentinels();
-        let ordinary = "tests passed: 42\nREADME.md updated\n";
-        let prepared =
-            client.prepare_model_bound_request(request_with_tool_result(ordinary.to_string()));
-        assert_eq!(tool_result_content(&prepared), ordinary);
     }
 
     #[test]
@@ -7448,46 +7453,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn provider_request_concurrency_limiter_is_shared_across_client_clones() {
-        let client = zai_client_for_test();
-        assert_eq!(
-            client.provider_request_concurrency_limit(),
-            Some(crate::config::DEFAULT_ZAI_PROVIDER_MAX_CONCURRENCY)
-        );
+    async fn provider_request_scenario() {
+        // Scenario consolidation of: provider_request_concurrency_limiter_is_shared_across_client_clones, provider_request_permit_lives_until_stream_is_consumed
+        // from provider_request_concurrency_limiter_is_shared_across_client_clones
+        {
+            let client = zai_client_for_test();
+            assert_eq!(
+                client.provider_request_concurrency_limit(),
+                Some(crate::config::DEFAULT_ZAI_PROVIDER_MAX_CONCURRENCY)
+            );
 
-        let clone = client.clone();
-        let permit = client
-            .acquire_provider_request_permit()
-            .await
-            .expect("zai default should install provider request limiter");
+            let clone = client.clone();
+            let permit = client
+                .acquire_provider_request_permit()
+                .await
+                .expect("zai default should install provider request limiter");
 
-        assert_eq!(client.active_provider_requests(), 1);
-        assert_eq!(clone.active_provider_requests(), 1);
+            assert_eq!(client.active_provider_requests(), 1);
+            assert_eq!(clone.active_provider_requests(), 1);
 
-        drop(permit);
+            drop(permit);
 
-        assert_eq!(client.active_provider_requests(), 0);
-        assert_eq!(clone.active_provider_requests(), 0);
-    }
+            assert_eq!(client.active_provider_requests(), 0);
+            assert_eq!(clone.active_provider_requests(), 0);
+        }
+        // from provider_request_permit_lives_until_stream_is_consumed
+        {
+            let client = zai_client_for_test();
+            let permit = client
+                .acquire_provider_request_permit()
+                .await
+                .expect("zai default should install provider request limiter");
+            let stream: crate::llm_client::StreamEventBox = Box::pin(futures_util::stream::iter(
+                vec![Ok(StreamEvent::MessageStop)],
+            ));
+            let mut wrapped =
+                DeepSeekClient::hold_provider_request_permit_for_stream(stream, Some(permit));
 
-    #[tokio::test]
-    async fn provider_request_permit_lives_until_stream_is_consumed() {
-        let client = zai_client_for_test();
-        let permit = client
-            .acquire_provider_request_permit()
-            .await
-            .expect("zai default should install provider request limiter");
-        let stream: crate::llm_client::StreamEventBox =
-            Box::pin(futures_util::stream::iter(vec![Ok(
-                StreamEvent::MessageStop,
-            )]));
-        let mut wrapped =
-            DeepSeekClient::hold_provider_request_permit_for_stream(stream, Some(permit));
-
-        assert_eq!(client.active_provider_requests(), 1);
-        assert!(wrapped.next().await.is_some());
-        assert!(wrapped.next().await.is_none());
-        assert_eq!(client.active_provider_requests(), 0);
+            assert_eq!(client.active_provider_requests(), 1);
+            assert!(wrapped.next().await.is_some());
+            assert!(wrapped.next().await.is_none());
+            assert_eq!(client.active_provider_requests(), 0);
+        }
     }
 
     #[tokio::test]
@@ -7517,169 +7524,239 @@ mod tests {
     }
 
     #[test]
-    fn parse_speech_audio_response_accepts_message_audio() {
-        let encoded = general_purpose::STANDARD.encode(b"hi");
-        let payload = json!({
-            "choices": [{
-                "message": {
-                    "audio": {
-                        "data": encoded,
-                        "transcript": "hi"
+    fn parse_speech_scenario() {
+        // Scenario consolidation of: parse_speech_audio_response_accepts_message_audio, parse_speech_audio_response_accepts_data_uri
+        // from parse_speech_audio_response_accepts_message_audio
+        {
+            let encoded = general_purpose::STANDARD.encode(b"hi");
+            let payload = json!({
+                "choices": [{
+                    "message": {
+                        "audio": {
+                            "data": encoded,
+                            "transcript": "hi"
+                        }
                     }
+                }]
+            });
+
+            let (audio, transcript) = parse_speech_audio_response(&payload).unwrap();
+            assert_eq!(audio, b"hi");
+            assert_eq!(transcript.as_deref(), Some("hi"));
+        }
+        // from parse_speech_audio_response_accepts_data_uri
+        {
+            let encoded = general_purpose::STANDARD.encode(b"wav");
+            let payload = json!({
+                "audio": {
+                    "data": format!("data:audio/wav;base64,{encoded}")
                 }
-            }]
-        });
+            });
 
-        let (audio, transcript) = parse_speech_audio_response(&payload).unwrap();
-        assert_eq!(audio, b"hi");
-        assert_eq!(transcript.as_deref(), Some("hi"));
+            let (audio, transcript) = parse_speech_audio_response(&payload).unwrap();
+            assert_eq!(audio, b"wav");
+            assert_eq!(transcript, None);
+        }
     }
 
     #[test]
-    fn parse_speech_audio_response_accepts_data_uri() {
-        let encoded = general_purpose::STANDARD.encode(b"wav");
-        let payload = json!({
-            "audio": {
-                "data": format!("data:audio/wav;base64,{encoded}")
-            }
-        });
+    fn speech_synthesis_scenario() {
+        // Scenario consolidation of: speech_synthesis_body_omits_user_message_without_instruction, speech_synthesis_body_ignores_blank_instruction, speech_synthesis_body_includes_non_empty_instruction_first
+        // from speech_synthesis_body_omits_user_message_without_instruction
+        {
+            let body = build_speech_synthesis_body(
+                "mimo-v2.5-tts",
+                "hello",
+                None,
+                json!({"format": "wav"}),
+            );
+            let messages = body["messages"].as_array().expect("messages array");
 
-        let (audio, transcript) = parse_speech_audio_response(&payload).unwrap();
-        assert_eq!(audio, b"wav");
-        assert_eq!(transcript, None);
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0]["role"], "assistant");
+            assert_eq!(messages[0]["content"], "hello");
+            assert!(
+                messages
+                    .iter()
+                    .all(|message| message["content"].as_str() != Some(""))
+            );
+        }
+        // from speech_synthesis_body_ignores_blank_instruction
+        {
+            let body = build_speech_synthesis_body(
+                "mimo-v2.5-tts",
+                "hello",
+                Some("  \t\n  "),
+                json!({"format": "wav"}),
+            );
+            let messages = body["messages"].as_array().expect("messages array");
+
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0]["role"], "assistant");
+        }
+        // from speech_synthesis_body_includes_non_empty_instruction_first
+        {
+            let body = build_speech_synthesis_body(
+                "mimo-v2.5-tts-voicedesign",
+                "hello",
+                Some("warm and calm"),
+                json!({"format": "wav"}),
+            );
+            let messages = body["messages"].as_array().expect("messages array");
+
+            assert_eq!(messages.len(), 2);
+            assert_eq!(messages[0]["role"], "user");
+            assert_eq!(messages[0]["content"], "warm and calm");
+            assert_eq!(messages[1]["role"], "assistant");
+            assert_eq!(messages[1]["content"], "hello");
+        }
     }
 
     #[test]
-    fn speech_synthesis_body_omits_user_message_without_instruction() {
-        let body =
-            build_speech_synthesis_body("mimo-v2.5-tts", "hello", None, json!({"format": "wav"}));
-        let messages = body["messages"].as_array().expect("messages array");
-
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0]["role"], "assistant");
-        assert_eq!(messages[0]["content"], "hello");
-        assert!(
-            messages
-                .iter()
-                .all(|message| message["content"].as_str() != Some(""))
-        );
+    fn tool_name_scenario() {
+        // Scenario consolidation of: tool_name_roundtrip_dot, tool_name_decode_mangled_dot_prefix, tool_name_decode_bare_hex_no_trailing_dash, tool_name_bare_hex_preserves_alnum, tool_name_bare_hex_preserves_underscore, tool_name_roundtrip_colon
+        // from tool_name_roundtrip_dot
+        {
+            let original = "multi_tool_use.parallel";
+            let encoded = to_api_tool_name(original);
+            assert_eq!(encoded, "multi_tool_use-x00002E-parallel");
+            let decoded = from_api_tool_name(&encoded);
+            assert_eq!(decoded, original);
+        }
+        // from tool_name_decode_mangled_dot_prefix
+        {
+            let mangled = "multi_tool_use.x00002E-parallel";
+            let decoded = from_api_tool_name(mangled);
+            assert_eq!(decoded, "multi_tool_use..parallel");
+        }
+        // from tool_name_decode_bare_hex_no_trailing_dash
+        {
+            let mangled = "foo_x00002Ebar";
+            let decoded = from_api_tool_name(mangled);
+            assert_eq!(decoded, "foo_.bar");
+        }
+        // from tool_name_bare_hex_preserves_alnum
+        {
+            let input = "foox000041bar";
+            let decoded = from_api_tool_name(input);
+            assert_eq!(decoded, input);
+        }
+        // from tool_name_bare_hex_preserves_underscore
+        {
+            let input = "foox00005Fbar";
+            let decoded = from_api_tool_name(input);
+            assert_eq!(decoded, input);
+        }
+        // from tool_name_roundtrip_colon
+        {
+            let original = "mcp__server:tool_name";
+            let encoded = to_api_tool_name(original);
+            let decoded = from_api_tool_name(&encoded);
+            assert_eq!(decoded, original);
+        }
     }
 
     #[test]
-    fn speech_synthesis_body_ignores_blank_instruction() {
-        let body = build_speech_synthesis_body(
-            "mimo-v2.5-tts",
-            "hello",
-            Some("  \t\n  "),
-            json!({"format": "wav"}),
-        );
-        let messages = body["messages"].as_array().expect("messages array");
-
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0]["role"], "assistant");
-    }
-
-    #[test]
-    fn speech_synthesis_body_includes_non_empty_instruction_first() {
-        let body = build_speech_synthesis_body(
-            "mimo-v2.5-tts-voicedesign",
-            "hello",
-            Some("warm and calm"),
-            json!({"format": "wav"}),
-        );
-        let messages = body["messages"].as_array().expect("messages array");
-
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0]["role"], "user");
-        assert_eq!(messages[0]["content"], "warm and calm");
-        assert_eq!(messages[1]["role"], "assistant");
-        assert_eq!(messages[1]["content"], "hello");
-    }
-
-    #[test]
-    fn tool_name_roundtrip_dot() {
-        let original = "multi_tool_use.parallel";
-        let encoded = to_api_tool_name(original);
-        assert_eq!(encoded, "multi_tool_use-x00002E-parallel");
-        let decoded = from_api_tool_name(&encoded);
-        assert_eq!(decoded, original);
-    }
-
-    #[test]
-    fn tool_name_decode_mangled_dot_prefix() {
-        let mangled = "multi_tool_use.x00002E-parallel";
-        let decoded = from_api_tool_name(mangled);
-        assert_eq!(decoded, "multi_tool_use..parallel");
-    }
-
-    #[test]
-    fn tool_name_decode_bare_hex_no_trailing_dash() {
-        let mangled = "foo_x00002Ebar";
-        let decoded = from_api_tool_name(mangled);
-        assert_eq!(decoded, "foo_.bar");
-    }
-
-    #[test]
-    fn tool_name_bare_hex_preserves_alnum() {
-        let input = "foox000041bar";
-        let decoded = from_api_tool_name(input);
-        assert_eq!(decoded, input);
-    }
-
-    #[test]
-    fn tool_name_bare_hex_preserves_underscore() {
-        let input = "foox00005Fbar";
-        let decoded = from_api_tool_name(input);
-        assert_eq!(decoded, input);
-    }
-
-    #[test]
-    fn tool_name_roundtrip_colon() {
-        let original = "mcp__server:tool_name";
-        let encoded = to_api_tool_name(original);
-        let decoded = from_api_tool_name(&encoded);
-        assert_eq!(decoded, original);
-    }
-
-    #[test]
-    fn api_url_handles_default_v1_and_beta_base_urls() {
-        assert_eq!(
-            api_url("https://api.deepseek.com", "chat/completions"),
-            "https://api.deepseek.com/v1/chat/completions"
-        );
-        assert_eq!(
-            api_url("https://api.deepseek.com/v1", "chat/completions"),
-            "https://api.deepseek.com/v1/chat/completions"
-        );
-        // Non-beta paths from a /beta base URL route to /v1.
-        // Only paths with an explicit beta/ prefix use the beta surface.
-        assert_eq!(
-            api_url("https://api.deepseek.com/beta", "chat/completions"),
-            "https://api.deepseek.com/v1/chat/completions"
-        );
-        assert_eq!(
-            api_url(
-                "https://openai-compatible.example/api/coding/paas/v4",
-                "chat/completions"
-            ),
-            "https://openai-compatible.example/api/coding/paas/v4/chat/completions"
-        );
-    }
-
-    #[test]
-    fn api_url_routes_beta_paths_from_any_deepseek_base() {
-        assert_eq!(
-            api_url("https://api.deepseek.com", "beta/completions"),
-            "https://api.deepseek.com/beta/completions"
-        );
-        assert_eq!(
-            api_url("https://api.deepseek.com/v1", "beta/completions"),
-            "https://api.deepseek.com/beta/completions"
-        );
-        assert_eq!(
-            api_url("https://api.deepseek.com/beta", "beta/completions"),
-            "https://api.deepseek.com/beta/completions"
-        );
+    fn api_url_scenario() {
+        // Scenario consolidation of: api_url_handles_default_v1_and_beta_base_urls, api_url_routes_beta_paths_from_any_deepseek_base, api_url_with_suffix_strips_version_before_chat_suffix, api_url_with_suffix_handles_leading_slash, api_url_with_suffix_ignores_suffix_for_models, api_url_with_suffix_ignores_suffix_for_beta_paths, api_url_with_suffix_default_behavior_without_suffix
+        // from api_url_handles_default_v1_and_beta_base_urls
+        {
+            assert_eq!(
+                api_url("https://api.deepseek.com", "chat/completions"),
+                "https://api.deepseek.com/v1/chat/completions"
+            );
+            assert_eq!(
+                api_url("https://api.deepseek.com/v1", "chat/completions"),
+                "https://api.deepseek.com/v1/chat/completions"
+            );
+            // Non-beta paths from a /beta base URL route to /v1.
+            // Only paths with an explicit beta/ prefix use the beta surface.
+            assert_eq!(
+                api_url("https://api.deepseek.com/beta", "chat/completions"),
+                "https://api.deepseek.com/v1/chat/completions"
+            );
+            assert_eq!(
+                api_url(
+                    "https://openai-compatible.example/api/coding/paas/v4",
+                    "chat/completions"
+                ),
+                "https://openai-compatible.example/api/coding/paas/v4/chat/completions"
+            );
+        }
+        // from api_url_routes_beta_paths_from_any_deepseek_base
+        {
+            assert_eq!(
+                api_url("https://api.deepseek.com", "beta/completions"),
+                "https://api.deepseek.com/beta/completions"
+            );
+            assert_eq!(
+                api_url("https://api.deepseek.com/v1", "beta/completions"),
+                "https://api.deepseek.com/beta/completions"
+            );
+            assert_eq!(
+                api_url("https://api.deepseek.com/beta", "beta/completions"),
+                "https://api.deepseek.com/beta/completions"
+            );
+        }
+        // from api_url_with_suffix_strips_version_before_chat_suffix
+        {
+            assert_eq!(
+                api_url_with_suffix(
+                    "https://api.example.com/v1",
+                    "chat/completions",
+                    Some("/chat/completions")
+                ),
+                "https://api.example.com/chat/completions"
+            );
+            assert_eq!(
+                api_url_with_suffix(
+                    "https://api.example.com/beta",
+                    "chat/completions",
+                    Some("/chat/completions")
+                ),
+                "https://api.example.com/chat/completions"
+            );
+        }
+        // from api_url_with_suffix_handles_leading_slash
+        {
+            assert_eq!(
+                api_url_with_suffix(
+                    "https://api.example.com/v1",
+                    "chat/completions",
+                    Some("chat/completions")
+                ),
+                "https://api.example.com/chat/completions"
+            );
+        }
+        // from api_url_with_suffix_ignores_suffix_for_models
+        {
+            assert_eq!(
+                api_url_with_suffix(
+                    "https://api.example.com/v1",
+                    "models",
+                    Some("/chat/completions")
+                ),
+                "https://api.example.com/v1/models"
+            );
+        }
+        // from api_url_with_suffix_ignores_suffix_for_beta_paths
+        {
+            assert_eq!(
+                api_url_with_suffix(
+                    "https://api.example.com/v1",
+                    "beta/completions",
+                    Some("/chat/completions")
+                ),
+                "https://api.example.com/beta/completions"
+            );
+        }
+        // from api_url_with_suffix_default_behavior_without_suffix
+        {
+            assert_eq!(
+                api_url_with_suffix("https://api.deepseek.com", "chat/completions", None),
+                "https://api.deepseek.com/v1/chat/completions"
+            );
+        }
     }
 
     #[test]
@@ -7718,24 +7795,27 @@ mod tests {
     }
 
     #[test]
-    fn default_headers_include_custom_headers_when_configured() {
-        let mut extra = HashMap::new();
-        extra.insert("X-Model-Provider-Id".to_string(), "tongyi".to_string());
-        let headers = DeepSeekClient::default_headers("sk-test", &extra).expect("headers");
-        assert_eq!(
-            headers
-                .get("x-model-provider-id")
-                .and_then(|value| value.to_str().ok()),
-            Some("tongyi")
-        );
-    }
-
-    #[test]
-    fn default_headers_ignore_blank_custom_headers() {
-        let mut extra = HashMap::new();
-        extra.insert("X-Blank".to_string(), "   ".to_string());
-        let headers = DeepSeekClient::default_headers("sk-test", &extra).expect("headers");
-        assert!(headers.get("x-blank").is_none());
+    fn default_headers_scenario() {
+        // Scenario consolidation of: default_headers_include_custom_headers_when_configured, default_headers_ignore_blank_custom_headers
+        // from default_headers_include_custom_headers_when_configured
+        {
+            let mut extra = HashMap::new();
+            extra.insert("X-Model-Provider-Id".to_string(), "tongyi".to_string());
+            let headers = DeepSeekClient::default_headers("sk-test", &extra).expect("headers");
+            assert_eq!(
+                headers
+                    .get("x-model-provider-id")
+                    .and_then(|value| value.to_str().ok()),
+                Some("tongyi")
+            );
+        }
+        // from default_headers_ignore_blank_custom_headers
+        {
+            let mut extra = HashMap::new();
+            extra.insert("X-Blank".to_string(), "   ".to_string());
+            let headers = DeepSeekClient::default_headers("sk-test", &extra).expect("headers");
+            assert!(headers.get("x-blank").is_none());
+        }
     }
 
     #[test]
@@ -7848,46 +7928,67 @@ mod tests {
     }
 
     #[test]
-    fn xiaomi_mimo_token_plan_endpoint_uses_api_key_header() {
-        let headers = DeepSeekClient::default_headers_for_provider(
-            "tp-test",
-            &HashMap::new(),
-            ApiProvider::XiaomiMimo,
-            crate::config::DEFAULT_XIAOMI_MIMO_BASE_URL,
-        )
-        .expect("headers");
+    fn xiaomi_mimo_scenario() {
+        // Scenario consolidation of: xiaomi_mimo_token_plan_endpoint_uses_api_key_header, xiaomi_mimo_tp_key_uses_api_key_header_with_custom_base_url, xiaomi_mimo_pay_as_you_go_endpoint_keeps_bearer_header
+        // from xiaomi_mimo_token_plan_endpoint_uses_api_key_header
+        {
+            let headers = DeepSeekClient::default_headers_for_provider(
+                "tp-test",
+                &HashMap::new(),
+                ApiProvider::XiaomiMimo,
+                crate::config::DEFAULT_XIAOMI_MIMO_BASE_URL,
+            )
+            .expect("headers");
 
-        assert_eq!(
-            headers.get("api-key").and_then(|value| value.to_str().ok()),
-            Some("tp-test")
-        );
-        assert!(
-            headers.get(AUTHORIZATION).is_none(),
-            "Token Plan requires api-key instead of Authorization Bearer"
-        );
-    }
+            assert_eq!(
+                headers.get("api-key").and_then(|value| value.to_str().ok()),
+                Some("tp-test")
+            );
+            assert!(
+                headers.get(AUTHORIZATION).is_none(),
+                "Token Plan requires api-key instead of Authorization Bearer"
+            );
+        }
+        // from xiaomi_mimo_tp_key_uses_api_key_header_with_custom_base_url
+        {
+            let mut extra = HashMap::new();
+            extra.insert("api-key".to_string(), "wrong".to_string());
+            extra.insert("Authorization".to_string(), "Bearer wrong".to_string());
+            let headers = DeepSeekClient::default_headers_for_provider(
+                "tp-custom",
+                &extra,
+                ApiProvider::XiaomiMimo,
+                "https://proxy.example.test/mimo/v1",
+            )
+            .expect("headers");
 
-    #[test]
-    fn xiaomi_mimo_tp_key_uses_api_key_header_with_custom_base_url() {
-        let mut extra = HashMap::new();
-        extra.insert("api-key".to_string(), "wrong".to_string());
-        extra.insert("Authorization".to_string(), "Bearer wrong".to_string());
-        let headers = DeepSeekClient::default_headers_for_provider(
-            "tp-custom",
-            &extra,
-            ApiProvider::XiaomiMimo,
-            "https://proxy.example.test/mimo/v1",
-        )
-        .expect("headers");
+            assert_eq!(
+                headers.get("api-key").and_then(|value| value.to_str().ok()),
+                Some("tp-custom")
+            );
+            assert!(
+                headers.get(AUTHORIZATION).is_none(),
+                "tp-* Token Plan keys should use api-key auth even through custom gateways"
+            );
+        }
+        // from xiaomi_mimo_pay_as_you_go_endpoint_keeps_bearer_header
+        {
+            let headers = DeepSeekClient::default_headers_for_provider(
+                "sk-test",
+                &HashMap::new(),
+                ApiProvider::XiaomiMimo,
+                crate::config::XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL,
+            )
+            .expect("headers");
 
-        assert_eq!(
-            headers.get("api-key").and_then(|value| value.to_str().ok()),
-            Some("tp-custom")
-        );
-        assert!(
-            headers.get(AUTHORIZATION).is_none(),
-            "tp-* Token Plan keys should use api-key auth even through custom gateways"
-        );
+            assert_eq!(
+                headers
+                    .get(AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok()),
+                Some("Bearer sk-test")
+            );
+            assert!(headers.get("api-key").is_none());
+        }
     }
 
     #[test]
@@ -8132,19 +8233,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deepseek_anthropic_health_check_skips_models_probe() {
-        let server = MockServer::start().await;
-        let client = deepseek_anthropic_client(&server);
+    async fn deepseek_anthropic_scenario() {
+        // Scenario consolidation of: deepseek_anthropic_health_check_skips_models_probe, deepseek_anthropic_fim_fails_without_http_request
+        // from deepseek_anthropic_health_check_skips_models_probe
+        {
+            let server = MockServer::start().await;
+            let client = deepseek_anthropic_client(&server);
 
-        assert!(client.health_check().await.expect("health check"));
-        assert!(!provider_api_key_verification_is_observed(
-            ApiProvider::DeepseekAnthropic
-        ));
-        let requests = server.received_requests().await.expect("recorded requests");
-        assert!(
-            requests.is_empty(),
-            "DeepSeek Anthropic-compatible route must not probe /models"
-        );
+            assert!(client.health_check().await.expect("health check"));
+            assert!(!provider_api_key_verification_is_observed(
+                ApiProvider::DeepseekAnthropic
+            ));
+            let requests = server.received_requests().await.expect("recorded requests");
+            assert!(
+                requests.is_empty(),
+                "DeepSeek Anthropic-compatible route must not probe /models"
+            );
+        }
+        // from deepseek_anthropic_fim_fails_without_http_request
+        {
+            let server = MockServer::start().await;
+            let client = deepseek_anthropic_client(&server);
+
+            let err = client
+                .fim_completion("deepseek-chat", "fn main() {", "}", 16)
+                .await
+                .expect_err("FIM is unsupported");
+            let message = err.to_string();
+            assert!(
+                message.contains("FIM completion is not supported"),
+                "{message}"
+            );
+            assert!(message.contains("no proven FIM wire contract"), "{message}");
+            let requests = server.received_requests().await.expect("recorded requests");
+            assert!(
+                requests.is_empty(),
+                "unsupported FIM should fail locally before any HTTP call"
+            );
+        }
     }
 
     #[tokio::test]
@@ -8222,28 +8348,6 @@ mod tests {
         assert!(body.get("output_config").is_none(), "{body}");
     }
 
-    #[tokio::test]
-    async fn deepseek_anthropic_fim_fails_without_http_request() {
-        let server = MockServer::start().await;
-        let client = deepseek_anthropic_client(&server);
-
-        let err = client
-            .fim_completion("deepseek-chat", "fn main() {", "}", 16)
-            .await
-            .expect_err("FIM is unsupported");
-        let message = err.to_string();
-        assert!(
-            message.contains("FIM completion is not supported"),
-            "{message}"
-        );
-        assert!(message.contains("no proven FIM wire contract"), "{message}");
-        let requests = server.received_requests().await.expect("recorded requests");
-        assert!(
-            requests.is_empty(),
-            "unsupported FIM should fail locally before any HTTP call"
-        );
-    }
-
     #[test]
     fn custom_api_key_header_is_allowed_without_primary_provider_key() {
         let mut extra = HashMap::new();
@@ -8261,25 +8365,6 @@ mod tests {
             Some("gateway-key")
         );
         assert!(headers.get(AUTHORIZATION).is_none());
-    }
-
-    #[test]
-    fn xiaomi_mimo_pay_as_you_go_endpoint_keeps_bearer_header() {
-        let headers = DeepSeekClient::default_headers_for_provider(
-            "sk-test",
-            &HashMap::new(),
-            ApiProvider::XiaomiMimo,
-            crate::config::XIAOMI_MIMO_PAY_AS_YOU_GO_BASE_URL,
-        )
-        .expect("headers");
-
-        assert_eq!(
-            headers
-                .get(AUTHORIZATION)
-                .and_then(|value| value.to_str().ok()),
-            Some("Bearer sk-test")
-        );
-        assert!(headers.get("api-key").is_none());
     }
 
     #[test]
@@ -8962,32 +9047,124 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_effort_uses_deepseek_top_level_thinking_parameter() {
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("max"), ApiProvider::Deepseek);
+    fn reasoning_effort_scenario() {
+        // Scenario consolidation of: reasoning_effort_uses_deepseek_top_level_thinking_parameter, reasoning_effort_off_disables_top_level_thinking, reasoning_effort_off_is_omitted_for_strict_openai_like_providers, reasoning_effort_atlascloud_speaks_deepseek_dialect, reasoning_effort_modelstudio_writes_nothing_without_a_verified_route, reasoning_effort_moonshot_toggles_thinking, reasoning_effort_edenai_does_not_guess_a_model_dialect, reasoning_effort_ollama_toggles_think_flag
+        // from reasoning_effort_uses_deepseek_top_level_thinking_parameter
+        {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("max"), ApiProvider::Deepseek);
 
-        assert_eq!(
-            body.get("reasoning_effort").and_then(Value::as_str),
-            Some("max")
-        );
-        assert_eq!(
-            body.pointer("/thinking/type").and_then(Value::as_str),
-            Some("enabled")
-        );
-        assert!(body.get("extra_body").is_none());
-    }
+            assert_eq!(
+                body.get("reasoning_effort").and_then(Value::as_str),
+                Some("max")
+            );
+            assert_eq!(
+                body.pointer("/thinking/type").and_then(Value::as_str),
+                Some("enabled")
+            );
+            assert!(body.get("extra_body").is_none());
+        }
+        // from reasoning_effort_off_disables_top_level_thinking
+        {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Deepseek);
 
-    #[test]
-    fn reasoning_effort_off_disables_top_level_thinking() {
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Deepseek);
+            assert_eq!(
+                body.pointer("/thinking/type").and_then(Value::as_str),
+                Some("disabled")
+            );
+            assert!(body.get("reasoning_effort").is_none());
+            assert!(body.get("extra_body").is_none());
+        }
+        // from reasoning_effort_off_is_omitted_for_strict_openai_like_providers
+        {
+            for provider in [
+                ApiProvider::Openai,
+                ApiProvider::WanjieArk,
+                ApiProvider::Qianfan,
+                ApiProvider::Arcee,
+                ApiProvider::Huggingface,
+                ApiProvider::Fireworks,
+            ] {
+                let mut body = json!({});
+                apply_reasoning_effort(&mut body, Some("off"), provider);
 
-        assert_eq!(
-            body.pointer("/thinking/type").and_then(Value::as_str),
-            Some("disabled")
-        );
-        assert!(body.get("reasoning_effort").is_none());
-        assert!(body.get("extra_body").is_none());
+                assert_eq!(
+                    body,
+                    json!({}),
+                    "provider {provider:?} should not receive unsupported reasoning-off fields"
+                );
+            }
+        }
+        // from reasoning_effort_atlascloud_speaks_deepseek_dialect
+        {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("high"), ApiProvider::Atlascloud);
+            assert_eq!(
+                body,
+                json!({ "reasoning_effort": "high", "thinking": { "type": "enabled" } })
+            );
+
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("max"), ApiProvider::Atlascloud);
+            assert_eq!(
+                body,
+                json!({ "reasoning_effort": "max", "thinking": { "type": "enabled" } })
+            );
+
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Atlascloud);
+            assert_eq!(body, json!({ "thinking": { "type": "disabled" } }));
+        }
+        // from reasoning_effort_modelstudio_writes_nothing_without_a_verified_route
+        {
+            // The provider enum cannot decide DashScope's controls: `enable_thinking`
+            // is wrong for the thinking-only models, `reasoning_effort` is only
+            // valid for DeepSeek-V4/GLM, and a custom `base_url` on any of these
+            // identities is an arbitrary gateway. All four variants must therefore
+            // leave the body untouched here — the route shaper in client::chat is
+            // the sole writer.
+            for provider in [
+                ApiProvider::ModelstudioTokenPlan,
+                ApiProvider::ModelstudioTokenPlanAnthropic,
+                ApiProvider::ModelstudioCodingPlan,
+                ApiProvider::ModelstudioCodingPlanAnthropic,
+            ] {
+                for effort in [None, Some("off"), Some("low"), Some("high"), Some("max")] {
+                    let mut body = json!({});
+                    apply_reasoning_effort(&mut body, effort, provider);
+                    assert_eq!(body, json!({}), "{provider:?} {effort:?}");
+                }
+            }
+        }
+        // from reasoning_effort_moonshot_toggles_thinking
+        {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("high"), ApiProvider::Moonshot);
+            assert_eq!(body, json!({ "thinking": { "type": "enabled" } }));
+
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Moonshot);
+            assert_eq!(body, json!({ "thinking": { "type": "disabled" } }));
+        }
+        // from reasoning_effort_edenai_does_not_guess_a_model_dialect
+        {
+            for effort in ["off", "low", "medium", "high", "max", "xhigh"] {
+                let mut body = json!({});
+                apply_reasoning_effort(&mut body, Some(effort), ApiProvider::Edenai);
+                assert_eq!(body, json!({}), "unexpected Eden AI fields for {effort}");
+            }
+        }
+        // from reasoning_effort_ollama_toggles_think_flag
+        {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("high"), ApiProvider::Ollama);
+            assert_eq!(body, json!({ "think": true }));
+
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Ollama);
+            assert_eq!(body, json!({ "think": false }));
+        }
     }
 
     /// First-party DeepSeek routes document `reasoning_effort` low/high/max on
@@ -9162,81 +9339,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn reasoning_effort_off_is_omitted_for_strict_openai_like_providers() {
-        for provider in [
-            ApiProvider::Openai,
-            ApiProvider::WanjieArk,
-            ApiProvider::Qianfan,
-            ApiProvider::Arcee,
-            ApiProvider::Huggingface,
-            ApiProvider::Fireworks,
-        ] {
-            let mut body = json!({});
-            apply_reasoning_effort(&mut body, Some("off"), provider);
-
-            assert_eq!(
-                body,
-                json!({}),
-                "provider {provider:?} should not receive unsupported reasoning-off fields"
-            );
-        }
-    }
-
-    #[test]
-    fn reasoning_effort_atlascloud_speaks_deepseek_dialect() {
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("high"), ApiProvider::Atlascloud);
-        assert_eq!(
-            body,
-            json!({ "reasoning_effort": "high", "thinking": { "type": "enabled" } })
-        );
-
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("max"), ApiProvider::Atlascloud);
-        assert_eq!(
-            body,
-            json!({ "reasoning_effort": "max", "thinking": { "type": "enabled" } })
-        );
-
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Atlascloud);
-        assert_eq!(body, json!({ "thinking": { "type": "disabled" } }));
-    }
-
-    #[test]
-    fn reasoning_effort_modelstudio_writes_nothing_without_a_verified_route() {
-        // The provider enum cannot decide DashScope's controls: `enable_thinking`
-        // is wrong for the thinking-only models, `reasoning_effort` is only
-        // valid for DeepSeek-V4/GLM, and a custom `base_url` on any of these
-        // identities is an arbitrary gateway. All four variants must therefore
-        // leave the body untouched here — the route shaper in client::chat is
-        // the sole writer.
-        for provider in [
-            ApiProvider::ModelstudioTokenPlan,
-            ApiProvider::ModelstudioTokenPlanAnthropic,
-            ApiProvider::ModelstudioCodingPlan,
-            ApiProvider::ModelstudioCodingPlanAnthropic,
-        ] {
-            for effort in [None, Some("off"), Some("low"), Some("high"), Some("max")] {
-                let mut body = json!({});
-                apply_reasoning_effort(&mut body, effort, provider);
-                assert_eq!(body, json!({}), "{provider:?} {effort:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn reasoning_effort_moonshot_toggles_thinking() {
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("high"), ApiProvider::Moonshot);
-        assert_eq!(body, json!({ "thinking": { "type": "enabled" } }));
-
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Moonshot);
-        assert_eq!(body, json!({ "thinking": { "type": "disabled" } }));
-    }
-
     /// TelecomJS TokenHub: the gateway's OpenAI Chat Completions API does NOT
     /// support `reasoning_effort` or `thinking` fields (#4188 review). Verify
     /// that no reasoning fields are injected for any effort level, since not
@@ -9263,15 +9365,6 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_effort_edenai_does_not_guess_a_model_dialect() {
-        for effort in ["off", "low", "medium", "high", "max", "xhigh"] {
-            let mut body = json!({});
-            apply_reasoning_effort(&mut body, Some(effort), ApiProvider::Edenai);
-            assert_eq!(body, json!({}), "unexpected Eden AI fields for {effort}");
-        }
-    }
-
-    #[test]
     fn moonshot_uses_codewhale_user_agent_not_kimi_cli_identity() {
         let user_agent = client_user_agent(ApiProvider::Moonshot);
 
@@ -9281,156 +9374,170 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_effort_ollama_toggles_think_flag() {
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("high"), ApiProvider::Ollama);
-        assert_eq!(body, json!({ "think": true }));
+    fn reasoning_effort_scenario_2() {
+        // Scenario consolidation of: reasoning_effort_ollama_cloud_uses_openai_compatible_field, reasoning_effort_uses_nvidia_nim_chat_template_kwargs, reasoning_effort_off_disables_nvidia_nim_thinking, reasoning_effort_uses_openai_compatible_shape_for_fireworks, reasoning_effort_uses_arcee_reasoning_effort_without_thinking_object, reasoning_effort_maps_openrouter_scale_without_deepseek_max_label, reasoning_effort_uses_xiaomi_mimo_thinking_parameter_only, reasoning_effort_zai_uses_documented_thinking_shape
+        // from reasoning_effort_ollama_cloud_uses_openai_compatible_field
+        {
+            for (effort, expected) in [
+                ("off", "none"),
+                ("low", "low"),
+                ("medium", "medium"),
+                ("high", "high"),
+                ("max", "max"),
+            ] {
+                let mut body = json!({});
+                apply_reasoning_effort(&mut body, Some(effort), ApiProvider::OllamaCloud);
+                assert_eq!(body, json!({ "reasoning_effort": expected }));
+            }
 
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Ollama);
-        assert_eq!(body, json!({ "think": false }));
-    }
-
-    #[test]
-    fn reasoning_effort_ollama_cloud_uses_openai_compatible_field() {
-        for (effort, expected) in [
-            ("off", "none"),
-            ("low", "low"),
-            ("medium", "medium"),
-            ("high", "high"),
-            ("max", "max"),
-        ] {
-            let mut body = json!({});
-            apply_reasoning_effort(&mut body, Some(effort), ApiProvider::OllamaCloud);
-            assert_eq!(body, json!({ "reasoning_effort": expected }));
+            let mut local = json!({});
+            apply_reasoning_effort(&mut local, Some("high"), ApiProvider::Ollama);
+            assert_eq!(local, json!({ "think": true }));
         }
-
-        let mut local = json!({});
-        apply_reasoning_effort(&mut local, Some("high"), ApiProvider::Ollama);
-        assert_eq!(local, json!({ "think": true }));
-    }
-
-    #[test]
-    fn reasoning_effort_uses_nvidia_nim_chat_template_kwargs() {
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("max"), ApiProvider::NvidiaNim);
-
-        assert_eq!(
-            body.pointer("/chat_template_kwargs/thinking")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            body.pointer("/chat_template_kwargs/reasoning_effort")
-                .and_then(Value::as_str),
-            Some("max")
-        );
-        assert!(body.get("thinking").is_none());
-        assert!(body.get("reasoning_effort").is_none());
-    }
-
-    #[test]
-    fn reasoning_effort_off_disables_nvidia_nim_thinking() {
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("off"), ApiProvider::NvidiaNim);
-
-        assert_eq!(
-            body.pointer("/chat_template_kwargs/thinking")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(
-            body.pointer("/chat_template_kwargs/reasoning_effort")
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn reasoning_effort_uses_openai_compatible_shape_for_fireworks() {
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("max"), ApiProvider::Fireworks);
-
-        assert_eq!(
-            body.get("reasoning_effort").and_then(Value::as_str),
-            Some("max")
-        );
-        assert!(
-            body.get("thinking").is_none(),
-            "Fireworks strict-validates OpenAI-compatible requests and rejects top-level thinking"
-        );
-    }
-
-    #[test]
-    fn reasoning_effort_uses_arcee_reasoning_effort_without_thinking_object() {
-        for (input, expected) in [
-            ("minimal", "minimal"),
-            ("low", "low"),
-            ("mid", "medium"),
-            ("medium", "medium"),
-            ("high", "high"),
-            ("max", "high"),
-        ] {
+        // from reasoning_effort_uses_nvidia_nim_chat_template_kwargs
+        {
             let mut body = json!({});
-            apply_reasoning_effort(&mut body, Some(input), ApiProvider::Arcee);
+            apply_reasoning_effort(&mut body, Some("max"), ApiProvider::NvidiaNim);
+
+            assert_eq!(
+                body.pointer("/chat_template_kwargs/thinking")
+                    .and_then(Value::as_bool),
+                Some(true)
+            );
+            assert_eq!(
+                body.pointer("/chat_template_kwargs/reasoning_effort")
+                    .and_then(Value::as_str),
+                Some("max")
+            );
+            assert!(body.get("thinking").is_none());
+            assert!(body.get("reasoning_effort").is_none());
+        }
+        // from reasoning_effort_off_disables_nvidia_nim_thinking
+        {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("off"), ApiProvider::NvidiaNim);
+
+            assert_eq!(
+                body.pointer("/chat_template_kwargs/thinking")
+                    .and_then(Value::as_bool),
+                Some(false)
+            );
+            assert!(
+                body.pointer("/chat_template_kwargs/reasoning_effort")
+                    .is_none()
+            );
+        }
+        // from reasoning_effort_uses_openai_compatible_shape_for_fireworks
+        {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("max"), ApiProvider::Fireworks);
 
             assert_eq!(
                 body.get("reasoning_effort").and_then(Value::as_str),
-                Some(expected)
+                Some("max")
             );
             assert!(
                 body.get("thinking").is_none(),
-                "Arcee documents reasoning_effort rather than a DeepSeek thinking object"
+                "Fireworks strict-validates OpenAI-compatible requests and rejects top-level thinking"
             );
         }
-    }
+        // from reasoning_effort_uses_arcee_reasoning_effort_without_thinking_object
+        {
+            for (input, expected) in [
+                ("minimal", "minimal"),
+                ("low", "low"),
+                ("mid", "medium"),
+                ("medium", "medium"),
+                ("high", "high"),
+                ("max", "high"),
+            ] {
+                let mut body = json!({});
+                apply_reasoning_effort(&mut body, Some(input), ApiProvider::Arcee);
 
-    #[test]
-    fn reasoning_effort_maps_openrouter_scale_without_deepseek_max_label() {
-        for (input, expected) in [
-            ("low", "low"),
-            ("minimal", "low"),
-            ("medium", "medium"),
-            ("mid", "medium"),
-            ("high", "high"),
-            ("max", "xhigh"),
-            ("xhigh", "xhigh"),
-        ] {
-            let mut body = json!({});
-            apply_reasoning_effort(&mut body, Some(input), ApiProvider::Openrouter);
-
-            assert_eq!(
-                body.get("reasoning_effort").and_then(Value::as_str),
-                Some(expected),
-                "OpenRouter effort mapping for {input}"
-            );
-            assert_eq!(
-                body.pointer("/thinking/type").and_then(Value::as_str),
-                Some("enabled")
-            );
+                assert_eq!(
+                    body.get("reasoning_effort").and_then(Value::as_str),
+                    Some(expected)
+                );
+                assert!(
+                    body.get("thinking").is_none(),
+                    "Arcee documents reasoning_effort rather than a DeepSeek thinking object"
+                );
+            }
         }
-    }
+        // from reasoning_effort_maps_openrouter_scale_without_deepseek_max_label
+        {
+            for (input, expected) in [
+                ("low", "low"),
+                ("minimal", "low"),
+                ("medium", "medium"),
+                ("mid", "medium"),
+                ("high", "high"),
+                ("max", "xhigh"),
+                ("xhigh", "xhigh"),
+            ] {
+                let mut body = json!({});
+                apply_reasoning_effort(&mut body, Some(input), ApiProvider::Openrouter);
 
-    #[test]
-    fn reasoning_effort_uses_xiaomi_mimo_thinking_parameter_only() {
-        for input in ["low", "medium", "max", "xhigh"] {
+                assert_eq!(
+                    body.get("reasoning_effort").and_then(Value::as_str),
+                    Some(expected),
+                    "OpenRouter effort mapping for {input}"
+                );
+                assert_eq!(
+                    body.pointer("/thinking/type").and_then(Value::as_str),
+                    Some("enabled")
+                );
+            }
+        }
+        // from reasoning_effort_uses_xiaomi_mimo_thinking_parameter_only
+        {
+            for input in ["low", "medium", "max", "xhigh"] {
+                let mut body = json!({});
+                apply_reasoning_effort(&mut body, Some(input), ApiProvider::XiaomiMimo);
+
+                assert_eq!(
+                    body.pointer("/thinking/type").and_then(Value::as_str),
+                    Some("enabled"),
+                    "MiMo thinking mapping for {input}"
+                );
+                assert!(body.get("reasoning_effort").is_none());
+            }
+
             let mut body = json!({});
-            apply_reasoning_effort(&mut body, Some(input), ApiProvider::XiaomiMimo);
-
+            apply_reasoning_effort(&mut body, Some("off"), ApiProvider::XiaomiMimo);
             assert_eq!(
                 body.pointer("/thinking/type").and_then(Value::as_str),
-                Some("enabled"),
-                "MiMo thinking mapping for {input}"
+                Some("disabled")
             );
             assert!(body.get("reasoning_effort").is_none());
         }
+        // from reasoning_effort_zai_uses_documented_thinking_shape
+        {
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("high"), ApiProvider::Zai);
+            assert_eq!(
+                body,
+                json!({ "thinking": { "type": "enabled", "clear_thinking": false } })
+            );
 
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("off"), ApiProvider::XiaomiMimo);
-        assert_eq!(
-            body.pointer("/thinking/type").and_then(Value::as_str),
-            Some("disabled")
-        );
-        assert!(body.get("reasoning_effort").is_none());
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("max"), ApiProvider::Zai);
+            assert_eq!(
+                body,
+                json!({ "thinking": { "type": "enabled", "clear_thinking": false } })
+            );
+
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("ultracode"), ApiProvider::Zai);
+            assert_eq!(
+                body,
+                json!({ "thinking": { "type": "enabled", "clear_thinking": false } })
+            );
+
+            let mut body = json!({});
+            apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Zai);
+            assert_eq!(body, json!({ "thinking": { "type": "disabled" } }));
+        }
     }
 
     #[test]
@@ -9516,34 +9623,6 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_effort_zai_uses_documented_thinking_shape() {
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("high"), ApiProvider::Zai);
-        assert_eq!(
-            body,
-            json!({ "thinking": { "type": "enabled", "clear_thinking": false } })
-        );
-
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("max"), ApiProvider::Zai);
-        assert_eq!(
-            body,
-            json!({ "thinking": { "type": "enabled", "clear_thinking": false } })
-        );
-
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("ultracode"), ApiProvider::Zai);
-        assert_eq!(
-            body,
-            json!({ "thinking": { "type": "enabled", "clear_thinking": false } })
-        );
-
-        let mut body = json!({});
-        apply_reasoning_effort(&mut body, Some("off"), ApiProvider::Zai);
-        assert_eq!(body, json!({ "thinking": { "type": "disabled" } }));
-    }
-
-    #[test]
     fn chat_parser_accepts_nvidia_nim_reasoning_field() -> Result<()> {
         let response = parse_chat_message(&json!({
             "id": "chatcmpl-test",
@@ -9606,27 +9685,51 @@ mod tests {
     }
 
     #[test]
-    fn chat_tool_strict_flag_is_nested_under_function() {
-        let tool = Tool {
-            tool_type: Some("function".to_string()),
-            name: "emit_json".to_string(),
-            description: "Emit JSON".to_string(),
-            input_schema: json!({"type": "object", "properties": {}}),
-            allowed_callers: None,
-            defer_loading: None,
-            input_examples: None,
-            strict: Some(true),
-            cache_control: None,
-        };
-        let encoded = tool_to_chat(&tool);
-        assert_eq!(
-            encoded
-                .get("function")
-                .and_then(|function| function.get("strict"))
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert!(encoded.get("strict").is_none());
+    fn chat_tool_scenario() {
+        // Scenario consolidation of: chat_tool_strict_flag_is_nested_under_function, chat_tool_wire_shape_omits_anthropic_only_metadata
+        // from chat_tool_strict_flag_is_nested_under_function
+        {
+            let tool = Tool {
+                tool_type: Some("function".to_string()),
+                name: "emit_json".to_string(),
+                description: "Emit JSON".to_string(),
+                input_schema: json!({"type": "object", "properties": {}}),
+                allowed_callers: None,
+                defer_loading: None,
+                input_examples: None,
+                strict: Some(true),
+                cache_control: None,
+            };
+            let encoded = tool_to_chat(&tool);
+            assert_eq!(
+                encoded
+                    .get("function")
+                    .and_then(|function| function.get("strict"))
+                    .and_then(Value::as_bool),
+                Some(true)
+            );
+            assert!(encoded.get("strict").is_none());
+        }
+        // from chat_tool_wire_shape_omits_anthropic_only_metadata
+        {
+            let tool = Tool {
+                tool_type: Some("function".to_string()),
+                name: "mcp_read_resource".to_string(),
+                description: "Read resource".to_string(),
+                input_schema: json!({"type": "object", "properties": {}}),
+                allowed_callers: Some(vec!["direct".to_string()]),
+                defer_loading: Some(false),
+                input_examples: Some(vec![json!({"uri": "file://example"})]),
+                strict: None,
+                cache_control: None,
+            };
+
+            let encoded = tool_to_chat_for_base_url(&tool, "https://api.fireworks.ai/inference/v1");
+
+            assert!(encoded.get("allowed_callers").is_none());
+            assert!(encoded.get("defer_loading").is_none());
+            assert!(encoded.get("input_examples").is_none());
+        }
     }
 
     #[test]
@@ -9683,42 +9786,43 @@ mod tests {
     }
 
     #[test]
-    fn chat_tool_wire_shape_omits_anthropic_only_metadata() {
-        let tool = Tool {
-            tool_type: Some("function".to_string()),
-            name: "mcp_read_resource".to_string(),
-            description: "Read resource".to_string(),
-            input_schema: json!({"type": "object", "properties": {}}),
-            allowed_callers: Some(vec!["direct".to_string()]),
-            defer_loading: Some(false),
-            input_examples: Some(vec![json!({"uri": "file://example"})]),
-            strict: None,
-            cache_control: None,
-        };
+    fn chat_messages_scenario() {
+        // Scenario consolidation of: chat_messages_drop_thinking_only_assistant_for_non_reasoning_model, chat_messages_drop_orphan_tool_results
+        // from chat_messages_drop_thinking_only_assistant_for_non_reasoning_model
+        {
+            let message = Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Thinking {
+                    signature: None,
+                    state: None,
+                    thinking: "plan".to_string(),
+                }],
+            };
+            let out = build_chat_messages(None, &[message], "some-non-deepseek-model");
+            assert!(
+                !out.iter()
+                    .any(|value| value.get("role").and_then(Value::as_str) == Some("assistant")),
+                "non-reasoning model should drop thinking-only assistant"
+            );
+        }
+        // from chat_messages_drop_orphan_tool_results
+        {
+            let messages = vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "tool-1".to_string(),
+                    content: "ok".to_string(),
+                    is_error: None,
+                    content_blocks: None,
+                }],
+            }];
 
-        let encoded = tool_to_chat_for_base_url(&tool, "https://api.fireworks.ai/inference/v1");
-
-        assert!(encoded.get("allowed_callers").is_none());
-        assert!(encoded.get("defer_loading").is_none());
-        assert!(encoded.get("input_examples").is_none());
-    }
-
-    #[test]
-    fn chat_messages_drop_thinking_only_assistant_for_non_reasoning_model() {
-        let message = Message {
-            role: Role::Assistant,
-            content: vec![ContentBlock::Thinking {
-                signature: None,
-                state: None,
-                thinking: "plan".to_string(),
-            }],
-        };
-        let out = build_chat_messages(None, &[message], "some-non-deepseek-model");
-        assert!(
-            !out.iter()
-                .any(|value| value.get("role").and_then(Value::as_str) == Some("assistant")),
-            "non-reasoning model should drop thinking-only assistant"
-        );
+            let out = build_chat_messages(None, &messages, "deepseek-v4-flash");
+            assert!(
+                !out.iter()
+                    .any(|value| { value.get("role").and_then(Value::as_str) == Some("tool") })
+            );
+        }
     }
 
     #[test]
@@ -9829,25 +9933,6 @@ mod tests {
         assert_eq!(usage.input_tokens, 100);
         assert_eq!(usage.prompt_cache_hit_tokens, Some(70));
         assert_eq!(usage.prompt_cache_miss_tokens, Some(30));
-    }
-
-    #[test]
-    fn chat_messages_drop_orphan_tool_results() {
-        let messages = vec![Message {
-            role: Role::User,
-            content: vec![ContentBlock::ToolResult {
-                tool_use_id: "tool-1".to_string(),
-                content: "ok".to_string(),
-                is_error: None,
-                content_blocks: None,
-            }],
-        }];
-
-        let out = build_chat_messages(None, &messages, "deepseek-v4-flash");
-        assert!(
-            !out.iter()
-                .any(|value| { value.get("role").and_then(Value::as_str) == Some("tool") })
-        );
     }
 
     #[test]
@@ -10237,35 +10322,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verify_provider_api_key_accepts_mocked_models_success() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/v1/models"))
-            .and(header("authorization", "Bearer test-key"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": []})))
-            .mount(&server)
-            .await;
+    async fn verify_provider_scenario() {
+        // Scenario consolidation of: verify_provider_api_key_accepts_mocked_models_success, verify_provider_api_key_returns_status_and_unicode_body_without_panic
+        // from verify_provider_api_key_accepts_mocked_models_success
+        {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/models"))
+                .and(header("authorization", "Bearer test-key"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": []})))
+                .mount(&server)
+                .await;
 
-        verify_provider_api_key(ApiProvider::Openrouter, "test-key", &server.uri())
-            .await
-            .expect("mocked /models success should verify");
-    }
+            verify_provider_api_key(ApiProvider::Openrouter, "test-key", &server.uri())
+                .await
+                .expect("mocked /models success should verify");
+        }
+        // from verify_provider_api_key_returns_status_and_unicode_body_without_panic
+        {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/models"))
+                .respond_with(ResponseTemplate::new(401).set_body_string("密钥无效"))
+                .mount(&server)
+                .await;
 
-    #[tokio::test]
-    async fn verify_provider_api_key_returns_status_and_unicode_body_without_panic() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/v1/models"))
-            .respond_with(ResponseTemplate::new(401).set_body_string("密钥无效"))
-            .mount(&server)
-            .await;
+            let err = verify_provider_api_key(ApiProvider::Openrouter, "bad-key", &server.uri())
+                .await
+                .expect_err("mocked /models failure should be reported");
 
-        let err = verify_provider_api_key(ApiProvider::Openrouter, "bad-key", &server.uri())
-            .await
-            .expect_err("mocked /models failure should be reported");
-
-        assert!(err.contains("HTTP 401"), "status is preserved: {err}");
-        assert!(err.contains("密钥无效"), "unicode body is preserved: {err}");
+            assert!(err.contains("HTTP 401"), "status is preserved: {err}");
+            assert!(err.contains("密钥无效"), "unicode body is preserved: {err}");
+        }
     }
 
     #[test]
@@ -10484,48 +10572,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_catalog_delta_maps_http_statuses_to_typed_errors() {
-        for (status, expected) in [
-            (401u16, CatalogRefreshError::Unauthorized),
-            (403, CatalogRefreshError::Forbidden),
-            (404, CatalogRefreshError::NotFound),
-            (429, CatalogRefreshError::RateLimited),
-            (500, CatalogRefreshError::Network),
-        ] {
-            let server = MockServer::start().await;
-            mount_models_json(&server, status, json!({"error": "nope"})).await;
-            let client = openrouter_client_for(&server);
-            let err = client.fetch_catalog_delta().await.expect_err("should fail");
-            assert_eq!(err, expected, "status {status} should map to {expected:?}");
+    async fn fetch_catalog_scenario() {
+        // Scenario consolidation of: fetch_catalog_delta_maps_http_statuses_to_typed_errors, fetch_catalog_delta_maps_invalid_json_and_empty_list
+        // from fetch_catalog_delta_maps_http_statuses_to_typed_errors
+        {
+            for (status, expected) in [
+                (401u16, CatalogRefreshError::Unauthorized),
+                (403, CatalogRefreshError::Forbidden),
+                (404, CatalogRefreshError::NotFound),
+                (429, CatalogRefreshError::RateLimited),
+                (500, CatalogRefreshError::Network),
+            ] {
+                let server = MockServer::start().await;
+                mount_models_json(&server, status, json!({"error": "nope"})).await;
+                let client = openrouter_client_for(&server);
+                let err = client.fetch_catalog_delta().await.expect_err("should fail");
+                assert_eq!(err, expected, "status {status} should map to {expected:?}");
+            }
         }
-    }
+        // from fetch_catalog_delta_maps_invalid_json_and_empty_list
+        {
+            // Invalid JSON -> InvalidResponse.
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v1/models"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+                .mount(&server)
+                .await;
+            let client = openrouter_client_for(&server);
+            assert_eq!(
+                client
+                    .fetch_catalog_delta()
+                    .await
+                    .expect_err("invalid json"),
+                CatalogRefreshError::InvalidResponse
+            );
 
-    #[tokio::test]
-    async fn fetch_catalog_delta_maps_invalid_json_and_empty_list() {
-        // Invalid JSON -> InvalidResponse.
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/v1/models"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
-            .mount(&server)
-            .await;
-        let client = openrouter_client_for(&server);
-        assert_eq!(
-            client
-                .fetch_catalog_delta()
-                .await
-                .expect_err("invalid json"),
-            CatalogRefreshError::InvalidResponse
-        );
-
-        // Empty list -> EmptyList.
-        let server = MockServer::start().await;
-        mount_models_json(&server, 200, json!({"data": []})).await;
-        let client = openrouter_client_for(&server);
-        assert_eq!(
-            client.fetch_catalog_delta().await.expect_err("empty list"),
-            CatalogRefreshError::EmptyList
-        );
+            // Empty list -> EmptyList.
+            let server = MockServer::start().await;
+            mount_models_json(&server, 200, json!({"data": []})).await;
+            let client = openrouter_client_for(&server);
+            assert_eq!(
+                client.fetch_catalog_delta().await.expect_err("empty list"),
+                CatalogRefreshError::EmptyList
+            );
+        }
     }
 
     #[tokio::test]
@@ -10648,45 +10739,111 @@ mod tests {
     }
 
     #[test]
-    fn parse_usage_reads_deepseek_cache_and_reasoning_tokens() {
-        let usage = parse_usage(Some(&json!({
-            "prompt_tokens": 100,
-            "completion_tokens": 20,
-            "prompt_cache_hit_tokens": 70,
-            "prompt_cache_miss_tokens": 30,
-            "completion_tokens_details": {
-                "reasoning_tokens": 12
-            }
-        })));
+    fn parse_usage_scenario() {
+        // Scenario consolidation of: parse_usage_reads_deepseek_cache_and_reasoning_tokens, parse_usage_saturates_every_u64_token_field, parse_usage_counts_reasoning_tokens_when_completion_tokens_are_zero, parse_usage_derives_completion_tokens_from_total_tokens_when_needed, parse_usage_reads_v4_prompt_tokens_details_cached_tokens, parse_usage_infers_cache_miss_from_selected_hit_source
+        // from parse_usage_reads_deepseek_cache_and_reasoning_tokens
+        {
+            let usage = parse_usage(Some(&json!({
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "prompt_cache_hit_tokens": 70,
+                "prompt_cache_miss_tokens": 30,
+                "completion_tokens_details": {
+                    "reasoning_tokens": 12
+                }
+            })));
 
-        assert_eq!(usage.input_tokens, 100);
-        assert_eq!(usage.output_tokens, 20);
-        assert_eq!(usage.prompt_cache_hit_tokens, Some(70));
-        assert_eq!(usage.prompt_cache_miss_tokens, Some(30));
-        assert_eq!(usage.reasoning_tokens, Some(12));
-    }
+            assert_eq!(usage.input_tokens, 100);
+            assert_eq!(usage.output_tokens, 20);
+            assert_eq!(usage.prompt_cache_hit_tokens, Some(70));
+            assert_eq!(usage.prompt_cache_miss_tokens, Some(30));
+            assert_eq!(usage.reasoning_tokens, Some(12));
+        }
+        // from parse_usage_saturates_every_u64_token_field
+        {
+            let usage = parse_usage(Some(&json!({
+                "input_tokens": u64::MAX,
+                "output_tokens": u64::MAX,
+                "prompt_cache_hit_tokens": u64::MAX,
+                "prompt_cache_miss_tokens": u64::MAX,
+                "completion_tokens_details": { "reasoning_tokens": u64::MAX },
+                "server_tool_use": {
+                    "code_execution_requests": u64::MAX,
+                    "tool_search_requests": u64::MAX
+                }
+            })));
+            assert_eq!(usage.input_tokens, u32::MAX);
+            assert_eq!(usage.output_tokens, u32::MAX);
+            assert_eq!(usage.prompt_cache_hit_tokens, Some(u32::MAX));
+            assert_eq!(usage.prompt_cache_miss_tokens, Some(u32::MAX));
+            assert_eq!(usage.reasoning_tokens, Some(u32::MAX));
+            let server = usage.server_tool_use.expect("server usage");
+            assert_eq!(server.code_execution_requests, Some(u32::MAX));
+            assert_eq!(server.tool_search_requests, Some(u32::MAX));
+        }
+        // from parse_usage_counts_reasoning_tokens_when_completion_tokens_are_zero
+        {
+            let usage = parse_usage(Some(&json!({
+                "prompt_tokens": 100,
+                "completion_tokens": 0,
+                "completion_tokens_details": {
+                    "reasoning_tokens": 12
+                }
+            })));
 
-    #[test]
-    fn parse_usage_saturates_every_u64_token_field() {
-        let usage = parse_usage(Some(&json!({
-            "input_tokens": u64::MAX,
-            "output_tokens": u64::MAX,
-            "prompt_cache_hit_tokens": u64::MAX,
-            "prompt_cache_miss_tokens": u64::MAX,
-            "completion_tokens_details": { "reasoning_tokens": u64::MAX },
-            "server_tool_use": {
-                "code_execution_requests": u64::MAX,
-                "tool_search_requests": u64::MAX
-            }
-        })));
-        assert_eq!(usage.input_tokens, u32::MAX);
-        assert_eq!(usage.output_tokens, u32::MAX);
-        assert_eq!(usage.prompt_cache_hit_tokens, Some(u32::MAX));
-        assert_eq!(usage.prompt_cache_miss_tokens, Some(u32::MAX));
-        assert_eq!(usage.reasoning_tokens, Some(u32::MAX));
-        let server = usage.server_tool_use.expect("server usage");
-        assert_eq!(server.code_execution_requests, Some(u32::MAX));
-        assert_eq!(server.tool_search_requests, Some(u32::MAX));
+            assert_eq!(usage.input_tokens, 100);
+            assert_eq!(usage.output_tokens, 12);
+            assert_eq!(usage.reasoning_tokens, Some(12));
+            assert!(
+                crate::pricing::calculate_turn_cost_from_usage("deepseek-v4-pro", &usage)
+                    .expect("DeepSeek V4 Pro pricing should apply")
+                    > 0.0
+            );
+        }
+        // from parse_usage_derives_completion_tokens_from_total_tokens_when_needed
+        {
+            let usage = parse_usage(Some(&json!({
+                "prompt_tokens": 100,
+                "total_tokens": 125,
+                "prompt_cache_hit_tokens": 70,
+                "prompt_cache_miss_tokens": 30
+            })));
+
+            assert_eq!(usage.input_tokens, 100);
+            assert_eq!(usage.output_tokens, 25);
+            assert_eq!(usage.prompt_cache_hit_tokens, Some(70));
+            assert_eq!(usage.prompt_cache_miss_tokens, Some(30));
+        }
+        // from parse_usage_reads_v4_prompt_tokens_details_cached_tokens
+        {
+            let usage = parse_usage(Some(&json!({
+                "prompt_tokens": 4000,
+                "completion_tokens": 20,
+                "prompt_tokens_details": {
+                    "cached_tokens": 3000
+                }
+            })));
+
+            assert_eq!(usage.input_tokens, 4000);
+            assert_eq!(usage.output_tokens, 20);
+            assert_eq!(usage.prompt_cache_hit_tokens, Some(3000));
+            assert_eq!(usage.prompt_cache_miss_tokens, Some(1000));
+        }
+        // from parse_usage_infers_cache_miss_from_selected_hit_source
+        {
+            let usage = parse_usage(Some(&json!({
+                "prompt_tokens": 4000,
+                "completion_tokens": 20,
+                "prompt_cache_hit_tokens": 3000,
+                "prompt_tokens_details": {
+                    "cached_tokens": 1000
+                }
+            })));
+
+            assert_eq!(usage.input_tokens, 4000);
+            assert_eq!(usage.prompt_cache_hit_tokens, Some(3000));
+            assert_eq!(usage.prompt_cache_miss_tokens, Some(1000));
+        }
     }
 
     #[test]
@@ -10835,73 +10992,6 @@ mod tests {
         })));
         assert_eq!(zero_output.output_tokens, 12);
         assert_eq!(zero_output.reasoning_tokens, Some(12));
-    }
-
-    #[test]
-    fn parse_usage_counts_reasoning_tokens_when_completion_tokens_are_zero() {
-        let usage = parse_usage(Some(&json!({
-            "prompt_tokens": 100,
-            "completion_tokens": 0,
-            "completion_tokens_details": {
-                "reasoning_tokens": 12
-            }
-        })));
-
-        assert_eq!(usage.input_tokens, 100);
-        assert_eq!(usage.output_tokens, 12);
-        assert_eq!(usage.reasoning_tokens, Some(12));
-        assert!(
-            crate::pricing::calculate_turn_cost_from_usage("deepseek-v4-pro", &usage)
-                .expect("DeepSeek V4 Pro pricing should apply")
-                > 0.0
-        );
-    }
-
-    #[test]
-    fn parse_usage_derives_completion_tokens_from_total_tokens_when_needed() {
-        let usage = parse_usage(Some(&json!({
-            "prompt_tokens": 100,
-            "total_tokens": 125,
-            "prompt_cache_hit_tokens": 70,
-            "prompt_cache_miss_tokens": 30
-        })));
-
-        assert_eq!(usage.input_tokens, 100);
-        assert_eq!(usage.output_tokens, 25);
-        assert_eq!(usage.prompt_cache_hit_tokens, Some(70));
-        assert_eq!(usage.prompt_cache_miss_tokens, Some(30));
-    }
-
-    #[test]
-    fn parse_usage_reads_v4_prompt_tokens_details_cached_tokens() {
-        let usage = parse_usage(Some(&json!({
-            "prompt_tokens": 4000,
-            "completion_tokens": 20,
-            "prompt_tokens_details": {
-                "cached_tokens": 3000
-            }
-        })));
-
-        assert_eq!(usage.input_tokens, 4000);
-        assert_eq!(usage.output_tokens, 20);
-        assert_eq!(usage.prompt_cache_hit_tokens, Some(3000));
-        assert_eq!(usage.prompt_cache_miss_tokens, Some(1000));
-    }
-
-    #[test]
-    fn parse_usage_infers_cache_miss_from_selected_hit_source() {
-        let usage = parse_usage(Some(&json!({
-            "prompt_tokens": 4000,
-            "completion_tokens": 20,
-            "prompt_cache_hit_tokens": 3000,
-            "prompt_tokens_details": {
-                "cached_tokens": 1000
-            }
-        })));
-
-        assert_eq!(usage.input_tokens, 4000);
-        assert_eq!(usage.prompt_cache_hit_tokens, Some(3000));
-        assert_eq!(usage.prompt_cache_miss_tokens, Some(1000));
     }
 
     #[test]
@@ -11158,49 +11248,51 @@ mod tests {
     }
 
     #[test]
-    fn base_url_security_rejects_insecure_non_local_http() {
-        let _lock = ALLOW_INSECURE_HTTP_ENV_LOCK.lock().unwrap();
-        let _guard = AllowInsecureHttpEnvGuard::capture();
-        unsafe { std::env::remove_var(ALLOW_INSECURE_HTTP_ENV) };
+    fn base_url_scenario() {
+        // Scenario consolidation of: base_url_security_rejects_insecure_non_local_http, base_url_security_errors_redact_sensitive_url_parts, base_url_security_allows_localhost_http, base_url_security_allows_non_local_http_with_explicit_opt_in
+        // from base_url_security_rejects_insecure_non_local_http
+        {
+            let _lock = ALLOW_INSECURE_HTTP_ENV_LOCK.lock().unwrap();
+            let _guard = AllowInsecureHttpEnvGuard::capture();
+            unsafe { std::env::remove_var(ALLOW_INSECURE_HTTP_ENV) };
 
-        let err = validate_base_url_security("http://api.deepseek.com")
-            .expect_err("non-local insecure HTTP should be rejected");
-        assert!(err.to_string().contains("Refusing insecure base URL"));
-    }
-
-    #[test]
-    fn base_url_security_errors_redact_sensitive_url_parts() {
-        let _lock = ALLOW_INSECURE_HTTP_ENV_LOCK.lock().unwrap();
-        let _guard = AllowInsecureHttpEnvGuard::capture();
-        unsafe { std::env::remove_var(ALLOW_INSECURE_HTTP_ENV) };
-
-        let err =
-            validate_base_url_security("http://user:secret@example.com/v1?api_key=sk-test&ok=1")
+            let err = validate_base_url_security("http://api.deepseek.com")
                 .expect_err("non-local insecure HTTP should be rejected");
-        let message = err.to_string();
+            assert!(err.to_string().contains("Refusing insecure base URL"));
+        }
+        // from base_url_security_errors_redact_sensitive_url_parts
+        {
+            let _lock = ALLOW_INSECURE_HTTP_ENV_LOCK.lock().unwrap();
+            let _guard = AllowInsecureHttpEnvGuard::capture();
+            unsafe { std::env::remove_var(ALLOW_INSECURE_HTTP_ENV) };
 
-        assert!(message.contains("http://***:***@example.com/v1?api_key=***&ok=1"));
-        assert!(!message.contains("user:secret"));
-        assert!(!message.contains("sk-test"));
-    }
+            let err = validate_base_url_security(
+                "http://user:secret@example.com/v1?api_key=sk-test&ok=1",
+            )
+            .expect_err("non-local insecure HTTP should be rejected");
+            let message = err.to_string();
 
-    #[test]
-    fn base_url_security_allows_localhost_http() {
-        let _lock = ALLOW_INSECURE_HTTP_ENV_LOCK.lock().unwrap();
-        let _guard = AllowInsecureHttpEnvGuard::capture();
-        unsafe { std::env::remove_var(ALLOW_INSECURE_HTTP_ENV) };
+            assert!(message.contains("http://***:***@example.com/v1?api_key=***&ok=1"));
+            assert!(!message.contains("user:secret"));
+            assert!(!message.contains("sk-test"));
+        }
+        // from base_url_security_allows_localhost_http
+        {
+            let _lock = ALLOW_INSECURE_HTTP_ENV_LOCK.lock().unwrap();
+            let _guard = AllowInsecureHttpEnvGuard::capture();
+            unsafe { std::env::remove_var(ALLOW_INSECURE_HTTP_ENV) };
 
-        assert!(validate_base_url_security("http://localhost:8080").is_ok());
-        assert!(validate_base_url_security("http://127.0.0.1:8080").is_ok());
-    }
+            assert!(validate_base_url_security("http://localhost:8080").is_ok());
+            assert!(validate_base_url_security("http://127.0.0.1:8080").is_ok());
+        }
+        // from base_url_security_allows_non_local_http_with_explicit_opt_in
+        {
+            let _lock = ALLOW_INSECURE_HTTP_ENV_LOCK.lock().unwrap();
+            let _guard = AllowInsecureHttpEnvGuard::capture();
+            unsafe { std::env::set_var(ALLOW_INSECURE_HTTP_ENV, "1") };
 
-    #[test]
-    fn base_url_security_allows_non_local_http_with_explicit_opt_in() {
-        let _lock = ALLOW_INSECURE_HTTP_ENV_LOCK.lock().unwrap();
-        let _guard = AllowInsecureHttpEnvGuard::capture();
-        unsafe { std::env::set_var(ALLOW_INSECURE_HTTP_ENV, "1") };
-
-        assert!(validate_base_url_security("http://192.168.0.110:8000/v1").is_ok());
+            assert!(validate_base_url_security("http://192.168.0.110:8000/v1").is_ok());
+        }
     }
 
     /// Serialize tests that mutate `DEEPSEEK_ALLOW_INSECURE_HTTP`; env vars are
@@ -11302,102 +11394,40 @@ mod tests {
     }
 
     #[test]
-    fn force_http1_unset_is_false() {
-        let _lock = FORCE_HTTP1_ENV_LOCK.lock().unwrap();
-        let _guard = ForceHttp1EnvGuard::capture();
-        unsafe { std::env::remove_var("DEEPSEEK_FORCE_HTTP1") };
-        assert!(!force_http1_from_env());
-    }
-
-    #[test]
-    fn force_http1_truthy_values() {
-        let _lock = FORCE_HTTP1_ENV_LOCK.lock().unwrap();
-        let _guard = ForceHttp1EnvGuard::capture();
-        for value in ["1", "true", "True", "YES", "on", " 1 "] {
-            // Safety: serialized by FORCE_HTTP1_ENV_LOCK; reverted by guard.
-            unsafe { std::env::set_var("DEEPSEEK_FORCE_HTTP1", value) };
-            assert!(
-                force_http1_from_env(),
-                "{value:?} should be parsed as truthy",
-            );
+    fn force_http1_scenario() {
+        // Scenario consolidation of: force_http1_unset_is_false, force_http1_truthy_values, force_http1_falsy_values
+        // from force_http1_unset_is_false
+        {
+            let _lock = FORCE_HTTP1_ENV_LOCK.lock().unwrap();
+            let _guard = ForceHttp1EnvGuard::capture();
+            unsafe { std::env::remove_var("DEEPSEEK_FORCE_HTTP1") };
+            assert!(!force_http1_from_env());
         }
-    }
-
-    #[test]
-    fn force_http1_falsy_values() {
-        let _lock = FORCE_HTTP1_ENV_LOCK.lock().unwrap();
-        let _guard = ForceHttp1EnvGuard::capture();
-        for value in ["0", "false", "no", "off", "", "garbage", "2"] {
-            unsafe { std::env::set_var("DEEPSEEK_FORCE_HTTP1", value) };
-            assert!(
-                !force_http1_from_env(),
-                "{value:?} should NOT be parsed as truthy"
-            );
+        // from force_http1_truthy_values
+        {
+            let _lock = FORCE_HTTP1_ENV_LOCK.lock().unwrap();
+            let _guard = ForceHttp1EnvGuard::capture();
+            for value in ["1", "true", "True", "YES", "on", " 1 "] {
+                // Safety: serialized by FORCE_HTTP1_ENV_LOCK; reverted by guard.
+                unsafe { std::env::set_var("DEEPSEEK_FORCE_HTTP1", value) };
+                assert!(
+                    force_http1_from_env(),
+                    "{value:?} should be parsed as truthy",
+                );
+            }
         }
-    }
-
-    #[test]
-    fn api_url_with_suffix_strips_version_before_chat_suffix() {
-        assert_eq!(
-            api_url_with_suffix(
-                "https://api.example.com/v1",
-                "chat/completions",
-                Some("/chat/completions")
-            ),
-            "https://api.example.com/chat/completions"
-        );
-        assert_eq!(
-            api_url_with_suffix(
-                "https://api.example.com/beta",
-                "chat/completions",
-                Some("/chat/completions")
-            ),
-            "https://api.example.com/chat/completions"
-        );
-    }
-
-    #[test]
-    fn api_url_with_suffix_handles_leading_slash() {
-        assert_eq!(
-            api_url_with_suffix(
-                "https://api.example.com/v1",
-                "chat/completions",
-                Some("chat/completions")
-            ),
-            "https://api.example.com/chat/completions"
-        );
-    }
-
-    #[test]
-    fn api_url_with_suffix_ignores_suffix_for_models() {
-        assert_eq!(
-            api_url_with_suffix(
-                "https://api.example.com/v1",
-                "models",
-                Some("/chat/completions")
-            ),
-            "https://api.example.com/v1/models"
-        );
-    }
-
-    #[test]
-    fn api_url_with_suffix_ignores_suffix_for_beta_paths() {
-        assert_eq!(
-            api_url_with_suffix(
-                "https://api.example.com/v1",
-                "beta/completions",
-                Some("/chat/completions")
-            ),
-            "https://api.example.com/beta/completions"
-        );
-    }
-
-    #[test]
-    fn api_url_with_suffix_default_behavior_without_suffix() {
-        assert_eq!(
-            api_url_with_suffix("https://api.deepseek.com", "chat/completions", None),
-            "https://api.deepseek.com/v1/chat/completions"
-        );
+        // from force_http1_falsy_values
+        {
+            let _lock = FORCE_HTTP1_ENV_LOCK.lock().unwrap();
+            let _guard = ForceHttp1EnvGuard::capture();
+            for value in ["0", "false", "no", "off", "", "garbage", "2"] {
+                unsafe { std::env::set_var("DEEPSEEK_FORCE_HTTP1", value) };
+                assert!(
+                    !force_http1_from_env(),
+                    "{value:?} should NOT be parsed as truthy"
+                );
+            }
+        }
     }
 
     #[test]
@@ -11423,111 +11453,114 @@ mod tests {
     }
 
     #[test]
-    fn take_sse_line_preserves_multibyte_split_across_reads() {
-        // "你好" streamed so the 3-byte '好' straddles a read boundary.
-        let full = "data: 你好\n";
-        let bytes = full.as_bytes();
-        let split = mid_char_split(full, '好');
-        let mut buffer: Vec<u8> = Vec::new();
-        // First read: no complete line yet.
-        buffer.extend_from_slice(&bytes[..split]);
-        assert_eq!(take_sse_line(&mut buffer).expect("valid prefix"), None);
-        // Second read completes the line; '好' must be intact, not U+FFFD.
-        buffer.extend_from_slice(&bytes[split..]);
-        let line = take_sse_line(&mut buffer)
-            .expect("valid utf-8")
-            .expect("a complete line");
-        assert_eq!(line, "data: 你好");
-        assert!(!line.contains('\u{FFFD}'), "multibyte char was corrupted");
-        assert_eq!(extract_sse_data_value(&line), Some("你好"));
-        // Buffer fully drained.
-        assert!(buffer.is_empty());
+    fn take_sse_scenario() {
+        // Scenario consolidation of: take_sse_line_preserves_multibyte_split_across_reads, take_sse_line_returns_none_without_newline, take_sse_line_reassembles_cjk_and_rejects_invalid_bytes, take_sse_line_rejects_invalid_bytes_without_replacement
+        // from take_sse_line_preserves_multibyte_split_across_reads
+        {
+            // "你好" streamed so the 3-byte '好' straddles a read boundary.
+            let full = "data: 你好\n";
+            let bytes = full.as_bytes();
+            let split = mid_char_split(full, '好');
+            let mut buffer: Vec<u8> = Vec::new();
+            // First read: no complete line yet.
+            buffer.extend_from_slice(&bytes[..split]);
+            assert_eq!(take_sse_line(&mut buffer).expect("valid prefix"), None);
+            // Second read completes the line; '好' must be intact, not U+FFFD.
+            buffer.extend_from_slice(&bytes[split..]);
+            let line = take_sse_line(&mut buffer)
+                .expect("valid utf-8")
+                .expect("a complete line");
+            assert_eq!(line, "data: 你好");
+            assert!(!line.contains('\u{FFFD}'), "multibyte char was corrupted");
+            assert_eq!(extract_sse_data_value(&line), Some("你好"));
+            // Buffer fully drained.
+            assert!(buffer.is_empty());
+        }
+        // from take_sse_line_returns_none_without_newline
+        {
+            let mut buffer = b"data: partial".to_vec();
+            assert_eq!(take_sse_line(&mut buffer).expect("valid utf-8"), None);
+            assert_eq!(buffer, b"data: partial");
+        }
+        // from take_sse_line_reassembles_cjk_and_rejects_invalid_bytes
+        {
+            let full = "data: 测试中文\n";
+            let split = mid_char_split(full, '试');
+            let mut buffer = full.as_bytes()[..split].to_vec();
+            assert_eq!(take_sse_line(&mut buffer).expect("valid prefix"), None);
+            buffer.extend_from_slice(&full.as_bytes()[split..]);
+            let line = take_sse_line(&mut buffer)
+                .expect("valid utf-8")
+                .expect("complete line");
+            assert_eq!(line, "data: 测试中文");
+            assert!(!line.contains('\u{FFFD}'));
+
+            let mut invalid = b"data: ok".to_vec();
+            invalid.push(0xFF);
+            invalid.push(b'\n');
+            let err = take_sse_line(&mut invalid).expect_err("invalid bytes must fail closed");
+            assert!(!err.to_string().contains('\u{FFFD}'));
+            assert_eq!(err.valid_up_to, 8);
+            assert!(
+                invalid.is_empty(),
+                "invalid line is consumed so retries cannot loop"
+            );
+        }
+        // from take_sse_line_rejects_invalid_bytes_without_replacement
+        {
+            let mut buffer = b"data: ok".to_vec();
+            buffer.push(0xFF);
+            buffer.extend_from_slice(b"\n");
+            let err = take_sse_line(&mut buffer).expect_err("0xFF is not UTF-8");
+            assert_eq!(err.valid_up_to, 8);
+            assert!(!err.to_string().contains('\u{FFFD}'));
+            assert!(buffer.is_empty(), "invalid line must be drained");
+        }
     }
 
     #[test]
-    fn take_sse_line_returns_none_without_newline() {
-        let mut buffer = b"data: partial".to_vec();
-        assert_eq!(take_sse_line(&mut buffer).expect("valid utf-8"), None);
-        assert_eq!(buffer, b"data: partial");
-    }
+    fn flush_sse_scenario() {
+        // Scenario consolidation of: flush_sse_line_reassembles_cjk_and_rejects_invalid_bytes, flush_sse_line_preserves_unterminated_cjk, flush_sse_line_rejects_truncated_multibyte_sequence
+        // from flush_sse_line_reassembles_cjk_and_rejects_invalid_bytes
+        {
+            let text = "data: 你好世界";
+            let split = mid_char_split(text, '好');
+            let mut buffer = text.as_bytes()[..split].to_vec();
+            assert_eq!(take_sse_line(&mut buffer).expect("no newline yet"), None);
+            buffer.extend_from_slice(&text.as_bytes()[split..]);
+            let line = flush_sse_line(&mut buffer)
+                .expect("valid utf-8")
+                .expect("unterminated tail");
+            assert_eq!(line, "data: 你好世界");
+            assert!(!line.contains('\u{FFFD}'));
+            assert!(buffer.is_empty());
+            assert_eq!(flush_sse_line(&mut buffer).expect("empty"), None);
 
-    #[test]
-    fn take_sse_line_reassembles_cjk_and_rejects_invalid_bytes() {
-        let full = "data: 测试中文\n";
-        let split = mid_char_split(full, '试');
-        let mut buffer = full.as_bytes()[..split].to_vec();
-        assert_eq!(take_sse_line(&mut buffer).expect("valid prefix"), None);
-        buffer.extend_from_slice(&full.as_bytes()[split..]);
-        let line = take_sse_line(&mut buffer)
-            .expect("valid utf-8")
-            .expect("complete line");
-        assert_eq!(line, "data: 测试中文");
-        assert!(!line.contains('\u{FFFD}'));
-
-        let mut invalid = b"data: ok".to_vec();
-        invalid.push(0xFF);
-        invalid.push(b'\n');
-        let err = take_sse_line(&mut invalid).expect_err("invalid bytes must fail closed");
-        assert!(!err.to_string().contains('\u{FFFD}'));
-        assert_eq!(err.valid_up_to, 8);
-        assert!(
-            invalid.is_empty(),
-            "invalid line is consumed so retries cannot loop"
-        );
-    }
-
-    #[test]
-    fn take_sse_line_rejects_invalid_bytes_without_replacement() {
-        let mut buffer = b"data: ok".to_vec();
-        buffer.push(0xFF);
-        buffer.extend_from_slice(b"\n");
-        let err = take_sse_line(&mut buffer).expect_err("0xFF is not UTF-8");
-        assert_eq!(err.valid_up_to, 8);
-        assert!(!err.to_string().contains('\u{FFFD}'));
-        assert!(buffer.is_empty(), "invalid line must be drained");
-    }
-
-    #[test]
-    fn flush_sse_line_reassembles_cjk_and_rejects_invalid_bytes() {
-        let text = "data: 你好世界";
-        let split = mid_char_split(text, '好');
-        let mut buffer = text.as_bytes()[..split].to_vec();
-        assert_eq!(take_sse_line(&mut buffer).expect("no newline yet"), None);
-        buffer.extend_from_slice(&text.as_bytes()[split..]);
-        let line = flush_sse_line(&mut buffer)
-            .expect("valid utf-8")
-            .expect("unterminated tail");
-        assert_eq!(line, "data: 你好世界");
-        assert!(!line.contains('\u{FFFD}'));
-        assert!(buffer.is_empty());
-        assert_eq!(flush_sse_line(&mut buffer).expect("empty"), None);
-
-        let mut invalid = vec![0x80, 0xBF];
-        let err = flush_sse_line(&mut invalid).expect_err("invalid flush must fail closed");
-        assert!(!err.to_string().contains('\u{FFFD}'));
-        assert_eq!(err.valid_up_to, 0);
-        assert!(invalid.is_empty());
-    }
-
-    #[test]
-    fn flush_sse_line_preserves_unterminated_cjk() {
-        let mut buffer = "data: 你好".as_bytes().to_vec();
-        let line = flush_sse_line(&mut buffer)
-            .expect("valid utf-8")
-            .expect("residual line");
-        assert_eq!(line, "data: 你好");
-        assert!(!line.contains('\u{FFFD}'));
-        assert!(buffer.is_empty());
-    }
-
-    #[test]
-    fn flush_sse_line_rejects_truncated_multibyte_sequence() {
-        let mut buffer = "data: ".as_bytes().to_vec();
-        buffer.extend_from_slice(&"好".as_bytes()[..2]);
-        let err = flush_sse_line(&mut buffer).expect_err("truncated UTF-8");
-        assert_eq!(err.valid_up_to, 6);
-        assert!(!err.to_string().contains('\u{FFFD}'));
-        assert!(buffer.is_empty());
+            let mut invalid = vec![0x80, 0xBF];
+            let err = flush_sse_line(&mut invalid).expect_err("invalid flush must fail closed");
+            assert!(!err.to_string().contains('\u{FFFD}'));
+            assert_eq!(err.valid_up_to, 0);
+            assert!(invalid.is_empty());
+        }
+        // from flush_sse_line_preserves_unterminated_cjk
+        {
+            let mut buffer = "data: 你好".as_bytes().to_vec();
+            let line = flush_sse_line(&mut buffer)
+                .expect("valid utf-8")
+                .expect("residual line");
+            assert_eq!(line, "data: 你好");
+            assert!(!line.contains('\u{FFFD}'));
+            assert!(buffer.is_empty());
+        }
+        // from flush_sse_line_rejects_truncated_multibyte_sequence
+        {
+            let mut buffer = "data: ".as_bytes().to_vec();
+            buffer.extend_from_slice(&"好".as_bytes()[..2]);
+            let err = flush_sse_line(&mut buffer).expect_err("truncated UTF-8");
+            assert_eq!(err.valid_up_to, 6);
+            assert!(!err.to_string().contains('\u{FFFD}'));
+            assert!(buffer.is_empty());
+        }
     }
 
     #[test]
@@ -11542,27 +11575,29 @@ mod tests {
     }
 
     #[test]
-    fn extract_sse_data_value_accepts_optional_space() {
-        assert_eq!(
-            extract_sse_data_value("data: {\"ok\":true}"),
-            Some("{\"ok\":true}")
-        );
-        assert_eq!(
-            extract_sse_data_value("data:{\"ok\":true}"),
-            Some("{\"ok\":true}")
-        );
-    }
-
-    #[test]
-    fn extract_sse_data_value_handles_done_marker() {
-        assert_eq!(extract_sse_data_value("data: [DONE]"), Some("[DONE]"));
-        assert_eq!(extract_sse_data_value("data:[DONE]"), Some("[DONE]"));
-    }
-
-    #[test]
-    fn extract_sse_data_value_rejects_non_data_lines() {
-        assert_eq!(extract_sse_data_value("event: message"), None);
-        assert_eq!(extract_sse_data_value(": heartbeat"), None);
+    fn extract_sse_scenario() {
+        // Scenario consolidation of: extract_sse_data_value_accepts_optional_space, extract_sse_data_value_handles_done_marker, extract_sse_data_value_rejects_non_data_lines
+        // from extract_sse_data_value_accepts_optional_space
+        {
+            assert_eq!(
+                extract_sse_data_value("data: {\"ok\":true}"),
+                Some("{\"ok\":true}")
+            );
+            assert_eq!(
+                extract_sse_data_value("data:{\"ok\":true}"),
+                Some("{\"ok\":true}")
+            );
+        }
+        // from extract_sse_data_value_handles_done_marker
+        {
+            assert_eq!(extract_sse_data_value("data: [DONE]"), Some("[DONE]"));
+            assert_eq!(extract_sse_data_value("data:[DONE]"), Some("[DONE]"));
+        }
+        // from extract_sse_data_value_rejects_non_data_lines
+        {
+            assert_eq!(extract_sse_data_value("event: message"), None);
+            assert_eq!(extract_sse_data_value(": heartbeat"), None);
+        }
     }
 
     /// Build a DeepSeek config with an inline key/base URL plus the resolved
@@ -11590,37 +11625,40 @@ mod tests {
     }
 
     #[test]
-    fn from_candidate_uses_candidate_base_url_and_wire_model() {
-        let (_config, route) =
-            deepseek_route_for_test("https://route.example.com/v1", "deepseek-v4-pro");
+    fn from_candidate_scenario() {
+        // Scenario consolidation of: from_candidate_uses_candidate_base_url_and_wire_model, from_candidate_matches_new_when_config_agrees
+        // from from_candidate_uses_candidate_base_url_and_wire_model
+        {
+            let (_config, route) =
+                deepseek_route_for_test("https://route.example.com/v1", "deepseek-v4-pro");
 
-        let client = DeepSeekClient::from_candidate(&route.config, &route.candidate)
-            .expect("client should construct from candidate");
+            let client = DeepSeekClient::from_candidate(&route.config, &route.candidate)
+                .expect("client should construct from candidate");
 
-        // The transport is bound to the candidate, not re-derived from Config.
-        assert_eq!(client.base_url, route.candidate.endpoint().base_url);
-        assert_eq!(
-            client.default_model,
-            route.candidate.wire_model_id().as_str()
-        );
-    }
+            // The transport is bound to the candidate, not re-derived from Config.
+            assert_eq!(client.base_url, route.candidate.endpoint().base_url);
+            assert_eq!(
+                client.default_model,
+                route.candidate.wire_model_id().as_str()
+            );
+        }
+        // from from_candidate_matches_new_when_config_agrees
+        {
+            // For a normal route, the resolver writes the candidate's wire model and
+            // endpoint back into `route.config`, so constructing from the candidate
+            // must be byte-identical to constructing from that config. This pins the
+            // "no behavior change today" guarantee for Slice A.
+            let (_config, route) =
+                deepseek_route_for_test("https://api.deepseek.com/v1", "deepseek-v4-pro");
 
-    #[test]
-    fn from_candidate_matches_new_when_config_agrees() {
-        // For a normal route, the resolver writes the candidate's wire model and
-        // endpoint back into `route.config`, so constructing from the candidate
-        // must be byte-identical to constructing from that config. This pins the
-        // "no behavior change today" guarantee for Slice A.
-        let (_config, route) =
-            deepseek_route_for_test("https://api.deepseek.com/v1", "deepseek-v4-pro");
+            let from_new = DeepSeekClient::new(&route.config).expect("new client");
+            let from_candidate = DeepSeekClient::from_candidate(&route.config, &route.candidate)
+                .expect("candidate client");
 
-        let from_new = DeepSeekClient::new(&route.config).expect("new client");
-        let from_candidate = DeepSeekClient::from_candidate(&route.config, &route.candidate)
-            .expect("candidate client");
-
-        assert_eq!(from_candidate.base_url, from_new.base_url);
-        assert_eq!(from_candidate.default_model, from_new.default_model);
-        assert_eq!(from_candidate.api_provider, from_new.api_provider);
+            assert_eq!(from_candidate.base_url, from_new.base_url);
+            assert_eq!(from_candidate.default_model, from_new.default_model);
+            assert_eq!(from_candidate.api_provider, from_new.api_provider);
+        }
     }
 
     fn route_cap_test_client(wire_format: WireFormat, limits: RouteLimits) -> DeepSeekClient {

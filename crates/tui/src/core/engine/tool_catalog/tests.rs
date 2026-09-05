@@ -86,7 +86,7 @@ fn first_turn_surface_is_stable_across_plan_work_and_full_access() {
     .into_iter()
     .map(str::to_string)
     .collect::<BTreeSet<_>>();
-    for mode in [AppMode::Plan, AppMode::Agent, AppMode::Yolo] {
+    for mode in [AppMode::Plan, AppMode::Agent] {
         let mut catalog = [
             "read",
             "write",
@@ -114,7 +114,7 @@ fn first_turn_surface_is_stable_across_plan_work_and_full_access() {
 
 #[test]
 fn mcp_tools_are_searchable_not_eager_in_every_mode() {
-    for mode in [AppMode::Plan, AppMode::Agent, AppMode::Yolo] {
+    for mode in [AppMode::Plan, AppMode::Agent] {
         let mut catalog = vec![tool("read_mcp_resource"), tool("mcp_acme_lookup")];
         apply_mcp_tool_deferral(&mut catalog, mode, &HashSet::new());
         assert!(

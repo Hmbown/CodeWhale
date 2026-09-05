@@ -12,7 +12,7 @@ pub mod metadata;
 pub mod types;
 
 pub use facets::*;
-pub use handler::{CommandContexts, CommandHandler, ContextParts};
+pub use handler::{CommandCapabilities, CommandContexts, CommandHandler, ContextParts};
 pub use metadata::{CommandDiscovery, CommandInfo, RegisterCommand};
 pub use types::*;
 

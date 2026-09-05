@@ -1,8 +1,10 @@
- Appearance   Models & providers   Fleet   Work   Tools & MCP   Trust          ›
+ Appearance   Models & providers   Work   Tools & MCP   Trust   Motion         ›
   System
   Terminal
-  Blue Stage
-[ ✓ Blue Stage Light ]
+  Underwater
+  Underwater Retro
+[ ✓ Blue Stage ]
+  Blue Stage Light
   Grayscale
   Catppuccin Mocha
   Tokyo Night

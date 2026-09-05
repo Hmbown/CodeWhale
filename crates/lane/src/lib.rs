@@ -25,4 +25,6 @@ pub use runtime::{
     InlineRuntime, LaneLogProxySpec, LaneStartSpec, RuntimeBackend, RuntimeBackendKind,
     TmuxRuntime, backend_for, resolve_backend, run_lane_log_proxy,
 };
-pub use worktree::{WorktreeProvision, provision_worktree, remove_worktree_if_expired};
+pub use worktree::{
+    ProvisionedWorktree, WorktreeProvision, provision_worktree, remove_worktree_if_expired,
+};

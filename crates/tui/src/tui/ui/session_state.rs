@@ -546,76 +546,35 @@ pub(crate) fn restore_message_submit_denial(
     app.needs_redraw = true;
 }
 
-pub(crate) fn launch_worktree_slug(requested: &str) -> String {
-    let requested = requested.trim();
-    if requested.is_empty() {
-        return format!("session-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+/// Resume one recent-work row from the startup card by session id. Mirrors
+/// `/resume <id>`: the card dissolves and the saved session loads through
+/// the normal `LoadSession` path; a session that vanished behind the card
+/// leaves the card up with a status saying why instead of stranding the
+/// user on an empty stage.
+pub(crate) fn resume_launch_session(app: &mut App, session_id: &str) -> commands::CommandResult {
+    let failed = |app: &mut App, err: &str| {
+        app.launch.status = Some(
+            app.tr(MessageId::LaunchResumeFailed)
+                .replace("{error}", err),
+        );
+        commands::CommandResult::ok()
+    };
+    let manager = match crate::session_manager::SessionManager::default_location() {
+        Ok(manager) => manager,
+        Err(err) => return failed(app, &err.to_string()),
+    };
+    let saved = match manager.load_session(session_id) {
+        Ok(saved) => saved,
+        Err(err) => return failed(app, &err.to_string()),
+    };
+    let path = manager
+        .sessions_dir()
+        .join(format!("{}.json", saved.metadata.id));
+    if !path.exists() {
+        return failed(app, "saved session file is gone");
     }
-    let mut slug = String::new();
-    let mut separator = false;
-    for ch in requested.chars() {
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch.to_ascii_lowercase());
-            separator = false;
-        } else if matches!(ch, '-' | '_' | ' ' | '/' | '.') && !slug.is_empty() && !separator {
-            slug.push('-');
-            separator = true;
-        }
-    }
-    while slug.ends_with('-') {
-        slug.pop();
-    }
-    if slug.is_empty() {
-        format!("session-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"))
-    } else {
-        slug
-    }
-}
-
-pub(crate) fn launch_worktree_spec(
-    workspace: &std::path::Path,
-    requested: &str,
-) -> Result<codewhale_lane::WorktreeProvision> {
-    let output = std::process::Command::new("git")
-        .current_dir(workspace)
-        .args(["rev-parse", "--show-toplevel"])
-        .output()
-        .context("inspect Git repository for new worktree")?;
-    if !output.status.success() {
-        anyhow::bail!("new worktree requires a Git repository");
-    }
-    let repo_root = PathBuf::from(String::from_utf8(output.stdout)?.trim());
-    let repo_name = repo_root
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or("workspace");
-    let slug = launch_worktree_slug(requested);
-    let parent = repo_root.parent().unwrap_or(repo_root.as_path());
-    let path = parent
-        .join(".codewhale-worktrees")
-        .join(format!("{repo_name}-{slug}"));
-    if path.exists() {
-        anyhow::bail!("worktree path already exists: {}", path.display());
-    }
-    Ok(codewhale_lane::WorktreeProvision {
-        repo_root,
-        branch: format!("codex/{slug}"),
-        path,
-        base_ref: Some("HEAD".to_string()),
-    })
-}
-
-pub(crate) async fn provision_launch_worktree(
-    workspace: PathBuf,
-    requested: String,
-) -> Result<PathBuf> {
-    let spec = launch_worktree_spec(&workspace, &requested)?;
-    let provisioned =
-        tokio::task::spawn_blocking(move || codewhale_lane::provision_worktree(&spec))
-            .await
-            .context("new worktree task failed")??;
-    Ok(provisioned.path)
+    app.launch.dissolve_card(app.ambient_clock_ms);
+    commands::CommandResult::action(AppAction::LoadSession(path))
 }
 
 pub(crate) fn begin_launch_session(
@@ -1191,6 +1150,52 @@ mod stall_outbox_tests {
         assert!(
             !dir.path().join("outbox.jsonl").exists(),
             "no outbox file must be created when the feature is off"
+        );
+    }
+}
+
+#[cfg(test)]
+mod launch_resume_tests {
+    use super::*;
+
+    /// A recent-work row that vanished behind the card must leave the card
+    /// up with a status — never strand the user on an empty stage.
+    #[test]
+    fn resume_missing_session_leaves_the_card_up_with_a_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            crate::test_support::test_tui_options(dir.path()),
+            &Config::default(),
+        );
+        app.launch.visible = true;
+        let result = resume_launch_session(&mut app, "no-such-session-000000");
+        assert!(result.action.is_none(), "nothing to load");
+        assert!(app.launch.visible, "the card stays up");
+        let status = app.launch.status.as_deref().expect("a status");
+        assert!(
+            status.contains("Resume failed"),
+            "the status says why: {status}"
+        );
+    }
+
+    /// The prominent new-session entry begins a fresh session in place.
+    #[test]
+    fn new_session_begins_a_fresh_session_and_leaves_the_card() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            crate::test_support::test_tui_options(dir.path()),
+            &Config::default(),
+        );
+        app.launch.visible = true;
+        let result = begin_launch_session(&mut app, None);
+        assert!(!app.launch.visible, "the session began");
+        assert!(
+            app.current_session_id.is_some(),
+            "a fresh session id was minted"
+        );
+        assert!(
+            matches!(result.action, Some(AppAction::SyncSession { .. })),
+            "the engine syncs the fresh session"
         );
     }
 }

@@ -172,6 +172,7 @@ fn workspace_prompt_omits_disabled_skills_without_configured_directory() {
         super::SkillDiscoveryMode::Compatible,
         "en",
         None,
+        super::MAX_AVAILABLE_SKILLS_CHARS,
     )
     .expect("enabled skill context");
 
@@ -275,8 +276,11 @@ fn render_available_skills_context_collapses_internal_whitespace() {
     assert!(line.contains("alpha beta gamma"), "got: {line:?}");
 }
 
+/// Three-tier fitting: when full descriptions overflow the budget the index
+/// shortens them, then drops to names-only — a skill's name never vanishes
+/// while the names themselves fit.
 #[test]
-fn render_available_skills_context_omits_overflowing_skills() {
+fn render_available_skills_context_keeps_every_name_when_descriptions_overflow() {
     let tmpdir = TempDir::new().unwrap();
     let big_desc = "y".repeat(super::MAX_SKILL_DESCRIPTION_CHARS - 20);
     for i in 0..200 {
@@ -287,9 +291,19 @@ fn render_available_skills_context_omits_overflowing_skills() {
     let rendered = crate::skills::render_available_skills_context(&tmpdir.path().join("skills"))
         .expect("skill context");
 
+    // 200 × ~380 chars of description is ~76k, far over the default budget:
+    // tier 1 cannot fit, so descriptions shrink or names stand alone.
+    for i in 0..200 {
+        let name = format!("- skill-{i:03}");
+        assert!(rendered.contains(&name), "missing {name}:\n{rendered}");
+    }
     assert!(
-        rendered.contains("additional skills omitted"),
-        "expected overflow notice"
+        !rendered.contains("additional skills omitted"),
+        "names fit the budget; omission is the last resort, not the first"
+    );
+    assert!(
+        !rendered.contains(&big_desc),
+        "a full-length description must not survive an overflowing index"
     );
     assert!(
         rendered.chars().count() <= super::MAX_AVAILABLE_SKILLS_CHARS,
@@ -297,11 +311,64 @@ fn render_available_skills_context_omits_overflowing_skills() {
     );
 }
 
+/// `Use when:` triggers survive shortening ahead of the summary — they are
+/// what the model routes on.
+#[test]
+fn render_skills_block_shortens_summary_before_trigger() {
+    let tmpdir = TempDir::new().unwrap();
+    let mut registry = super::SkillRegistry::default();
+    let summary = "s".repeat(300);
+    for i in 0..120 {
+        registry.skills.push(super::Skill {
+            name: format!("skill-{i:03}"),
+            description: format!("{summary} Use when: the user asks for widget {i}."),
+            localized_descriptions: std::collections::HashMap::new(),
+            invocation: super::SkillInvocation::ModelAndUser,
+            aliases: Vec::new(),
+            body: "body".to_string(),
+            path: tmpdir.path().join(format!("skill-{i:03}/SKILL.md")),
+            source: super::SkillSource::Native,
+        });
+    }
+    let rendered =
+        super::render_skills_block(&registry, "en", tmpdir.path()).expect("skill context");
+    let line = rendered
+        .lines()
+        .find(|l| l.starts_with("- skill-007:"))
+        .expect("row for skill-007");
+    assert!(
+        line.contains("Use when: the user asks for widget 7"),
+        "trigger must survive shortening intact:\n{line}"
+    );
+    assert!(
+        !line.contains(&summary),
+        "summary must be the half that shrinks:\n{line}"
+    );
+    assert!(rendered.chars().count() <= super::MAX_AVAILABLE_SKILLS_CHARS);
+}
+
+/// The budget follows the route window: a 1M route sees a much larger index
+/// than a small local window, both clamped to sane bounds.
+#[test]
+fn skills_prompt_budget_scales_with_context_window() {
+    let small = super::skills_prompt_budget_chars(Some(8_000));
+    let default = super::skills_prompt_budget_chars(None);
+    let large = super::skills_prompt_budget_chars(Some(1_000_000));
+    assert_eq!(small, 2_400, "floor holds for tiny windows");
+    assert_eq!(default, 25_600, "128k window × 4 chars × 5%");
+    assert_eq!(large, 40_000, "ceiling holds for 1M windows");
+    assert_eq!(
+        super::skills_prompt_budget_chars(Some(0)),
+        default,
+        "a zero window is treated as unknown"
+    );
+}
+
 #[test]
 fn render_skills_block_holds_budget_with_five_digit_omission_counts() {
     let tmpdir = TempDir::new().unwrap();
     let mut registry = super::SkillRegistry::default();
-    for i in 0..11_000 {
+    for i in 0..15_000 {
         registry.skills.push(super::Skill {
             name: format!("skill-{i:05}"),
             description: "x".to_string(),
@@ -423,9 +490,13 @@ fn render_skills_block_preserves_registry_precedence_under_prompt_budget() {
         rendered.contains("workspace-priority"),
         "higher-precedence workspace skills must not be reordered behind globals:\n{rendered}"
     );
+    let first_row = rendered
+        .lines()
+        .find(|line| line.starts_with("- "))
+        .expect("at least one row");
     assert!(
-        rendered.contains("additional skills omitted"),
-        "fixture should exceed prompt budget"
+        first_row.starts_with("- workspace-priority"),
+        "registry order is render order:\n{rendered}"
     );
 }
 
@@ -1809,6 +1880,7 @@ fn configured_skill_prompt_uses_a_stable_root_in_entries_and_warnings() {
             super::SkillDiscoveryMode::Compatible,
             "en",
             None,
+            super::MAX_AVAILABLE_SKILLS_CHARS,
         )
         .expect("configured skill context");
 
@@ -1851,6 +1923,7 @@ fn default_workspace_skill_prompt_preserves_its_discoverable_path() {
             super::SkillDiscoveryMode::Compatible,
             "en",
             None,
+            super::MAX_AVAILABLE_SKILLS_CHARS,
         )
         .expect("workspace skill context");
 

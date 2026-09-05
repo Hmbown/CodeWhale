@@ -1,18 +1,20 @@
 //! Ocean Work Graph surface ownership.
 //!
-//! This is called the "rail" or the "work surface". Fresh settings default to
-//! `Left`; `Top` remains a supported horizontal strip under the header and
-//! above the transcript. It is not the header ([`crate::tui::underwater`]) and
-//! not the footer.
+//! This is called the "workbar" or the "work surface". Fresh settings default
+//! to `Bottom` (round 3, 2026-09-01); `Top`, `Left`, and `Right` remain
+//! supported and `Off` hides it. It is not the header
+//! ([`crate::tui::underwater`]) and not the footer.
 //!
 //! Two settings are orthogonal and are routinely mixed up:
 //!
-//! - **placement** — where it renders. `Top` | `Left` (fresh default) | `Right` |
-//!   `Off`. Drag-resizing the divider persists `work_surface_top_height`
-//!   (5..=16) or `work_surface_side_width` (26..=80) to `settings.toml`.
+//! - **placement** — where it renders. `Bottom` (fresh default) | `Top` |
+//!   `Left` | `Right` | `Off`. Drag-resizing the divider persists
+//!   `work_surface_top_height` (5..=16) or `work_surface_side_width`
+//!   (26..=80) to `settings.toml`.
 //! - **panel** — what it shows. [`RailPanel`]: `Tasks` (default) | `Agents` |
-//!   `Context` | `Pinned`, from the `rail_panel` setting. The legacy
-//!   `sidebar_focus` key migrates into it.
+//!   `Background` | `Files` | `Notepad` | `Context` | `Git` | `Price`, from
+//!   the `rail_panel` setting. The legacy `sidebar_focus` key migrates into
+//!   it.
 //!
 //! So the word "Pinned" on screen is a PANEL name, not a state.
 //!

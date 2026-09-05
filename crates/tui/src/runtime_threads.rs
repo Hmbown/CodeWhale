@@ -2583,6 +2583,7 @@ fn merge_usage_totals(into: &mut UsageTotals, from: &UsageTotals) {
     into.turns = into.turns.saturating_add(from.turns);
 }
 
+#[allow(clippy::too_many_arguments)] // pre-existing baseline signature; FEAT-022 gate repair
 fn accumulate_runtime_cost_coverage(
     audit: Option<&crate::pricing::TurnCostAudit>,
     priced_turns: &mut u64,
@@ -8318,42 +8319,30 @@ impl RuntimeThreadManager {
                     }
                     TurnItemKind::ToolCall => {
                         let meta = item.metadata.as_ref();
-                        let is_tool_result = meta.and_then(|m| m.get("tool_result_for")).is_some();
-                        if is_tool_result {
-                            flush_assistant(&mut assistant_blocks, &mut messages);
-                            let tool_use_id = meta
-                                .and_then(|m| m.get("tool_result_for"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let content = item.detail.unwrap_or_default();
-                            let is_error = meta
-                                .and_then(|m| m.get("is_error"))
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false);
-                            let content_blocks = meta
-                                .and_then(|m| m.get("content_blocks"))
-                                .and_then(|v| v.as_array())
-                                .cloned();
-                            user_blocks.push(ContentBlock::ToolResult {
-                                tool_use_id,
-                                content,
-                                is_error: if is_error { Some(true) } else { None },
-                                content_blocks,
-                            });
-                        } else {
+                        let meta_str = |key: &str| {
+                            meta.and_then(|m| m.get(key))
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string()
+                        };
+                        let tool_use_id = meta_str("tool_use_id");
+                        let tool_name = meta_str("tool_name");
+                        let tool_result_for = meta_str("tool_result_for");
+                        // Completed live turns persist the call and its result
+                        // on one item; seeded history persists them as two.
+                        // Both shapes must rebuild the paired tool_call /
+                        // tool_result. Snapshots persisted before tool identity
+                        // was durable carry neither side: skip them rather than
+                        // replay an empty tool_call shell that strict
+                        // OpenAI-compatible endpoints reject (#5823).
+                        if !tool_use_id.is_empty() && !tool_name.is_empty() {
                             flush_user(&mut user_blocks, &mut messages);
-                            let tool_use_id = meta
-                                .and_then(|m| m.get("tool_use_id"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let tool_name = meta
-                                .and_then(|m| m.get("tool_name"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let input_str = item.detail.unwrap_or_default();
+                            let input_str = meta
+                                .and_then(|m| m.get("tool_input"))
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                                .or_else(|| item.detail.clone())
+                                .unwrap_or_default();
                             let input: serde_json::Value =
                                 serde_json::from_str(&input_str).unwrap_or(serde_json::Value::Null);
                             assistant_blocks.push(ContentBlock::ToolUse {
@@ -8362,6 +8351,24 @@ impl RuntimeThreadManager {
                                 input,
                                 caller: None,
                                 thought_signature: None,
+                            });
+                        }
+                        if !tool_result_for.is_empty() {
+                            flush_assistant(&mut assistant_blocks, &mut messages);
+                            let content = item.detail.unwrap_or_default();
+                            let is_error = meta
+                                .and_then(|m| m.get("is_error"))
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false);
+                            let content_blocks = meta
+                                .and_then(|m| m.get("content_blocks"))
+                                .and_then(Value::as_array)
+                                .cloned();
+                            user_blocks.push(ContentBlock::ToolResult {
+                                tool_use_id: tool_result_for,
+                                content,
+                                is_error: if is_error { Some(true) } else { None },
+                                content_blocks,
                             });
                         }
                     }
@@ -8701,6 +8708,7 @@ impl RuntimeThreadManager {
                     tool_items.insert(id.clone(), item_id.clone());
                     let kind = tool_kind_for_name(&name);
                     let summary = summarize_text(&format!("{name} started"), SUMMARY_LIMIT);
+                    let input_str = serde_json::to_string(&input).unwrap_or_default();
                     let item = TurnItemRecord {
                         schema_version: CURRENT_RUNTIME_SCHEMA_VERSION,
                         id: item_id.clone(),
@@ -8708,8 +8716,17 @@ impl RuntimeThreadManager {
                         kind,
                         status: TurnItemLifecycleStatus::InProgress,
                         summary,
-                        detail: Some(serde_json::to_string(&input).unwrap_or_default()),
-                        metadata: None,
+                        detail: Some(input_str.clone()),
+                        // The tool identity must live in the durable item
+                        // snapshot: restart history rebuild reads it back to
+                        // re-emit provider tool_calls. Without it a restart
+                        // replays empty id/name/arguments shells that strict
+                        // OpenAI-compatible endpoints reject (#5823).
+                        metadata: Some(json!({
+                            "tool_use_id": id.clone(),
+                            "tool_name": name.clone(),
+                            "tool_input": input_str,
+                        })),
                         artifact_refs: Vec::new(),
                         started_at: Some(Utc::now()),
                         ended_at: None,
@@ -8770,7 +8787,30 @@ impl RuntimeThreadManager {
                                         SUMMARY_LIMIT,
                                     );
                                     item.detail = Some(output.content.clone());
-                                    item.metadata = output.metadata.clone();
+                                    // `detail` is now the tool output, so the
+                                    // call identity persisted at start must be
+                                    // carried through metadata. Mark the
+                                    // terminal result too so restart history
+                                    // rebuild can re-emit the paired
+                                    // tool_call/tool_result (#5823).
+                                    let mut meta = match output.metadata {
+                                        Some(Value::Object(map)) => Value::Object(map),
+                                        _ => json!({}),
+                                    };
+                                    if let Some(obj) = meta.as_object_mut() {
+                                        if let Some(started) =
+                                            item.metadata.as_ref().and_then(Value::as_object)
+                                        {
+                                            for key in ["tool_use_id", "tool_name", "tool_input"] {
+                                                if let Some(value) = started.get(key) {
+                                                    obj.insert(key.to_string(), value.clone());
+                                                }
+                                            }
+                                        }
+                                        obj.insert("tool_result_for".to_string(), json!(id));
+                                        obj.insert("is_error".to_string(), json!(!output.success));
+                                    }
+                                    item.metadata = Some(meta);
                                 }
                             }
                             Err(err) => {

@@ -165,44 +165,55 @@ assert_status GET "/v1/threads/summary" 200
 
 stop_server
 
-# ── Test Group 3: Binding warnings ──────────────────────────────────────────
+# ── Test Group 3: Non-loopback binding rejection ────────────────────────────
 
 PORT=$(pick_port)
 
-log "=== Test Group 3: Binding warnings (0.0.0.0 default) ==="
-STDOUT_FILE=$(mktemp)
-"$BINARY" serve --port "$PORT" --mobile --insecure > "$STDOUT_FILE" 2>&1 &
-SERVER_PID=$!
-SERVER_READY=0
-for _ in $(seq 1 30); do
-    if curl -sf --max-time 2 "http://127.0.0.1:${PORT}/health" > /dev/null 2>&1; then
-        SERVER_READY=1
-        break
-    fi
-    sleep 0.3
-done
-if [[ "$SERVER_READY" -ne 1 ]]; then
-    rm -f "$STDOUT_FILE"
-    fail "Server did not become ready on port $PORT"
-    cleanup
-    exit 1
-fi
-STDOUT=$(cat "$STDOUT_FILE")
-rm -f "$STDOUT_FILE"
+log "=== Test Group 3: Reject non-loopback mobile binding ==="
+set +e
+BIND_OUTPUT=$(python3 - "$BINARY" "$PORT" <<'PY'
+import os
+import signal
+import subprocess
+import sys
 
-if echo "$STDOUT" | grep -q "0.0.0.0"; then
-    pass "stdout/stderr contains 0.0.0.0 binding warning"
+probe = subprocess.Popen(
+    [sys.argv[1], "serve", "--host", "0.0.0.0", "--port", sys.argv[2], "--mobile", "--insecure"],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    start_new_session=True,
+)
+try:
+    output, _ = probe.communicate(timeout=10)
+except subprocess.TimeoutExpired:
+    try:
+        os.killpg(probe.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    output, _ = probe.communicate()
+    sys.stdout.buffer.write(output)
+    print("Non-loopback rejection probe timed out; terminated and reaped its process group.")
+    sys.exit(124)
+sys.stdout.buffer.write(output)
+sys.exit(probe.returncode)
+PY
+)
+BIND_STATUS=$?
+set -e
+
+if [[ "$BIND_STATUS" -eq 124 ]]; then
+    fail "mobile did not reject a 0.0.0.0 binding within 10 seconds"
+elif [[ "$BIND_STATUS" -ne 0 ]]; then
+    pass "mobile rejects a 0.0.0.0 binding"
 else
-    fail "stdout/stderr missing 0.0.0.0 binding warning"
+    fail "mobile unexpectedly accepted a 0.0.0.0 binding"
 fi
 
-if echo "$STDOUT" | grep -qi "mobile"; then
-    pass "stdout contains mobile URL hint"
+if echo "$BIND_OUTPUT" | grep -qi "loopback-only"; then
+    pass "rejection explains the loopback-only boundary"
 else
-    fail "stdout missing mobile URL hint"
+    fail "rejection missing loopback-only guidance"
 fi
-
-stop_server
 
 # ── summary ──────────────────────────────────────────────────────────────────
 

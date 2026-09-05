@@ -759,7 +759,7 @@ mod tests {
         }
 
         app.configured_sandbox_mode = None;
-        app.mode = AppMode::Yolo;
+        app.mode = AppMode::Agent;
         let yolo = format_status(&app);
         assert!(yolo.contains("sandbox disabled, network unrestricted"));
     }

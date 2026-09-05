@@ -43,7 +43,9 @@ use crate::model_profile::{
 };
 use crate::models_dev_live::{self, ModelsDevFreshness};
 use crate::palette;
-use crate::provider_lake::{catalog_model_count_for_provider, catalog_offering_for_model};
+use crate::provider_lake::{
+    all_catalog_models_for_provider, catalog_model_count_for_provider, catalog_offering_for_model,
+};
 use crate::provider_readiness::{
     CredentialState, ProviderReadinessSnapshot, ProviderRouteIdentity, ResolvedProviderReadiness,
     credential_state_for_provider, route_identity_for_model,
@@ -222,6 +224,23 @@ pub struct ProviderPickerView {
     template_selected_idx: usize,
     template_row_hitboxes: RefCell<Vec<(Rect, usize)>>,
     last_template_mouse_selected: Option<usize>,
+    /// Pointer geometry for the two-pane picker (Slice D): provider-strip
+    /// rows on the left, model rows on the right/under, recorded during
+    /// render like the template hitboxes above.
+    list_row_hitboxes: RefCell<Vec<(Rect, usize)>>,
+    model_row_hitboxes: RefCell<Vec<(Rect, usize)>>,
+    consent_row_hitboxes: RefCell<Vec<(Rect, usize)>>,
+    /// Pointer hover positions. Advisory only — hover never moves the
+    /// keyboard selection; it renders with the shared
+    /// [`crate::tui::menu_style::hovered_row_style`] primitive.
+    hovered_list_idx: Option<usize>,
+    hovered_model_idx: Option<usize>,
+    hovered_consent_idx: Option<usize>,
+    /// Last clicked row per pane for single-click-select /
+    /// double-click-activate rhythm (mirrors the model picker).
+    last_list_mouse_selected: Option<usize>,
+    last_model_mouse_selected: Option<usize>,
+    hovered_template_idx: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,7 +256,6 @@ pub struct ProviderDashboardRow {
     pub available_model_count: usize,
     pub default_route: ProviderDefaultRoute,
     pub request_concurrency: ProviderRequestConcurrencySummary,
-    pub usage_meter: String,
     pub reasoning: ProviderReasoningSummary,
     pub capabilities: ProviderCapabilityBadges,
     pub model_origin: ProviderModelOrigin,
@@ -584,11 +602,11 @@ impl ProviderDashboardRow {
                 xai_oauth_ready,
             )
         };
-        let usage_meter = if matches!(auth_status, ProviderAuthStatus::ImportedTokenUnavailable) {
-            "usage: Kimi API key required".to_string()
-        } else {
-            usage_meter_for(provider)
-        };
+        // Slice D: cost lives at the model level (per-model $/mtok in the
+        // models pane and the model-pick stage), never on the provider row.
+        // Auth guidance that used to ride the provider meter (e.g. the Kimi
+        // imported-token hint) travels on `messages` via
+        // `missing_auth_message` below instead.
         let provider_id = provider_id_override
             .map(str::to_string)
             .unwrap_or_else(|| provider.as_str().to_string());
@@ -628,7 +646,6 @@ impl ProviderDashboardRow {
                     wire_model: "legacy alias".to_string(),
                 },
                 request_concurrency,
-                usage_meter,
                 reasoning: ProviderReasoningSummary::unknown(provider, config),
                 capabilities: ProviderCapabilityBadges::unknown(),
                 model_origin,
@@ -687,7 +704,6 @@ impl ProviderDashboardRow {
             base_url,
             supported_protocols,
             default_route,
-            resolved_pricing,
             route_ok,
             route_context_window,
             route_context_window_source,
@@ -710,7 +726,6 @@ impl ProviderDashboardRow {
                         logical_model: candidate.logical_model().raw().to_string(),
                         wire_model: candidate.wire_model_id().as_str().to_string(),
                     },
-                    pricing_label(provider, candidate.pricing()),
                     candidate.validation().ok,
                     Some(resolution.context_window.tokens),
                     Some(resolution.context_window.source.label().to_string()),
@@ -731,24 +746,12 @@ impl ProviderDashboardRow {
                         logical_model: configured_model.unwrap_or_else(|| "invalid".to_string()),
                         wire_model: "unresolved".to_string(),
                     },
-                    usage_meter.clone(),
                     false,
                     None,
                     None,
                 )
             }
         };
-        let resolved_pricing =
-            if matches!(auth_status, ProviderAuthStatus::ImportedTokenUnavailable) {
-                usage_meter
-            } else if provider == ApiProvider::Ollama
-                && !crate::config::provider_route_is_keyless_self_hosted(provider, &base_url)
-                && resolved_pricing == "cost: local"
-            {
-                "cost: unknown".to_string()
-            } else {
-                resolved_pricing
-            };
 
         if matches!(
             auth_status,
@@ -808,7 +811,6 @@ impl ProviderDashboardRow {
             available_model_count,
             default_route,
             request_concurrency,
-            usage_meter: resolved_pricing,
             reasoning,
             capabilities,
             model_origin,
@@ -865,11 +867,12 @@ impl ProviderDashboardRow {
             .label()
             .map(|label| format!(" | {label}"))
             .unwrap_or_default();
+        // Slice D: no provider-level cost — per-model $/mtok lives in the
+        // models pane and the model-pick stage.
         format!(
-            "{} | {} | {} | {} | base:{}{} | route:{}{} origin:{} | {} | {}{} | catalog:{}{}",
+            "{} | {} | {} | base:{}{} | route:{}{} origin:{} | {} | {}{} | catalog:{}{}",
             self.readiness.label(),
             self.auth_status.label(),
-            self.usage_meter,
             self.supported_protocols.join("+"),
             compact_base_url(&self.base_url),
             self_hosted,
@@ -1420,43 +1423,76 @@ fn readiness_for(
     crate::provider_readiness::resolve_with_identity(identity, credential, route_ok, health)
 }
 
-fn usage_meter_for(provider: ApiProvider) -> String {
-    match provider {
-        ApiProvider::Ollama | ApiProvider::Sglang | ApiProvider::Vllm => "cost: local".to_string(),
-        ApiProvider::OpenaiCodex => "usage: Codex OAuth quota".to_string(),
-        ApiProvider::XiaomiMimo => "cost: token-plan".to_string(),
-        // OpenCode ships two billing tracks off one account; the rows must not
-        // both read as generic metering (#4526).
-        ApiProvider::OpencodeGo => "usage: OpenCode Go subscription".to_string(),
-        ApiProvider::OpencodeZen => "cost: OpenCode Zen pay-as-you-go".to_string(),
-        _ => "cost: unknown".to_string(),
+/// Slice D: cost lives at the model level. Per-model $/mtok in/out projected
+/// from the merged catalog offering, with honest non-token fallbacks. `None`
+/// pricing is an unknown, never a fabricated zero.
+///
+/// Provider-agnostic fallbacks keep the label truthful when the catalog has
+/// no row: self-hosted routes are local, Codex rides OAuth quota, and
+/// everything else is honestly unknown.
+fn model_cost_label(provider: ApiProvider, model: &str) -> String {
+    // OpenCode Go spends a subscription allowance, not per-token dollars, so
+    // a catalog token price would misreport it as metered spend (#4526).
+    if provider == ApiProvider::OpencodeGo {
+        return "plan".to_string();
     }
+    let pricing =
+        catalog_offering_for_model(provider, model).map(|offering| offering.to_offering().pricing);
+    model_cost_label_for_pricing(provider, pricing.as_ref())
 }
 
-fn pricing_label(provider: ApiProvider, pricing: Option<&PricingSku>) -> String {
-    // OpenCode Go spends a subscription allowance, not per-token dollars, so a
-    // catalog token price would misreport it as metered spend.
+/// Slice D two-pane picker: `(model, per-model cost, is_default_route)` rows
+/// for the models pane beside/under the provider strip. The default route's
+/// model sorts first so the eye lands on what Enter would use; the rest are
+/// alphabetical. Falls back to the default route when the catalog has no rows
+/// for the provider, so the pane never renders empty.
+fn provider_pane_models(row: &ProviderDashboardRow, limit: usize) -> Vec<(String, String, bool)> {
+    let mut models = all_catalog_models_for_provider(row.provider);
+    if models.is_empty() && !row.default_route.logical_model.trim().is_empty() {
+        models.push(row.default_route.logical_model.clone());
+    }
+    models.sort_by_key(|model| model.to_ascii_lowercase());
+    models.dedup_by_key(|model| model.to_ascii_lowercase());
+    let default = row.default_route.logical_model.clone();
+    let wire = row.default_route.wire_model.clone();
+    models.sort_by_key(|model| {
+        (!model.eq_ignore_ascii_case(&default) && !model.eq_ignore_ascii_case(&wire)) as u8
+    });
+    models
+        .into_iter()
+        .take(limit.max(1))
+        .map(|model| {
+            let is_default =
+                model.eq_ignore_ascii_case(&default) || model.eq_ignore_ascii_case(&wire);
+            let price = model_cost_label(row.provider, &model);
+            (model, price, is_default)
+        })
+        .collect()
+}
+
+fn model_cost_label_for_pricing(provider: ApiProvider, pricing: Option<&PricingSku>) -> String {
+    // OpenCode Go spends a subscription allowance, not per-token dollars, so
+    // a catalog token price would misreport it as metered spend (#4526).
     if provider == ApiProvider::OpencodeGo {
-        return usage_meter_for(provider);
+        return "plan".to_string();
     }
     match pricing {
         Some(PricingSku::Token {
             input_per_mtok,
             output_per_mtok,
         }) => match (input_per_mtok, output_per_mtok) {
-            (Some(input), Some(output)) => format!("cost: ${input:.2}/${output:.2} mtok"),
-            _ => "cost: token".to_string(),
+            (Some(input), Some(output)) => format!("${input:.2}/${output:.2} mtok"),
+            _ => "token-priced".to_string(),
         },
-        Some(PricingSku::SubscriptionQuota { used_pct, .. }) => used_pct.map_or_else(
-            || "usage: subscription quota".to_string(),
-            |pct| format!("usage: subscription {pct:.0}%"),
-        ),
-        Some(PricingSku::AccountCredits { balance }) => balance.map_or_else(
-            || "usage: account credits".to_string(),
-            |balance| format!("usage: ${balance:.2} credits"),
-        ),
-        Some(PricingSku::LocalOrNotApplicable) => "cost: local".to_string(),
-        Some(PricingSku::UnknownOrStale) | None => usage_meter_for(provider),
+        Some(PricingSku::SubscriptionQuota { .. }) => "plan".to_string(),
+        Some(PricingSku::AccountCredits { .. }) => "credits".to_string(),
+        Some(PricingSku::LocalOrNotApplicable) => "local".to_string(),
+        Some(PricingSku::UnknownOrStale) | None => match provider {
+            ApiProvider::Ollama | ApiProvider::Sglang | ApiProvider::Vllm => "local".to_string(),
+            ApiProvider::OpenaiCodex => "oauth quota".to_string(),
+            ApiProvider::OpencodeZen => "pay-as-you-go".to_string(),
+            _ => "price ?".to_string(),
+        },
     }
 }
 
@@ -1636,6 +1672,15 @@ impl ProviderPickerView {
             template_selected_idx: 0,
             template_row_hitboxes: RefCell::new(Vec::new()),
             last_template_mouse_selected: None,
+            list_row_hitboxes: RefCell::new(Vec::new()),
+            model_row_hitboxes: RefCell::new(Vec::new()),
+            consent_row_hitboxes: RefCell::new(Vec::new()),
+            hovered_list_idx: None,
+            hovered_model_idx: None,
+            hovered_consent_idx: None,
+            last_list_mouse_selected: None,
+            last_model_mouse_selected: None,
+            hovered_template_idx: None,
         };
         picker.restore_memory(memory);
         picker
@@ -2626,6 +2671,10 @@ impl ProviderPickerView {
             .unwrap_or(0);
         let visible_rows = usize::from(layout.list.height);
         let visible_start = Self::visible_start(selected_pos, filtered.len(), visible_rows);
+        // Slice D two-pane picker: the provider strip lives on the left and
+        // every visible row is clickable, so record this frame's geometry for
+        // hover + click handling (mirrors the model picker hitboxes).
+        self.list_row_hitboxes.borrow_mut().clear();
         let mut lines: Vec<Line> = Vec::with_capacity(visible_rows);
         for (pos, (idx, row)) in filtered
             .iter()
@@ -2643,8 +2692,11 @@ impl ProviderPickerView {
             } else {
                 Style::default()
             };
+            let is_hovered = self.hovered_list_idx == Some(*idx);
             let label_style = if is_selected {
                 menu_style::selected_row_style_with_fg(palette::SELECTION_TEXT)
+            } else if is_hovered {
+                menu_style::hovered_row_style()
             } else {
                 Style::default().fg(palette::TEXT_PRIMARY)
             };
@@ -2695,6 +2747,10 @@ impl ProviderPickerView {
                     ));
                 }
             }
+            let row_y = layout.list.y.saturating_add(lines.len() as u16);
+            self.list_row_hitboxes
+                .borrow_mut()
+                .push((Rect::new(layout.list.x, row_y, layout.list.width, 1), *idx));
             lines.push(line);
         }
         Paragraph::new(lines).render(layout.list, buf);
@@ -2761,11 +2817,7 @@ impl ProviderPickerView {
                 Style::default().fg(palette::TEXT_MUTED),
             )),
             Line::from(Span::styled(
-                format!(
-                    "Protocol: {} | Usage: {}",
-                    row.supported_protocols.join("+"),
-                    row.usage_meter
-                ),
+                format!("Protocol: {}", row.supported_protocols.join("+")),
                 Style::default().fg(palette::TEXT_MUTED),
             )),
             Line::from(Span::styled(
@@ -2852,6 +2904,46 @@ impl ProviderPickerView {
                 .replace("{revoke}", &status.revoke_command);
             lines.push(Line::from(Span::styled(
                 revoke,
+                Style::default().fg(palette::TEXT_MUTED),
+            )));
+        }
+        // Slice D two-pane picker: the selected provider's models live
+        // beside (wide) or under (narrow) the provider strip, each with its
+        // own $/mtok in/out from the catalog. Last on purpose: when the pane
+        // is short, clipping eats models — never the consent block above.
+        // Display-only — choosing a model happens in the model picker (`M`)
+        // or the guided setup flow.
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "Models · $in/$out per mtok",
+            Style::default()
+                .fg(palette::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        )));
+        let pane_models = provider_pane_models(row, 8);
+        let name_budget = usize::from(inner.width).saturating_sub(22).max(8);
+        for (model, price, is_default) in &pane_models {
+            let name = crate::tui::ui_text::truncate_line_to_width(model, name_budget);
+            let mut spans = vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(name, Style::default().fg(palette::TEXT_PRIMARY)),
+                Span::styled(
+                    format!("  {price}"),
+                    Style::default().fg(palette::TEXT_MUTED),
+                ),
+            ];
+            if *is_default {
+                spans.push(Span::styled(
+                    "  (default)",
+                    Style::default().fg(palette::WHALE_ACTION),
+                ));
+            }
+            lines.push(Line::from(spans));
+        }
+        let total_models = all_catalog_models_for_provider(row.provider).len();
+        if total_models > pane_models.len() {
+            lines.push(Line::from(Span::styled(
+                format!("  +{} more · M for all", total_models - pane_models.len()),
                 Style::default().fg(palette::TEXT_MUTED),
             )));
         }
@@ -3155,45 +3247,79 @@ impl ProviderPickerView {
                 ActionHint::new("Esc", self.tr(MessageId::SetupActionBack)),
             ],
         );
+        // Slice D explicit-consent gate, Gate 1 of 2: choose access. The
+        // consent backend (#5779) and every localized string are unchanged —
+        // only the gate framing and the clickable rows are new.
+        self.consent_row_hitboxes.borrow_mut().clear();
         let selected = self.external_consent_choice;
-        let row = |choice, label: Cow<'static, str>, detail: Cow<'static, str>| {
-            let marker = crate::tui::glyphs::selection_marker(selected == choice);
-            Line::from(vec![
-                Span::styled(
-                    format!("{marker} {label}"),
-                    Style::default().fg(if selected == choice {
-                        palette::WHALE_ACTION
-                    } else {
-                        palette::TEXT_PRIMARY
-                    }),
-                ),
+        let options = [
+            (
+                ExternalConsentChoice::Disabled,
+                '1',
+                self.tr(MessageId::ProviderExternalDisabledLabel),
+                self.tr(MessageId::ProviderExternalDisabledDetail),
+            ),
+            (
+                ExternalConsentChoice::ReadOnly,
+                '2',
+                self.tr(MessageId::ProviderExternalReadOnlyLabel),
+                self.tr(MessageId::ProviderExternalReadOnlyDetail),
+            ),
+            (
+                ExternalConsentChoice::ManagedUnavailable,
+                '3',
+                self.tr(MessageId::ProviderExternalManagedLabel),
+                self.tr(MessageId::ProviderExternalManagedDetail),
+            ),
+        ];
+        // Options render first at fixed rows (header + one line per
+        // option) so hitboxes stay exact; the wrapping explainer lines live
+        // below where wrapping cannot disturb pointer geometry.
+        let mut lines = vec![Line::from(Span::styled(
+            "Gate 1 of 2 · choose access",
+            Style::default()
+                .fg(palette::TEXT_PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ))];
+        for (slot, (choice, digit, label, detail)) in options.iter().enumerate() {
+            let is_selected = selected == *choice;
+            let is_hovered = self.hovered_consent_idx == Some(slot);
+            let marker = crate::tui::glyphs::selection_marker(is_selected);
+            let label_style = if is_selected {
+                menu_style::selected_row_style_with_fg(palette::WHALE_ACTION)
+            } else if is_hovered {
+                menu_style::hovered_row_style()
+            } else {
+                Style::default().fg(palette::TEXT_PRIMARY)
+            };
+            let mut label_line = Line::from(vec![
+                Span::styled(format!("{marker} {digit}. {label}"), label_style),
                 Span::styled(
                     format!(" · {detail}"),
                     Style::default().fg(palette::TEXT_MUTED),
                 ),
-            ])
-        };
-        Paragraph::new(vec![
-            Line::from(self.tr(MessageId::ProviderExternalChoiceIntro)),
-            Line::from(""),
-            row(
-                ExternalConsentChoice::Disabled,
-                self.tr(MessageId::ProviderExternalDisabledLabel),
-                self.tr(MessageId::ProviderExternalDisabledDetail),
-            ),
-            row(
-                ExternalConsentChoice::ReadOnly,
-                self.tr(MessageId::ProviderExternalReadOnlyLabel),
-                self.tr(MessageId::ProviderExternalReadOnlyDetail),
-            ),
-            row(
-                ExternalConsentChoice::ManagedUnavailable,
-                self.tr(MessageId::ProviderExternalManagedLabel),
-                self.tr(MessageId::ProviderExternalManagedDetail),
-            ),
-        ])
-        .wrap(Wrap { trim: false })
-        .render(content, buf);
+            ]);
+            if is_selected {
+                label_line.style = menu_style::selected_row_bg_style();
+            }
+            lines.push(label_line);
+            let row_y = content.y.saturating_add(1 + slot as u16);
+            self.consent_row_hitboxes
+                .borrow_mut()
+                .push((Rect::new(content.x, row_y, content.width, 1), slot));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            self.tr(MessageId::ProviderExternalChoiceIntro),
+            Style::default().fg(palette::TEXT_MUTED),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Enter continues · nothing is read or saved until Gate 2 confirms.",
+            Style::default().fg(palette::TEXT_MUTED),
+        )));
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: true })
+            .render(content, buf);
     }
 
     fn render_external_consent_confirm(&self, area: Rect, buf: &mut Buffer) {
@@ -3232,6 +3358,15 @@ impl ProviderPickerView {
         // consequence before any validate/read/persist may run.
         let row = &self.rows[self.selected_idx];
         Paragraph::new(vec![
+            // Slice D explicit-consent gate, Gate 2 of 2: review the exact
+            // disclosure before granting. Backend (#5779) unchanged.
+            Line::from(Span::styled(
+                "Gate 2 of 2 · review before granting",
+                Style::default()
+                    .fg(palette::TEXT_PRIMARY)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
             Line::from(format!("{provider_label}: {}", provider.as_str())),
             Line::from(format!(
                 "{route_label}: {} · {}",
@@ -3355,6 +3490,11 @@ impl ProviderPickerView {
             self.model_options.len(),
             visible_rows,
         );
+        // Slice D: every model row carries its own $/mtok from the catalog
+        // and every visible row is clickable, so record this frame's geometry
+        // for hover + click handling.
+        self.model_row_hitboxes.borrow_mut().clear();
+        let model_provider = self.rows[self.selected_idx].provider;
         let mut lines: Vec<Line> = Vec::with_capacity(visible_rows);
         for (idx, model) in self
             .model_options
@@ -3364,9 +3504,12 @@ impl ProviderPickerView {
             .take(visible_rows)
         {
             let is_selected = idx == self.model_selected_idx;
+            let is_hovered = self.hovered_model_idx == Some(idx);
             let arrow = crate::tui::glyphs::selection_marker(is_selected);
             let label_style = if is_selected {
                 menu_style::selected_row_style_with_fg(palette::SELECTION_TEXT)
+            } else if is_hovered {
+                menu_style::hovered_row_style()
             } else {
                 Style::default().fg(palette::TEXT_PRIMARY)
             };
@@ -3379,24 +3522,37 @@ impl ProviderPickerView {
             } else {
                 ""
             };
-            let mut line = Line::from(vec![
+            // Slice D: cost moved off the provider level down to the model.
+            let price = model_cost_label(model_provider, model);
+            let mut spans = vec![
                 Span::styled(format!(" {arrow} {model}"), label_style),
-                if default_tag.is_empty() {
-                    Span::raw("")
-                } else {
-                    Span::styled(
-                        format!("  ({default_tag})"),
-                        if is_selected {
-                            menu_style::selected_row_style_with_fg(palette::TEXT_MUTED)
-                        } else {
-                            Style::default().fg(palette::TEXT_MUTED)
-                        },
-                    )
-                },
-            ]);
+                Span::styled(
+                    format!("  {price}"),
+                    if is_selected {
+                        menu_style::selected_row_style_with_fg(palette::TEXT_MUTED)
+                    } else {
+                        Style::default().fg(palette::TEXT_MUTED)
+                    },
+                ),
+            ];
+            if !default_tag.is_empty() {
+                spans.push(Span::styled(
+                    format!("  ({default_tag})"),
+                    if is_selected {
+                        menu_style::selected_row_style_with_fg(palette::TEXT_MUTED)
+                    } else {
+                        Style::default().fg(palette::TEXT_MUTED)
+                    },
+                ));
+            }
+            let mut line = Line::from(spans);
             if is_selected {
                 line.style = menu_style::selected_row_bg_style();
             }
+            let row_y = list_area.y.saturating_add(lines.len() as u16);
+            self.model_row_hitboxes
+                .borrow_mut()
+                .push((Rect::new(list_area.x, row_y, list_area.width, 1), idx));
             lines.push(line);
         }
         if lines.is_empty() {
@@ -3732,8 +3888,12 @@ impl ProviderPickerView {
             let selected_row = idx == self.template_selected_idx;
             let marker = crate::tui::glyphs::selection_marker(selected_row);
             let kind = self.template_kind_label(template);
+            // Slice D hover rule: template rows are clickable, so they
+            // hover-respond with the shared primitive like every other row.
             let style = if selected_row {
                 menu_style::selected_row_style_with_fg(palette::SELECTION_TEXT)
+            } else if self.hovered_template_idx == Some(idx) {
+                menu_style::hovered_row_style()
             } else {
                 Style::default().fg(palette::TEXT_PRIMARY)
             };
@@ -3840,6 +4000,118 @@ impl ProviderPickerView {
         }
         Paragraph::new(line).render(area, buf);
     }
+
+    /// Slice D two-pane pointer support: hover is advisory (it never moves
+    /// the keyboard selection) and renders with the shared
+    /// [`crate::tui::menu_style::hovered_row_style`] primitive; click selects
+    /// and a second click activates, mirroring the model picker rhythm.
+    fn list_hit_at(&self, mouse: MouseEvent) -> Option<usize> {
+        let pos = Position::new(mouse.column, mouse.row);
+        self.list_row_hitboxes
+            .borrow()
+            .iter()
+            .find_map(|(rect, idx)| rect.contains(pos).then_some(*idx))
+    }
+
+    fn model_hit_at(&self, mouse: MouseEvent) -> Option<usize> {
+        let pos = Position::new(mouse.column, mouse.row);
+        self.model_row_hitboxes
+            .borrow()
+            .iter()
+            .find_map(|(rect, idx)| rect.contains(pos).then_some(*idx))
+    }
+
+    fn consent_hit_at(&self, mouse: MouseEvent) -> Option<usize> {
+        let pos = Position::new(mouse.column, mouse.row);
+        self.consent_row_hitboxes
+            .borrow()
+            .iter()
+            .find_map(|(rect, slot)| rect.contains(pos).then_some(*slot))
+    }
+
+    /// Enter on the list stage, shared by keyboard and double-click so both
+    /// paths apply, set up, or route to the custom form identically.
+    fn activate_selected_row(&mut self) -> ViewAction {
+        if !self.row_visible(self.selected_idx) {
+            return ViewAction::None;
+        }
+        let provider = self.selected_provider();
+        let provider_id = self.selected_provider_id();
+        if provider == ApiProvider::Custom && !self.rows[self.selected_idx].is_configured {
+            self.enter_custom_form();
+            ViewAction::None
+        } else if !self.selected_route_is_valid() {
+            ViewAction::None
+        } else if self.selected_has_key() {
+            ViewAction::EmitAndClose(ViewEvent::ProviderPickerApplied {
+                provider,
+                provider_id,
+            })
+        } else {
+            // #5772: plain activation never inspects or adopts an external
+            // CLI credential. Reuse starts only from the explicit `e` action,
+            // which discloses the exact path and requires its own
+            // confirmation.
+            self.begin_setup();
+            ViewAction::None
+        }
+    }
+
+    /// Enter on the model-pick stage, shared by keyboard and double-click.
+    fn advance_from_model_pick(&mut self) -> ViewAction {
+        if self.model_options.is_empty() {
+            return ViewAction::None;
+        }
+        self.selected_model = self.model_options.get(self.model_selected_idx).cloned();
+        if self.selected_kimi_code_k3() {
+            self.enter_plan_tier();
+        } else {
+            self.enter_confirm();
+        }
+        ViewAction::None
+    }
+
+    fn click_list_row(&mut self, mouse: MouseEvent) -> ViewAction {
+        let Some(idx) = self.list_hit_at(mouse) else {
+            return ViewAction::None;
+        };
+        let activate = self.last_list_mouse_selected == Some(idx) && self.selected_idx == idx;
+        self.selected_idx = idx;
+        self.last_list_mouse_selected = Some(idx);
+        if activate {
+            self.activate_selected_row()
+        } else {
+            ViewAction::None
+        }
+    }
+
+    fn click_model_row(&mut self, mouse: MouseEvent) -> ViewAction {
+        let Some(idx) = self.model_hit_at(mouse) else {
+            return ViewAction::None;
+        };
+        let advance = self.last_model_mouse_selected == Some(idx) && self.model_selected_idx == idx;
+        self.model_selected_idx = idx.min(self.model_options.len().saturating_sub(1));
+        self.selected_model = self.model_options.get(self.model_selected_idx).cloned();
+        self.last_model_mouse_selected = Some(idx);
+        if advance {
+            self.advance_from_model_pick()
+        } else {
+            ViewAction::None
+        }
+    }
+
+    fn click_consent_row(&mut self, mouse: MouseEvent) {
+        let Some(slot) = self.consent_hit_at(mouse) else {
+            return;
+        };
+        // Single click chooses; Enter still commits, so a stray click can
+        // never grant or revoke access by itself.
+        self.external_consent_choice = match slot {
+            0 => ExternalConsentChoice::Disabled,
+            1 => ExternalConsentChoice::ReadOnly,
+            _ => ExternalConsentChoice::ManagedUnavailable,
+        };
+    }
 }
 
 fn mask_key(input: &str) -> String {
@@ -3929,30 +4201,9 @@ impl ModalView for ProviderPickerView {
                 // (#3830) hides every row — e.g. a fresh Configured view
                 // with nothing configured yet shows the empty state and
                 // `selected_idx` doesn't point at anything on screen.
-                KeyCode::Enter if self.row_visible(self.selected_idx) => {
-                    let provider = self.selected_provider();
-                    let provider_id = self.selected_provider_id();
-                    if provider == ApiProvider::Custom
-                        && !self.rows[self.selected_idx].is_configured
-                    {
-                        self.enter_custom_form();
-                        ViewAction::None
-                    } else if !self.selected_route_is_valid() {
-                        ViewAction::None
-                    } else if self.selected_has_key() {
-                        ViewAction::EmitAndClose(ViewEvent::ProviderPickerApplied {
-                            provider,
-                            provider_id,
-                        })
-                    } else {
-                        // #5772: plain Enter never inspects or adopts an
-                        // external CLI credential. Reuse starts only from the
-                        // explicit `e` action, which discloses the exact path
-                        // and requires its own confirmation.
-                        self.begin_setup();
-                        ViewAction::None
-                    }
-                }
+                // Keyboard and double-click share `activate_selected_row`
+                // (Slice D) so both paths behave identically.
+                KeyCode::Enter => self.activate_selected_row(),
                 KeyCode::Char(c)
                     if key.modifiers.is_empty()
                         && self.query.is_empty()
@@ -4326,18 +4577,9 @@ impl ModalView for ProviderPickerView {
                     self.move_model_selection(1);
                     ViewAction::None
                 }
-                KeyCode::Enter => {
-                    if self.model_options.is_empty() {
-                        return ViewAction::None;
-                    }
-                    self.selected_model = self.model_options.get(self.model_selected_idx).cloned();
-                    if self.selected_kimi_code_k3() {
-                        self.enter_plan_tier();
-                    } else {
-                        self.enter_confirm();
-                    }
-                    ViewAction::None
-                }
+                // Keyboard and double-click share `advance_from_model_pick`
+                // (Slice D) so both paths behave identically.
+                KeyCode::Enter => self.advance_from_model_pick(),
                 _ => ViewAction::None,
             },
             Stage::StepfunBillingRoute => match key.code {
@@ -4469,13 +4711,46 @@ impl ModalView for ProviderPickerView {
     fn handle_mouse(&mut self, mouse: MouseEvent) -> ViewAction {
         match self.stage {
             Stage::List => match mouse.kind {
-                MouseEventKind::ScrollUp => self.move_up(),
-                MouseEventKind::ScrollDown => self.move_down(),
+                MouseEventKind::ScrollUp => {
+                    self.last_list_mouse_selected = None;
+                    self.move_up();
+                }
+                MouseEventKind::ScrollDown => {
+                    self.last_list_mouse_selected = None;
+                    self.move_down();
+                }
+                MouseEventKind::Moved => {
+                    self.hovered_list_idx = self.list_hit_at(mouse);
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    return self.click_list_row(mouse);
+                }
                 _ => {}
             },
             Stage::ModelPick => match mouse.kind {
-                MouseEventKind::ScrollUp => self.move_model_selection(-1),
-                MouseEventKind::ScrollDown => self.move_model_selection(1),
+                MouseEventKind::ScrollUp => {
+                    self.last_model_mouse_selected = None;
+                    self.move_model_selection(-1);
+                }
+                MouseEventKind::ScrollDown => {
+                    self.last_model_mouse_selected = None;
+                    self.move_model_selection(1);
+                }
+                MouseEventKind::Moved => {
+                    self.hovered_model_idx = self.model_hit_at(mouse);
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    return self.click_model_row(mouse);
+                }
+                _ => {}
+            },
+            Stage::ExternalConsentChoice => match mouse.kind {
+                MouseEventKind::Moved => {
+                    self.hovered_consent_idx = self.consent_hit_at(mouse);
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    self.click_consent_row(mouse);
+                }
                 _ => {}
             },
             Stage::TemplateList => {
@@ -4486,6 +4761,15 @@ impl ModalView for ProviderPickerView {
                     }
                     MouseEventKind::ScrollDown => {
                         self.move_template_selection(1);
+                        ViewAction::None
+                    }
+                    MouseEventKind::Moved => {
+                        let pos = Position::new(mouse.column, mouse.row);
+                        self.hovered_template_idx = self
+                            .template_row_hitboxes
+                            .borrow()
+                            .iter()
+                            .find_map(|(rect, idx)| rect.contains(pos).then_some(*idx));
                         ViewAction::None
                     }
                     MouseEventKind::Down(MouseButton::Left) => {
@@ -4499,7 +4783,6 @@ impl ModalView for ProviderPickerView {
             | Stage::XaiAuthChoice
             | Stage::ChatgptAuthChoice
             | Stage::KeyEntry
-            | Stage::ExternalConsentChoice
             | Stage::ExternalConsentConfirm
             | Stage::ExternalConsentRevokeConfirm
             | Stage::Confirm
@@ -5247,7 +5530,8 @@ mod tests {
         assert_eq!(row.auth_status, ProviderAuthStatus::Local);
         assert_eq!(row.readiness, ResolvedProviderReadiness::LocalUnchecked);
         assert_eq!(row.supported_protocols, vec!["chat".to_string()]);
-        assert_eq!(row.usage_meter, "cost: local");
+        // Slice D: cost is model-level — a local model prices as local.
+        assert_eq!(model_cost_label(ApiProvider::Ollama, "llama3"), "local");
         assert!(row.base_url.contains("localhost:11434"));
         assert!(row.is_active);
     }
@@ -5283,7 +5567,8 @@ mod tests {
         );
         assert_eq!(missing.auth_status, ProviderAuthStatus::Missing);
         assert_eq!(missing.readiness, ResolvedProviderReadiness::MissingKey);
-        assert_eq!(missing.usage_meter, "cost: unknown");
+        // Slice D: no provider-level cost leaks into the catalog hint.
+        assert!(!missing.compact_hint().contains("cost:"));
         assert!(!missing.compact_hint().contains("(self-hosted)"));
         assert!(
             missing
@@ -6271,6 +6556,56 @@ mod tests {
         }
     }
 
+    /// Slice D hover rule: template rows are clickable, so hover must
+    /// respond visibly without moving the keyboard selection.
+    #[test]
+    fn template_list_hover_tracks_pointer_without_moving_selection() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        assert!(matches!(
+            picker.handle_key(key(KeyCode::Char('p'))),
+            ViewAction::None
+        ));
+        let area = Rect::new(0, 0, 100, 24);
+        let mut buf = Buffer::empty(area);
+        picker.render(area, &mut buf);
+        let (rect, idx) = picker
+            .template_row_hitboxes
+            .borrow()
+            .iter()
+            .copied()
+            .find(|(_, row_idx)| *row_idx != picker.template_selected_idx)
+            .expect("a non-selected template row");
+        let selected_before = picker.template_selected_idx;
+        picker.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(picker.hovered_template_idx, Some(idx));
+        assert_eq!(picker.template_selected_idx, selected_before);
+    }
+
+    /// Slice D two-pane picker at narrow widths: the provider strip stays on
+    /// top and the priced models pane renders under it (stacked layout).
+    /// Ollama carries no auth notes, so the pane fits the short detail area;
+    /// note-heavy rows degrade by clipping, as detail panes always have.
+    #[test]
+    fn narrow_list_stage_stacks_models_pane_under_provider_strip() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        move_to_provider(&mut picker, ApiProvider::Ollama);
+        let rendered = render_text(&picker, 80, 52);
+        assert!(
+            rendered.contains("Models · $in/$out per mtok"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("(default)"), "{rendered}");
+        assert!(rendered.contains("local"), "{rendered}");
+        assert!(!rendered.contains("cost:"), "{rendered}");
+    }
+
     #[test]
     fn template_list_mouse_selects_row_and_second_click_activates() {
         let config = Config::default();
@@ -6867,13 +7202,16 @@ mod tests {
         };
         let picker = ProviderPickerView::new(ApiProvider::Openai, &config);
 
-        let rendered = render_text(&picker, 124, 18);
+        let rendered = render_text(&picker, 124, 24);
 
         assert!(rendered.contains("key:configured"));
         assert!(!rendered.contains("auth:configured"));
         assert!(rendered.contains("Route: custom-model"));
         assert!(rendered.contains("chat"));
-        assert!(rendered.contains("cost: unknown"));
+        // Slice D: provider detail carries no cost; the models pane does.
+        assert!(!rendered.contains("cost:"));
+        assert!(!rendered.contains("Usage:"));
+        assert!(rendered.contains("Models · $in/$out per mtok"));
         assert!(rendered.contains("Endpoint: http://localhost:9000/v1"));
     }
 
@@ -7792,27 +8130,261 @@ mod tests {
 
     /// #4526: OpenCode Go (subscription allowance) and OpenCode Zen
     /// (pay-as-you-go) are separate billing tracks and must not present as the
-    /// same generic meter.
+    /// same generic meter. Slice D: the distinction now lives on the
+    /// per-model cost label, not on a provider row.
     #[test]
     fn opencode_go_and_zen_read_as_distinct_billing_tracks() {
-        let go = usage_meter_for(ApiProvider::OpencodeGo);
-        let zen = usage_meter_for(ApiProvider::OpencodeZen);
+        let token = PricingSku::Token {
+            input_per_mtok: Some(1.0),
+            output_per_mtok: Some(2.0),
+        };
+        let go = model_cost_label_for_pricing(ApiProvider::OpencodeGo, Some(&token));
+        let zen = model_cost_label_for_pricing(ApiProvider::OpencodeZen, Some(&token));
         assert_ne!(go, zen);
-        assert!(go.contains("subscription"), "Go label was {go:?}");
-        assert!(zen.contains("pay-as-you-go"), "Zen label was {zen:?}");
-        assert_ne!(go, usage_meter_for(ApiProvider::Openrouter));
+        assert_eq!(go, "plan", "Go label was {go:?}");
+        assert_eq!(zen, "$1.00/$2.00 mtok", "Zen label was {zen:?}");
+        assert_ne!(
+            go,
+            model_cost_label_for_pricing(ApiProvider::Openrouter, None)
+        );
 
         // Go never reports catalog token prices: its allowance is not spend.
+        assert_eq!(model_cost_label(ApiProvider::OpencodeGo, "some-model"), go);
+    }
+
+    /// Slice D: per-model $/mtok in/out from the catalog, with honest
+    /// non-token fallbacks and never a fabricated rate.
+    #[test]
+    fn model_cost_label_spells_out_mtok_in_and_out() {
+        let token = PricingSku::Token {
+            input_per_mtok: Some(1.5),
+            output_per_mtok: Some(6.0),
+        };
         assert_eq!(
-            pricing_label(
-                ApiProvider::OpencodeGo,
-                Some(&PricingSku::Token {
-                    input_per_mtok: Some(1.0),
-                    output_per_mtok: Some(2.0),
+            model_cost_label_for_pricing(ApiProvider::Deepseek, Some(&token)),
+            "$1.50/$6.00 mtok"
+        );
+        // Partial token pricing never fabricates the missing leg.
+        let partial = PricingSku::Token {
+            input_per_mtok: Some(1.5),
+            output_per_mtok: None,
+        };
+        assert_eq!(
+            model_cost_label_for_pricing(ApiProvider::Deepseek, Some(&partial)),
+            "token-priced"
+        );
+        assert_eq!(
+            model_cost_label_for_pricing(
+                ApiProvider::Deepseek,
+                Some(&PricingSku::SubscriptionQuota {
+                    used_pct: None,
+                    resets_at: None,
                 }),
             ),
-            go
+            "plan"
         );
+        assert_eq!(
+            model_cost_label_for_pricing(
+                ApiProvider::Deepseek,
+                Some(&PricingSku::AccountCredits { balance: None }),
+            ),
+            "credits"
+        );
+        assert_eq!(
+            model_cost_label_for_pricing(
+                ApiProvider::Deepseek,
+                Some(&PricingSku::LocalOrNotApplicable),
+            ),
+            "local"
+        );
+        // Unknown pricing falls back honestly per provider posture.
+        assert_eq!(
+            model_cost_label_for_pricing(ApiProvider::Ollama, None),
+            "local"
+        );
+        assert_eq!(
+            model_cost_label_for_pricing(ApiProvider::OpenaiCodex, None),
+            "oauth quota"
+        );
+        assert_eq!(
+            model_cost_label_for_pricing(ApiProvider::Deepseek, None),
+            "price ?"
+        );
+    }
+
+    /// Slice D two-pane picker: the models pane leads with the default route
+    /// and every row carries a non-empty cost label.
+    #[test]
+    fn provider_pane_models_lead_with_default_route() {
+        let config = Config::default();
+        let picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        let row = picker
+            .rows
+            .iter()
+            .find(|row| row.provider == ApiProvider::Deepseek)
+            .expect("DeepSeek has a picker row");
+        let models = provider_pane_models(row, 8);
+        assert!(!models.is_empty(), "models pane must never render empty");
+        assert!(models.len() <= 8);
+        let (first, _, first_default) = &models[0];
+        assert!(
+            *first_default,
+            "default route model must sort first, got {first:?}"
+        );
+        assert!(
+            first.eq_ignore_ascii_case(&row.default_route.logical_model)
+                || first.eq_ignore_ascii_case(&row.default_route.wire_model),
+            "first pane model {first:?} is not the default route"
+        );
+        for (model, price, _) in &models {
+            assert!(!price.trim().is_empty(), "model {model:?} needs a price");
+        }
+    }
+
+    /// Slice D: the list stage pairs the provider strip with a models pane —
+    /// no provider-level cost, per-model $/mtok beside it.
+    #[test]
+    fn list_stage_pairs_provider_strip_with_priced_models_pane() {
+        let config = Config::default();
+        let picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        let rendered = render_text(&picker, 124, 24);
+        assert!(
+            rendered.contains("Models · $in/$out per mtok"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("(default)"), "{rendered}");
+        assert!(!rendered.contains("cost:"), "{rendered}");
+        assert!(!rendered.contains("Usage:"), "{rendered}");
+    }
+
+    /// Slice D: provider-strip rows are clickable and hover visibly without
+    /// disturbing the keyboard selection.
+    #[test]
+    fn provider_strip_rows_are_clickable_and_hoverable() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        move_to_provider(&mut picker, ApiProvider::Ollama);
+        // Render first so this frame's hitboxes exist.
+        let _ = render_text(&picker, 120, 24);
+        assert!(
+            !picker.list_row_hitboxes.borrow().is_empty(),
+            "list rows must record hitboxes"
+        );
+        let ollama_idx = picker
+            .rows
+            .iter()
+            .position(|row| row.provider == ApiProvider::Ollama)
+            .expect("Ollama has a picker row");
+        let ollama_hit = picker
+            .list_row_hitboxes
+            .borrow()
+            .iter()
+            .find(|(_, idx)| *idx == ollama_idx)
+            .map(|(rect, _)| *rect)
+            .expect("Ollama row must be visible");
+        let other_hit = picker
+            .list_row_hitboxes
+            .borrow()
+            .iter()
+            .find(|(_, idx)| *idx != ollama_idx)
+            .map(|(rect, idx)| (*rect, *idx))
+            .expect("a second visible row is needed");
+        // Hover tracks the pointer and leaves the selection alone.
+        let selected_before = picker.selected_idx;
+        picker.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: other_hit.0.x,
+            row: other_hit.0.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(picker.hovered_list_idx, Some(other_hit.1));
+        assert_eq!(picker.selected_idx, selected_before);
+        // Moving off every row clears the hover.
+        picker.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        // Single click selects; a second click activates like Enter.
+        // (Ollama needs no key, so activation applies immediately.)
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: ollama_hit.x,
+            row: ollama_hit.y,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(matches!(picker.handle_mouse(click), ViewAction::None));
+        assert_eq!(picker.selected_idx, ollama_idx);
+        match picker.handle_mouse(click) {
+            ViewAction::EmitAndClose(ViewEvent::ProviderPickerApplied { provider, .. }) => {
+                assert_eq!(provider, ApiProvider::Ollama);
+            }
+            other => panic!("double-click must apply Ollama, got {other:?}"),
+        }
+    }
+
+    /// Slice D: model-pick rows carry per-model cost and are clickable.
+    #[test]
+    fn model_pick_rows_show_per_model_cost_and_click_selects() {
+        let config = Config::default();
+        // Codex prices deterministically off-catalog ("oauth quota").
+        let mut picker = ProviderPickerView::new_for_model_pick_after_validation(
+            ApiProvider::Deepseek,
+            ApiProvider::OpenaiCodex,
+            &config,
+            None,
+            "[REDACTED]".to_string(),
+            None,
+        )
+        .expect("Codex has a picker row");
+        assert_eq!(picker.stage, Stage::ModelPick);
+        let rendered = render_text(&picker, 100, 24);
+        assert!(rendered.contains("oauth quota"), "{rendered}");
+        assert!(
+            !picker.model_row_hitboxes.borrow().is_empty(),
+            "model rows must record hitboxes"
+        );
+        let target = picker.model_row_hitboxes.borrow()[0];
+        picker.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: target.0.x,
+            row: target.0.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(picker.model_selected_idx, target.1);
+    }
+
+    /// Slice D explicit-consent gate: Gate 1 chooses (clickable), Gate 2
+    /// discloses, and a click alone never grants anything.
+    #[test]
+    fn external_consent_gate_chooses_then_discloses() {
+        let config = Config::default();
+        let mut picker = ProviderPickerView::new(ApiProvider::Deepseek, &config);
+        move_to_provider(&mut picker, ApiProvider::Xai);
+        picker.handle_key(key(KeyCode::Char('e')));
+        assert_eq!(picker.stage, Stage::ExternalConsentChoice);
+        let rendered = render_text(&picker, 100, 24);
+        assert!(rendered.contains("Gate 1 of 2"), "{rendered}");
+        assert_eq!(picker.consent_row_hitboxes.borrow().len(), 3);
+        // Click the read-only option: chosen, not granted.
+        let readonly_hit = picker.consent_row_hitboxes.borrow()[1];
+        picker.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: readonly_hit.0.x,
+            row: readonly_hit.0.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(
+            picker.external_consent_choice,
+            ExternalConsentChoice::ReadOnly
+        );
+        assert_eq!(picker.stage, Stage::ExternalConsentChoice);
+        // Enter advances to the Gate 2 disclosure.
+        picker.handle_key(key(KeyCode::Enter));
+        assert_eq!(picker.stage, Stage::ExternalConsentConfirm);
+        let confirm = render_text(&picker, 100, 24);
+        assert!(confirm.contains("Gate 2 of 2"), "{confirm}");
     }
 
     #[test]
@@ -8689,7 +9261,15 @@ mod tests {
             row.default_route.logical_model,
             crate::config::DEFAULT_KIMI_CODE_MODEL
         );
-        assert_eq!(row.usage_meter, "usage: Kimi API key required");
+        // Slice D: the Kimi key guidance travels on messages, not on a
+        // provider-level meter.
+        assert!(
+            row.messages
+                .iter()
+                .any(|message| message.contains("Kimi API key")),
+            "missing Kimi key guidance: {:?}",
+            row.messages
+        );
         assert_eq!(row.readiness, ResolvedProviderReadiness::MissingKey);
         assert!(matches!(
             picker.handle_key(key(KeyCode::Enter)),

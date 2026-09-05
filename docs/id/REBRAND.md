@@ -42,5 +42,6 @@ Berkas dan direktori Anda yang ada seperti `~/.deepseek/config.toml`, `~/.deepse
 ## Apa yang TIDAK Berubah
 
 Semua hal yang berkaitan dengan API penyedia DeepSeek tetap berjalan persis seperti sebelumnya:
-- **Variabel Lingkungan**: `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_PROVIDER`, `DEEPSEEK_PROFILE`, `DEEPSEEK_YOLO`, dll. tetap didukung sepenuhnya.
+- **Variabel Lingkungan**: `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_PROVIDER`, `DEEPSEEK_PROFILE`, dll. tetap didukung sepenuhnya.
+- **`DEEPSEEK_YOLO`**: kini usang, tetapi masih dibaca sebagai alias dari `CODEWHALE_YOLO` selama 0.9.x agar skrip lama tetap berjalan (jika keduanya diisi, `CODEWHALE_YOLO` yang menang). Dihapus di 0.10 (#5443); gunakan `CODEWHALE_YOLO` untuk skrip baru.
 - **Konfigurasi Penyedia**: Pengaturan rute `[providers.deepseek]` pada `config.toml` tetap valid.

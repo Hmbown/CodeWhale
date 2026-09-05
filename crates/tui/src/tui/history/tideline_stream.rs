@@ -70,7 +70,7 @@ pub enum TidelineStreamEvent {
     UserTurn { text: String },
     /// Assistant turn — transcript rail continuation.
     AssistantTurn { text: String },
-    /// Pod-formation tree (`├──`/`└──` edges) — the same object the ledger
+    /// Fleet-formation tree (`├──`/`└──` edges) — the same object the ledger
     /// below shows; continuity is the design (§7 orient moment).
     PodFormation { edges: Vec<(bool, String)> },
     /// State-marked receipt row: mark + label + timestamp + receipt count.
@@ -160,7 +160,7 @@ fn struncate(text: &str, width: usize) -> String {
 }
 
 /// Paint the receipt stream. The legend row is the last line and teaches
-/// the marks in place (§7). The pod-formation tree draws all edges as one
+/// the marks in place (§7). The fleet-formation tree draws all edges as one
 /// still frame — the ≤600 ms top-down reveal is a landing-slice motion.
 #[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub fn render_tideline_stream(area: Rect, buf: &mut Buffer, stream: &TidelineStream<'_>) {
@@ -291,7 +291,7 @@ pub fn render_tideline_stream(area: Rect, buf: &mut Buffer, stream: &TidelineStr
 }
 
 /// Row hitboxes for the stream (transcript click path, spec §6): one rect
-/// per event, pod trees spanning their edges.
+/// per event, fleet trees spanning their edges.
 #[must_use]
 #[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub fn tideline_stream_hitboxes(area: Rect, stream: &TidelineStream<'_>) -> Vec<Rect> {

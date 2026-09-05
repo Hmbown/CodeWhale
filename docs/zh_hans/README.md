@@ -28,13 +28,13 @@
 把 Codewhale 配置成最顺手的样子。
 
 1. [CONFIGURATION.md](../CONFIGURATION.md) —— 完整配置参考（最大的文档，可分章节阅读）
-2. [Pod](../FLEET.md) —— Pod 角色与多模型编排
+2. [Fleet](../FLEET.md) —— Fleet 角色与多模型编排
 3. [MCP.md](../MCP.md) —— MCP 模型上下文协议接入
 4. [SKILLS.md](../SKILLS.md) —— 技能（skill）的安装、管理与使用
-5. [SUBAGENTS.md](../SUBAGENTS.md) —— 子智能体（Pod）机制
+5. [SUBAGENTS.md](../SUBAGENTS.md) —— 子智能体（Fleet）机制
 6. [HOOKS.md](../HOOKS.md) —— 钩子机制与自动化
 7. [TOOL_SURFACE.md](../TOOL_SURFACE.md) —— 工具面：AI 当前可用的工具契约
-8. [AGENT_RUNTIME.md](../AGENT_RUNTIME.md) —— Agent 运行时：子智能体、exec 与 Pod 的关系
+8. [AGENT_RUNTIME.md](../AGENT_RUNTIME.md) —— Agent 运行时：子智能体、exec 与 Fleet 的关系
 
 ## 四、开发者（阅读源码或为 Codewhale 贡献）
 

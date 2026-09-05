@@ -32,7 +32,7 @@ fn contrast_ratio(foreground: Color, background: Color) -> f64 {
 
 #[test]
 fn whale_ramp_is_perceptibly_deep_not_merely_non_equal() {
-    let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
+    let ramp = OceanRamp::for_theme(&crate::palette::UNDERWATER_UI_THEME).expect("underwater ramp");
     assert_eq!(ramp.surface, Color::Rgb(0x10, 0x2a, 0x45));
     assert_eq!(ramp.middle, Color::Rgb(0x0a, 0x1e, 0x33));
     assert_eq!(ramp.deep, Color::Rgb(0x06, 0x13, 0x20));
@@ -40,17 +40,20 @@ fn whale_ramp_is_perceptibly_deep_not_merely_non_equal() {
         distance(ramp.surface, ramp.deep) >= 32,
         "the selected underwater treatment must read at a glance"
     );
-    assert_ne!(ramp.color_at(0, 20), ramp.color_at(19, 20));
+    assert_ne!(
+        ramp.color_at_context(0, 20, 0),
+        ramp.color_at_context(19, 20, 0)
+    );
 }
 
 #[test]
 fn whale_column_stays_blue_and_gently_banded_at_full_screen_depth() {
-    let theme = crate::palette::UI_THEME;
-    let ramp = OceanRamp::for_theme(&theme).expect("RGB theme");
-    let mut previous = ramp.color_at(0, 80);
+    let theme = crate::palette::UNDERWATER_UI_THEME;
+    let ramp = OceanRamp::for_theme(&theme).expect("underwater ramp");
+    let mut previous = ramp.color_at_context(0, 80, 0);
 
     for row in 0..80 {
-        let current = ramp.color_at(row, 80);
+        let current = ramp.color_at_context(row, 80, 0);
         let (red, green, blue) = rgb(current).expect("RGB ocean color");
         assert!(
             blue > green && green > red,
@@ -67,14 +70,14 @@ fn whale_column_stays_blue_and_gently_banded_at_full_screen_depth() {
         previous = current;
     }
 
-    assert_eq!(ramp.color_at(0, 80), ramp.surface);
-    assert_eq!(ramp.color_at(79, 80), ramp.deep);
+    assert_eq!(ramp.color_at_context(0, 80, 0), ramp.surface);
+    assert_eq!(ramp.color_at_context(79, 80, 0), ramp.deep);
 }
 
 #[test]
 fn whale_ocean_keeps_text_and_semantic_roles_readable() {
-    let theme = crate::palette::UI_THEME;
-    let ramp = OceanRamp::for_theme(&theme).expect("RGB theme");
+    let theme = crate::palette::UNDERWATER_UI_THEME;
+    let ramp = OceanRamp::for_theme(&theme).expect("underwater ramp");
     let foregrounds = [
         ("body", theme.text_body),
         ("soft", theme.text_soft),
@@ -108,62 +111,39 @@ fn whale_ocean_keeps_text_and_semantic_roles_readable() {
 }
 
 #[test]
-fn light_theme_stays_light_enough_for_light_theme_text() {
-    let ramp = OceanRamp::for_theme(&crate::palette::LIGHT_UI_THEME).expect("RGB theme");
-    assert_eq!(ramp.surface, Color::Rgb(0xff, 0xfd, 0xf8));
-    assert_eq!(ramp.middle, Color::Rgb(0xf4, 0xf7, 0xfb));
-    assert_eq!(ramp.deep, Color::Rgb(0xf0, 0xf4, 0xf9));
-    let (r, g, b) = rgb(ramp.deep).expect("RGB color");
-    assert!(u16::from(r) + u16::from(g) + u16::from(b) > 420);
+fn underwater_custom_background_keeps_the_field() {
+    let custom = Color::Rgb(0x12, 0x1a, 0x2d);
+    let theme = crate::palette::UNDERWATER_UI_THEME.with_background_color(custom);
+    let ramp = OceanRamp::for_theme(&theme).expect("the field survives a background override");
+
+    assert_ne!(ramp.surface, ramp.deep);
 }
 
 #[test]
-fn light_ocean_and_selection_keep_text_and_semantic_roles_readable() {
-    let theme = crate::palette::LIGHT_UI_THEME;
-    let ramp = OceanRamp::for_theme(&theme).expect("RGB theme");
-    let foregrounds = [
-        ("body", theme.text_body),
-        ("soft", theme.text_soft),
-        ("muted", theme.text_muted),
-        ("hint", theme.text_hint),
-        ("action", theme.accent_primary),
-        ("live", theme.status_working),
-        ("human", theme.accent_action),
-        ("warning", theme.warning),
-        ("danger", theme.error_fg),
-        ("act mode", theme.mode_agent),
-        ("plan mode", theme.mode_plan),
-        ("operate", theme.mode_operate),
-        ("full-access mode", theme.mode_yolo),
-        ("success", theme.success),
-        ("user", crate::palette::LIGHT_USER_BODY),
-    ];
-    let backgrounds = [
-        ("ocean surface", ramp.surface),
-        ("ocean middle", ramp.middle),
-        ("ocean deep", ramp.deep),
-        ("selection", theme.selection_bg),
-    ];
+fn themes_other_than_underwater_own_no_field() {
+    use crate::palette::{SELECTABLE_THEMES, ThemeId};
 
-    for (background_name, background) in backgrounds {
-        for (foreground_name, foreground) in foregrounds {
-            let ratio = contrast_ratio(foreground, background);
-            assert!(
-                ratio >= 4.5,
-                "light {foreground_name} on {background_name} contrast {ratio:.2} is below 4.50"
+    for id in SELECTABLE_THEMES {
+        let ramp = OceanRamp::for_theme(&id.ui_theme());
+        if matches!(id, ThemeId::Underwater) {
+            assert!(ramp.is_some(), "{} owns the painted field", id.name());
+        } else {
+            assert_eq!(
+                ramp,
+                None,
+                "{} must leave the terminal's ground alone",
+                id.name()
             );
         }
     }
-}
 
-#[test]
-fn whale_custom_background_uses_the_configured_surface() {
+    // A custom background repaints surfaces; it never grants a field to a
+    // theme that does not own one.
     let custom = Color::Rgb(0x12, 0x1a, 0x2d);
-    let theme = crate::palette::UI_THEME.with_background_color(custom);
-    let ramp = OceanRamp::for_theme(&theme).expect("custom backgrounds retain Deepsea");
-
-    assert_ne!(ramp.surface, Color::Rgb(0x0e, 0x17, 0x29));
-    assert_ne!(ramp.surface, ramp.deep);
+    assert_eq!(
+        OceanRamp::for_theme(&crate::palette::UI_THEME.with_background_color(custom)),
+        None
+    );
 }
 
 #[test]
@@ -183,70 +163,22 @@ fn solarized_light_preserves_its_canonical_base3_background() {
 }
 
 #[test]
-fn solarized_light_custom_background_preserves_deepsea() {
+fn solarized_light_custom_background_stays_field_free() {
     let custom = Color::Rgb(0x1a, 0x1b, 0x26);
     let theme = crate::palette::SOLARIZED_LIGHT_UI_THEME.with_background_color(custom);
-    let ramp = OceanRamp::for_theme(&theme).expect("custom backgrounds retain Deepsea");
-
-    assert_ne!(ramp.surface, custom);
-    assert_ne!(ramp.surface, ramp.deep);
+    assert_eq!(OceanRamp::for_theme(&theme), None);
+    assert_eq!(theme.surface_bg, custom);
 }
 
 #[test]
-fn every_shipped_theme_has_an_intentional_ocean_treatment() {
-    use crate::palette::{SELECTABLE_THEMES, ThemeId};
-
-    for id in SELECTABLE_THEMES {
-        let ramp = OceanRamp::for_theme(&id.ui_theme());
-        if matches!(id, ThemeId::Terminal | ThemeId::SolarizedLight) {
-            assert_eq!(
-                ramp,
-                None,
-                "{} must keep its canonical background",
-                id.name()
-            );
-        } else {
-            let ramp = ramp.unwrap_or_else(|| panic!("{} has no ocean ramp", id.name()));
-            assert_ne!(
-                ramp.surface,
-                ramp.deep,
-                "{} lost underwater depth",
-                id.name()
-            );
-        }
-    }
-}
-
-#[test]
-fn treatment_parses_saved_values_and_migrates_legacy_ombre_values() {
-    assert_eq!(OceanTreatment::parse("flat"), OceanTreatment::Flat);
-    assert_eq!(OceanTreatment::parse(" FLAT "), OceanTreatment::Flat);
-    assert_eq!(OceanTreatment::parse("deepsea"), OceanTreatment::Deepsea);
-    assert_eq!(OceanTreatment::parse("ombre"), OceanTreatment::Deepsea);
-    assert_eq!(OceanTreatment::parse("underwater"), OceanTreatment::Deepsea);
-    assert_eq!(OceanTreatment::parse("kelp"), OceanTreatment::Flat);
-    assert_eq!(OceanTreatment::parse(""), OceanTreatment::Flat);
-    // Migration aliases remain deterministic for older persisted settings.
-    assert_eq!(OceanTreatment::parse("classic"), OceanTreatment::Deepsea);
-}
-
-#[test]
-fn deepsea_is_the_explicit_underwater_treatment() {
-    // The ordinary terminal must not be turned into an aquarium by default.
-    // Flat and Deepsea stay distinct so the user can deliberately opt into the
-    // underwater field.
-    assert_eq!(OceanTreatment::default(), OceanTreatment::Flat);
-    assert_ne!(OceanTreatment::Deepsea, OceanTreatment::Flat);
-    assert!(OceanTreatment::Deepsea.is_deepsea());
-    assert!(OceanTreatment::Flat.is_flat());
-}
-
-#[test]
-fn whale_pair_flat_shells_reset_while_deepsea_paints_the_shared_column() {
-    assert!(OceanTreatment::Flat.is_flat());
-    assert!(OceanTreatment::Deepsea.is_deepsea());
-
+fn terminal_native_themes_keep_reset_shells_while_underwater_paints_the_column() {
     for theme in [crate::palette::UI_THEME, crate::palette::LIGHT_UI_THEME] {
+        assert_eq!(
+            OceanRamp::for_theme(&theme),
+            None,
+            "{} must not grow a field",
+            theme.name
+        );
         for shell_surface in [
             theme.surface_bg,
             theme.panel_bg,
@@ -254,30 +186,38 @@ fn whale_pair_flat_shells_reset_while_deepsea_paints_the_shared_column() {
             theme.header_bg,
             theme.footer_bg,
         ] {
-            assert_eq!(shell_surface, Color::Reset, "{} Flat shell", theme.name);
+            assert_eq!(shell_surface, Color::Reset, "{} shell", theme.name);
         }
-
-        let ramp = OceanRamp::for_theme(&theme).expect("built-in Deepsea ramp");
-        for painted in [ramp.surface, ramp.middle, ramp.deep, ramp.ambient] {
-            assert_ne!(painted, Color::Reset, "{} Deepsea paint", theme.name);
-        }
-
-        let area = Rect::new(0, 0, 4, 4);
-        let mut buf = Buffer::empty(area);
-        let column = OceanColumn::new(ramp, area, 0, None, ShellPhase::Idle, false, 0);
-        column.paint_matching(area, &mut buf, theme.surface_bg);
-        assert_ne!(buf[(0, 0)].bg, Color::Reset);
-        assert_ne!(buf[(0, area.height - 1)].bg, Color::Reset);
-        assert_ne!(buf[(0, 0)].bg, buf[(0, area.height - 1)].bg);
     }
+
+    let theme = crate::palette::UNDERWATER_UI_THEME;
+    let ramp = OceanRamp::for_theme(&theme).expect("underwater ramp");
+    for painted in [ramp.surface, ramp.middle, ramp.deep, ramp.ambient] {
+        assert_ne!(painted, Color::Reset, "underwater paint");
+    }
+
+    let area = Rect::new(0, 0, 4, 4);
+    let mut buf = Buffer::empty(area);
+    // The shell has already painted its surface; paint_matching only re-inks
+    // cells wearing that exact background.
+    for y in 0..area.height {
+        for x in 0..area.width {
+            buf[(x, y)].set_bg(theme.surface_bg);
+        }
+    }
+    let column = OceanColumn::new(ramp, area, 0, None, ShellPhase::Idle, false, 0, 0);
+    column.paint_matching(area, &mut buf, theme.surface_bg);
+    assert_ne!(buf[(0, 0)].bg, Color::Reset);
+    assert_ne!(buf[(0, area.height - 1)].bg, Color::Reset);
+    assert_ne!(buf[(0, 0)].bg, buf[(0, area.height - 1)].bg);
 }
 
 #[test]
 fn ambient_ink_matches_sunk_sky_shades_and_survives_reset_surfaces() {
-    // Deepsea's authored RGB ramp gives the terminal-native Whale shell two
-    // sunk sky shades; seafoam remains live-work ink.
-    let theme = crate::palette::UI_THEME;
-    let ramp = OceanRamp::for_theme(&theme).expect("RGB theme");
+    // The underwater theme's authored RGB ramp gives its shell two sunk sky
+    // shades; seafoam remains live-work ink.
+    let theme = crate::palette::UNDERWATER_UI_THEME;
+    let ramp = OceanRamp::for_theme(&theme).expect("underwater ramp");
     let baseline = crate::tui::ambient_life::AmbientActivity::Baseline;
     let (primary, secondary) = ambient_inks_for_activity(&theme, baseline);
     assert_ne!(primary, ramp.ambient);
@@ -296,7 +236,7 @@ fn ambient_ink_matches_sunk_sky_shades_and_survives_reset_surfaces() {
 #[test]
 fn ambient_ink_reads_the_activity_at_a_glance() {
     use crate::tui::ambient_life::AmbientActivity;
-    let theme = crate::palette::UI_THEME;
+    let theme = crate::palette::UNDERWATER_UI_THEME;
     let baseline = ambient_inks_for_activity(&theme, AmbientActivity::Baseline);
     let reasoning = ambient_inks_for_activity(&theme, AmbientActivity::Reasoning);
     let tools = ambient_inks_for_activity(&theme, AmbientActivity::Tools);
@@ -318,30 +258,41 @@ fn ambient_ink_reads_the_activity_at_a_glance() {
 #[test]
 fn attention_phases_tint_the_water_even_when_life_has_settled() {
     let viewport = Rect::new(0, 0, 80, 24);
-    let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
+    let ramp = OceanRamp::for_theme(&crate::palette::UNDERWATER_UI_THEME).expect("underwater ramp");
     // presence 0 + animated false is the fully settled, reduced-motion case —
     // exactly where the old treatment went neutral and a blocked session was
     // indistinguishable from an idle one across the room.
-    let waiting = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Approval, false, 0);
-    let failed = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Failed, false, 0);
-    let idle = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Idle, false, 0);
+    let waiting = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Approval, false, 0, 0);
+    let failed = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Failed, false, 0, 0);
+    let idle = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Idle, false, 0, 0);
 
     assert_ne!(waiting.color_at_y(0), idle.color_at_y(0));
     assert_ne!(failed.color_at_y(0), idle.color_at_y(0));
     assert_ne!(waiting.color_at_y(0), failed.color_at_y(0));
 
     // The tint is steady across time and motion settings alike.
-    let later = OceanColumn::new(ramp, viewport, 700, None, ShellPhase::Approval, true, 0);
+    let later = OceanColumn::new(ramp, viewport, 700, None, ShellPhase::Approval, true, 0, 0);
     assert_eq!(waiting.color_at_y(0), later.color_at_y(0));
+}
+
+/// A full context window reads as the trench: row 0 at 100% matches the
+/// bottom row at 0%, so the abyss visibly rises as context fills.
+#[test]
+fn context_fill_drags_the_water_column_toward_the_deep() {
+    let ramp = OceanRamp::for_theme(&crate::palette::UNDERWATER_UI_THEME).expect("underwater ramp");
+    let surface_row = ramp.color_at_context(0, 24, 0);
+    let abyss_row = ramp.color_at_context(0, 24, 100);
+    assert_ne!(surface_row, abyss_row);
+    assert_eq!(abyss_row, ramp.color_at_context(23, 24, 0));
 }
 
 #[test]
 fn shimmer_is_subtle_and_concentrated_near_the_surface() {
-    let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
-    let surface_a = ramp.color_at_phase(0, 20, 0, ShellPhase::Idle);
-    let surface_b = ramp.color_at_phase(0, 20, 22_500, ShellPhase::Idle);
-    let deep_a = ramp.color_at_phase(19, 20, 0, ShellPhase::Idle);
-    let deep_b = ramp.color_at_phase(19, 20, 22_500, ShellPhase::Idle);
+    let ramp = OceanRamp::for_theme(&crate::palette::UNDERWATER_UI_THEME).expect("underwater ramp");
+    let surface_a = ramp.color_at_phase_context(0, 20, 0, ShellPhase::Idle, 0);
+    let surface_b = ramp.color_at_phase_context(0, 20, 22_500, ShellPhase::Idle, 0);
+    let deep_a = ramp.color_at_phase_context(19, 20, 0, ShellPhase::Idle, 0);
+    let deep_b = ramp.color_at_phase_context(19, 20, 22_500, ShellPhase::Idle, 0);
 
     let surface_shift = distance(surface_a, surface_b);
     assert!(
@@ -356,7 +307,7 @@ fn shimmer_is_subtle_and_concentrated_near_the_surface() {
 
 #[test]
 fn attention_phases_carry_their_own_water_and_work_phases_have_distinct_depth_bias() {
-    let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
+    let ramp = OceanRamp::for_theme(&crate::palette::UNDERWATER_UI_THEME).expect("underwater ramp");
     // Attention tints are steady — the color itself is the signal, and a
     // slow breath read as flicker rather than intent — but never neutral:
     // each attention phase differs from the plain water.
@@ -366,14 +317,17 @@ fn attention_phases_carry_their_own_water_and_work_phases_have_distinct_depth_bi
         ShellPhase::Failed,
     ] {
         assert_eq!(
-            ramp.color_at_phase(4, 20, 0, phase),
-            ramp.color_at_phase(4, 20, 45_000, phase)
+            ramp.color_at_phase_context(4, 20, 0, phase, 0),
+            ramp.color_at_phase_context(4, 20, 45_000, phase, 0)
         );
-        assert_ne!(ramp.color_at_phase(4, 20, 0, phase), ramp.color_at(4, 20));
+        assert_ne!(
+            ramp.color_at_phase_context(4, 20, 0, phase, 0),
+            ramp.color_at_context(4, 20, 0)
+        );
     }
     assert_ne!(
-        ramp.color_at_phase(10, 20, 22_500, ShellPhase::Working),
-        ramp.color_at_phase(10, 20, 22_500, ShellPhase::Verifying)
+        ramp.color_at_phase_context(10, 20, 22_500, ShellPhase::Working, 0),
+        ramp.color_at_phase_context(10, 20, 22_500, ShellPhase::Verifying, 0)
     );
 }
 
@@ -382,27 +336,27 @@ fn tall_columns_darken_continuously_without_an_anchor_shelf() {
     // The old two-segment ramp met at 0.42 with zero color velocity on both
     // sides: on a tall window that shelf read as a horizontal seam. The
     // Bézier column must keep moving through the former anchor zone.
-    let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
+    let ramp = OceanRamp::for_theme(&crate::palette::UNDERWATER_UI_THEME).expect("underwater ramp");
     let height = 120;
     let anchor = 50; // ~0.42 of 120
-    let above = ramp.color_at(anchor - 6, height);
-    let at = ramp.color_at(anchor, height);
-    let below = ramp.color_at(anchor + 6, height);
+    let above = ramp.color_at_context(anchor - 6, height, 0);
+    let at = ramp.color_at_context(anchor, height, 0);
+    let below = ramp.color_at_context(anchor + 6, height, 0);
     assert_ne!(above, at, "water must still darken entering the old anchor");
     assert_ne!(at, below, "water must still darken leaving the old anchor");
-    assert_eq!(ramp.color_at(0, height), ramp.surface);
-    assert_eq!(ramp.color_at(height - 1, height), ramp.deep);
+    assert_eq!(ramp.color_at_context(0, height, 0), ramp.surface);
+    assert_eq!(ramp.color_at_context(height - 1, height, 0), ramp.deep);
 }
 
 #[test]
 fn completion_breath_peaks_once_then_settles() {
-    let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
-    let start = ramp.color_at_completion(0, 20, 0);
-    let peak = ramp.color_at_completion(0, 20, 320);
-    let settled = ramp.color_at_completion(0, 20, 800);
+    let ramp = OceanRamp::for_theme(&crate::palette::UNDERWATER_UI_THEME).expect("underwater ramp");
+    let start = ramp.color_at_completion_context(0, 20, 0, 0);
+    let peak = ramp.color_at_completion_context(0, 20, 320, 0);
+    let settled = ramp.color_at_completion_context(0, 20, 800, 0);
     assert_ne!(start, peak);
     assert_ne!(peak, settled);
-    assert_eq!(settled, ramp.color_at(0, 20));
+    assert_eq!(settled, ramp.color_at_context(0, 20, 0));
 }
 
 #[test]
@@ -432,6 +386,7 @@ fn cache_fingerprint_changes_when_only_ramp_colors_change() {
         ShellPhase::Working,
         true,
         1000,
+        0,
     );
     let second = OceanColumn::new(
         second_ramp,
@@ -441,6 +396,7 @@ fn cache_fingerprint_changes_when_only_ramp_colors_change() {
         ShellPhase::Working,
         true,
         1000,
+        0,
     );
 
     assert_ne!(first.color_at_y(viewport.y), second.color_at_y(viewport.y));
@@ -470,6 +426,7 @@ fn each_ramp_color_participates_in_the_typed_cache_identity() {
         ShellPhase::Working,
         true,
         1000,
+        0,
     );
     let alternatives = [
         OceanRamp {
@@ -507,6 +464,7 @@ fn each_ramp_color_participates_in_the_typed_cache_identity() {
             ShellPhase::Working,
             true,
             1000,
+            0,
         );
         assert_ne!(
             baseline.ramp_cache_identity(),
@@ -518,7 +476,7 @@ fn each_ramp_color_participates_in_the_typed_cache_identity() {
 
 #[test]
 fn identical_semantic_cache_inputs_have_identical_identity() {
-    let ramp = OceanRamp::for_theme(&crate::palette::UI_THEME).expect("RGB theme");
+    let ramp = OceanRamp::for_theme(&crate::palette::UNDERWATER_UI_THEME).expect("underwater ramp");
     let viewport = Rect::new(3, 5, 80, 24);
     let first = OceanColumn::new(
         ramp,
@@ -528,6 +486,7 @@ fn identical_semantic_cache_inputs_have_identical_identity() {
         ShellPhase::Working,
         true,
         1000,
+        0,
     );
     let second = OceanColumn::new(
         ramp,
@@ -537,6 +496,7 @@ fn identical_semantic_cache_inputs_have_identical_identity() {
         ShellPhase::Working,
         true,
         1000,
+        0,
     );
 
     assert_eq!(first.ramp_cache_identity(), second.ramp_cache_identity());
@@ -545,8 +505,8 @@ fn identical_semantic_cache_inputs_have_identical_identity() {
 
 #[test]
 fn split_shell_surfaces_share_one_absolute_row_column() {
-    let theme = crate::palette::UI_THEME;
-    let ramp = OceanRamp::for_theme(&theme).expect("RGB theme");
+    let theme = crate::palette::UNDERWATER_UI_THEME;
+    let ramp = OceanRamp::for_theme(&theme).expect("underwater ramp");
     let viewport = Rect::new(0, 0, 12, 12);
     let header = Rect::new(0, 0, 12, 2);
     let composer = Rect::new(0, 10, 12, 2);
@@ -563,12 +523,12 @@ fn split_shell_surfaces_share_one_absolute_row_column() {
     }
     buf[(4, 10)].set_bg(theme.selection_bg);
 
-    let column = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Idle, false, 0);
+    let column = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Idle, false, 0, 0);
     column.paint_matching(header, &mut buf, theme.header_bg);
     column.paint_matching(composer, &mut buf, theme.composer_bg);
 
-    assert_eq!(buf[(0, 0)].bg, ramp.color_at(0, 12));
-    assert_eq!(buf[(0, 11)].bg, ramp.color_at(11, 12));
+    assert_eq!(buf[(0, 0)].bg, ramp.color_at_context(0, 12, 0));
+    assert_eq!(buf[(0, 11)].bg, ramp.color_at_context(11, 12, 0));
     assert_ne!(buf[(0, 1)].bg, buf[(0, 10)].bg);
     assert_eq!(
         buf[(4, 10)].bg,
@@ -579,8 +539,8 @@ fn split_shell_surfaces_share_one_absolute_row_column() {
 
 #[test]
 fn full_viewport_water_column_reaches_both_terminal_edges() {
-    let theme = crate::palette::UI_THEME;
-    let ramp = OceanRamp::for_theme(&theme).expect("RGB theme");
+    let theme = crate::palette::UNDERWATER_UI_THEME;
+    let ramp = OceanRamp::for_theme(&theme).expect("underwater ramp");
     let viewport = Rect::new(0, 0, 120, 32);
     let mut buf = Buffer::empty(viewport);
     for y in viewport.top()..viewport.bottom() {
@@ -590,11 +550,11 @@ fn full_viewport_water_column_reaches_both_terminal_edges() {
     }
     buf[(60, 16)].set_bg(theme.selection_bg);
 
-    let column = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Idle, false, 0);
+    let column = OceanColumn::new(ramp, viewport, 0, None, ShellPhase::Idle, false, 0, 0);
     column.paint_matching(viewport, &mut buf, theme.surface_bg);
 
     for y in viewport.top()..viewport.bottom() {
-        let expected = ramp.color_at(y, viewport.height);
+        let expected = ramp.color_at_context(y, viewport.height, 0);
         assert_eq!(buf[(viewport.left(), y)].bg, expected);
         assert_eq!(buf[(viewport.right() - 1, y)].bg, expected);
     }

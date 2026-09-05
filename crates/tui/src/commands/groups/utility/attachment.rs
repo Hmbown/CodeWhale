@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use codewhale_command_contract::facets::CommandMediaContext;
-use codewhale_command_contract::handler::{CommandContexts, CommandHandler};
+use codewhale_command_contract::handler::{CommandCapabilities, CommandContexts, CommandHandler};
 use codewhale_command_contract::metadata::{CommandInfo, RegisterCommand};
 
 use crate::commands::CommandResult;
@@ -23,14 +23,21 @@ impl RegisterCommand<CommandResult> for AttachCmd {
     }
 
     fn handler() -> CommandHandler<CommandResult> {
-        CommandHandler::Contextual(attach_contextual)
+        CommandHandler::Contextual {
+            capabilities: CommandCapabilities::WORKSPACE.union(CommandCapabilities::MEDIA),
+            handler: attach_contextual,
+        }
     }
 }
 
 fn attach_contextual(contexts: CommandContexts<'_>, arg: Option<&str>) -> CommandResult {
     let mut parts = contexts.into_parts();
-    let workspace = parts.workspace.as_deref().expect("workspace facet");
-    let media = parts.media.as_deref_mut().expect("media facet");
+    let Some(workspace) = parts.workspace.as_deref() else {
+        return CommandResult::error("Command capability unavailable: workspace");
+    };
+    let Some(media) = parts.media.as_deref_mut() else {
+        return CommandResult::error("Command capability unavailable: media");
+    };
     attach(workspace.workspace(), media, arg)
 }
 
@@ -163,10 +170,23 @@ mod tests {
 
     #[test]
     fn handler_is_contextual() {
-        assert!(matches!(
-            AttachCmd::handler(),
-            CommandHandler::Contextual(_)
-        ));
+        let CommandHandler::Contextual {
+            capabilities,
+            handler,
+        } = AttachCmd::handler()
+        else {
+            panic!("attach must be contextual");
+        };
+        assert_eq!(
+            capabilities,
+            CommandCapabilities::WORKSPACE.union(CommandCapabilities::MEDIA)
+        );
+        let missing = handler(CommandContexts::empty(), Some("photo.png"));
+        assert!(missing.is_error);
+        assert_eq!(
+            missing.message.as_deref(),
+            Some("Error: Command capability unavailable: workspace")
+        );
         assert_eq!(AttachCmd::info().description_key, "cmd_attach_description");
         assert_eq!(AttachCmd::info().aliases, &["image", "media", "fujian"]);
     }

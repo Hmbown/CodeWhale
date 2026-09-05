@@ -131,6 +131,26 @@ pub fn query_terminal_background(timeout: std::time::Duration) -> Option<(u8, u8
 /// yet reading stdin.
 #[cfg(unix)]
 pub(crate) fn query_terminal(query: &[u8], timeout: std::time::Duration) -> Option<Vec<u8>> {
+    query_terminal_inner(query, timeout, false)
+}
+
+/// CSI-terminated variant of [`query_terminal`] for the sixel probe
+/// (`tui::mark`): a primary-DA reply ends at its alphabetic final byte
+/// (`c`), which is neither BEL nor `ESC \`, so the plain reader would keep
+/// swallowing input — including the user's own typed-ahead keystrokes —
+/// until its byte cap. Stops after the final byte of a reply that opened
+/// with `ESC [` and keeps the same raw-mode caveat.
+#[cfg(unix)]
+pub(crate) fn query_terminal_csi(query: &[u8], timeout: std::time::Duration) -> Option<Vec<u8>> {
+    query_terminal_inner(query, timeout, true)
+}
+
+#[cfg(unix)]
+fn query_terminal_inner(
+    query: &[u8],
+    timeout: std::time::Duration,
+    stop_at_csi_final: bool,
+) -> Option<Vec<u8>> {
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
     use std::time::Instant;
@@ -183,6 +203,16 @@ pub(crate) fn query_terminal(query: &[u8], timeout: std::time::Duration) -> Opti
             break;
         }
         reply.push(byte[0]);
+        // A CSI reply (`ESC [` …) ends at its first final byte (`@..=~`):
+        // keep the final and stop, so a DA answer never eats past itself.
+        if stop_at_csi_final
+            && reply.len() >= 3
+            && reply[0] == 0x1b
+            && reply[1] == b'['
+            && (0x40..=0x7e).contains(&byte[0])
+        {
+            break;
+        }
         if reply.len() >= 128 {
             return None;
         }
@@ -213,5 +243,11 @@ fn wait_readable(fd: std::os::fd::RawFd, timeout: std::time::Duration) -> bool {
 /// sources. Callers treat `None` as "no evidence", never as "dark".
 #[cfg(not(unix))]
 pub(crate) fn query_terminal(_query: &[u8], _timeout: std::time::Duration) -> Option<Vec<u8>> {
+    None
+}
+
+/// Non-Unix twin of [`query_terminal_csi`]: no console to ask, no evidence.
+#[cfg(not(unix))]
+pub(crate) fn query_terminal_csi(_query: &[u8], _timeout: std::time::Duration) -> Option<Vec<u8>> {
     None
 }

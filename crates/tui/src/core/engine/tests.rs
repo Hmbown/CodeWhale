@@ -398,30 +398,58 @@ fn ordinary_engine_default_has_a_finite_step_budget() {
 }
 
 #[test]
-fn registry_first_policy_is_in_the_initial_prompt_only_when_mcp_is_enabled() {
-    let enabled = EngineConfig::default();
-    let (engine, _handle) = Engine::new(enabled, &Config::default());
-    let prompt = crate::prompts::system_prompt_flat_text(
-        engine
-            .session
-            .system_prompt
-            .as_ref()
-            .expect("system prompt"),
-    );
-    assert!(prompt.contains(MCP_REGISTRY_FIRST_INSTRUCTION_SOURCE));
-    assert!(prompt.contains("must call `registry_sync` with a `query` describing that capability"));
+fn registry_first_scenario() {
+    // Scenario consolidation of: registry_first_policy_is_in_the_initial_prompt_only_when_mcp_is_enabled, registry_first_guidance_is_attached_to_the_shell_fallback_once
+    // from registry_first_policy_is_in_the_initial_prompt_only_when_mcp_is_enabled
+    {
+        let enabled = EngineConfig::default();
+        let (engine, _handle) = Engine::new(enabled, &Config::default());
+        let prompt = crate::prompts::system_prompt_flat_text(
+            engine
+                .session
+                .system_prompt
+                .as_ref()
+                .expect("system prompt"),
+        );
+        assert!(prompt.contains(MCP_REGISTRY_FIRST_INSTRUCTION_SOURCE));
+        assert!(
+            prompt.contains("must call `registry_sync` with a `query` describing that capability")
+        );
 
-    let mut disabled = EngineConfig::default();
-    disabled.features.disable(Feature::Mcp);
-    let (engine, _handle) = Engine::new(disabled, &Config::default());
-    let prompt = crate::prompts::system_prompt_flat_text(
-        engine
-            .session
-            .system_prompt
-            .as_ref()
-            .expect("system prompt"),
-    );
-    assert!(!prompt.contains(MCP_REGISTRY_FIRST_INSTRUCTION_SOURCE));
+        let mut disabled = EngineConfig::default();
+        disabled.features.disable(Feature::Mcp);
+        let (engine, _handle) = Engine::new(disabled, &Config::default());
+        let prompt = crate::prompts::system_prompt_flat_text(
+            engine
+                .session
+                .system_prompt
+                .as_ref()
+                .expect("system prompt"),
+        );
+        assert!(!prompt.contains(MCP_REGISTRY_FIRST_INSTRUCTION_SOURCE));
+    }
+    // from registry_first_guidance_is_attached_to_the_shell_fallback_once
+    {
+        let mut catalog = vec![api_tool("read_file"), api_tool("exec_shell")];
+
+        apply_registry_first_shell_guidance(&mut catalog);
+        let after_first = catalog
+            .iter()
+            .find(|tool| tool.name == "exec_shell")
+            .expect("shell tool")
+            .description
+            .clone();
+        apply_registry_first_shell_guidance(&mut catalog);
+
+        let after_second = &catalog
+            .iter()
+            .find(|tool| tool.name == "exec_shell")
+            .expect("shell tool")
+            .description;
+        assert_eq!(after_second, &after_first);
+        assert!(after_second.contains("registry_sync"));
+        assert!(after_second.contains("start_registry_mcp_server"));
+    }
 }
 
 #[test]
@@ -4505,22 +4533,37 @@ fn policy_for_catalog(
 }
 
 #[test]
-fn tool_catalog_filter_applies_allow_and_deny_gates() {
-    // #3027 AC1: the advertised catalog must not contain tools the execution
-    // gates would deny; deny wins over allow.
-    let catalog = vec![
-        catalog_tool("read_file"),
-        catalog_tool("exec_shell"),
-        catalog_tool("grep_files"),
-    ];
-    let surface = policy_for_catalog(
-        catalog,
-        Some(vec!["read_file".to_string(), "exec_shell".to_string()]),
-        Some(vec!["exec_shell".to_string()]),
-        crate::tui::approval::ApprovalMode::Suggest,
-    );
-    let names: Vec<&str> = surface.catalog.iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(names, ["read_file"]);
+fn tool_catalog_scenario() {
+    // Scenario consolidation of: tool_catalog_filter_applies_allow_and_deny_gates, tool_catalog_filter_is_inert_without_gates
+    // from tool_catalog_filter_applies_allow_and_deny_gates
+    {
+        // #3027 AC1: the advertised catalog must not contain tools the execution
+        // gates would deny; deny wins over allow.
+        let catalog = vec![
+            catalog_tool("read_file"),
+            catalog_tool("exec_shell"),
+            catalog_tool("grep_files"),
+        ];
+        let surface = policy_for_catalog(
+            catalog,
+            Some(vec!["read_file".to_string(), "exec_shell".to_string()]),
+            Some(vec!["exec_shell".to_string()]),
+            crate::tui::approval::ApprovalMode::Suggest,
+        );
+        let names: Vec<&str> = surface.catalog.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["read_file"]);
+    }
+    // from tool_catalog_filter_is_inert_without_gates
+    {
+        let surface = policy_for_catalog(
+            vec![catalog_tool("read_file"), catalog_tool("exec_shell")],
+            None,
+            None,
+            crate::tui::approval::ApprovalMode::Suggest,
+        );
+        assert!(surface.catalog.iter().any(|tool| tool.name == "read_file"));
+        assert!(surface.catalog.iter().any(|tool| tool.name == "exec_shell"));
+    }
 }
 
 #[test]
@@ -4553,18 +4596,6 @@ fn tool_catalog_shell_only_benchmark_surface_hides_native_tools() {
         names,
         ["exec_shell", "exec_shell_wait", "exec_shell_interact"]
     );
-}
-
-#[test]
-fn tool_catalog_filter_is_inert_without_gates() {
-    let surface = policy_for_catalog(
-        vec![catalog_tool("read_file"), catalog_tool("exec_shell")],
-        None,
-        None,
-        crate::tui::approval::ApprovalMode::Suggest,
-    );
-    assert!(surface.catalog.iter().any(|tool| tool.name == "read_file"));
-    assert!(surface.catalog.iter().any(|tool| tool.name == "exec_shell"));
 }
 
 #[test]
@@ -7914,103 +7945,159 @@ fn auto_review_plan_decision(
 }
 
 #[test]
-fn auto_review_classifies_publish_and_holds_without_prompting() {
-    let (decision, audit) = auto_review_plan_decision(
-        &crate::tui::auto_review::AutoReviewPolicy::default(),
-        "exec_shell",
-        &json!({"command": "git push origin main"}),
-        crate::tui::auto_review::RunOrigin::Interactive,
-        crate::tui::approval::ApprovalMode::Auto,
-        true,
-        None,
-    );
+fn auto_review_scenario() {
+    // Scenario consolidation of: auto_review_classifies_publish_and_holds_without_prompting, auto_review_classifier_allow_executes_without_prompting, auto_review_allows_ordinary_shell_probe_without_prompting, auto_review_routes_unknown_tool_to_reviewer_in_auto, auto_review_policy_blocks_publish_when_approval_is_never, auto_review_allows_ordinary_test_command_without_prompting, auto_review_allows_ordinary_workspace_write_without_prompting, auto_review_routes_unbounded_or_sensitive_workspace_writes_to_reviewer
+    // from auto_review_classifies_publish_and_holds_without_prompting
+    {
+        let (decision, audit) = auto_review_plan_decision(
+            &crate::tui::auto_review::AutoReviewPolicy::default(),
+            "exec_shell",
+            &json!({"command": "git push origin main"}),
+            crate::tui::auto_review::RunOrigin::Interactive,
+            crate::tui::approval::ApprovalMode::Auto,
+            true,
+            None,
+        );
 
-    assert_eq!(
-        decision,
-        AutoReviewPlanDecision::Block(
-            "Built-in safety gate requires approval: publish-like action requires durable review"
-                .to_string()
-        )
-    );
-    assert_eq!(audit["action_kind"], "publish");
-    assert_eq!(audit["decision"], "hold_for_review");
-}
+        assert_eq!(
+            decision,
+            AutoReviewPlanDecision::Block(
+                "Built-in safety gate requires approval: publish-like action requires durable review"
+                    .to_string()
+            )
+        );
+        assert_eq!(audit["action_kind"], "publish");
+        assert_eq!(audit["decision"], "hold_for_review");
+    }
+    // from auto_review_classifier_allow_executes_without_prompting
+    {
+        let (decision, audit) = auto_review_plan_decision(
+            &crate::tui::auto_review::AutoReviewPolicy::default(),
+            "read_file",
+            &json!({"path": "Cargo.toml"}),
+            crate::tui::auto_review::RunOrigin::Interactive,
+            crate::tui::approval::ApprovalMode::Auto,
+            true,
+            None,
+        );
 
-#[test]
-fn auto_review_classifier_allow_executes_without_prompting() {
-    let (decision, audit) = auto_review_plan_decision(
-        &crate::tui::auto_review::AutoReviewPolicy::default(),
-        "read_file",
-        &json!({"path": "Cargo.toml"}),
-        crate::tui::auto_review::RunOrigin::Interactive,
-        crate::tui::approval::ApprovalMode::Auto,
-        true,
-        None,
-    );
+        assert_eq!(decision, AutoReviewPlanDecision::Allow);
+        assert_eq!(audit["decision"], "allow");
+    }
+    // from auto_review_allows_ordinary_shell_probe_without_prompting
+    {
+        let (decision, audit) = auto_review_plan_decision(
+            &crate::tui::auto_review::AutoReviewPolicy::default(),
+            "exec_shell",
+            &json!({"command": "git remote -v && git rev-parse --show-toplevel && git branch --show-current && git rev-parse HEAD && git tag --list 'v0.8.65'"}),
+            crate::tui::auto_review::RunOrigin::Interactive,
+            crate::tui::approval::ApprovalMode::Auto,
+            true,
+            None,
+        );
 
-    assert_eq!(decision, AutoReviewPlanDecision::Allow);
-    assert_eq!(audit["decision"], "allow");
-}
+        assert_eq!(decision, AutoReviewPlanDecision::Allow);
+        assert_eq!(audit["decision"], "allow");
+        assert_eq!(audit["action_kind"], "shell");
+    }
+    // from auto_review_routes_unknown_tool_to_reviewer_in_auto
+    {
+        let (decision, audit) = auto_review_plan_decision(
+            &crate::tui::auto_review::AutoReviewPolicy::default(),
+            "mystery_tool",
+            &json!({"value": true}),
+            crate::tui::auto_review::RunOrigin::Interactive,
+            crate::tui::approval::ApprovalMode::Auto,
+            true,
+            None,
+        );
 
-#[test]
-fn auto_review_allows_ordinary_shell_probe_without_prompting() {
-    let (decision, audit) = auto_review_plan_decision(
-        &crate::tui::auto_review::AutoReviewPolicy::default(),
-        "exec_shell",
-        &json!({"command": "git remote -v && git rev-parse --show-toplevel && git branch --show-current && git rev-parse HEAD && git tag --list 'v0.8.65'"}),
-        crate::tui::auto_review::RunOrigin::Interactive,
-        crate::tui::approval::ApprovalMode::Auto,
-        true,
-        None,
-    );
+        assert_eq!(
+            decision,
+            AutoReviewPlanDecision::ConsultReviewer(
+                "unknown tool category requires explicit review".to_string()
+            )
+        );
+        assert_eq!(audit["decision"], "ask_user");
+    }
+    // from auto_review_policy_blocks_publish_when_approval_is_never
+    {
+        let (decision, audit) = auto_review_plan_decision(
+            &crate::tui::auto_review::AutoReviewPolicy::default(),
+            "github_publish_release",
+            &json!({"tag": "v0.8.64"}),
+            crate::tui::auto_review::RunOrigin::Interactive,
+            crate::tui::approval::ApprovalMode::Never,
+            true,
+            None,
+        );
 
-    assert_eq!(decision, AutoReviewPlanDecision::Allow);
-    assert_eq!(audit["decision"], "allow");
-    assert_eq!(audit["action_kind"], "shell");
-}
+        assert_eq!(
+            decision,
+            AutoReviewPlanDecision::Block(
+                "Built-in safety gate requires approval: publish-like action requires durable review"
+                    .to_string()
+            )
+        );
+        assert_eq!(audit["approval_mode"], "NEVER");
+        assert_eq!(audit["decision"], "hold_for_review");
+    }
+    // from auto_review_allows_ordinary_test_command_without_prompting
+    {
+        let (decision, audit) = auto_review_plan_decision(
+            &crate::tui::auto_review::AutoReviewPolicy::default(),
+            "exec_shell",
+            &json!({"command": "cargo test"}),
+            crate::tui::auto_review::RunOrigin::Interactive,
+            crate::tui::approval::ApprovalMode::Auto,
+            true,
+            None,
+        );
 
-#[test]
-fn auto_review_routes_unknown_tool_to_reviewer_in_auto() {
-    let (decision, audit) = auto_review_plan_decision(
-        &crate::tui::auto_review::AutoReviewPolicy::default(),
-        "mystery_tool",
-        &json!({"value": true}),
-        crate::tui::auto_review::RunOrigin::Interactive,
-        crate::tui::approval::ApprovalMode::Auto,
-        true,
-        None,
-    );
+        assert_eq!(decision, AutoReviewPlanDecision::Allow);
+        assert_eq!(audit["decision"], "allow");
+        assert_eq!(audit["risk"], "destructive");
+    }
+    // from auto_review_allows_ordinary_workspace_write_without_prompting
+    {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::create_dir(tmp.path().join(".git")).expect("git marker");
+        std::fs::create_dir(tmp.path().join("src")).expect("source directory");
+        let (decision, audit) = auto_review_plan_decision(
+            &crate::tui::auto_review::AutoReviewPolicy::default(),
+            "write_file",
+            &json!({"path": "src/lib.rs", "content": "pub fn ready() {}\n"}),
+            crate::tui::auto_review::RunOrigin::Interactive,
+            crate::tui::approval::ApprovalMode::Auto,
+            true,
+            Some(tmp.path()),
+        );
 
-    assert_eq!(
-        decision,
-        AutoReviewPlanDecision::ConsultReviewer(
-            "unknown tool category requires explicit review".to_string()
-        )
-    );
-    assert_eq!(audit["decision"], "ask_user");
-}
-
-#[test]
-fn auto_review_policy_blocks_publish_when_approval_is_never() {
-    let (decision, audit) = auto_review_plan_decision(
-        &crate::tui::auto_review::AutoReviewPolicy::default(),
-        "github_publish_release",
-        &json!({"tag": "v0.8.64"}),
-        crate::tui::auto_review::RunOrigin::Interactive,
-        crate::tui::approval::ApprovalMode::Never,
-        true,
-        None,
-    );
-
-    assert_eq!(
-        decision,
-        AutoReviewPlanDecision::Block(
-            "Built-in safety gate requires approval: publish-like action requires durable review"
-                .to_string()
-        )
-    );
-    assert_eq!(audit["approval_mode"], "NEVER");
-    assert_eq!(audit["decision"], "hold_for_review");
+        assert_eq!(decision, AutoReviewPlanDecision::Allow);
+        assert_eq!(audit["decision"], "allow");
+        assert_eq!(audit["action_kind"], "write");
+    }
+    // from auto_review_routes_unbounded_or_sensitive_workspace_writes_to_reviewer
+    {
+        let tmp = tempdir().expect("tempdir");
+        std::fs::create_dir(tmp.path().join(".git")).expect("git marker");
+        for path in ["../outside.rs", "/etc/hostname", ".env", ".git/config"] {
+            let (decision, audit) = auto_review_plan_decision(
+                &crate::tui::auto_review::AutoReviewPolicy::default(),
+                "write_file",
+                &json!({"path": path, "content": "blocked"}),
+                crate::tui::auto_review::RunOrigin::Interactive,
+                crate::tui::approval::ApprovalMode::Auto,
+                true,
+                Some(tmp.path()),
+            );
+            assert!(
+                matches!(decision, AutoReviewPlanDecision::ConsultReviewer(_)),
+                "Auto-Review must not auto-approve {path} without reviewer judgment"
+            );
+            assert_eq!(audit["decision"], "ask_user", "unexpected audit for {path}");
+        }
+    }
 }
 
 #[test]
@@ -8380,84 +8467,120 @@ fn sandbox_escalation_denial_names_no_new_privs_remediation_only_when_flag_activ
 }
 
 #[test]
-fn auto_review_allows_ordinary_test_command_without_prompting() {
-    let (decision, audit) = auto_review_plan_decision(
-        &crate::tui::auto_review::AutoReviewPolicy::default(),
-        "exec_shell",
-        &json!({"command": "cargo test"}),
-        crate::tui::auto_review::RunOrigin::Interactive,
-        crate::tui::approval::ApprovalMode::Auto,
-        true,
-        None,
-    );
-
-    assert_eq!(decision, AutoReviewPlanDecision::Allow);
-    assert_eq!(audit["decision"], "allow");
-    assert_eq!(audit["risk"], "destructive");
-}
-
-#[test]
-fn auto_review_allows_ordinary_workspace_write_without_prompting() {
-    let tmp = tempdir().expect("tempdir");
-    std::fs::create_dir(tmp.path().join(".git")).expect("git marker");
-    std::fs::create_dir(tmp.path().join("src")).expect("source directory");
-    let (decision, audit) = auto_review_plan_decision(
-        &crate::tui::auto_review::AutoReviewPolicy::default(),
-        "write_file",
-        &json!({"path": "src/lib.rs", "content": "pub fn ready() {}\n"}),
-        crate::tui::auto_review::RunOrigin::Interactive,
-        crate::tui::approval::ApprovalMode::Auto,
-        true,
-        Some(tmp.path()),
-    );
-
-    assert_eq!(decision, AutoReviewPlanDecision::Allow);
-    assert_eq!(audit["decision"], "allow");
-    assert_eq!(audit["action_kind"], "write");
-}
-
-#[test]
-fn auto_review_routes_unbounded_or_sensitive_workspace_writes_to_reviewer() {
-    let tmp = tempdir().expect("tempdir");
-    std::fs::create_dir(tmp.path().join(".git")).expect("git marker");
-    for path in ["../outside.rs", "/etc/hostname", ".env", ".git/config"] {
+fn auto_review_scenario_2() {
+    // Scenario consolidation of: auto_review_routes_interactive_destructive_shell_to_reviewer, auto_review_routes_mcp_mutations_or_secret_tools_to_reviewer, auto_review_run_origin_marks_detached_tools_as_background, auto_review_policy_holds_background_destructive_under_suggest, auto_review_policy_blocks_background_destructive_under_never, auto_review_block_error_preserves_reason_and_names_the_safe_next_step
+    // from auto_review_routes_interactive_destructive_shell_to_reviewer
+    {
         let (decision, audit) = auto_review_plan_decision(
             &crate::tui::auto_review::AutoReviewPolicy::default(),
-            "write_file",
-            &json!({"path": path, "content": "blocked"}),
+            "exec_shell",
+            &json!({"command": "rm -rf /"}),
             crate::tui::auto_review::RunOrigin::Interactive,
             crate::tui::approval::ApprovalMode::Auto,
             true,
-            Some(tmp.path()),
+            None,
         );
-        assert!(
-            matches!(decision, AutoReviewPlanDecision::ConsultReviewer(_)),
-            "Auto-Review must not auto-approve {path} without reviewer judgment"
+
+        assert_eq!(
+            decision,
+            AutoReviewPlanDecision::ConsultReviewer(
+                "sensitive or destructive action requires explicit review".to_string()
+            )
         );
-        assert_eq!(audit["decision"], "ask_user", "unexpected audit for {path}");
+        assert_eq!(audit["decision"], "ask_user");
+        assert_eq!(audit["risk"], "destructive");
     }
-}
+    // from auto_review_routes_mcp_mutations_or_secret_tools_to_reviewer
+    {
+        for (tool_name, input) in [
+            ("mcp_github_merge_pull_request", json!({"number": 5341})),
+            ("read_secret", json!({"name": "provider-token"})),
+        ] {
+            let (decision, audit) = auto_review_plan_decision(
+                &crate::tui::auto_review::AutoReviewPolicy::default(),
+                tool_name,
+                &input,
+                crate::tui::auto_review::RunOrigin::Interactive,
+                crate::tui::approval::ApprovalMode::Auto,
+                true,
+                None,
+            );
 
-#[test]
-fn auto_review_routes_interactive_destructive_shell_to_reviewer() {
-    let (decision, audit) = auto_review_plan_decision(
-        &crate::tui::auto_review::AutoReviewPolicy::default(),
-        "exec_shell",
-        &json!({"command": "rm -rf /"}),
-        crate::tui::auto_review::RunOrigin::Interactive,
-        crate::tui::approval::ApprovalMode::Auto,
-        true,
-        None,
-    );
+            assert!(
+                matches!(decision, AutoReviewPlanDecision::ConsultReviewer(_)),
+                "Auto-Review must not auto-approve {tool_name} without reviewer judgment"
+            );
+            assert_ne!(
+                audit["decision"], "allow",
+                "unexpected allow for {tool_name}"
+            );
+        }
+    }
+    // from auto_review_run_origin_marks_detached_tools_as_background
+    {
+        assert_eq!(
+            auto_review_run_origin_for_plan(false),
+            crate::tui::auto_review::RunOrigin::Interactive
+        );
+        assert_eq!(
+            auto_review_run_origin_for_plan(true),
+            crate::tui::auto_review::RunOrigin::Background
+        );
+    }
+    // from auto_review_policy_holds_background_destructive_under_suggest
+    {
+        let (decision, audit) = auto_review_plan_decision(
+            &crate::tui::auto_review::AutoReviewPolicy::default(),
+            "exec_shell",
+            &json!({"command": "rm -rf ~/", "background": true}),
+            crate::tui::auto_review::RunOrigin::Background,
+            crate::tui::approval::ApprovalMode::Suggest,
+            true,
+            None,
+        );
 
-    assert_eq!(
-        decision,
-        AutoReviewPlanDecision::ConsultReviewer(
-            "sensitive or destructive action requires explicit review".to_string()
-        )
-    );
-    assert_eq!(audit["decision"], "ask_user");
-    assert_eq!(audit["risk"], "destructive");
+        assert_eq!(
+            decision,
+            AutoReviewPlanDecision::ForcePrompt(
+                "Built-in safety gate requires approval: destructive background/headless action requires durable review"
+                    .to_string()
+            )
+        );
+        assert_eq!(audit["run_origin"], "background");
+        assert_eq!(audit["decision"], "hold_for_review");
+    }
+    // from auto_review_policy_blocks_background_destructive_under_never
+    {
+        let (decision, audit) = auto_review_plan_decision(
+            &crate::tui::auto_review::AutoReviewPolicy::default(),
+            "exec_shell",
+            &json!({"command": "rm -rf ~/", "background": true}),
+            crate::tui::auto_review::RunOrigin::Background,
+            crate::tui::approval::ApprovalMode::Never,
+            true,
+            None,
+        );
+
+        assert_eq!(
+            decision,
+            AutoReviewPlanDecision::Block(
+                "Built-in safety gate requires approval: destructive background/headless action requires durable review"
+                    .to_string()
+            )
+        );
+        assert_eq!(audit["approval_mode"], "NEVER");
+        assert_eq!(audit["run_origin"], "background");
+        assert_eq!(audit["decision"], "hold_for_review");
+    }
+    // from auto_review_block_error_preserves_reason_and_names_the_safe_next_step
+    {
+        let error = auto_review_block_tool_error("policy reason");
+        let message = error.to_string();
+
+        assert!(message.contains("policy reason."), "{message}");
+        assert!(message.contains("do not work around it"), "{message}");
+        assert!(message.contains("take a safer approach"), "{message}");
+    }
 }
 
 #[test]
@@ -8491,68 +8614,6 @@ fn auto_review_routes_shell_commands_requiring_approval_to_reviewer() {
 }
 
 #[test]
-fn auto_review_routes_mcp_mutations_or_secret_tools_to_reviewer() {
-    for (tool_name, input) in [
-        ("mcp_github_merge_pull_request", json!({"number": 5341})),
-        ("read_secret", json!({"name": "provider-token"})),
-    ] {
-        let (decision, audit) = auto_review_plan_decision(
-            &crate::tui::auto_review::AutoReviewPolicy::default(),
-            tool_name,
-            &input,
-            crate::tui::auto_review::RunOrigin::Interactive,
-            crate::tui::approval::ApprovalMode::Auto,
-            true,
-            None,
-        );
-
-        assert!(
-            matches!(decision, AutoReviewPlanDecision::ConsultReviewer(_)),
-            "Auto-Review must not auto-approve {tool_name} without reviewer judgment"
-        );
-        assert_ne!(
-            audit["decision"], "allow",
-            "unexpected allow for {tool_name}"
-        );
-    }
-}
-
-#[test]
-fn auto_review_run_origin_marks_detached_tools_as_background() {
-    assert_eq!(
-        auto_review_run_origin_for_plan(false),
-        crate::tui::auto_review::RunOrigin::Interactive
-    );
-    assert_eq!(
-        auto_review_run_origin_for_plan(true),
-        crate::tui::auto_review::RunOrigin::Background
-    );
-}
-
-#[test]
-fn auto_review_policy_holds_background_destructive_under_suggest() {
-    let (decision, audit) = auto_review_plan_decision(
-        &crate::tui::auto_review::AutoReviewPolicy::default(),
-        "exec_shell",
-        &json!({"command": "rm -rf ~/", "background": true}),
-        crate::tui::auto_review::RunOrigin::Background,
-        crate::tui::approval::ApprovalMode::Suggest,
-        true,
-        None,
-    );
-
-    assert_eq!(
-        decision,
-        AutoReviewPlanDecision::ForcePrompt(
-            "Built-in safety gate requires approval: destructive background/headless action requires durable review"
-                .to_string()
-        )
-    );
-    assert_eq!(audit["run_origin"], "background");
-    assert_eq!(audit["decision"], "hold_for_review");
-}
-
-#[test]
 fn full_access_blocks_detached_catastrophic_tools_without_prompting() {
     for run_origin in [
         crate::tui::auto_review::RunOrigin::Background,
@@ -8579,30 +8640,6 @@ fn full_access_blocks_detached_catastrophic_tools_without_prompting() {
         assert_eq!(audit["run_origin"], run_origin.as_str());
         assert_eq!(audit["decision"], "hold_for_review");
     }
-}
-
-#[test]
-fn auto_review_policy_blocks_background_destructive_under_never() {
-    let (decision, audit) = auto_review_plan_decision(
-        &crate::tui::auto_review::AutoReviewPolicy::default(),
-        "exec_shell",
-        &json!({"command": "rm -rf ~/", "background": true}),
-        crate::tui::auto_review::RunOrigin::Background,
-        crate::tui::approval::ApprovalMode::Never,
-        true,
-        None,
-    );
-
-    assert_eq!(
-        decision,
-        AutoReviewPlanDecision::Block(
-            "Built-in safety gate requires approval: destructive background/headless action requires durable review"
-                .to_string()
-        )
-    );
-    assert_eq!(audit["approval_mode"], "NEVER");
-    assert_eq!(audit["run_origin"], "background");
-    assert_eq!(audit["decision"], "hold_for_review");
 }
 
 #[test]
@@ -8640,36 +8677,70 @@ fn auto_review_plan_decision_uses_configured_policy() {
 }
 
 #[test]
-fn auto_review_block_error_preserves_reason_and_names_the_safe_next_step() {
-    let error = auto_review_block_tool_error("policy reason");
-    let message = error.to_string();
+fn exec_shell_scenario() {
+    // Scenario consolidation of: exec_shell_ask_rule_decision_prompts_for_matching_auto_command, exec_shell_ask_rule_decision_blocks_matching_never_command, exec_shell_ask_rule_decision_ignores_unmatched_command
+    // from exec_shell_ask_rule_decision_prompts_for_matching_auto_command
+    {
+        let config = EngineConfig {
+            exec_policy_engine: ask_rule_engine("cargo test"),
+            ..EngineConfig::default()
+        };
 
-    assert!(message.contains("policy reason."), "{message}");
-    assert!(message.contains("do not work around it"), "{message}");
-    assert!(message.contains("take a safer approach"), "{message}");
-}
+        let decision = exec_shell_ask_rule_decision(
+            &config,
+            "exec_shell",
+            &json!({"command": "cargo test --workspace"}),
+            Path::new("/repo"),
+            crate::tui::approval::ApprovalMode::Auto,
+        );
 
-#[test]
-fn exec_shell_ask_rule_decision_prompts_for_matching_auto_command() {
-    let config = EngineConfig {
-        exec_policy_engine: ask_rule_engine("cargo test"),
-        ..EngineConfig::default()
-    };
+        assert_eq!(
+            decision,
+            Some(ToolAskRuleDecision::Prompt(
+                "Typed ask rule 'tool=exec_shell command=cargo test' requires approval."
+                    .to_string()
+            ))
+        );
+    }
+    // from exec_shell_ask_rule_decision_blocks_matching_never_command
+    {
+        let config = EngineConfig {
+            exec_policy_engine: ask_rule_engine("cargo test"),
+            ..EngineConfig::default()
+        };
 
-    let decision = exec_shell_ask_rule_decision(
-        &config,
-        "exec_shell",
-        &json!({"command": "cargo test --workspace"}),
-        Path::new("/repo"),
-        crate::tui::approval::ApprovalMode::Auto,
-    );
+        let decision = exec_shell_ask_rule_decision(
+            &config,
+            "exec_shell",
+            &json!({"command": "cargo test --workspace"}),
+            Path::new("/repo"),
+            crate::tui::approval::ApprovalMode::Never,
+        );
 
-    assert_eq!(
-        decision,
-        Some(ToolAskRuleDecision::Prompt(
-            "Typed ask rule 'tool=exec_shell command=cargo test' requires approval.".to_string()
-        ))
-    );
+        assert_eq!(
+            decision,
+            Some(ToolAskRuleDecision::Block(
+                "Typed ask rule 'tool=exec_shell command=cargo test' requires approval, but approval policy is never.".to_string()
+            ))
+        );
+    }
+    // from exec_shell_ask_rule_decision_ignores_unmatched_command
+    {
+        let config = EngineConfig {
+            exec_policy_engine: ask_rule_engine("cargo test"),
+            ..EngineConfig::default()
+        };
+
+        let decision = exec_shell_ask_rule_decision(
+            &config,
+            "exec_shell",
+            &json!({"command": "git status"}),
+            Path::new("/repo"),
+            crate::tui::approval::ApprovalMode::Auto,
+        );
+
+        assert_eq!(decision, None);
+    }
 }
 
 #[test]
@@ -8693,47 +8764,6 @@ fn canonical_bash_run_honors_legacy_typed_ask_rules() {
             "Typed ask rule 'tool=exec_shell command=cargo test' requires approval.".to_string()
         ))
     );
-}
-
-#[test]
-fn exec_shell_ask_rule_decision_blocks_matching_never_command() {
-    let config = EngineConfig {
-        exec_policy_engine: ask_rule_engine("cargo test"),
-        ..EngineConfig::default()
-    };
-
-    let decision = exec_shell_ask_rule_decision(
-        &config,
-        "exec_shell",
-        &json!({"command": "cargo test --workspace"}),
-        Path::new("/repo"),
-        crate::tui::approval::ApprovalMode::Never,
-    );
-
-    assert_eq!(
-        decision,
-        Some(ToolAskRuleDecision::Block(
-            "Typed ask rule 'tool=exec_shell command=cargo test' requires approval, but approval policy is never.".to_string()
-        ))
-    );
-}
-
-#[test]
-fn exec_shell_ask_rule_decision_ignores_unmatched_command() {
-    let config = EngineConfig {
-        exec_policy_engine: ask_rule_engine("cargo test"),
-        ..EngineConfig::default()
-    };
-
-    let decision = exec_shell_ask_rule_decision(
-        &config,
-        "exec_shell",
-        &json!({"command": "git status"}),
-        Path::new("/repo"),
-        crate::tui::approval::ApprovalMode::Auto,
-    );
-
-    assert_eq!(decision, None);
 }
 
 #[test]
@@ -8780,27 +8810,93 @@ fn exec_shell_allow_rule_decision_allows_only_exact_command_in_scoped_repo() {
 }
 
 #[test]
-fn file_ask_rule_decision_prompts_for_matching_read_path() {
-    let config = EngineConfig {
-        exec_policy_engine: file_ask_rule_engine("read_file", "secrets/api_key.txt"),
-        ..EngineConfig::default()
-    };
+fn file_ask_scenario() {
+    // Scenario consolidation of: file_ask_rule_decision_prompts_for_matching_read_path, file_ask_rule_decision_prompts_for_absolute_workspace_path, file_ask_rule_decision_blocks_matching_read_path_when_approval_is_never, file_ask_rule_decision_ignores_unmatched_path
+    // from file_ask_rule_decision_prompts_for_matching_read_path
+    {
+        let config = EngineConfig {
+            exec_policy_engine: file_ask_rule_engine("read_file", "secrets/api_key.txt"),
+            ..EngineConfig::default()
+        };
 
-    let decision = file_tool_ask_rule_decision(
-        &config,
-        "read_file",
-        &json!({"path": "secrets/api_key.txt"}),
-        Path::new("/repo"),
-        crate::tui::approval::ApprovalMode::Auto,
-    );
+        let decision = file_tool_ask_rule_decision(
+            &config,
+            "read_file",
+            &json!({"path": "secrets/api_key.txt"}),
+            Path::new("/repo"),
+            crate::tui::approval::ApprovalMode::Auto,
+        );
 
-    assert_eq!(
-        decision,
-        Some(ToolAskRuleDecision::Prompt(
-            "Typed ask rule 'tool=read_file path=secrets/api_key.txt' requires approval."
-                .to_string()
-        ))
-    );
+        assert_eq!(
+            decision,
+            Some(ToolAskRuleDecision::Prompt(
+                "Typed ask rule 'tool=read_file path=secrets/api_key.txt' requires approval."
+                    .to_string()
+            ))
+        );
+    }
+    // from file_ask_rule_decision_prompts_for_absolute_workspace_path
+    {
+        let config = EngineConfig {
+            exec_policy_engine: file_ask_rule_engine("read_file", "secrets/api_key.txt"),
+            ..EngineConfig::default()
+        };
+
+        let decision = file_tool_ask_rule_decision(
+            &config,
+            "read_file",
+            &json!({"path": "/repo/secrets/api_key.txt"}),
+            Path::new("/repo"),
+            crate::tui::approval::ApprovalMode::Auto,
+        );
+
+        assert_eq!(
+            decision,
+            Some(ToolAskRuleDecision::Prompt(
+                "Typed ask rule 'tool=read_file path=secrets/api_key.txt' requires approval."
+                    .to_string()
+            ))
+        );
+    }
+    // from file_ask_rule_decision_blocks_matching_read_path_when_approval_is_never
+    {
+        let config = EngineConfig {
+            exec_policy_engine: file_ask_rule_engine("read_file", "secrets/api_key.txt"),
+            ..EngineConfig::default()
+        };
+
+        let decision = file_tool_ask_rule_decision(
+            &config,
+            "read_file",
+            &json!({"path": "secrets/api_key.txt"}),
+            Path::new("/repo"),
+            crate::tui::approval::ApprovalMode::Never,
+        );
+
+        assert_eq!(
+            decision,
+            Some(ToolAskRuleDecision::Block(
+                "Typed ask rule 'tool=read_file path=secrets/api_key.txt' requires approval, but approval policy is never.".to_string()
+            ))
+        );
+    }
+    // from file_ask_rule_decision_ignores_unmatched_path
+    {
+        let config = EngineConfig {
+            exec_policy_engine: file_ask_rule_engine("read_file", "secrets/api_key.txt"),
+            ..EngineConfig::default()
+        };
+
+        let decision = file_tool_ask_rule_decision(
+            &config,
+            "read_file",
+            &json!({"path": "docs/readme.md"}),
+            Path::new("/repo"),
+            crate::tui::approval::ApprovalMode::Auto,
+        );
+
+        assert_eq!(decision, None);
+    }
 }
 
 #[test]
@@ -8824,71 +8920,6 @@ fn canonical_file_action_honors_legacy_path_ask_rules() {
             "Typed ask rule 'tool=write_file path=src/lib.rs' requires approval.".to_string()
         ))
     );
-}
-
-#[test]
-fn file_ask_rule_decision_prompts_for_absolute_workspace_path() {
-    let config = EngineConfig {
-        exec_policy_engine: file_ask_rule_engine("read_file", "secrets/api_key.txt"),
-        ..EngineConfig::default()
-    };
-
-    let decision = file_tool_ask_rule_decision(
-        &config,
-        "read_file",
-        &json!({"path": "/repo/secrets/api_key.txt"}),
-        Path::new("/repo"),
-        crate::tui::approval::ApprovalMode::Auto,
-    );
-
-    assert_eq!(
-        decision,
-        Some(ToolAskRuleDecision::Prompt(
-            "Typed ask rule 'tool=read_file path=secrets/api_key.txt' requires approval."
-                .to_string()
-        ))
-    );
-}
-
-#[test]
-fn file_ask_rule_decision_blocks_matching_read_path_when_approval_is_never() {
-    let config = EngineConfig {
-        exec_policy_engine: file_ask_rule_engine("read_file", "secrets/api_key.txt"),
-        ..EngineConfig::default()
-    };
-
-    let decision = file_tool_ask_rule_decision(
-        &config,
-        "read_file",
-        &json!({"path": "secrets/api_key.txt"}),
-        Path::new("/repo"),
-        crate::tui::approval::ApprovalMode::Never,
-    );
-
-    assert_eq!(
-        decision,
-        Some(ToolAskRuleDecision::Block(
-            "Typed ask rule 'tool=read_file path=secrets/api_key.txt' requires approval, but approval policy is never.".to_string()
-        ))
-    );
-}
-
-#[test]
-fn file_ask_rule_decision_ignores_unmatched_path() {
-    let config = EngineConfig {
-        exec_policy_engine: file_ask_rule_engine("read_file", "secrets/api_key.txt"),
-        ..EngineConfig::default()
-    };
-
-    let decision = file_tool_ask_rule_decision(
-        &config,
-        "read_file",
-        &json!({"path": "docs/readme.md"}),
-        Path::new("/repo"),
-        crate::tui::approval::ApprovalMode::Auto,
-    );
-
-    assert_eq!(decision, None);
 }
 
 #[test]
@@ -9022,27 +9053,52 @@ fn engine_initial_prompt_omits_paused_goal() {
 }
 
 #[test]
-fn refresh_system_prompt_uses_runtime_goal_state() {
-    let (mut engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+fn refresh_system_scenario() {
+    // Scenario consolidation of: refresh_system_prompt_uses_runtime_goal_state, refresh_system_prompt_is_noop_when_unchanged
+    // from refresh_system_prompt_uses_runtime_goal_state
     {
-        let mut goal = engine.config.goal_state.lock().expect("goal lock");
-        goal.create("Close the runtime goal loop".to_string(), None)
-            .expect("create goal");
+        let (mut engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
+        {
+            let mut goal = engine.config.goal_state.lock().expect("goal lock");
+            goal.create("Close the runtime goal loop".to_string(), None)
+                .expect("create goal");
+        }
+
+        engine.refresh_system_prompt();
+        let prompt = match engine.session.system_prompt {
+            Some(SystemPrompt::Text(text)) => text,
+            Some(SystemPrompt::Blocks(blocks)) => blocks
+                .into_iter()
+                .map(|block| block.text)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            None => panic!("expected system prompt"),
+        };
+
+        assert!(prompt.contains("<session_goal>"));
+        assert!(prompt.contains("Close the runtime goal loop"));
     }
+    // from refresh_system_prompt_is_noop_when_unchanged
+    {
+        // The composed prompt reads ambient process state, so a concurrent test
+        // mutating the environment between the two refreshes changes the hash and
+        // fails the no-op assertion. Serialize with the other env-sensitive tests.
+        let _lock = lock_test_env();
+        let tmp = tempdir().expect("tempdir");
+        let config = EngineConfig {
+            workspace: tmp.path().to_path_buf(),
+            ..Default::default()
+        };
+        let (mut engine, _handle) = Engine::new(config, &Config::default());
 
-    engine.refresh_system_prompt();
-    let prompt = match engine.session.system_prompt {
-        Some(SystemPrompt::Text(text)) => text,
-        Some(SystemPrompt::Blocks(blocks)) => blocks
-            .into_iter()
-            .map(|block| block.text)
-            .collect::<Vec<_>>()
-            .join("\n"),
-        None => panic!("expected system prompt"),
-    };
+        engine.refresh_system_prompt();
+        let first_hash = engine.session.last_system_prompt_hash;
+        let first_prompt = engine.session.system_prompt.clone();
+        engine.refresh_system_prompt();
 
-    assert!(prompt.contains("<session_goal>"));
-    assert!(prompt.contains("Close the runtime goal loop"));
+        assert_eq!(engine.session.last_system_prompt_hash, first_hash);
+        assert_eq!(engine.session.system_prompt, first_prompt);
+    }
 }
 
 #[tokio::test]
@@ -9267,94 +9323,96 @@ fn globally_exclusive_shell_plans_never_share_a_batch() {
 }
 
 #[test]
-fn globally_exclusive_background_shell_does_not_overlap_readonly_shells() {
-    let mut shell_a = make_plan_at(0, true, true, false, false);
-    shell_a.name = "exec_shell".to_string();
-    shell_a.input = json!({"command": "git status -s"});
-    shell_a.resources = vec![ResourceClaim::GlobalExclusive];
+fn globally_exclusive_scenario() {
+    // Scenario consolidation of: globally_exclusive_background_shell_does_not_overlap_readonly_shells, globally_exclusive_background_verifier_does_not_overlap_readonly_tools, globally_exclusive_agent_starts_are_singleton_batches, globally_exclusive_agent_start_splits_neighboring_readonly_tools
+    // from globally_exclusive_background_shell_does_not_overlap_readonly_shells
+    {
+        let mut shell_a = make_plan_at(0, true, true, false, false);
+        shell_a.name = "exec_shell".to_string();
+        shell_a.input = json!({"command": "git status -s"});
+        shell_a.resources = vec![ResourceClaim::GlobalExclusive];
 
-    let mut background_cargo = make_plan_at(1, false, false, false, false);
-    background_cargo.name = "exec_shell".to_string();
-    background_cargo.input = json!({"command": "cargo check --workspace", "background": true});
-    background_cargo.detached_start = true;
-    background_cargo.resources = vec![ResourceClaim::GlobalExclusive];
+        let mut background_cargo = make_plan_at(1, false, false, false, false);
+        background_cargo.name = "exec_shell".to_string();
+        background_cargo.input = json!({"command": "cargo check --workspace", "background": true});
+        background_cargo.detached_start = true;
+        background_cargo.resources = vec![ResourceClaim::GlobalExclusive];
 
-    let mut shell_b = make_plan_at(2, true, true, false, false);
-    shell_b.name = "exec_shell".to_string();
-    shell_b.input = json!({"command": "rg TODO crates/tui/src/core"});
-    shell_b.resources = vec![ResourceClaim::GlobalExclusive];
+        let mut shell_b = make_plan_at(2, true, true, false, false);
+        shell_b.name = "exec_shell".to_string();
+        shell_b.input = json!({"command": "rg TODO crates/tui/src/core"});
+        shell_b.resources = vec![ResourceClaim::GlobalExclusive];
 
-    let batches = plan_tool_execution_batches(vec![shell_a, background_cargo, shell_b]);
-    assert_eq!(batches.len(), 3);
-    assert_eq!(parallel_batch_indices(&batches[0]), vec![0]);
-    assert_eq!(parallel_batch_indices(&batches[1]), vec![1]);
-    assert_eq!(parallel_batch_indices(&batches[2]), vec![2]);
-}
+        let batches = plan_tool_execution_batches(vec![shell_a, background_cargo, shell_b]);
+        assert_eq!(batches.len(), 3);
+        assert_eq!(parallel_batch_indices(&batches[0]), vec![0]);
+        assert_eq!(parallel_batch_indices(&batches[1]), vec![1]);
+        assert_eq!(parallel_batch_indices(&batches[2]), vec![2]);
+    }
+    // from globally_exclusive_background_verifier_does_not_overlap_readonly_tools
+    {
+        let mut shell_a = make_plan_at(0, true, true, false, false);
+        shell_a.name = "exec_shell".to_string();
+        shell_a.input = json!({"command": "git status -s"});
 
-#[test]
-fn globally_exclusive_background_verifier_does_not_overlap_readonly_tools() {
-    let mut shell_a = make_plan_at(0, true, true, false, false);
-    shell_a.name = "exec_shell".to_string();
-    shell_a.input = json!({"command": "git status -s"});
+        let mut verifier = make_plan_at(1, false, false, false, false);
+        verifier.name = "run_verifiers".to_string();
+        verifier.input = json!({"profile": "rust", "level": "full", "background": true});
+        verifier.detached_start = true;
+        verifier.resources = vec![ResourceClaim::GlobalExclusive];
 
-    let mut verifier = make_plan_at(1, false, false, false, false);
-    verifier.name = "run_verifiers".to_string();
-    verifier.input = json!({"profile": "rust", "level": "full", "background": true});
-    verifier.detached_start = true;
-    verifier.resources = vec![ResourceClaim::GlobalExclusive];
+        let mut shell_b = make_plan_at(2, true, true, false, false);
+        shell_b.name = "exec_shell".to_string();
+        shell_b.input = json!({"command": "rg TODO crates/tui/src/core"});
 
-    let mut shell_b = make_plan_at(2, true, true, false, false);
-    shell_b.name = "exec_shell".to_string();
-    shell_b.input = json!({"command": "rg TODO crates/tui/src/core"});
+        let batches = plan_tool_execution_batches(vec![shell_a, verifier, shell_b]);
+        assert_eq!(batches.len(), 3);
+        assert_eq!(parallel_batch_indices(&batches[0]), vec![0]);
+        assert_eq!(parallel_batch_indices(&batches[1]), vec![1]);
+        assert_eq!(parallel_batch_indices(&batches[2]), vec![2]);
+    }
+    // from globally_exclusive_agent_starts_are_singleton_batches
+    {
+        let plans: Vec<ToolExecutionPlan> = (0..4)
+            .map(|i| {
+                let mut plan = make_plan_at(i, false, false, false, false);
+                plan.name = "agent".to_string();
+                plan.detached_start = true;
+                plan.resources = vec![ResourceClaim::GlobalExclusive];
+                plan
+            })
+            .collect();
 
-    let batches = plan_tool_execution_batches(vec![shell_a, verifier, shell_b]);
-    assert_eq!(batches.len(), 3);
-    assert_eq!(parallel_batch_indices(&batches[0]), vec![0]);
-    assert_eq!(parallel_batch_indices(&batches[1]), vec![1]);
-    assert_eq!(parallel_batch_indices(&batches[2]), vec![2]);
+        let batches = plan_tool_execution_batches(plans);
+        assert_eq!(batches.len(), 4);
+        for (index, batch) in batches.iter().enumerate() {
+            assert_eq!(parallel_batch_indices(batch), vec![index]);
+        }
+    }
+    // from globally_exclusive_agent_start_splits_neighboring_readonly_tools
+    {
+        let mut grep_a = make_plan_at(0, true, true, false, false);
+        grep_a.name = "grep_files".to_string();
+
+        let mut agent_start = make_plan_at(1, false, false, false, false);
+        agent_start.name = "agent".to_string();
+        agent_start.detached_start = true;
+        agent_start.resources = vec![ResourceClaim::GlobalExclusive];
+
+        let mut grep_b = make_plan_at(2, true, true, false, false);
+        grep_b.name = "grep_files".to_string();
+
+        let batches = plan_tool_execution_batches(vec![grep_a, agent_start, grep_b]);
+        assert_eq!(batches.len(), 3);
+        assert_eq!(parallel_batch_indices(&batches[0]), vec![0]);
+        assert_eq!(parallel_batch_indices(&batches[1]), vec![1]);
+        assert_eq!(parallel_batch_indices(&batches[2]), vec![2]);
+    }
 }
 
 // Detached starts remain eligible for a parallel chunk, but their conservative
 // global claim prevents overlap until the agent scheduler exposes narrower
 // budget/session claims.
-#[test]
-fn globally_exclusive_agent_starts_are_singleton_batches() {
-    let plans: Vec<ToolExecutionPlan> = (0..4)
-        .map(|i| {
-            let mut plan = make_plan_at(i, false, false, false, false);
-            plan.name = "agent".to_string();
-            plan.detached_start = true;
-            plan.resources = vec![ResourceClaim::GlobalExclusive];
-            plan
-        })
-        .collect();
-
-    let batches = plan_tool_execution_batches(plans);
-    assert_eq!(batches.len(), 4);
-    for (index, batch) in batches.iter().enumerate() {
-        assert_eq!(parallel_batch_indices(batch), vec![index]);
-    }
-}
-
-#[test]
-fn globally_exclusive_agent_start_splits_neighboring_readonly_tools() {
-    let mut grep_a = make_plan_at(0, true, true, false, false);
-    grep_a.name = "grep_files".to_string();
-
-    let mut agent_start = make_plan_at(1, false, false, false, false);
-    agent_start.name = "agent".to_string();
-    agent_start.detached_start = true;
-    agent_start.resources = vec![ResourceClaim::GlobalExclusive];
-
-    let mut grep_b = make_plan_at(2, true, true, false, false);
-    grep_b.name = "grep_files".to_string();
-
-    let batches = plan_tool_execution_batches(vec![grep_a, agent_start, grep_b]);
-    assert_eq!(batches.len(), 3);
-    assert_eq!(parallel_batch_indices(&batches[0]), vec![0]);
-    assert_eq!(parallel_batch_indices(&batches[1]), vec![1]);
-    assert_eq!(parallel_batch_indices(&batches[2]), vec![2]);
-}
 
 #[test]
 fn tool_error_messages_include_actionable_hints() {
@@ -9439,43 +9497,46 @@ fn tool_exec_outcome_tracks_duration() {
 }
 
 #[test]
-fn approval_stamp_makes_user_approval_model_visible() {
-    let mut result = ToolResult::success("stdout");
+fn approval_stamp_scenario() {
+    // Scenario consolidation of: approval_stamp_makes_user_approval_model_visible, approval_stamp_preserves_existing_metadata
+    // from approval_stamp_makes_user_approval_model_visible
+    {
+        let mut result = ToolResult::success("stdout");
 
-    stamp_tool_result_approval(&mut result, ToolApprovalStamp::ApprovedByUser);
+        stamp_tool_result_approval(&mut result, ToolApprovalStamp::ApprovedByUser);
 
-    assert!(
-        result
-            .content
-            .starts_with("[approval] This tool call required approval"),
-        "{}",
-        result.content
-    );
-    assert!(
-        result
-            .content
-            .contains("approved by the user before execution")
-    );
-    assert!(result.content.ends_with("stdout"));
+        assert!(
+            result
+                .content
+                .starts_with("[approval] This tool call required approval"),
+            "{}",
+            result.content
+        );
+        assert!(
+            result
+                .content
+                .contains("approved by the user before execution")
+        );
+        assert!(result.content.ends_with("stdout"));
 
-    let metadata = result.metadata.expect("approval metadata");
-    assert_eq!(metadata["approval"]["required"], true);
-    assert_eq!(metadata["approval"]["decision"], "approved_by_user");
-    assert_eq!(metadata["approval"]["model_visible"], true);
-}
+        let metadata = result.metadata.expect("approval metadata");
+        assert_eq!(metadata["approval"]["required"], true);
+        assert_eq!(metadata["approval"]["decision"], "approved_by_user");
+        assert_eq!(metadata["approval"]["model_visible"], true);
+    }
+    // from approval_stamp_preserves_existing_metadata
+    {
+        let mut result = ToolResult::success("ok").with_metadata(json!({
+            "summary": "kept"
+        }));
 
-#[test]
-fn approval_stamp_preserves_existing_metadata() {
-    let mut result = ToolResult::success("ok").with_metadata(json!({
-        "summary": "kept"
-    }));
+        stamp_tool_result_approval(&mut result, ToolApprovalStamp::ApprovedWithPolicy);
 
-    stamp_tool_result_approval(&mut result, ToolApprovalStamp::ApprovedWithPolicy);
-
-    let metadata = result.metadata.expect("metadata");
-    assert_eq!(metadata["summary"], "kept");
-    assert_eq!(metadata["approval"]["decision"], "approved_with_policy");
-    assert!(result.content.contains("adjusted execution policy"));
+        let metadata = result.metadata.expect("metadata");
+        assert_eq!(metadata["summary"], "kept");
+        assert_eq!(metadata["approval"]["decision"], "approved_with_policy");
+        assert!(result.content.contains("adjusted execution policy"));
+    }
 }
 
 #[test]
@@ -9619,29 +9680,6 @@ fn model_tool_catalog_applies_native_and_mcp_deferral() {
     assert_eq!(defer_loading("project_map"), Some(true));
     assert_eq!(defer_loading("list_mcp_resources"), Some(true));
     assert_eq!(defer_loading("mcp_server_write"), Some(true));
-}
-
-#[test]
-fn registry_first_guidance_is_attached_to_the_shell_fallback_once() {
-    let mut catalog = vec![api_tool("read_file"), api_tool("exec_shell")];
-
-    apply_registry_first_shell_guidance(&mut catalog);
-    let after_first = catalog
-        .iter()
-        .find(|tool| tool.name == "exec_shell")
-        .expect("shell tool")
-        .description
-        .clone();
-    apply_registry_first_shell_guidance(&mut catalog);
-
-    let after_second = &catalog
-        .iter()
-        .find(|tool| tool.name == "exec_shell")
-        .expect("shell tool")
-        .description;
-    assert_eq!(after_second, &after_first);
-    assert!(after_second.contains("registry_sync"));
-    assert!(after_second.contains("start_registry_mcp_server"));
 }
 
 #[test]
@@ -9881,25 +9919,28 @@ fn bm25_tool_search_does_not_discover_hidden_exec_shell_alias() {
 }
 
 #[test]
-fn tools_always_load_overrides_mcp_deferral() {
-    let always_load = HashSet::from(["mcp_server_write".to_string()]);
-    let catalog = build_model_tool_catalog(
-        vec![api_tool("read_file")],
-        vec![api_tool("mcp_server_write")],
-        AppMode::Agent,
-        &always_load,
-    );
-    let mcp = catalog
-        .iter()
-        .find(|tool| tool.name == "mcp_server_write")
-        .expect("mcp tool");
-    assert_eq!(mcp.defer_loading, Some(false));
-}
-
-#[test]
-fn tools_always_load_overrides_default_native_deferral() {
-    let always_load = HashSet::from(["git_blame".to_string()]);
-    assert!(!should_default_defer_tool("git_blame", &always_load));
+fn tools_always_scenario() {
+    // Scenario consolidation of: tools_always_load_overrides_mcp_deferral, tools_always_load_overrides_default_native_deferral
+    // from tools_always_load_overrides_mcp_deferral
+    {
+        let always_load = HashSet::from(["mcp_server_write".to_string()]);
+        let catalog = build_model_tool_catalog(
+            vec![api_tool("read_file")],
+            vec![api_tool("mcp_server_write")],
+            AppMode::Agent,
+            &always_load,
+        );
+        let mcp = catalog
+            .iter()
+            .find(|tool| tool.name == "mcp_server_write")
+            .expect("mcp tool");
+        assert_eq!(mcp.defer_loading, Some(false));
+    }
+    // from tools_always_load_overrides_default_native_deferral
+    {
+        let always_load = HashSet::from(["git_blame".to_string()]);
+        assert!(!should_default_defer_tool("git_blame", &always_load));
+    }
 }
 
 fn tool_catalog_surface_metrics(catalog: &[Tool]) -> serde_json::Value {
@@ -9969,7 +10010,6 @@ async fn measure_production_mode_tool_catalogs() -> serde_json::Value {
             api_config: Box::new(api_config.clone()),
             locale_tag: engine.config.locale_tag.clone(),
             role_models: engine.subagent_role_models(),
-            fleet_roster: engine.config.fleet_roster.clone(),
             auto_model: false,
             reasoning_effort: None,
             reasoning_effort_auto: false,
@@ -10631,12 +10671,12 @@ fn deferred_apply_patch_first_use_hydrates_schema_without_execution() {
 }
 
 #[test]
-fn model_tool_catalog_defers_non_core_native_tools_in_yolo_mode() {
+fn model_tool_catalog_defers_non_core_native_tools_in_act_mode() {
     let always_load = HashSet::new();
     let catalog = build_model_tool_catalog(
         vec![api_tool("read"), api_tool("project_map")],
         vec![api_tool("mcp_server_write")],
-        AppMode::Yolo,
+        AppMode::Agent,
         &always_load,
     );
 
@@ -10713,10 +10753,10 @@ fn auto_review_hides_question_tool_while_other_postures_keep_it() {
 }
 
 #[test]
-fn legacy_yolo_auto_shape_keeps_question_tool_as_effective_full_access() {
+fn legacy_full_access_bit_keeps_question_tool_as_effective_full_access() {
     let authority = crate::core::authority::effective_input_policy(
         UserInputProvenance::ExternalUser,
-        AppMode::Yolo,
+        AppMode::Agent,
         "continue",
         true,
         true,
@@ -10756,7 +10796,7 @@ fn model_tool_catalog_sorts_each_partition_for_prefix_cache_stability() {
             api_tool("exec_shell"),
         ],
         vec![api_tool("mcp_zoo_b"), api_tool("mcp_aardvark_a")],
-        AppMode::Yolo,
+        AppMode::Agent,
         &always_load,
     );
 
@@ -11086,7 +11126,7 @@ async fn run_shell_command_op_skips_approval_when_auto_approved() {
     engine
         .handle_run_shell_command(
             "echo bang-yolo".to_string(),
-            AppMode::Yolo,
+            AppMode::Agent,
             true,
             true,
             true,
@@ -11151,7 +11191,7 @@ async fn run_shell_command_op_allows_readonly_shell_in_auto_mode() {
         engine
             .handle_run_shell_command(
                 "pwd".to_string(),
-                AppMode::Auto,
+                AppMode::Agent,
                 true,
                 false,
                 false,
@@ -11197,10 +11237,10 @@ async fn run_shell_command_op_allows_readonly_shell_in_auto_mode() {
 #[tokio::test]
 async fn yolo_mode_does_not_prompt_for_typed_ask_rule() {
     // #3386: a command matching a typed ask-rule (permissions.toml) must not
-    // surface an approval modal in YOLO mode, even though Yolo resolves to
-    // ApprovalMode::Auto which the execpolicy maps to OnFailure (honors
+    // surface an approval modal in the Full Access posture, even though the
+    // stale ApprovalMode::Auto maps to OnFailure in the execpolicy (honors
     // ask-rules). The auto_review safety floor and typed deny rules still
-    // apply; only the ask-rule Prompt is suppressed in YOLO.
+    // apply; only the ask-rule Prompt is suppressed under Full Access.
     let (mut engine, handle) = Engine::new(
         EngineConfig {
             exec_policy_engine: ask_rule_engine("echo"),
@@ -11212,7 +11252,7 @@ async fn yolo_mode_does_not_prompt_for_typed_ask_rule() {
     engine
         .handle_run_shell_command(
             "echo yolo-ask-rule".to_string(),
-            AppMode::Yolo,
+            AppMode::Agent,
             true,
             true,
             true,
@@ -12454,7 +12494,7 @@ async fn yolo_mode_does_not_prompt_for_background_shell() {
     handle
         .send(Op::SendMessage {
             content: "please run a background shell".to_string(),
-            mode: AppMode::Yolo,
+            mode: AppMode::Agent,
             route: resolved_route_for_test(&api_config, crate::config::DEFAULT_TEXT_MODEL),
             compaction: Box::new(CompactionConfig::default()),
             goal_objective: None,
@@ -12590,7 +12630,7 @@ async fn yolo_mode_executes_publish_like_shell_without_prompt() {
     handle
         .send(Op::SendMessage {
             content: "please publish this crate".to_string(),
-            mode: AppMode::Yolo,
+            mode: AppMode::Agent,
             route: resolved_route_for_test(&api_config, crate::config::DEFAULT_TEXT_MODEL),
             compaction: Box::new(CompactionConfig::default()),
             goal_objective: None,
@@ -12730,7 +12770,7 @@ async fn yolo_mode_does_not_prompt_for_mcp_action() {
     handle
         .send(Op::SendMessage {
             content: "please open the PR".to_string(),
-            mode: AppMode::Yolo,
+            mode: AppMode::Agent,
             route: resolved_route_for_test(&api_config, crate::config::DEFAULT_TEXT_MODEL),
             compaction: Box::new(CompactionConfig::default()),
             goal_objective: None,
@@ -13037,12 +13077,7 @@ fn plan_mode_toggle_preserves_catalog_byte_stability() {
 fn parent_turn_registry_includes_goal_tools_for_all_modes() {
     let (engine, _handle) = Engine::new(EngineConfig::default(), &Config::default());
 
-    for mode in [
-        AppMode::Plan,
-        AppMode::Agent,
-        AppMode::Operate,
-        AppMode::Yolo,
-    ] {
+    for mode in [AppMode::Plan, AppMode::Agent, AppMode::Operate] {
         let registry = engine
             .build_turn_tool_registry_builder(
                 mode,
@@ -13159,16 +13194,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
             plan_hint: false,
         },
         ModeCase {
-            name: "auto-compat",
-            mode: AppMode::Auto,
-            shell_policy: ShellPolicy::Full,
-            sandbox: ExpectedSandbox::WorkspaceWrite,
-            trust_mode: false,
-            auto_approve: false,
-            approval_mode: ApprovalMode::Suggest,
-            plan_hint: false,
-        },
-        ModeCase {
             name: "operate",
             mode: AppMode::Operate,
             shell_policy: ShellPolicy::Full,
@@ -13176,18 +13201,6 @@ fn mode_invariant_matrix_covers_context_catalog_subagents_and_prompt_metadata() 
             trust_mode: false,
             auto_approve: false,
             approval_mode: ApprovalMode::Suggest,
-            plan_hint: false,
-        },
-        ModeCase {
-            // YOLO remains an elevated-permission alias, but prompt/setting
-            // surfaces now speak Act (invisible one-way permission shorthand).
-            name: "yolo",
-            mode: AppMode::Yolo,
-            shell_policy: ShellPolicy::Full,
-            sandbox: ExpectedSandbox::DangerFullAccess,
-            trust_mode: true,
-            auto_approve: true,
-            approval_mode: ApprovalMode::Bypass,
             plan_hint: false,
         },
     ];
@@ -13394,7 +13407,7 @@ fn mode_invariant_matrix_covers_provenance_authority_narrowing() {
         ProvenanceCase {
             name: "external user",
             provenance: UserInputProvenance::ExternalUser,
-            expected_mode: AppMode::Yolo,
+            expected_mode: AppMode::Agent,
             expected_trust: true,
             expected_auto: true,
             expected_approval: ApprovalMode::Bypass,
@@ -13403,7 +13416,7 @@ fn mode_invariant_matrix_covers_provenance_authority_narrowing() {
         ProvenanceCase {
             name: "runtime continuation",
             provenance: UserInputProvenance::Runtime,
-            expected_mode: AppMode::Yolo,
+            expected_mode: AppMode::Agent,
             expected_trust: true,
             expected_auto: true,
             expected_approval: ApprovalMode::Bypass,
@@ -13412,7 +13425,7 @@ fn mode_invariant_matrix_covers_provenance_authority_narrowing() {
         ProvenanceCase {
             name: "sub-agent handoff",
             provenance: UserInputProvenance::SubAgentHandoff,
-            expected_mode: AppMode::Yolo,
+            expected_mode: AppMode::Agent,
             expected_trust: true,
             expected_auto: true,
             expected_approval: ApprovalMode::Bypass,
@@ -13450,7 +13463,7 @@ fn mode_invariant_matrix_covers_provenance_authority_narrowing() {
     for case in cases {
         let policy = effective_input_policy(
             case.provenance,
-            AppMode::Yolo,
+            AppMode::Agent,
             "continue",
             true,
             true,
@@ -13485,7 +13498,6 @@ fn agent_mode_can_build_auto_approved_tool_context() {
             .auto_approve
     );
     assert!(engine.build_tool_context(AppMode::Agent, true).auto_approve);
-    assert!(engine.build_tool_context(AppMode::Yolo, false).auto_approve);
 }
 
 #[test]
@@ -13540,10 +13552,6 @@ fn build_tool_context_uses_typed_shell_policy_per_mode() {
             .shell_policy,
         crate::worker_profile::ShellPolicy::Full
     );
-    assert_eq!(
-        engine.build_tool_context(AppMode::Yolo, false).shell_policy,
-        crate::worker_profile::ShellPolicy::Full
-    );
 
     config.allow_shell = false;
     let (engine, _handle) = Engine::new(config, &Config::default());
@@ -13563,7 +13571,7 @@ fn turn_tool_context_uses_planned_authority_and_route_not_installed_session() {
     engine.session.model = "installed-old-model".to_string();
 
     let authority = crate::core::authority::TurnAuthority::from_effective_fields(
-        AppMode::Yolo,
+        AppMode::Agent,
         true,
         true,
         true,
@@ -13582,7 +13590,6 @@ fn turn_tool_context_uses_planned_authority_and_route_not_installed_session() {
         api_config: Box::new(Config::default()),
         locale_tag: engine.config.locale_tag.clone(),
         role_models: engine.subagent_role_models(),
-        fleet_roster: engine.config.fleet_roster.clone(),
         auto_model: false,
         reasoning_effort: None,
         reasoning_effort_auto: false,
@@ -13637,21 +13644,24 @@ fn agent_mode_elevates_writes_without_granting_network() {
         "Agent mode must still elevate workspace writes; got {agent_policy:?}",
     );
 
-    let yolo_ctx = engine.build_tool_context(AppMode::Yolo, false);
-    let yolo_policy = yolo_ctx
+    let full_access_ctx = engine.build_tool_context(AppMode::Agent, true);
+    let full_access_policy = full_access_ctx
         .elevated_sandbox_policy
         .as_ref()
-        .expect("Yolo mode should elevate the sandbox policy");
-    assert!(yolo_policy.has_network_access());
-    // v0.8.11: YOLO drops to DangerFullAccess (no sandbox) so the user
-    // is not bounced through approval round-trips for legitimate
+        .expect("Full Access should elevate the sandbox policy");
+    assert!(full_access_policy.has_network_access());
+    // v0.8.11: Full Access drops to DangerFullAccess (no sandbox) so the
+    // user is not bounced through approval round-trips for legitimate
     // outside-workspace writes (package installs, sub-agent
-    // workspaces, ~/.cache mutations, etc.). YOLO is opt-in and
+    // workspaces, ~/.cache mutations, etc.). Full Access is opt-in and
     // already enables trust mode + auto-approve; the sandbox was the
     // last guardrail and contradicts the contract.
     assert!(
-        matches!(yolo_policy, crate::sandbox::SandboxPolicy::DangerFullAccess),
-        "Yolo mode must use DangerFullAccess (no sandbox); got {yolo_policy:?}",
+        matches!(
+            full_access_policy,
+            crate::sandbox::SandboxPolicy::DangerFullAccess
+        ),
+        "Full Access must use DangerFullAccess (no sandbox); got {full_access_policy:?}",
     );
 
     // Plan mode (#1077): the sandbox must actually deny workspace writes.
@@ -13745,11 +13755,11 @@ fn sandbox_policy_for_turn_returns_correct_default_policy_per_mode() {
         other => panic!("Agent mode should be WorkspaceWrite; got {other:?}"),
     }
 
-    // YOLO: DangerFullAccess.
+    // Bypass posture: DangerFullAccess.
     assert!(matches!(
         sandbox_policy_for_turn(
-            AppMode::Yolo,
-            ApprovalMode::Suggest,
+            AppMode::Agent,
+            ApprovalMode::Bypass,
             None,
             &workspace,
             SandboxNetworkAccess::Restricted,
@@ -13861,7 +13871,7 @@ async fn change_mode_refreshes_session_prompt_and_updates_session() {
     let run = tokio::spawn(engine.run());
     handle
         .send(Op::ChangeMode {
-            mode: AppMode::Yolo,
+            mode: AppMode::Agent,
             allow_shell: true,
             trust_mode: true,
             auto_approve: true,
@@ -14506,7 +14516,7 @@ async fn change_mode_op_updates_current_mode_and_emits_status() {
     let run = tokio::spawn(engine.run());
     handle
         .send(Op::ChangeMode {
-            mode: AppMode::Yolo,
+            mode: AppMode::Agent,
             allow_shell: true,
             trust_mode: true,
             auto_approve: true,
@@ -14580,16 +14590,16 @@ fn runtime_mode_policy_updates_engine_session_mirrors() {
         crate::tui::approval::ApprovalMode::Never
     );
 
-    let yolo_authority = crate::core::authority::TurnAuthority::from_effective_fields(
-        AppMode::Yolo,
+    let full_access_authority = crate::core::authority::TurnAuthority::from_effective_fields(
+        AppMode::Agent,
         true,
         true,
         true,
         crate::tui::approval::ApprovalMode::Bypass,
     );
-    engine.apply_runtime_mode_policy(&yolo_authority);
+    engine.apply_runtime_mode_policy(&full_access_authority);
 
-    assert_eq!(engine.current_mode, AppMode::Yolo);
+    assert_eq!(engine.current_mode, AppMode::Agent);
     assert!(engine.session.allow_shell);
     assert!(engine.session.trust_mode);
     assert!(engine.config.trust_mode);
@@ -15588,92 +15598,98 @@ fn detects_context_length_errors_from_provider_payloads() {
 }
 
 #[test]
-fn context_budget_reserves_output_and_headroom() {
-    // Serialize with other tests that mutate DEEPSEEK_MAX_OUTPUT_TOKENS so
-    // the internal effective_max_output_tokens() call sees a stable env.
-    let _lock = lock_test_env();
-    // Preflight reserves exactly the route-effective output request plus the
-    // shared safety headroom, even on a 1M route.
-    let budget = context_input_budget_for_provider(ApiProvider::Deepseek, "deepseek-v4-pro")
-        .expect("deepseek-v4-pro should have a known context window");
-    let v4_window: usize = 1_000_000;
-    let expected = v4_window
-        - effective_max_output_tokens_for_route(ApiProvider::Deepseek, "deepseek-v4-pro", None)
-            as usize
-        - 1_024usize;
-    assert_eq!(budget, expected);
-}
-
-#[test]
-fn context_budget_uses_conservative_fallback_for_unknown_models() {
-    let _lock = lock_test_env();
-    let budget = context_input_budget_for_provider(ApiProvider::Openai, "auto")
-        .expect("unknown/auto model ids should still get a conservative hard preflight budget");
-    let expected = 128_000usize
-        - effective_max_output_tokens_for_route(ApiProvider::Openai, "auto", None) as usize
-        - 1_024usize;
-    assert_eq!(budget, expected);
-}
-
-#[test]
-fn context_budget_uses_provider_effective_window_for_openai_codex() {
-    let _lock = lock_test_env();
-    let budget = context_input_budget_for_provider(ApiProvider::OpenaiCodex, "gpt-5.5")
-        .expect("OpenAI Codex should use a conservative fallback without route metadata");
-    let expected = usize::try_from(crate::config::OPENAI_CODEX_EFFECTIVE_CONTEXT_WINDOW_TOKENS)
-        .expect("context window fits usize")
-        - crate::config::provider_capability(ApiProvider::OpenaiCodex, "gpt-5.5")
-            .max_output
-            .expect("Codex route publishes a deliberate conservative output cap")
-            as usize
-        - 1_024usize;
-    assert_eq!(budget, expected);
-}
-
-#[test]
-fn route_context_budget_uses_shared_budget_service() {
-    let _lock = lock_test_env();
-    let budget = route_context_budget_for_provider(ApiProvider::OpenaiCodex, "gpt-5.5", 380_000)
-        .expect("OpenAI Codex should produce a route budget");
-
-    assert_eq!(
-        budget.window_tokens,
-        u64::from(crate::config::OPENAI_CODEX_EFFECTIVE_CONTEXT_WINDOW_TOKENS)
-    );
-    assert_eq!(
-        budget.output_cap_tokens,
-        u64::from(
-            crate::config::provider_capability(ApiProvider::OpenaiCodex, "gpt-5.5")
+fn context_budget_scenario() {
+    // Scenario consolidation of: context_budget_reserves_output_and_headroom, context_budget_uses_conservative_fallback_for_unknown_models, context_budget_uses_provider_effective_window_for_openai_codex
+    // from context_budget_reserves_output_and_headroom
+    {
+        // Serialize with other tests that mutate DEEPSEEK_MAX_OUTPUT_TOKENS so
+        // the internal effective_max_output_tokens() call sees a stable env.
+        let _lock = lock_test_env();
+        // Preflight reserves exactly the route-effective output request plus the
+        // shared safety headroom, even on a 1M route.
+        let budget = context_input_budget_for_provider(ApiProvider::Deepseek, "deepseek-v4-pro")
+            .expect("deepseek-v4-pro should have a known context window");
+        let v4_window: usize = 1_000_000;
+        let expected = v4_window
+            - effective_max_output_tokens_for_route(ApiProvider::Deepseek, "deepseek-v4-pro", None)
+                as usize
+            - 1_024usize;
+        assert_eq!(budget, expected);
+    }
+    // from context_budget_uses_conservative_fallback_for_unknown_models
+    {
+        let _lock = lock_test_env();
+        let budget = context_input_budget_for_provider(ApiProvider::Openai, "auto")
+            .expect("unknown/auto model ids should still get a conservative hard preflight budget");
+        let expected = 128_000usize
+            - effective_max_output_tokens_for_route(ApiProvider::Openai, "auto", None) as usize
+            - 1_024usize;
+        assert_eq!(budget, expected);
+    }
+    // from context_budget_uses_provider_effective_window_for_openai_codex
+    {
+        let _lock = lock_test_env();
+        let budget = context_input_budget_for_provider(ApiProvider::OpenaiCodex, "gpt-5.5")
+            .expect("OpenAI Codex should use a conservative fallback without route metadata");
+        let expected = usize::try_from(crate::config::OPENAI_CODEX_EFFECTIVE_CONTEXT_WINDOW_TOKENS)
+            .expect("context window fits usize")
+            - crate::config::provider_capability(ApiProvider::OpenaiCodex, "gpt-5.5")
                 .max_output
                 .expect("Codex route publishes a deliberate conservative output cap")
-        )
-    );
-    assert_eq!(
-        budget.pressure,
-        crate::context_budget::PressureLevel::Critical
-    );
-    assert!(!budget.fits_additional(1));
+                as usize
+            - 1_024usize;
+        assert_eq!(budget, expected);
+    }
 }
 
 #[test]
-fn route_context_budget_prefers_resolved_route_limits() {
-    let _lock = lock_test_env();
-    let limits = codewhale_config::route::RouteLimits {
-        context_tokens: Some(128_000),
-        input_tokens: None,
-        output_tokens: Some(32_768),
-    };
-    let budget = route_context_budget_for_route(
-        ApiProvider::Openrouter,
-        "deepseek/deepseek-v4-pro",
-        Some(limits),
-        60_000,
-    )
-    .expect("route limits should produce a budget");
+fn route_context_scenario() {
+    // Scenario consolidation of: route_context_budget_uses_shared_budget_service, route_context_budget_prefers_resolved_route_limits
+    // from route_context_budget_uses_shared_budget_service
+    {
+        let _lock = lock_test_env();
+        let budget =
+            route_context_budget_for_provider(ApiProvider::OpenaiCodex, "gpt-5.5", 380_000)
+                .expect("OpenAI Codex should produce a route budget");
 
-    assert_eq!(budget.window_tokens, 128_000);
-    assert_eq!(budget.output_cap_tokens, 32_768);
-    assert_eq!(budget.available_input_tokens, 34_208);
+        assert_eq!(
+            budget.window_tokens,
+            u64::from(crate::config::OPENAI_CODEX_EFFECTIVE_CONTEXT_WINDOW_TOKENS)
+        );
+        assert_eq!(
+            budget.output_cap_tokens,
+            u64::from(
+                crate::config::provider_capability(ApiProvider::OpenaiCodex, "gpt-5.5")
+                    .max_output
+                    .expect("Codex route publishes a deliberate conservative output cap")
+            )
+        );
+        assert_eq!(
+            budget.pressure,
+            crate::context_budget::PressureLevel::Critical
+        );
+        assert!(!budget.fits_additional(1));
+    }
+    // from route_context_budget_prefers_resolved_route_limits
+    {
+        let _lock = lock_test_env();
+        let limits = codewhale_config::route::RouteLimits {
+            context_tokens: Some(128_000),
+            input_tokens: None,
+            output_tokens: Some(32_768),
+        };
+        let budget = route_context_budget_for_route(
+            ApiProvider::Openrouter,
+            "deepseek/deepseek-v4-pro",
+            Some(limits),
+            60_000,
+        )
+        .expect("route limits should produce a budget");
+
+        assert_eq!(budget.window_tokens, 128_000);
+        assert_eq!(budget.output_cap_tokens, 32_768);
+        assert_eq!(budget.available_input_tokens, 34_208);
+    }
 }
 
 #[test]
@@ -15734,63 +15750,105 @@ fn kimi_catalog_output_ceiling_does_not_collapse_input_budget() {
 }
 
 #[test]
-fn effective_max_output_tokens_for_route_caps_to_route_output_limit() {
-    let _lock = lock_test_env();
-    let limits = codewhale_config::route::RouteLimits {
-        context_tokens: Some(1_000_000),
-        input_tokens: None,
-        output_tokens: Some(8_192),
-    };
+fn effective_max_scenario() {
+    // Scenario consolidation of: effective_max_output_tokens_for_route_caps_to_route_output_limit, effective_max_output_tokens_for_route_caps_to_context_window, effective_max_output_tokens_for_route_keeps_tiny_window_positive, effective_max_output_tokens_caps_api_request_for_large_window_models, effective_max_output_tokens_env_override_rejects_zero_and_invalid
+    // from effective_max_output_tokens_for_route_caps_to_route_output_limit
+    {
+        let _lock = lock_test_env();
+        let limits = codewhale_config::route::RouteLimits {
+            context_tokens: Some(1_000_000),
+            input_tokens: None,
+            output_tokens: Some(8_192),
+        };
 
-    assert_eq!(
-        effective_max_output_tokens_for_route(
+        assert_eq!(
+            effective_max_output_tokens_for_route(
+                ApiProvider::Deepseek,
+                "deepseek-v4-pro",
+                Some(limits),
+            ),
+            8_192
+        );
+    }
+    // from effective_max_output_tokens_for_route_caps_to_context_window
+    {
+        let _lock = lock_test_env();
+        let limits = codewhale_config::route::RouteLimits {
+            context_tokens: Some(32_000),
+            input_tokens: None,
+            output_tokens: None,
+        };
+
+        let cap = effective_max_output_tokens_for_route(
             ApiProvider::Deepseek,
             "deepseek-v4-pro",
             Some(limits),
-        ),
-        8_192
-    );
-}
+        );
 
-#[test]
-fn effective_max_output_tokens_for_route_caps_to_context_window() {
-    let _lock = lock_test_env();
-    let limits = codewhale_config::route::RouteLimits {
-        context_tokens: Some(32_000),
-        input_tokens: None,
-        output_tokens: None,
-    };
+        assert!(cap < 32_000, "request cap must fit the configured window");
+        assert!(
+            cap > 0,
+            "small configured windows should still allow output"
+        );
+    }
+    // from effective_max_output_tokens_for_route_keeps_tiny_window_positive
+    {
+        let _lock = lock_test_env();
+        let limits = codewhale_config::route::RouteLimits {
+            context_tokens: Some(2_048),
+            input_tokens: None,
+            output_tokens: None,
+        };
 
-    let cap = effective_max_output_tokens_for_route(
-        ApiProvider::Deepseek,
-        "deepseek-v4-pro",
-        Some(limits),
-    );
+        assert_eq!(
+            effective_max_output_tokens_for_route(
+                ApiProvider::Deepseek,
+                "deepseek-v4-pro",
+                Some(limits),
+            ),
+            1
+        );
+    }
+    // from effective_max_output_tokens_caps_api_request_for_large_window_models
+    {
+        // Serialize with other tests that mutate DEEPSEEK_MAX_OUTPUT_TOKENS so
+        // v4_cap and flash_cap below see the same env state.
+        let _lock = lock_test_env();
+        // Hosted V4 documents a 384K capability ceiling in the bundled catalogue,
+        // but a ceiling is not a safe no-config request size. The operator can
+        // still request a larger value explicitly; the automatic request starts
+        // at the ordinary 64K cap (#5516/#5518).
+        let v4_cap = effective_max_output_tokens("deepseek-v4-pro");
+        assert_eq!(
+            v4_cap, 65_536,
+            "hosted V4 must not turn the 384K capability maximum into the default request, got {v4_cap}"
+        );
 
-    assert!(cap < 32_000, "request cap must fit the configured window");
-    assert!(
-        cap > 0,
-        "small configured windows should still allow output"
-    );
-}
+        let flash_cap = effective_max_output_tokens("deepseek-v4-flash");
+        assert_eq!(v4_cap, flash_cap);
+    }
+    // from effective_max_output_tokens_env_override_rejects_zero_and_invalid
+    {
+        let _lock = lock_test_env();
+        // Establish the heuristic baseline with the env unset.
+        let baseline = {
+            let _guard = ScopedDeepSeekMaxOutputTokens::unset();
+            effective_max_output_tokens("deepseek-v4-pro")
+        };
+        assert!(baseline > 0);
 
-#[test]
-fn effective_max_output_tokens_for_route_keeps_tiny_window_positive() {
-    let _lock = lock_test_env();
-    let limits = codewhale_config::route::RouteLimits {
-        context_tokens: Some(2_048),
-        input_tokens: None,
-        output_tokens: None,
-    };
-
-    assert_eq!(
-        effective_max_output_tokens_for_route(
-            ApiProvider::Deepseek,
-            "deepseek-v4-pro",
-            Some(limits),
-        ),
-        1
-    );
+        // 0, non-numeric, and empty values must all fall through to the heuristic
+        // rather than producing a zero/garbage cap that would silently break
+        // request budgeting.
+        for raw in ["0", "abc", "", "  ", "-1"] {
+            let _guard = ScopedDeepSeekMaxOutputTokens::set(raw);
+            assert_eq!(
+                effective_max_output_tokens("deepseek-v4-pro"),
+                baseline,
+                "env={raw:?} should fall through to heuristic"
+            );
+        }
+    }
 }
 
 #[test]
@@ -15810,25 +15868,6 @@ fn codex_route_without_output_metadata_uses_oauth_capability_floor() {
         route_context_budget_for_route(ApiProvider::OpenaiCodex, "gpt-5.5", Some(limits), 0)
             .expect("Codex route budget");
     assert_eq!(budget.output_cap_tokens, 4_096);
-}
-
-#[test]
-fn effective_max_output_tokens_caps_api_request_for_large_window_models() {
-    // Serialize with other tests that mutate DEEPSEEK_MAX_OUTPUT_TOKENS so
-    // v4_cap and flash_cap below see the same env state.
-    let _lock = lock_test_env();
-    // Hosted V4 documents a 384K capability ceiling in the bundled catalogue,
-    // but a ceiling is not a safe no-config request size. The operator can
-    // still request a larger value explicitly; the automatic request starts
-    // at the ordinary 64K cap (#5516/#5518).
-    let v4_cap = effective_max_output_tokens("deepseek-v4-pro");
-    assert_eq!(
-        v4_cap, 65_536,
-        "hosted V4 must not turn the 384K capability maximum into the default request, got {v4_cap}"
-    );
-
-    let flash_cap = effective_max_output_tokens("deepseek-v4-flash");
-    assert_eq!(v4_cap, flash_cap);
 }
 
 #[test]
@@ -15917,29 +15956,6 @@ fn effective_max_output_tokens_env_override_returns_positive_value() {
     assert_eq!(effective_max_output_tokens("deepseek-v4-pro"), 16_384);
     assert_eq!(effective_max_output_tokens("deepseek-v4-flash"), 16_384);
     assert_eq!(effective_max_output_tokens("qwen3-32b-256k"), 16_384);
-}
-
-#[test]
-fn effective_max_output_tokens_env_override_rejects_zero_and_invalid() {
-    let _lock = lock_test_env();
-    // Establish the heuristic baseline with the env unset.
-    let baseline = {
-        let _guard = ScopedDeepSeekMaxOutputTokens::unset();
-        effective_max_output_tokens("deepseek-v4-pro")
-    };
-    assert!(baseline > 0);
-
-    // 0, non-numeric, and empty values must all fall through to the heuristic
-    // rather than producing a zero/garbage cap that would silently break
-    // request budgeting.
-    for raw in ["0", "abc", "", "  ", "-1"] {
-        let _guard = ScopedDeepSeekMaxOutputTokens::set(raw);
-        assert_eq!(
-            effective_max_output_tokens("deepseek-v4-pro"),
-            baseline,
-            "env={raw:?} should fall through to heuristic"
-        );
-    }
 }
 
 #[test]
@@ -16914,7 +16930,7 @@ fn provenance_gate_preserves_standing_yolo_for_runtime_and_subagent_continuation
     for provenance in all_provenances {
         let policy = effective_input_policy(
             provenance,
-            AppMode::Yolo,
+            AppMode::Agent,
             "continue",
             true,
             true,
@@ -16923,7 +16939,7 @@ fn provenance_gate_preserves_standing_yolo_for_runtime_and_subagent_continuation
         );
 
         if inheriting_provenances.contains(&provenance) {
-            assert_eq!(policy.mode, AppMode::Yolo, "{provenance:?}");
+            assert_eq!(policy.mode, AppMode::Agent, "{provenance:?}");
             assert!(policy.allow_shell, "{provenance:?}");
             assert!(policy.trust_mode, "{provenance:?}");
             assert!(policy.auto_approve, "{provenance:?}");
@@ -17021,7 +17037,7 @@ fn self_generated_fake_approvals_cannot_authorize_work() {
         for content in ["改吧", "嗯"] {
             let policy = effective_input_policy(
                 provenance,
-                AppMode::Yolo,
+                AppMode::Agent,
                 content,
                 true,
                 true,
@@ -17059,7 +17075,7 @@ fn external_prompt_wording_never_changes_effective_mode_or_authority() {
             "你在帮我看看 外卖部分还哪里没有使用多语言",
         ),
         (
-            AppMode::Yolo,
+            AppMode::Agent,
             crate::tui::approval::ApprovalMode::Bypass,
             true,
             true,
@@ -17099,14 +17115,14 @@ fn external_prompt_wording_never_changes_effective_mode_or_authority() {
 fn external_user_wording_does_not_downgrade_standing_authority() {
     let review_wording = effective_input_policy(
         UserInputProvenance::ExternalUser,
-        AppMode::Yolo,
+        AppMode::Agent,
         "你在帮我看看 外卖部分还哪里没有使用多语言 我看看要不要加",
         true,
         true,
         true,
         crate::tui::approval::ApprovalMode::Bypass,
     );
-    assert_eq!(review_wording.mode, AppMode::Yolo);
+    assert_eq!(review_wording.mode, AppMode::Agent);
     assert!(review_wording.allow_shell);
     assert!(review_wording.trust_mode);
     assert!(review_wording.auto_approve);
@@ -17121,14 +17137,14 @@ fn external_user_wording_does_not_downgrade_standing_authority() {
 
     let later_user_instruction = effective_input_policy(
         UserInputProvenance::ExternalUser,
-        AppMode::Yolo,
+        AppMode::Agent,
         "需要修复下",
         true,
         true,
         true,
         crate::tui::approval::ApprovalMode::Bypass,
     );
-    assert_eq!(later_user_instruction.mode, AppMode::Yolo);
+    assert_eq!(later_user_instruction.mode, AppMode::Agent);
     assert!(later_user_instruction.allow_shell);
     assert!(later_user_instruction.trust_mode);
     assert!(later_user_instruction.auto_approve);
@@ -17295,8 +17311,8 @@ fn current_mode_field_assignment_takes_effect_synchronously() {
     let (mut engine, _handle) = Engine::new(config, &Config::default());
     assert_eq!(engine.current_mode, AppMode::Agent);
 
-    engine.current_mode = AppMode::Yolo;
-    assert_eq!(engine.current_mode, AppMode::Yolo);
+    engine.current_mode = AppMode::Operate;
+    assert_eq!(engine.current_mode, AppMode::Operate);
 }
 
 #[test]
@@ -17753,28 +17769,6 @@ async fn submitted_turn_appends_context_update_before_the_user_message() {
 }
 
 #[test]
-fn refresh_system_prompt_is_noop_when_unchanged() {
-    // The composed prompt reads ambient process state, so a concurrent test
-    // mutating the environment between the two refreshes changes the hash and
-    // fails the no-op assertion. Serialize with the other env-sensitive tests.
-    let _lock = lock_test_env();
-    let tmp = tempdir().expect("tempdir");
-    let config = EngineConfig {
-        workspace: tmp.path().to_path_buf(),
-        ..Default::default()
-    };
-    let (mut engine, _handle) = Engine::new(config, &Config::default());
-
-    engine.refresh_system_prompt();
-    let first_hash = engine.session.last_system_prompt_hash;
-    let first_prompt = engine.session.system_prompt.clone();
-    engine.refresh_system_prompt();
-
-    assert_eq!(engine.session.last_system_prompt_hash, first_hash);
-    assert_eq!(engine.session.system_prompt, first_prompt);
-}
-
-#[test]
 fn engine_prompt_keeps_reasoning_on_the_user_language_contract() {
     let tmp = tempdir().expect("tempdir");
     let config = EngineConfig {
@@ -17992,29 +17986,91 @@ fn tool_search_activates_discovered_deferred_tools() {
 }
 
 #[test]
-fn tool_search_can_discover_request_user_input_modal_tool() {
-    let always_load = HashSet::new();
-    let mut catalog = build_model_tool_catalog(
-        vec![api_tool(REQUEST_USER_INPUT_NAME)],
-        Vec::new(),
-        AppMode::Agent,
-        &always_load,
-    );
-    ensure_advanced_tooling(&mut catalog, AppMode::Agent, &always_load);
+fn tool_search_scenario() {
+    // Scenario consolidation of: tool_search_can_discover_request_user_input_modal_tool, tool_search_defaults_to_eight_results_for_regex_and_bm25, tool_search_respects_and_caps_max_results, tool_search_schema_exposes_max_results_default_and_cap
+    // from tool_search_can_discover_request_user_input_modal_tool
+    {
+        let always_load = HashSet::new();
+        let mut catalog = build_model_tool_catalog(
+            vec![api_tool(REQUEST_USER_INPUT_NAME)],
+            Vec::new(),
+            AppMode::Agent,
+            &always_load,
+        );
+        ensure_advanced_tooling(&mut catalog, AppMode::Agent, &always_load);
 
-    let mut active = initial_active_tools(&catalog);
-    assert!(!active.contains(REQUEST_USER_INPUT_NAME));
+        let mut active = initial_active_tools(&catalog);
+        assert!(!active.contains(REQUEST_USER_INPUT_NAME));
 
-    let result = execute_tool_search(
-        TOOL_SEARCH_NAME,
-        &json!({"query":"ask user question"}),
-        &catalog,
-        &mut active,
-    )
-    .expect("search succeeds");
+        let result = execute_tool_search(
+            TOOL_SEARCH_NAME,
+            &json!({"query":"ask user question"}),
+            &catalog,
+            &mut active,
+        )
+        .expect("search succeeds");
 
-    assert!(result.success);
-    assert!(active.contains(REQUEST_USER_INPUT_NAME));
+        assert!(result.success);
+        assert!(active.contains(REQUEST_USER_INPUT_NAME));
+    }
+    // from tool_search_defaults_to_eight_results_for_regex_and_bm25
+    {
+        let catalog = tool_search_catalog_with_matches(25);
+
+        for match_kind in ["regex", "bm25"] {
+            let mut active = initial_active_tools(&catalog);
+            let result = execute_tool_search(
+                TOOL_SEARCH_NAME,
+                &json!({"query":"matching","match":match_kind}),
+                &catalog,
+                &mut active,
+            )
+            .expect("search succeeds");
+
+            assert_eq!(tool_search_reference_count(&result), 8);
+        }
+    }
+    // from tool_search_respects_and_caps_max_results
+    {
+        let catalog = tool_search_catalog_with_matches(120);
+
+        let mut active = initial_active_tools(&catalog);
+        let limited = execute_tool_search(
+            TOOL_SEARCH_NAME,
+            &json!({"query":"matching","max_results":7}),
+            &catalog,
+            &mut active,
+        )
+        .expect("search succeeds");
+        assert_eq!(tool_search_reference_count(&limited), 7);
+
+        let mut active = initial_active_tools(&catalog);
+        let capped = execute_tool_search(
+            TOOL_SEARCH_NAME,
+            &json!({"query":"matching","match":"regex","max_results":999}),
+            &catalog,
+            &mut active,
+        )
+        .expect("search succeeds");
+        assert_eq!(tool_search_reference_count(&capped), 8);
+    }
+    // from tool_search_schema_exposes_max_results_default_and_cap
+    {
+        let mut catalog = Vec::new();
+        let always_load = HashSet::new();
+        ensure_advanced_tooling(&mut catalog, AppMode::Agent, &always_load);
+
+        let tool = catalog
+            .iter()
+            .find(|tool| tool.name == TOOL_SEARCH_NAME)
+            .expect("tool search definition exists");
+        let schema = &tool.input_schema["properties"]["max_results"];
+
+        assert_eq!(schema["default"], 8);
+        assert_eq!(schema["maximum"], 8);
+        assert_eq!(schema["minimum"], 1);
+        assert_eq!(tool.input_schema["properties"]["match"]["default"], "bm25");
+    }
 }
 
 fn tool_search_catalog_with_matches(count: usize) -> Vec<Tool> {
@@ -18045,100 +18101,44 @@ fn tool_search_reference_count(result: &ToolResult) -> usize {
         .map_or(0, Vec::len)
 }
 
-#[test]
-fn tool_search_defaults_to_eight_results_for_regex_and_bm25() {
-    let catalog = tool_search_catalog_with_matches(25);
-
-    for match_kind in ["regex", "bm25"] {
-        let mut active = initial_active_tools(&catalog);
-        let result = execute_tool_search(
-            TOOL_SEARCH_NAME,
-            &json!({"query":"matching","match":match_kind}),
-            &catalog,
-            &mut active,
+#[tokio::test]
+async fn code_execution_scenario() {
+    // Scenario consolidation of: code_execution_runs_python_and_returns_result_payload, code_execution_runs_through_common_executor_after_approval_gate
+    // from code_execution_runs_python_and_returns_result_payload
+    {
+        let tmp = tempdir().expect("tempdir");
+        let result = execute_code_execution_tool(
+            &json!({"code":"print('hello from code exec')"}),
+            tmp.path(),
         )
-        .expect("search succeeds");
-
-        assert_eq!(tool_search_reference_count(&result), 8);
+        .await
+        .expect("code execution should run");
+        assert!(result.content.contains("hello from code exec"));
+        assert!(result.content.contains("return_code"));
     }
-}
+    // from code_execution_runs_through_common_executor_after_approval_gate
+    {
+        let tmp = tempdir().expect("tempdir");
+        let (tx_event, _rx_event) = mpsc::channel(8);
+        let result = Engine::execute_tool_with_lock(
+            Arc::new(RwLock::new(())),
+            false,
+            false,
+            tx_event,
+            None,
+            CODE_EXECUTION_TOOL_NAME.to_string(),
+            json!({"code":"print('common executor code exec')"}),
+            tmp.path().to_path_buf(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("code_execution should run through common executor");
 
-#[test]
-fn tool_search_respects_and_caps_max_results() {
-    let catalog = tool_search_catalog_with_matches(120);
-
-    let mut active = initial_active_tools(&catalog);
-    let limited = execute_tool_search(
-        TOOL_SEARCH_NAME,
-        &json!({"query":"matching","max_results":7}),
-        &catalog,
-        &mut active,
-    )
-    .expect("search succeeds");
-    assert_eq!(tool_search_reference_count(&limited), 7);
-
-    let mut active = initial_active_tools(&catalog);
-    let capped = execute_tool_search(
-        TOOL_SEARCH_NAME,
-        &json!({"query":"matching","match":"regex","max_results":999}),
-        &catalog,
-        &mut active,
-    )
-    .expect("search succeeds");
-    assert_eq!(tool_search_reference_count(&capped), 8);
-}
-
-#[test]
-fn tool_search_schema_exposes_max_results_default_and_cap() {
-    let mut catalog = Vec::new();
-    let always_load = HashSet::new();
-    ensure_advanced_tooling(&mut catalog, AppMode::Agent, &always_load);
-
-    let tool = catalog
-        .iter()
-        .find(|tool| tool.name == TOOL_SEARCH_NAME)
-        .expect("tool search definition exists");
-    let schema = &tool.input_schema["properties"]["max_results"];
-
-    assert_eq!(schema["default"], 8);
-    assert_eq!(schema["maximum"], 8);
-    assert_eq!(schema["minimum"], 1);
-    assert_eq!(tool.input_schema["properties"]["match"]["default"], "bm25");
-}
-
-#[tokio::test]
-async fn code_execution_runs_python_and_returns_result_payload() {
-    let tmp = tempdir().expect("tempdir");
-    let result =
-        execute_code_execution_tool(&json!({"code":"print('hello from code exec')"}), tmp.path())
-            .await
-            .expect("code execution should run");
-    assert!(result.content.contains("hello from code exec"));
-    assert!(result.content.contains("return_code"));
-}
-
-#[tokio::test]
-async fn code_execution_runs_through_common_executor_after_approval_gate() {
-    let tmp = tempdir().expect("tempdir");
-    let (tx_event, _rx_event) = mpsc::channel(8);
-    let result = Engine::execute_tool_with_lock(
-        Arc::new(RwLock::new(())),
-        false,
-        false,
-        tx_event,
-        None,
-        CODE_EXECUTION_TOOL_NAME.to_string(),
-        json!({"code":"print('common executor code exec')"}),
-        tmp.path().to_path_buf(),
-        None,
-        None,
-        None,
-    )
-    .await
-    .expect("code_execution should run through common executor");
-
-    assert!(result.result.content.contains("common executor code exec"));
-    assert!(result.result.content.contains("return_code"));
+        assert!(result.result.content.contains("common executor code exec"));
+        assert!(result.result.content.contains("return_code"));
+    }
 }
 
 #[test]
@@ -18197,187 +18197,252 @@ fn missing_tool_error_message_offers_suggestions() {
 }
 
 #[test]
-fn missing_tool_error_message_includes_discovery_guidance_when_no_match() {
-    let catalog = vec![Tool {
-        tool_type: None,
-        name: "read_file".to_string(),
-        description: "Read file contents".to_string(),
-        input_schema: json!({"type":"object","properties":{"path":{"type":"string"}}}),
-        allowed_callers: Some(vec!["direct".to_string()]),
-        defer_loading: Some(false),
-        input_examples: None,
-        strict: None,
-        cache_control: None,
-    }];
+fn missing_tool_scenario() {
+    // Scenario consolidation of: missing_tool_error_message_includes_discovery_guidance_when_no_match, missing_tool_error_message_redirects_checklist_item_miscalls, missing_tool_error_message_names_exec_shell_rename
+    // from missing_tool_error_message_includes_discovery_guidance_when_no_match
+    {
+        let catalog = vec![Tool {
+            tool_type: None,
+            name: "read_file".to_string(),
+            description: "Read file contents".to_string(),
+            input_schema: json!({"type":"object","properties":{"path":{"type":"string"}}}),
+            allowed_callers: Some(vec!["direct".to_string()]),
+            defer_loading: Some(false),
+            input_examples: None,
+            strict: None,
+            cache_control: None,
+        }];
 
-    let message = missing_tool_error_message("totally_unknown_tool", &catalog);
-    assert!(message.contains("not available in the current tool catalog"));
-    assert!(message.contains(TOOL_SEARCH_NAME));
-}
-
-#[test]
-fn missing_tool_error_message_redirects_checklist_item_miscalls() {
-    let catalog = vec![api_tool("note"), api_tool("tts")];
-
-    for tool_name in ["item", "items", "todo", "checklist_item"] {
-        let message = missing_tool_error_message(tool_name, &catalog);
-        assert!(message.contains("todo_write"), "{tool_name}: {message}");
-        assert!(
-            !message.contains("Did you mean"),
-            "fuzzy suggestions are misleading for checklist mis-calls: {message}"
-        );
-    }
-}
-
-#[test]
-fn missing_tool_error_message_names_exec_shell_rename() {
-    // #5123-class: retired exec_shell must point at lowercase foreground bash,
-    // not misdiagnosed as an allow_shell permission problem.
-    let catalog = vec![api_tool("read_file")];
-
-    let message = missing_tool_error_message("exec_shell", &catalog);
-    assert!(message.contains("replaced by `bash`"), "{message}");
-    assert!(message.contains("`command`"), "{message}");
-
-    for tool_name in [
-        "exec_shell_wait",
-        "exec_shell_interact",
-        "exec_shell_cancel",
-    ] {
-        let message = missing_tool_error_message(tool_name, &catalog);
+        let message = missing_tool_error_message("totally_unknown_tool", &catalog);
         assert!(message.contains("not available in the current tool catalog"));
-        assert!(
-            message.contains("foreground-only"),
-            "{tool_name}: {message}"
-        );
-        assert!(message.contains(TOOL_SEARCH_NAME), "{tool_name}: {message}");
+        assert!(message.contains(TOOL_SEARCH_NAME));
+    }
+    // from missing_tool_error_message_redirects_checklist_item_miscalls
+    {
+        let catalog = vec![api_tool("note"), api_tool("tts")];
+
+        for tool_name in ["item", "items", "todo", "checklist_item"] {
+            let message = missing_tool_error_message(tool_name, &catalog);
+            assert!(message.contains("todo_write"), "{tool_name}: {message}");
+            assert!(
+                !message.contains("Did you mean"),
+                "fuzzy suggestions are misleading for checklist mis-calls: {message}"
+            );
+        }
+    }
+    // from missing_tool_error_message_names_exec_shell_rename
+    {
+        // #5123-class: retired exec_shell must point at lowercase foreground bash,
+        // not misdiagnosed as an allow_shell permission problem.
+        let catalog = vec![api_tool("read_file")];
+
+        let message = missing_tool_error_message("exec_shell", &catalog);
+        assert!(message.contains("replaced by `bash`"), "{message}");
+        assert!(message.contains("`command`"), "{message}");
+
+        for tool_name in [
+            "exec_shell_wait",
+            "exec_shell_interact",
+            "exec_shell_cancel",
+        ] {
+            let message = missing_tool_error_message(tool_name, &catalog);
+            assert!(message.contains("not available in the current tool catalog"));
+            assert!(
+                message.contains("foreground-only"),
+                "{tool_name}: {message}"
+            );
+            assert!(message.contains(TOOL_SEARCH_NAME), "{tool_name}: {message}");
+        }
     }
 }
 
 #[test]
-fn missing_shell_tool_error_message_names_allow_shell_gate() {
-    let catalog = vec![api_tool("read_file")];
+fn missing_shell_scenario() {
+    // Scenario consolidation of: missing_shell_tool_error_message_names_allow_shell_gate, missing_shell_tool_error_message_keeps_allow_shell_hint_with_suggestions
+    // from missing_shell_tool_error_message_names_allow_shell_gate
+    {
+        let catalog = vec![api_tool("read_file")];
 
-    for tool_name in ["task_shell_start", "task_shell_wait"] {
-        let message = missing_tool_error_message(tool_name, &catalog);
-        assert!(message.contains("not available in the current tool catalog"));
-        assert!(
-            message.contains("allow_shell = false"),
-            "{tool_name}: {message}"
-        );
-        assert!(message.contains("allow_shell"), "{tool_name}: {message}");
-        assert!(
-            message.contains("/config allow_shell true"),
-            "{tool_name}: {message}"
-        );
-        assert!(message.contains("--save"), "{tool_name}: {message}");
-        assert!(message.contains("Work mode"), "{tool_name}: {message}");
-        assert!(
-            message.contains("approval gating"),
-            "{tool_name}: {message}"
-        );
-        assert!(!message.contains("YOLO"), "{tool_name}: {message}");
-        assert!(!message.contains("auto-approve"), "{tool_name}: {message}");
-        assert!(message.contains(TOOL_SEARCH_NAME), "{tool_name}: {message}");
+        for tool_name in ["task_shell_start", "task_shell_wait"] {
+            let message = missing_tool_error_message(tool_name, &catalog);
+            assert!(message.contains("not available in the current tool catalog"));
+            assert!(
+                message.contains("allow_shell = false"),
+                "{tool_name}: {message}"
+            );
+            assert!(message.contains("allow_shell"), "{tool_name}: {message}");
+            assert!(
+                message.contains("/config allow_shell true"),
+                "{tool_name}: {message}"
+            );
+            assert!(message.contains("--save"), "{tool_name}: {message}");
+            assert!(message.contains("Work mode"), "{tool_name}: {message}");
+            assert!(
+                message.contains("approval gating"),
+                "{tool_name}: {message}"
+            );
+            assert!(!message.contains("YOLO"), "{tool_name}: {message}");
+            assert!(!message.contains("auto-approve"), "{tool_name}: {message}");
+            assert!(message.contains(TOOL_SEARCH_NAME), "{tool_name}: {message}");
+        }
+    }
+    // from missing_shell_tool_error_message_keeps_allow_shell_hint_with_suggestions
+    {
+        let catalog = vec![api_tool("task_shell_starter")];
+
+        let message = missing_tool_error_message("task_shell_start", &catalog);
+
+        assert!(message.contains("Did you mean:"));
+        assert!(message.contains("task_shell_starter"));
+        assert!(message.contains("allow_shell = false"));
+        assert!(message.contains("allow_shell"));
+        assert!(message.contains("/config allow_shell true"));
+        assert!(message.contains("--save"));
+        assert!(message.contains("Work mode"));
+        assert!(!message.contains("YOLO"));
+        assert!(!message.contains("auto-approve"));
+        assert!(message.contains(TOOL_SEARCH_NAME));
     }
 }
 
 #[test]
-fn missing_shell_tool_error_message_keeps_allow_shell_hint_with_suggestions() {
-    let catalog = vec![api_tool("task_shell_starter")];
-
-    let message = missing_tool_error_message("task_shell_start", &catalog);
-
-    assert!(message.contains("Did you mean:"));
-    assert!(message.contains("task_shell_starter"));
-    assert!(message.contains("allow_shell = false"));
-    assert!(message.contains("allow_shell"));
-    assert!(message.contains("/config allow_shell true"));
-    assert!(message.contains("--save"));
-    assert!(message.contains("Work mode"));
-    assert!(!message.contains("YOLO"));
-    assert!(!message.contains("auto-approve"));
-    assert!(message.contains(TOOL_SEARCH_NAME));
-}
-
-#[test]
-fn filter_tool_call_delta_strips_bracket_marker() {
-    let mut in_block = false;
-    let visible = filter_tool_call_delta(
-        "intro [TOOL_CALL]\n{\"tool\":\"x\"}\n[/TOOL_CALL] outro",
-        &mut in_block,
-    );
-    assert!(!in_block);
-    assert!(!visible.contains("[TOOL_CALL]"));
-    assert!(!visible.contains("[/TOOL_CALL]"));
-    assert!(!visible.contains("\"tool\":\"x\""));
-    assert!(visible.contains("intro"));
-    assert!(visible.contains("outro"));
-}
-
-#[test]
-fn filter_tool_call_delta_strips_deepseek_xml_marker() {
-    let mut in_block = false;
-    let visible = filter_tool_call_delta(
-        "before <codewhale:tool_call name=\"x\">payload</codewhale:tool_call> after",
-        &mut in_block,
-    );
-    assert!(!in_block);
-    for marker in TOOL_CALL_START_MARKERS {
-        assert!(
-            !visible.contains(marker),
-            "visible text leaked start marker `{marker}`: {visible:?}"
-        );
-    }
-    assert!(visible.contains("before"));
-    assert!(visible.contains("after"));
-}
-
-#[test]
-fn filter_tool_call_delta_strips_deepseek_native_tool_tokens() {
-    // #3880: DeepSeek's chat template separates words with `▁` (U+2581), so
-    // `<｜tool▁calls▁begin｜>` matched no DSML entry and reached the user as
-    // visible text that interrupted the task.
-    for (start, end) in [
-        ("<｜tool▁calls▁begin｜>", "<｜tool▁calls▁end｜>"),
-        ("<｜tool▁call▁begin｜>", "<｜tool▁call▁end｜>"),
-        ("<|tool▁calls▁begin|>", "<|tool▁calls▁end|>"),
-        ("<｜tool_calls_begin｜>", "<｜tool_calls_end｜>"),
-        ("<|tool_call_begin|>", "<|tool_call_end|>"),
-        ("<｜tool▁outputs▁begin｜>", "<｜tool▁outputs▁end｜>"),
-    ] {
+fn filter_tool_scenario() {
+    // Scenario consolidation of: filter_tool_call_delta_strips_bracket_marker, filter_tool_call_delta_strips_deepseek_xml_marker, filter_tool_call_delta_strips_deepseek_native_tool_tokens, filter_tool_call_delta_strips_deepseek_native_token_split_across_chunks, filter_tool_call_delta_strips_generic_tool_call_marker, filter_tool_call_delta_strips_invoke_marker, filter_tool_call_delta_strips_function_calls_marker, filter_tool_call_delta_strips_siliconflow_v4_dsml_content_fixture
+    // from filter_tool_call_delta_strips_bracket_marker
+    {
         let mut in_block = false;
         let visible = filter_tool_call_delta(
-            &format!("before {start}function<｜tool▁sep｜>read_file\n{{}}{end} after"),
+            "intro [TOOL_CALL]\n{\"tool\":\"x\"}\n[/TOOL_CALL] outro",
             &mut in_block,
         );
-        assert!(!in_block, "state stuck inside block for {start}");
+        assert!(!in_block);
+        assert!(!visible.contains("[TOOL_CALL]"));
+        assert!(!visible.contains("[/TOOL_CALL]"));
+        assert!(!visible.contains("\"tool\":\"x\""));
+        assert!(visible.contains("intro"));
+        assert!(visible.contains("outro"));
+    }
+    // from filter_tool_call_delta_strips_deepseek_xml_marker
+    {
+        let mut in_block = false;
+        let visible = filter_tool_call_delta(
+            "before <codewhale:tool_call name=\"x\">payload</codewhale:tool_call> after",
+            &mut in_block,
+        );
+        assert!(!in_block);
+        for marker in TOOL_CALL_START_MARKERS {
+            assert!(
+                !visible.contains(marker),
+                "visible text leaked start marker `{marker}`: {visible:?}"
+            );
+        }
+        assert!(visible.contains("before"));
+        assert!(visible.contains("after"));
+    }
+    // from filter_tool_call_delta_strips_deepseek_native_tool_tokens
+    {
+        // #3880: DeepSeek's chat template separates words with `▁` (U+2581), so
+        // `<｜tool▁calls▁begin｜>` matched no DSML entry and reached the user as
+        // visible text that interrupted the task.
+        for (start, end) in [
+            ("<｜tool▁calls▁begin｜>", "<｜tool▁calls▁end｜>"),
+            ("<｜tool▁call▁begin｜>", "<｜tool▁call▁end｜>"),
+            ("<|tool▁calls▁begin|>", "<|tool▁calls▁end|>"),
+            ("<｜tool_calls_begin｜>", "<｜tool_calls_end｜>"),
+            ("<|tool_call_begin|>", "<|tool_call_end|>"),
+            ("<｜tool▁outputs▁begin｜>", "<｜tool▁outputs▁end｜>"),
+        ] {
+            let mut in_block = false;
+            let visible = filter_tool_call_delta(
+                &format!("before {start}function<｜tool▁sep｜>read_file\n{{}}{end} after"),
+                &mut in_block,
+            );
+            assert!(!in_block, "state stuck inside block for {start}");
+            assert!(
+                !visible.contains("tool▁") && !visible.contains("tool_calls"),
+                "leaked {start} into visible text: {visible:?}"
+            );
+            assert!(visible.contains("before"), "{visible:?}");
+            assert!(visible.contains("after"), "{visible:?}");
+        }
+    }
+    // from filter_tool_call_delta_strips_deepseek_native_token_split_across_chunks
+    {
+        // The streaming filter carries a partial marker across chunk boundaries.
+        // These markers are multi-byte, so a split partway through one is the case
+        // most likely to slip past the carry buffer.
+        let mut state = ToolCallDeltaFilterState::default();
+        let full = "before <｜tool▁calls▁begin｜>payload<｜tool▁calls▁end｜> after";
+        let cut = full.find("calls").expect("marker present") + 2;
+        let mut visible = filter_tool_call_delta_with_state(&full[..cut], &mut state);
+        visible.push_str(&filter_tool_call_delta_with_state(&full[cut..], &mut state));
+
         assert!(
-            !visible.contains("tool▁") && !visible.contains("tool_calls"),
-            "leaked {start} into visible text: {visible:?}"
+            !visible.contains("tool▁") && !visible.contains("payload"),
+            "chunk-split marker leaked: {visible:?}"
         );
         assert!(visible.contains("before"), "{visible:?}");
         assert!(visible.contains("after"), "{visible:?}");
     }
-}
+    // from filter_tool_call_delta_strips_generic_tool_call_marker
+    {
+        let mut in_block = false;
+        let visible = filter_tool_call_delta(
+            "lead <tool_call>\n{\"name\":\"do\"}\n</tool_call> tail",
+            &mut in_block,
+        );
+        assert!(!in_block);
+        assert!(!visible.contains("<tool_call"));
+        assert!(!visible.contains("</tool_call>"));
+        assert!(visible.contains("lead"));
+        assert!(visible.contains("tail"));
+    }
+    // from filter_tool_call_delta_strips_invoke_marker
+    {
+        let mut in_block = false;
+        let visible = filter_tool_call_delta(
+            "alpha <invoke name=\"x\"><parameter name=\"k\">v</parameter></invoke> beta",
+            &mut in_block,
+        );
+        assert!(!in_block);
+        assert!(!visible.contains("<invoke "));
+        assert!(!visible.contains("</invoke>"));
+        assert!(visible.contains("alpha"));
+        assert!(visible.contains("beta"));
+    }
+    // from filter_tool_call_delta_strips_function_calls_marker
+    {
+        let mut in_block = false;
+        let visible = filter_tool_call_delta(
+            "head <function_calls>\n{\"name\":\"x\"}\n</function_calls> tail",
+            &mut in_block,
+        );
+        assert!(!in_block);
+        assert!(!visible.contains("<function_calls>"));
+        assert!(!visible.contains("</function_calls>"));
+        assert!(visible.contains("head"));
+        assert!(visible.contains("tail"));
+    }
+    // from filter_tool_call_delta_strips_siliconflow_v4_dsml_content_fixture
+    {
+        // #2900: a SiliconFlow CN `deepseek-ai/DeepSeek-V4-Pro` stream can leak
+        // DSML/function-call markup through the ordinary content channel. Keep it
+        // out of visible assistant text; do not reinterpret `<function_calls>` as
+        // an executable legacy text tool call.
+        let mut in_block = false;
+        let visible_a = filter_tool_call_delta(
+            "visible prefix <function_calls>\n{\"name\":\"exec_shell\",\"arguments\":{\"cmd\":\"echo leaked\"}}",
+            &mut in_block,
+        );
+        assert!(in_block);
+        assert_eq!(visible_a, "visible prefix ");
 
-#[test]
-fn filter_tool_call_delta_strips_deepseek_native_token_split_across_chunks() {
-    // The streaming filter carries a partial marker across chunk boundaries.
-    // These markers are multi-byte, so a split partway through one is the case
-    // most likely to slip past the carry buffer.
-    let mut state = ToolCallDeltaFilterState::default();
-    let full = "before <｜tool▁calls▁begin｜>payload<｜tool▁calls▁end｜> after";
-    let cut = full.find("calls").expect("marker present") + 2;
-    let mut visible = filter_tool_call_delta_with_state(&full[..cut], &mut state);
-    visible.push_str(&filter_tool_call_delta_with_state(&full[cut..], &mut state));
-
-    assert!(
-        !visible.contains("tool▁") && !visible.contains("payload"),
-        "chunk-split marker leaked: {visible:?}"
-    );
-    assert!(visible.contains("before"), "{visible:?}");
-    assert!(visible.contains("after"), "{visible:?}");
+        let visible_b = filter_tool_call_delta("\n</function_calls> visible suffix", &mut in_block);
+        assert!(!in_block);
+        assert_eq!(visible_b, " visible suffix");
+        assert!(!visible_b.contains("exec_shell"));
+        assert!(!visible_b.contains("<function_calls>"));
+    }
 }
 
 #[test]
@@ -18408,196 +18473,134 @@ fn marker_tables_are_consistent() {
 }
 
 #[test]
-fn filter_tool_call_delta_strips_generic_tool_call_marker() {
-    let mut in_block = false;
-    let visible = filter_tool_call_delta(
-        "lead <tool_call>\n{\"name\":\"do\"}\n</tool_call> tail",
-        &mut in_block,
-    );
-    assert!(!in_block);
-    assert!(!visible.contains("<tool_call"));
-    assert!(!visible.contains("</tool_call>"));
-    assert!(visible.contains("lead"));
-    assert!(visible.contains("tail"));
-}
-
-#[test]
-fn filter_tool_call_delta_strips_invoke_marker() {
-    let mut in_block = false;
-    let visible = filter_tool_call_delta(
-        "alpha <invoke name=\"x\"><parameter name=\"k\">v</parameter></invoke> beta",
-        &mut in_block,
-    );
-    assert!(!in_block);
-    assert!(!visible.contains("<invoke "));
-    assert!(!visible.contains("</invoke>"));
-    assert!(visible.contains("alpha"));
-    assert!(visible.contains("beta"));
-}
-
-#[test]
-fn filter_tool_call_delta_strips_function_calls_marker() {
-    let mut in_block = false;
-    let visible = filter_tool_call_delta(
-        "head <function_calls>\n{\"name\":\"x\"}\n</function_calls> tail",
-        &mut in_block,
-    );
-    assert!(!in_block);
-    assert!(!visible.contains("<function_calls>"));
-    assert!(!visible.contains("</function_calls>"));
-    assert!(visible.contains("head"));
-    assert!(visible.contains("tail"));
-}
-
-#[test]
-fn filter_tool_call_delta_strips_siliconflow_v4_dsml_content_fixture() {
-    // #2900: a SiliconFlow CN `deepseek-ai/DeepSeek-V4-Pro` stream can leak
-    // DSML/function-call markup through the ordinary content channel. Keep it
-    // out of visible assistant text; do not reinterpret `<function_calls>` as
-    // an executable legacy text tool call.
-    let mut in_block = false;
-    let visible_a = filter_tool_call_delta(
-        "visible prefix <function_calls>\n{\"name\":\"exec_shell\",\"arguments\":{\"cmd\":\"echo leaked\"}}",
-        &mut in_block,
-    );
-    assert!(in_block);
-    assert_eq!(visible_a, "visible prefix ");
-
-    let visible_b = filter_tool_call_delta("\n</function_calls> visible suffix", &mut in_block);
-    assert!(!in_block);
-    assert_eq!(visible_b, " visible suffix");
-    assert!(!visible_b.contains("exec_shell"));
-    assert!(!visible_b.contains("<function_calls>"));
-}
-
-#[test]
-fn filter_tool_call_delta_strips_fullwidth_dsml_invoke_fixture() {
-    // #3717: Windows users reported SiliconFlow/DSML content leaking through
-    // the ordinary text channel with fullwidth DSML wrapper tags. Treat it as
-    // non-API tool markup, not visible assistant text.
-    let mut in_block = false;
-    let visible = filter_tool_call_delta(
-        "visible prefix <｜DSML｜tool_calls>\n\
-         <｜DSML｜invoke name=\"read_file\">\n\
-         <｜DSML｜parameter name=\"path\" string=\"true\">backend/open_webui/utils/auth.py</｜DSML｜parameter>\n\
-         </｜DSML｜invoke>\n\
-         </｜DSML｜tool_calls> visible suffix",
-        &mut in_block,
-    );
-
-    assert!(!in_block);
-    assert_eq!(visible, "visible prefix  visible suffix");
-    assert!(!visible.contains("DSML"));
-    assert!(!visible.contains("read_file"));
-    assert!(!visible.contains("backend/open_webui"));
-}
-
-#[test]
-fn filter_tool_call_delta_strips_ascii_dsml_invoke_fixture() {
-    let mut in_block = false;
-    let visible = filter_tool_call_delta(
-        "visible prefix <|DSML|tool_calls>\n\
-         <|DSML|invoke name=\"read_file\">\n\
-         <|DSML|parameter name=\"path\" string=\"true\">backend/open_webui/utils/auth.py</|DSML|parameter>\n\
-         </|DSML|invoke>\n\
-         </|DSML|tool_calls> visible suffix",
-        &mut in_block,
-    );
-
-    assert!(!in_block);
-    assert_eq!(visible, "visible prefix  visible suffix");
-    assert!(!visible.contains("DSML"));
-    assert!(!visible.contains("read_file"));
-    assert!(!visible.contains("backend/open_webui"));
-}
-
-#[test]
-fn filter_tool_call_delta_carries_split_fullwidth_dsml_marker() {
-    let mut state = ToolCallDeltaFilterState::default();
-
-    let visible_a = filter_tool_call_delta_with_state("visible prefix <｜DS", &mut state);
-    assert_eq!(visible_a, "visible prefix ");
-
-    let visible_b = filter_tool_call_delta_with_state(
-        "ML｜tool_calls>\n<｜DSML｜invoke name=\"read_file\">",
-        &mut state,
-    );
-    assert!(
-        visible_b.is_empty(),
-        "split DSML opener leaked: {visible_b:?}"
-    );
-
-    let visible_c = filter_tool_call_delta_with_state(
-        "</｜DSML｜invoke>\n</｜DSML｜tool_calls> visible suffix",
-        &mut state,
-    );
-    assert_eq!(visible_c, " visible suffix");
-}
-
-#[test]
-fn filter_tool_call_delta_flushes_clean_partial_marker_prefix() {
-    let mut state = ToolCallDeltaFilterState::default();
-
-    let visible = filter_tool_call_delta_with_state("ordinary text ending in <", &mut state);
-    assert_eq!(visible, "ordinary text ending in ");
-
-    let flushed = flush_tool_call_delta_state(&mut state);
-    assert_eq!(flushed, "<");
-}
-
-#[test]
-fn filter_tool_call_delta_handles_chunk_split_marker() {
-    let mut in_block = false;
-    // First chunk opens the wrapper but does not close it.
-    let visible_a = filter_tool_call_delta("hello <tool_call>partial", &mut in_block);
-    assert!(in_block, "filter must remember it is mid-wrapper");
-    assert_eq!(visible_a, "hello ");
-
-    // Second chunk continues inside the wrapper, then closes it and adds tail.
-    let visible_b = filter_tool_call_delta("payload</tool_call> tail", &mut in_block);
-    assert!(!in_block);
-    assert_eq!(visible_b, " tail");
-}
-
-#[test]
-fn filter_tool_call_delta_unmatched_open_suppresses_remainder() {
-    let mut in_block = false;
-    let visible = filter_tool_call_delta("ok [TOOL_CALL]rest of stream", &mut in_block);
-    assert_eq!(visible, "ok ");
-    assert!(
-        in_block,
-        "unmatched open must leave filter in tool-call mode"
-    );
-}
-
-#[test]
-fn filter_tool_call_delta_passes_through_clean_text() {
-    let mut in_block = false;
-    let input = "no markers here, just prose with code `<not a tag>`.";
-    let visible = filter_tool_call_delta(input, &mut in_block);
-    assert!(!in_block);
-    assert_eq!(visible, input);
-}
-
-#[test]
-fn contains_fake_tool_wrapper_detects_each_marker() {
-    for marker in TOOL_CALL_START_MARKERS {
-        let needle = format!("noise {marker} more noise");
-        assert!(
-            contains_fake_tool_wrapper(&needle),
-            "marker `{marker}` should be detected"
+fn filter_tool_scenario_2() {
+    // Scenario consolidation of: filter_tool_call_delta_strips_fullwidth_dsml_invoke_fixture, filter_tool_call_delta_strips_ascii_dsml_invoke_fixture, filter_tool_call_delta_carries_split_fullwidth_dsml_marker, filter_tool_call_delta_flushes_clean_partial_marker_prefix, filter_tool_call_delta_handles_chunk_split_marker, filter_tool_call_delta_unmatched_open_suppresses_remainder, filter_tool_call_delta_passes_through_clean_text
+    // from filter_tool_call_delta_strips_fullwidth_dsml_invoke_fixture
+    {
+        // #3717: Windows users reported SiliconFlow/DSML content leaking through
+        // the ordinary text channel with fullwidth DSML wrapper tags. Treat it as
+        // non-API tool markup, not visible assistant text.
+        let mut in_block = false;
+        let visible = filter_tool_call_delta(
+            "visible prefix <｜DSML｜tool_calls>\n\
+             <｜DSML｜invoke name=\"read_file\">\n\
+             <｜DSML｜parameter name=\"path\" string=\"true\">backend/open_webui/utils/auth.py</｜DSML｜parameter>\n\
+             </｜DSML｜invoke>\n\
+             </｜DSML｜tool_calls> visible suffix",
+            &mut in_block,
         );
+
+        assert!(!in_block);
+        assert_eq!(visible, "visible prefix  visible suffix");
+        assert!(!visible.contains("DSML"));
+        assert!(!visible.contains("read_file"));
+        assert!(!visible.contains("backend/open_webui"));
+    }
+    // from filter_tool_call_delta_strips_ascii_dsml_invoke_fixture
+    {
+        let mut in_block = false;
+        let visible = filter_tool_call_delta(
+            "visible prefix <|DSML|tool_calls>\n\
+             <|DSML|invoke name=\"read_file\">\n\
+             <|DSML|parameter name=\"path\" string=\"true\">backend/open_webui/utils/auth.py</|DSML|parameter>\n\
+             </|DSML|invoke>\n\
+             </|DSML|tool_calls> visible suffix",
+            &mut in_block,
+        );
+
+        assert!(!in_block);
+        assert_eq!(visible, "visible prefix  visible suffix");
+        assert!(!visible.contains("DSML"));
+        assert!(!visible.contains("read_file"));
+        assert!(!visible.contains("backend/open_webui"));
+    }
+    // from filter_tool_call_delta_carries_split_fullwidth_dsml_marker
+    {
+        let mut state = ToolCallDeltaFilterState::default();
+
+        let visible_a = filter_tool_call_delta_with_state("visible prefix <｜DS", &mut state);
+        assert_eq!(visible_a, "visible prefix ");
+
+        let visible_b = filter_tool_call_delta_with_state(
+            "ML｜tool_calls>\n<｜DSML｜invoke name=\"read_file\">",
+            &mut state,
+        );
+        assert!(
+            visible_b.is_empty(),
+            "split DSML opener leaked: {visible_b:?}"
+        );
+
+        let visible_c = filter_tool_call_delta_with_state(
+            "</｜DSML｜invoke>\n</｜DSML｜tool_calls> visible suffix",
+            &mut state,
+        );
+        assert_eq!(visible_c, " visible suffix");
+    }
+    // from filter_tool_call_delta_flushes_clean_partial_marker_prefix
+    {
+        let mut state = ToolCallDeltaFilterState::default();
+
+        let visible = filter_tool_call_delta_with_state("ordinary text ending in <", &mut state);
+        assert_eq!(visible, "ordinary text ending in ");
+
+        let flushed = flush_tool_call_delta_state(&mut state);
+        assert_eq!(flushed, "<");
+    }
+    // from filter_tool_call_delta_handles_chunk_split_marker
+    {
+        let mut in_block = false;
+        // First chunk opens the wrapper but does not close it.
+        let visible_a = filter_tool_call_delta("hello <tool_call>partial", &mut in_block);
+        assert!(in_block, "filter must remember it is mid-wrapper");
+        assert_eq!(visible_a, "hello ");
+
+        // Second chunk continues inside the wrapper, then closes it and adds tail.
+        let visible_b = filter_tool_call_delta("payload</tool_call> tail", &mut in_block);
+        assert!(!in_block);
+        assert_eq!(visible_b, " tail");
+    }
+    // from filter_tool_call_delta_unmatched_open_suppresses_remainder
+    {
+        let mut in_block = false;
+        let visible = filter_tool_call_delta("ok [TOOL_CALL]rest of stream", &mut in_block);
+        assert_eq!(visible, "ok ");
+        assert!(
+            in_block,
+            "unmatched open must leave filter in tool-call mode"
+        );
+    }
+    // from filter_tool_call_delta_passes_through_clean_text
+    {
+        let mut in_block = false;
+        let input = "no markers here, just prose with code `<not a tag>`.";
+        let visible = filter_tool_call_delta(input, &mut in_block);
+        assert!(!in_block);
+        assert_eq!(visible, input);
     }
 }
 
 #[test]
-fn contains_fake_tool_wrapper_returns_false_on_clean_text() {
-    assert!(!contains_fake_tool_wrapper(
-        "plain assistant text without wrappers"
-    ));
-    assert!(!contains_fake_tool_wrapper(
-        "`<tool` lookalike but not a real start marker"
-    ));
+fn contains_fake_scenario() {
+    // Scenario consolidation of: contains_fake_tool_wrapper_detects_each_marker, contains_fake_tool_wrapper_returns_false_on_clean_text
+    // from contains_fake_tool_wrapper_detects_each_marker
+    {
+        for marker in TOOL_CALL_START_MARKERS {
+            let needle = format!("noise {marker} more noise");
+            assert!(
+                contains_fake_tool_wrapper(&needle),
+                "marker `{marker}` should be detected"
+            );
+        }
+    }
+    // from contains_fake_tool_wrapper_returns_false_on_clean_text
+    {
+        assert!(!contains_fake_tool_wrapper(
+            "plain assistant text without wrappers"
+        ));
+        assert!(!contains_fake_tool_wrapper(
+            "`<tool` lookalike but not a real start marker"
+        ));
+    }
 }
 
 #[test]
@@ -18630,93 +18633,156 @@ fn tool_state(initial: serde_json::Value, buffer: &str) -> ToolUseState {
 }
 
 #[test]
-fn final_tool_input_prefers_parsed_buffer_over_empty_initial() {
-    // The exact regression: ContentBlockStart delivered `{}`, then args
-    // streamed in via InputJsonDelta. The emitted ToolCallStarted must
-    // carry the parsed buffer, not the placeholder.
-    let state = tool_state(json!({}), r#"{"command": "ls -la"}"#);
-    assert_eq!(final_tool_input(&state), json!({"command": "ls -la"}));
-}
-
-#[test]
-fn final_tool_input_falls_back_to_initial_when_buffer_empty() {
-    // Models occasionally embed args directly in the start frame and never
-    // send any InputJsonDelta. We must still report those args.
-    let state = tool_state(json!({"command": "echo hi"}), "");
-    assert_eq!(final_tool_input(&state), json!({"command": "echo hi"}));
-}
-
-#[test]
-fn final_tool_input_preserves_raw_buffer_for_parse_errors() {
-    let mut state = tool_state(json!({}), "{not json");
-    state.input_parse_error = Some("malformed tool arguments".into());
-    assert_eq!(
-        final_tool_input(&state),
-        json!({"raw_arguments": "{not json"})
-    );
+fn final_tool_scenario() {
+    // Scenario consolidation of: final_tool_input_prefers_parsed_buffer_over_empty_initial, final_tool_input_falls_back_to_initial_when_buffer_empty, final_tool_input_preserves_raw_buffer_for_parse_errors
+    // from final_tool_input_prefers_parsed_buffer_over_empty_initial
+    {
+        // The exact regression: ContentBlockStart delivered `{}`, then args
+        // streamed in via InputJsonDelta. The emitted ToolCallStarted must
+        // carry the parsed buffer, not the placeholder.
+        let state = tool_state(json!({}), r#"{"command": "ls -la"}"#);
+        assert_eq!(final_tool_input(&state), json!({"command": "ls -la"}));
+    }
+    // from final_tool_input_falls_back_to_initial_when_buffer_empty
+    {
+        // Models occasionally embed args directly in the start frame and never
+        // send any InputJsonDelta. We must still report those args.
+        let state = tool_state(json!({"command": "echo hi"}), "");
+        assert_eq!(final_tool_input(&state), json!({"command": "echo hi"}));
+    }
+    // from final_tool_input_preserves_raw_buffer_for_parse_errors
+    {
+        let mut state = tool_state(json!({}), "{not json");
+        state.input_parse_error = Some("malformed tool arguments".into());
+        assert_eq!(
+            final_tool_input(&state),
+            json!({"raw_arguments": "{not json"})
+        );
+    }
 }
 
 // === #103 transparent stream-retry policy =====================================
 
 #[test]
-fn stream_retry_zero_content_then_error_is_transparently_retried() {
-    // Case 2 from issue #103: stream yielded ZERO content then errored.
-    // The decoder hit Err on the very first poll → engine should retry
-    // because DeepSeek hasn't billed and the user has seen nothing.
-    assert!(
-        super::should_transparently_retry_stream(false, 0, false),
-        "first attempt with no content must be eligible for transparent retry"
-    );
-    assert!(
-        super::should_transparently_retry_stream(false, 1, false),
-        "second attempt (one prior retry) with no content must still be eligible"
-    );
+fn stream_retry_scenario() {
+    // Scenario consolidation of: stream_retry_zero_content_then_error_is_transparently_retried, stream_retry_after_content_received_surfaces_error, stream_retry_respects_cancellation, stream_retry_budget_caps_resumes_in_mechanism, stream_retry_threshold_relaxed_to_five
+    // from stream_retry_zero_content_then_error_is_transparently_retried
+    {
+        // Case 2 from issue #103: stream yielded ZERO content then errored.
+        // The decoder hit Err on the very first poll → engine should retry
+        // because DeepSeek hasn't billed and the user has seen nothing.
+        assert!(
+            super::should_transparently_retry_stream(false, 0, false),
+            "first attempt with no content must be eligible for transparent retry"
+        );
+        assert!(
+            super::should_transparently_retry_stream(false, 1, false),
+            "second attempt (one prior retry) with no content must still be eligible"
+        );
+    }
+    // from stream_retry_after_content_received_surfaces_error
+    {
+        // Case 3 from issue #103: stream yielded content then errored. We must
+        // NOT transparently retry — the model has emitted billed output tokens
+        // and the UI has streamed deltas; resending would double-bill and the
+        // user would see the same prefix twice.
+        assert!(
+            !super::should_transparently_retry_stream(true, 0, false),
+            "any content received → no transparent retry, even with full budget"
+        );
+        assert!(
+            !super::should_transparently_retry_stream(true, 1, false),
+            "any content received → no transparent retry on subsequent attempts"
+        );
+    }
+    // from stream_retry_respects_cancellation
+    {
+        // Cancellation overrides every other condition. If the user pressed
+        // Esc / Ctrl-C, do not silently re-issue the request behind their back.
+        assert!(
+            !super::should_transparently_retry_stream(false, 0, true),
+            "cancelled turn must not be transparently retried"
+        );
+        assert!(
+            !super::should_transparently_retry_stream(false, 1, true),
+            "cancelled turn must not be transparently retried even with budget"
+        );
+    }
+    // from stream_retry_budget_caps_resumes_in_mechanism
+    {
+        // "At most one bounded retry per drop" is enforced by types, not by a
+        // comment: `authorize()` is the only way to spend a resume and it refuses
+        // once MAX_STREAM_RETRIES resumes have been issued, whatever the guard
+        // predicates say. A healthy round resets the chain.
+        let mut budget = super::StreamRetryBudget::default();
+        assert_eq!(budget.spent(), 0);
+        assert_eq!(budget.authorize(), Some(1));
+        assert_eq!(budget.authorize(), Some(2));
+        assert_eq!(budget.authorize(), Some(3));
+        assert_eq!(
+            budget.authorize(),
+            None,
+            "authorize() must refuse past MAX_STREAM_RETRIES"
+        );
+        assert_eq!(budget.authorize(), None, "and keep refusing");
+        assert_eq!(budget.spent(), super::MAX_STREAM_RETRIES);
+        budget.reset();
+        assert_eq!(budget.spent(), 0);
+        assert_eq!(budget.authorize(), Some(1));
+    }
+    // from stream_retry_threshold_relaxed_to_five
+    {
+        // Case 1+4 from issue #103: the consecutive-error threshold for marking
+        // the turn failed was relaxed from 3 → 5 in v0.6.7 because the new
+        // HTTP/2 keepalive defaults make spurious decode errors rarer.
+        // This test pins the constant so a future regression to 3 fails loudly.
+        assert_eq!(
+            super::MAX_STREAM_ERRORS_BEFORE_FAIL,
+            5,
+            "the consecutive-stream-error threshold should be 5; \
+             lowering it back to 3 will fail mid-turn under transient flakiness"
+        );
+        // And a regression guard on the transparent-retry cap.
+        assert_eq!(
+            super::MAX_TRANSPARENT_STREAM_RETRIES,
+            2,
+            "transparent-retry cap should be 2; raising it risks hammering the \
+             provider on real outages"
+        );
+    }
 }
 
 #[test]
-fn stream_retry_after_content_received_surfaces_error() {
-    // Case 3 from issue #103: stream yielded content then errored. We must
-    // NOT transparently retry — the model has emitted billed output tokens
-    // and the UI has streamed deltas; resending would double-bill and the
-    // user would see the same prefix twice.
-    assert!(
-        !super::should_transparently_retry_stream(true, 0, false),
-        "any content received → no transparent retry, even with full budget"
-    );
-    assert!(
-        !super::should_transparently_retry_stream(true, 1, false),
-        "any content received → no transparent retry on subsequent attempts"
-    );
-}
+fn stream_read_scenario() {
+    // Scenario consolidation of: stream_read_error_message_explains_retry_before_output, stream_read_error_message_explains_no_replay_after_output
+    // from stream_read_error_message_explains_retry_before_output
+    {
+        let message = super::stream_read_error_user_message(
+            "Stream read error: error decoding response body",
+            false,
+        );
 
-#[test]
-fn stream_read_error_message_explains_retry_before_output() {
-    let message = super::stream_read_error_user_message(
-        "Stream read error: error decoding response body",
-        false,
-    );
+        assert!(message.contains("Provider stream connection dropped"));
+        assert!(message.contains("No output had streamed yet"));
+        assert!(message.contains("retry automatically"));
+        assert!(message.contains("Stream read error: error decoding response body"));
+    }
+    // from stream_read_error_message_explains_no_replay_after_output
+    {
+        let message = super::stream_read_error_user_message(
+            "Stream read error: error decoding response body",
+            true,
+        );
 
-    assert!(message.contains("Provider stream connection dropped"));
-    assert!(message.contains("No output had streamed yet"));
-    assert!(message.contains("retry automatically"));
-    assert!(message.contains("Stream read error: error decoding response body"));
-}
-
-#[test]
-fn stream_read_error_message_explains_no_replay_after_output() {
-    let message = super::stream_read_error_user_message(
-        "Stream read error: error decoding response body",
-        true,
-    );
-
-    assert!(message.contains("Provider stream connection dropped"));
-    assert!(message.contains("Some output had already streamed"));
-    assert!(message.contains("risking duplicated output"));
-    assert!(message.contains("Stream read error: error decoding response body"));
-    assert_eq!(
-        crate::error_taxonomy::classify_error_message(&message),
-        crate::error_taxonomy::ErrorCategory::Network
-    );
+        assert!(message.contains("Provider stream connection dropped"));
+        assert!(message.contains("Some output had already streamed"));
+        assert!(message.contains("risking duplicated output"));
+        assert!(message.contains("Stream read error: error decoding response body"));
+        assert_eq!(
+            crate::error_taxonomy::classify_error_message(&message),
+            crate::error_taxonomy::ErrorCategory::Network
+        );
+    }
 }
 
 #[test]
@@ -18751,20 +18817,6 @@ fn stream_retry_budget_caps_transparent_retries_at_two() {
     );
 }
 
-#[test]
-fn stream_retry_respects_cancellation() {
-    // Cancellation overrides every other condition. If the user pressed
-    // Esc / Ctrl-C, do not silently re-issue the request behind their back.
-    assert!(
-        !super::should_transparently_retry_stream(false, 0, true),
-        "cancelled turn must not be transparently retried"
-    );
-    assert!(
-        !super::should_transparently_retry_stream(false, 1, true),
-        "cancelled turn must not be transparently retried even with budget"
-    );
-}
-
 // === #2990 sleep-resume policy ================================================
 
 #[test]
@@ -18793,41 +18845,43 @@ fn sleep_gap_requires_wallclock_to_outrun_monotonic_clock() {
 }
 
 #[test]
-fn sleep_resume_retries_even_after_content_streamed() {
-    // The whole point of #2990: unlike the #103 transparent retry, a
-    // detected sleep gap retries regardless of streamed content — the
-    // partial output predates the sleep and the user was not watching.
-    assert!(
-        super::should_resume_after_sleep(true, 0, false),
-        "detected sleep with full budget must resume"
-    );
-    assert!(
-        super::should_resume_after_sleep(true, super::MAX_STREAM_RETRIES - 1, false),
-        "detected sleep one short of the budget must still resume"
-    );
-}
-
-#[test]
-fn sleep_resume_requires_a_detected_gap() {
-    // Without a sleep gap this layer stays out of the way entirely, so the
-    // deliberate no-retry-after-content policy for ordinary flakes (#103)
-    // is preserved.
-    assert!(
-        !super::should_resume_after_sleep(false, 0, false),
-        "no sleep gap → never resume via this layer"
-    );
-}
-
-#[test]
-fn sleep_resume_respects_budget_and_cancellation() {
-    assert!(
-        !super::should_resume_after_sleep(true, super::MAX_STREAM_RETRIES, false),
-        "budget exhausted → surface the failure instead of looping"
-    );
-    assert!(
-        !super::should_resume_after_sleep(true, 0, true),
-        "cancelled turn must not be resumed behind the user's back"
-    );
+fn sleep_resume_scenario() {
+    // Scenario consolidation of: sleep_resume_retries_even_after_content_streamed, sleep_resume_requires_a_detected_gap, sleep_resume_respects_budget_and_cancellation
+    // from sleep_resume_retries_even_after_content_streamed
+    {
+        // The whole point of #2990: unlike the #103 transparent retry, a
+        // detected sleep gap retries regardless of streamed content — the
+        // partial output predates the sleep and the user was not watching.
+        assert!(
+            super::should_resume_after_sleep(true, 0, false),
+            "detected sleep with full budget must resume"
+        );
+        assert!(
+            super::should_resume_after_sleep(true, super::MAX_STREAM_RETRIES - 1, false),
+            "detected sleep one short of the budget must still resume"
+        );
+    }
+    // from sleep_resume_requires_a_detected_gap
+    {
+        // Without a sleep gap this layer stays out of the way entirely, so the
+        // deliberate no-retry-after-content policy for ordinary flakes (#103)
+        // is preserved.
+        assert!(
+            !super::should_resume_after_sleep(false, 0, false),
+            "no sleep gap → never resume via this layer"
+        );
+    }
+    // from sleep_resume_respects_budget_and_cancellation
+    {
+        assert!(
+            !super::should_resume_after_sleep(true, super::MAX_STREAM_RETRIES, false),
+            "budget exhausted → surface the failure instead of looping"
+        );
+        assert!(
+            !super::should_resume_after_sleep(true, 0, true),
+            "cancelled turn must not be resumed behind the user's back"
+        );
+    }
 }
 
 // === headless mid-stream network-drop resume (v0.9.4 Terminal-Bench P0) ======
@@ -18841,40 +18895,47 @@ fn sleep_resume_respects_budget_and_cancellation() {
 // like the #2990 sleep-resume.
 
 #[test]
-fn network_drop_resume_only_fires_for_headless_hosts() {
-    assert!(
-        super::should_resume_after_network_drop(true, true, 0, false),
-        "headless host + network-class drop with budget must resume"
-    );
-    assert!(
-        !super::should_resume_after_network_drop(false, true, 0, false),
-        "interactive sessions keep the #103 surface-the-warning policy: \
-         the user saw the partial deltas and replay would render them twice"
-    );
-}
-
-#[test]
-fn network_drop_resume_requires_network_class_error() {
-    assert!(
-        !super::should_resume_after_network_drop(true, false, 0, false),
-        "non-network failures (model/parse/auth) must never be replayed"
-    );
-}
-
-#[test]
-fn network_drop_resume_respects_budget_and_cancellation() {
-    assert!(
-        super::should_resume_after_network_drop(true, true, super::MAX_STREAM_RETRIES - 1, false),
-        "one short of the budget should still resume"
-    );
-    assert!(
-        !super::should_resume_after_network_drop(true, true, super::MAX_STREAM_RETRIES, false),
-        "budget exhausted → surface the failure instead of looping"
-    );
-    assert!(
-        !super::should_resume_after_network_drop(true, true, 0, true),
-        "cancelled turn must not be resumed behind the operator's back"
-    );
+fn network_drop_scenario() {
+    // Scenario consolidation of: network_drop_resume_only_fires_for_headless_hosts, network_drop_resume_requires_network_class_error, network_drop_resume_respects_budget_and_cancellation
+    // from network_drop_resume_only_fires_for_headless_hosts
+    {
+        assert!(
+            super::should_resume_after_network_drop(true, true, 0, false),
+            "headless host + network-class drop with budget must resume"
+        );
+        assert!(
+            !super::should_resume_after_network_drop(false, true, 0, false),
+            "interactive sessions keep the #103 surface-the-warning policy: \
+             the user saw the partial deltas and replay would render them twice"
+        );
+    }
+    // from network_drop_resume_requires_network_class_error
+    {
+        assert!(
+            !super::should_resume_after_network_drop(true, false, 0, false),
+            "non-network failures (model/parse/auth) must never be replayed"
+        );
+    }
+    // from network_drop_resume_respects_budget_and_cancellation
+    {
+        assert!(
+            super::should_resume_after_network_drop(
+                true,
+                true,
+                super::MAX_STREAM_RETRIES - 1,
+                false
+            ),
+            "one short of the budget should still resume"
+        );
+        assert!(
+            !super::should_resume_after_network_drop(true, true, super::MAX_STREAM_RETRIES, false),
+            "budget exhausted → surface the failure instead of looping"
+        );
+        assert!(
+            !super::should_resume_after_network_drop(true, true, 0, true),
+            "cancelled turn must not be resumed behind the operator's back"
+        );
+    }
 }
 
 // === interactive mid-stream network-drop resume (0.9.4; reworked 0.9.10) =========
@@ -18888,35 +18949,37 @@ fn network_drop_resume_respects_budget_and_cancellation() {
 // nothing and never claims it did.
 
 #[test]
-fn interactive_network_drop_resume_only_fires_for_interactive_hosts() {
-    assert!(
-        super::should_resume_interactive_after_network_drop(true, true, true, true, 0, false),
-        "interactive TUI + partial text + no tools + budget must resume"
-    );
-    assert!(
-        !super::should_resume_interactive_after_network_drop(false, true, true, true, 0, false),
-        "headless hosts must use the headless resume path, not this one"
-    );
-}
-
-#[test]
-fn interactive_network_drop_resume_requires_partial_content_and_no_tools() {
-    assert!(
-        !super::should_resume_interactive_after_network_drop(true, true, false, true, 0, false),
-        "no streamed content → transparent retry or nothing-streamed path"
-    );
-    assert!(
-        !super::should_resume_interactive_after_network_drop(true, true, true, false, 0, false),
-        "in-flight tool calls must never be resumed (side-effect duplication)"
-    );
-}
-
-#[test]
-fn interactive_network_drop_resume_requires_network_class_error() {
-    assert!(
-        !super::should_resume_interactive_after_network_drop(true, false, true, true, 0, false),
-        "non-network failures must surface normally"
-    );
+fn interactive_network_scenario() {
+    // Scenario consolidation of: interactive_network_drop_resume_only_fires_for_interactive_hosts, interactive_network_drop_resume_requires_partial_content_and_no_tools, interactive_network_drop_resume_requires_network_class_error
+    // from interactive_network_drop_resume_only_fires_for_interactive_hosts
+    {
+        assert!(
+            super::should_resume_interactive_after_network_drop(true, true, true, true, 0, false),
+            "interactive TUI + partial text + no tools + budget must resume"
+        );
+        assert!(
+            !super::should_resume_interactive_after_network_drop(false, true, true, true, 0, false),
+            "headless hosts must use the headless resume path, not this one"
+        );
+    }
+    // from interactive_network_drop_resume_requires_partial_content_and_no_tools
+    {
+        assert!(
+            !super::should_resume_interactive_after_network_drop(true, true, false, true, 0, false),
+            "no streamed content → transparent retry or nothing-streamed path"
+        );
+        assert!(
+            !super::should_resume_interactive_after_network_drop(true, true, true, false, 0, false),
+            "in-flight tool calls must never be resumed (side-effect duplication)"
+        );
+    }
+    // from interactive_network_drop_resume_requires_network_class_error
+    {
+        assert!(
+            !super::should_resume_interactive_after_network_drop(true, false, true, true, 0, false),
+            "non-network failures must surface normally"
+        );
+    }
 }
 
 #[test]
@@ -18947,29 +19010,6 @@ fn interactive_network_drop_resume_respects_budget_and_cancellation() {
         !super::should_resume_interactive_after_network_drop(true, true, true, true, 0, true),
         "cancelled turn must not resume"
     );
-}
-
-#[test]
-fn stream_retry_budget_caps_resumes_in_mechanism() {
-    // "At most one bounded retry per drop" is enforced by types, not by a
-    // comment: `authorize()` is the only way to spend a resume and it refuses
-    // once MAX_STREAM_RETRIES resumes have been issued, whatever the guard
-    // predicates say. A healthy round resets the chain.
-    let mut budget = super::StreamRetryBudget::default();
-    assert_eq!(budget.spent(), 0);
-    assert_eq!(budget.authorize(), Some(1));
-    assert_eq!(budget.authorize(), Some(2));
-    assert_eq!(budget.authorize(), Some(3));
-    assert_eq!(
-        budget.authorize(),
-        None,
-        "authorize() must refuse past MAX_STREAM_RETRIES"
-    );
-    assert_eq!(budget.authorize(), None, "and keep refusing");
-    assert_eq!(budget.spent(), super::MAX_STREAM_RETRIES);
-    budget.reset();
-    assert_eq!(budget.spent(), 0);
-    assert_eq!(budget.authorize(), Some(1));
 }
 
 /// Model client whose first `failures` streams emit partial content and then
@@ -20194,27 +20234,6 @@ async fn headless_turn_fails_with_real_error_after_network_drop_budget_exhausted
     );
 }
 
-#[test]
-fn stream_retry_threshold_relaxed_to_five() {
-    // Case 1+4 from issue #103: the consecutive-error threshold for marking
-    // the turn failed was relaxed from 3 → 5 in v0.6.7 because the new
-    // HTTP/2 keepalive defaults make spurious decode errors rarer.
-    // This test pins the constant so a future regression to 3 fails loudly.
-    assert_eq!(
-        super::MAX_STREAM_ERRORS_BEFORE_FAIL,
-        5,
-        "the consecutive-stream-error threshold should be 5; \
-         lowering it back to 3 will fail mid-turn under transient flakiness"
-    );
-    // And a regression guard on the transparent-retry cap.
-    assert_eq!(
-        super::MAX_TRANSPARENT_STREAM_RETRIES,
-        2,
-        "transparent-retry cap should be 2; raising it risks hammering the \
-         provider on real outages"
-    );
-}
-
 // === Issue #66: error taxonomy wired through engine + audit + capacity ===
 
 /// A failed-tool audit entry must carry the typed `category` and `severity`
@@ -20248,68 +20267,66 @@ fn tool_failure_audit_payload_carries_category_and_severity() {
 // ── #136: post-edit LSP diagnostics hook ─────────────────────────────────
 
 #[test]
-fn edited_paths_for_edit_file_returns_path() {
-    let input = json!({ "path": "src/foo.rs", "search": "x", "replace": "y" });
-    let paths = edited_paths_for_tool("edit_file", &input);
-    assert_eq!(paths, vec![PathBuf::from("src/foo.rs")]);
-}
-
-#[test]
-fn edited_paths_for_write_file_returns_path() {
-    let input = json!({ "path": "src/bar.rs", "content": "fn main() {}" });
-    let paths = edited_paths_for_tool("write_file", &input);
-    assert_eq!(paths, vec![PathBuf::from("src/bar.rs")]);
-}
-
-#[test]
-fn edited_paths_for_apply_patch_with_replace_returns_each_path() {
-    let input = json!({
-        "replace": [
-            { "path": "a.rs", "content": "" },
-            { "path": "b.rs", "content": "" }
-        ]
-    });
-    let paths = edited_paths_for_tool("apply_patch", &input);
-    assert_eq!(paths, vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")]);
-}
-
-#[test]
-fn edited_paths_for_apply_patch_with_legacy_changes_returns_each_path() {
-    let input = json!({
-        "changes": [
-            { "path": "a.rs", "content": "" },
-            { "path": "b.rs", "content": "" }
-        ]
-    });
-    let paths = edited_paths_for_tool("apply_patch", &input);
-    assert_eq!(paths, vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")]);
-}
-
-#[test]
-fn edited_paths_for_apply_patch_with_diff_text_extracts_paths() {
-    let input = json!({
-        "patch": "--- a/foo.rs\n+++ b/foo.rs\n@@ -1 +1 @@\n-let x: i32 = 0;\n+let x: i32 = \"oops\";\n"
-    });
-    let paths = edited_paths_for_tool("apply_patch", &input);
-    assert_eq!(paths, vec![PathBuf::from("foo.rs")]);
-}
-
-#[test]
-fn edited_paths_for_apply_patch_with_invalid_diff_returns_empty() {
-    let input = json!({
-        "patch": "@@ -1 +1 @@\n-old\n+new\n"
-    });
-    let paths = edited_paths_for_tool("apply_patch", &input);
-    assert!(paths.is_empty());
-}
-
-#[test]
-fn edited_paths_for_unknown_tool_returns_empty() {
-    let input = json!({ "path": "irrelevant.rs" });
-    let paths = edited_paths_for_tool("read_file", &input);
-    assert!(paths.is_empty());
-    let paths = edited_paths_for_tool("grep_files", &input);
-    assert!(paths.is_empty());
+fn edited_paths_scenario() {
+    // Scenario consolidation of: edited_paths_for_edit_file_returns_path, edited_paths_for_write_file_returns_path, edited_paths_for_apply_patch_with_replace_returns_each_path, edited_paths_for_apply_patch_with_legacy_changes_returns_each_path, edited_paths_for_apply_patch_with_diff_text_extracts_paths, edited_paths_for_apply_patch_with_invalid_diff_returns_empty, edited_paths_for_unknown_tool_returns_empty
+    // from edited_paths_for_edit_file_returns_path
+    {
+        let input = json!({ "path": "src/foo.rs", "search": "x", "replace": "y" });
+        let paths = edited_paths_for_tool("edit_file", &input);
+        assert_eq!(paths, vec![PathBuf::from("src/foo.rs")]);
+    }
+    // from edited_paths_for_write_file_returns_path
+    {
+        let input = json!({ "path": "src/bar.rs", "content": "fn main() {}" });
+        let paths = edited_paths_for_tool("write_file", &input);
+        assert_eq!(paths, vec![PathBuf::from("src/bar.rs")]);
+    }
+    // from edited_paths_for_apply_patch_with_replace_returns_each_path
+    {
+        let input = json!({
+            "replace": [
+                { "path": "a.rs", "content": "" },
+                { "path": "b.rs", "content": "" }
+            ]
+        });
+        let paths = edited_paths_for_tool("apply_patch", &input);
+        assert_eq!(paths, vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")]);
+    }
+    // from edited_paths_for_apply_patch_with_legacy_changes_returns_each_path
+    {
+        let input = json!({
+            "changes": [
+                { "path": "a.rs", "content": "" },
+                { "path": "b.rs", "content": "" }
+            ]
+        });
+        let paths = edited_paths_for_tool("apply_patch", &input);
+        assert_eq!(paths, vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")]);
+    }
+    // from edited_paths_for_apply_patch_with_diff_text_extracts_paths
+    {
+        let input = json!({
+            "patch": "--- a/foo.rs\n+++ b/foo.rs\n@@ -1 +1 @@\n-let x: i32 = 0;\n+let x: i32 = \"oops\";\n"
+        });
+        let paths = edited_paths_for_tool("apply_patch", &input);
+        assert_eq!(paths, vec![PathBuf::from("foo.rs")]);
+    }
+    // from edited_paths_for_apply_patch_with_invalid_diff_returns_empty
+    {
+        let input = json!({
+            "patch": "@@ -1 +1 @@\n-old\n+new\n"
+        });
+        let paths = edited_paths_for_tool("apply_patch", &input);
+        assert!(paths.is_empty());
+    }
+    // from edited_paths_for_unknown_tool_returns_empty
+    {
+        let input = json!({ "path": "irrelevant.rs" });
+        let paths = edited_paths_for_tool("read_file", &input);
+        assert!(paths.is_empty());
+        let paths = edited_paths_for_tool("grep_files", &input);
+        assert!(paths.is_empty());
+    }
 }
 
 #[test]
@@ -20898,7 +20915,7 @@ fn every_effective_mode_change_carries_a_structured_narrowing_event() {
     for provenance in narrowing_provenances {
         let policy = effective_input_policy(
             provenance,
-            AppMode::Yolo,
+            AppMode::Agent,
             "continue",
             true,
             true,
@@ -20923,10 +20940,8 @@ fn every_effective_mode_change_carries_a_structured_narrowing_event() {
             "{provenance:?}"
         );
         assert_eq!(event.reason().as_str(), "non_authoritative_provenance");
-        // The transition names both ends, so a reader can see what was lost.
-        // Mode deliberately reads as the permission vocabulary (`AppMode::
-        // as_setting` writes "agent" for the legacy Yolo label), so the
-        // posture is what carries the change here.
+        // The transition names both ends, so a reader can see what was
+        // lost; the posture is what carries the change here.
         let transition = event.transition();
         assert_eq!(
             transition, "agent (Full Access) -> agent (Ask)",
@@ -20937,7 +20952,7 @@ fn every_effective_mode_change_carries_a_structured_narrowing_event() {
     // An authoritative turn narrows nothing and therefore reports nothing.
     let unchanged = effective_input_policy(
         UserInputProvenance::ExternalUser,
-        AppMode::Yolo,
+        AppMode::Agent,
         "continue",
         true,
         true,
@@ -20955,7 +20970,7 @@ fn every_effective_mode_change_carries_a_structured_narrowing_event() {
 fn ui_status_and_model_metadata_render_the_same_narrowing_sentence() {
     let policy = effective_input_policy(
         UserInputProvenance::AssistantGenerated,
-        AppMode::Yolo,
+        AppMode::Agent,
         "continue",
         true,
         true,
@@ -21024,7 +21039,7 @@ fn turn_metadata_carries_the_narrowing_only_on_a_narrowed_turn() {
 
     let policy = effective_input_policy(
         UserInputProvenance::AssistantGenerated,
-        AppMode::Yolo,
+        AppMode::Agent,
         "continue",
         true,
         true,

@@ -100,7 +100,7 @@ fn run_pointer_submit_case(rows: u16, cols: u16) {
     tui.send(keys::key::enter()).expect("leave onboarding");
     wait_or_panic(
         &mut tui,
-        "New worktree",
+        "New session",
         STARTUP_WAIT,
         &format!("{size}: show the launch card"),
     );
@@ -297,22 +297,24 @@ fn normalized_text(frame: &Frame) -> String {
 
 fn assert_startup_contract(frame: &Frame, rows: u16, cols: u16, size: &str) {
     let text = frame.text();
-    // The launch card's own truth: the wordmark + version, the menu with
-    // real chords, and the focused composer. The posture bar and metrics
-    // line appear only once a session exists, so `context` is NOT asserted
-    // here any more (SHELL-DESIGN-20260901 Round 5).
-    for needle in ["Codewhale", "❯"] {
+    // The launch card's own truth: the wordmark + version, the prominent
+    // new-session entry, and the focused composer. The posture bar and
+    // metrics line appear only once a session exists, so `context` is NOT
+    // asserted here any more (SHELL-DESIGN-20260901 Round 5).
+    for needle in ["codewhale", "❯"] {
         assert!(
             text.contains(needle),
             "{size}: startup misses {needle:?}\n{}",
             frame.debug_dump()
         );
     }
-    // The card sheds menu rows on narrow stages; the title holds last.
+    // The card sheds rows on narrow stages; the new-session entry holds
+    // last. The sealed harness home has no saved sessions, so wide stages
+    // also paint the empty-workspace note.
     let needles: &[&str] = if cols < 56 {
-        &["New worktree"]
+        &["New session"]
     } else {
-        &["New worktree", "Resume session", "Changelog", "Quit"]
+        &["New session", "No recent sessions"]
     };
     for needle in needles {
         assert!(
@@ -339,9 +341,13 @@ fn assert_startup_contract(frame: &Frame, rows: u16, cols: u16, size: &str) {
 
 fn assert_live_shell_contract(frame: &Frame, cols: u16, size: &str) {
     let text = frame.text();
+    // The bottom metrics row owns the model; repository state belongs to
+    // the launch header and git view. This sealed offline session uses the
+    // default model, which must remain visible even at 40 columns.
+    let metrics = frame.row(frame.rows().saturating_sub(1));
     assert!(
-        text.contains("ctx "),
-        "{size}: live shell misses the info line\n{}",
+        metrics.contains("deepseek-v4-pro"),
+        "{size}: live shell misses the model in the metrics line\n{}",
         frame.debug_dump()
     );
     // The shell advertises one help route per surface: the info line's

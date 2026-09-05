@@ -406,11 +406,13 @@ mod tests {
     }
 
     #[test]
-    fn balance_excluded_for_non_deepseek_provider() {
+    fn balance_offered_for_prepaid_providers_and_hidden_for_local() {
         let active = StatusItem::default_footer();
-        let view = StatusPickerView::new(&active, ApiProvider::Openrouter, Locale::En);
-        assert!(!view.rows.contains(&StatusItem::Balance));
-        assert!(view.rows.contains(&StatusItem::Mode));
+        let openrouter = StatusPickerView::new(&active, ApiProvider::Openrouter, Locale::En);
+        assert!(openrouter.rows.contains(&StatusItem::Balance));
+        let ollama = StatusPickerView::new(&active, ApiProvider::Ollama, Locale::En);
+        assert!(!ollama.rows.contains(&StatusItem::Balance));
+        assert!(ollama.rows.contains(&StatusItem::Mode));
     }
 
     #[test]

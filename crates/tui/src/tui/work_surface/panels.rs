@@ -1,4 +1,4 @@
-//! Tideline pod ledger (spec §2 ledger resolution, §5a "Pod ledger", §5b
+//! Tideline fleet ledger (spec §2 ledger resolution, §5a "Fleet ledger", §5b
 //! ledger columns). The line-list panel path that used to live here
 //! (Context as a fact list with nothing to click) is gone: every dock view
 //! now renders through the row/hitbox machinery in `render/`, so a context
@@ -219,7 +219,7 @@ fn ltruncate(text: &str, width: usize) -> String {
     out
 }
 
-/// Paint the pod ledger: `POD LEDGER` title, column header row, one-line
+/// Paint the fleet ledger: `FLEET LEDGER` title, column header row, one-line
 /// rows (truncate, never wrap) with the selected-row `▶` marker.
 #[allow(dead_code)] // translation scaffolding: wired by the landing slice
 pub fn render_tideline_ledger(area: Rect, buf: &mut Buffer, ledger: &TidelinePodLedger<'_>) {
@@ -233,7 +233,7 @@ pub fn render_tideline_ledger(area: Rect, buf: &mut Buffer, ledger: &TidelinePod
         buf,
         area.x,
         area.y,
-        "POD LEDGER",
+        "FLEET LEDGER",
         lchrome(theme, ChromeInk::Metadata).add_modifier(Modifier::BOLD),
     );
 
