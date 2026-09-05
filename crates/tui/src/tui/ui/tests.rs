@@ -4927,7 +4927,10 @@ fn paste_burst_does_not_leak_into_composer_while_a_modal_owns_keys() {
         &mut app,
         now + crate::tui::paste_burst::PasteBurst::recommended_flush_delay(),
     );
-    assert!(!flushed, "modal-owned keys must not flush into the composer");
+    assert!(
+        !flushed,
+        "modal-owned keys must not flush into the composer"
+    );
     assert!(
         app.input.is_empty() || app.input == "/",
         "composer must not gain leaked burst text under a modal: {:?}",

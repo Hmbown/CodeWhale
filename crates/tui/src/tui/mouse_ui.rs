@@ -337,9 +337,6 @@ fn handle_plugin_cta_mouse(app: &mut App, mouse: MouseEvent) -> Option<Vec<ViewE
     Some(Vec::new())
 }
 
-/// Handle mouse events within the composer area.
-/// Returns true if the event was consumed.
-
 /// Slash-autocomplete rows painted inside the composer. Click selects
 /// (second click on the same row applies, matching the command palette);
 /// wheel moves the highlight. Returns true when the event was consumed so
@@ -349,12 +346,13 @@ fn handle_slash_autocomplete_mouse(app: &mut App, mouse: MouseEvent) -> bool {
     if hitboxes.is_empty() {
         return false;
     }
-    let over_row = hitboxes.iter().find_map(|(idx, rect)| {
-        mouse_hits_rect(mouse, Some(*rect)).then_some(*idx)
-    });
+    let over_row = hitboxes
+        .iter()
+        .find_map(|(idx, rect)| mouse_hits_rect(mouse, Some(*rect)).then_some(*idx));
     let over_menu = over_row.is_some()
         || hitboxes.iter().any(|(_, rect)| {
-            mouse.row >= rect.y && mouse.row < rect.y.saturating_add(rect.height)
+            mouse.row >= rect.y
+                && mouse.row < rect.y.saturating_add(rect.height)
                 && mouse.column >= rect.x
                 && mouse.column < rect.x.saturating_add(rect.width)
         });
@@ -405,6 +403,8 @@ fn handle_slash_autocomplete_mouse(app: &mut App, mouse: MouseEvent) -> bool {
     }
 }
 
+/// Handle mouse events within the composer area.
+/// Returns true if the event was consumed.
 pub(crate) fn handle_composer_mouse(app: &mut App, mouse: MouseEvent) -> bool {
     // Use outer area for hit-testing (includes border).
     let Some(area) = app.viewport.last_composer_area else {
@@ -1973,8 +1973,6 @@ mod tests {
         crate::tui::hover_layer::clear_pointer();
     }
 
-
-
     #[test]
     fn slash_autocomplete_click_selects_and_second_click_applies() {
         let mut app = create_test_app();
@@ -1986,18 +1984,22 @@ mod tests {
         app.slash_menu_selected = 0;
         // Simulate two painted rows from ComposerWidget.
         app.viewport.last_composer_area = Some(Rect::new(0, 18, 80, 6));
-        *app.viewport.last_slash_menu_hitboxes.borrow_mut() = vec![
-            (0, Rect::new(1, 20, 78, 1)),
-            (1, Rect::new(1, 21, 78, 1)),
-        ];
+        *app.viewport.last_slash_menu_hitboxes.borrow_mut() =
+            vec![(0, Rect::new(1, 20, 78, 1)), (1, Rect::new(1, 21, 78, 1))];
 
         assert!(
             handle_composer_mouse(&mut app, left_click(5, 21)),
             "slash row click must be consumed by the composer"
         );
-        assert_eq!(app.slash_menu_selected, 1, "click on another row highlights it");
+        assert_eq!(
+            app.slash_menu_selected, 1,
+            "click on another row highlights it"
+        );
         let before = app.input.clone();
-        assert_eq!(before, "/he", "select-only click must not rewrite the composer");
+        assert_eq!(
+            before, "/he",
+            "select-only click must not rewrite the composer"
+        );
 
         assert!(handle_composer_mouse(&mut app, left_click(5, 21)));
         assert_ne!(app.input, before, "click on the highlighted row applies it");
@@ -2018,10 +2020,8 @@ mod tests {
         app.slash_menu_hidden = false;
         app.slash_menu_selected = 0;
         app.viewport.last_composer_area = Some(Rect::new(0, 18, 80, 6));
-        *app.viewport.last_slash_menu_hitboxes.borrow_mut() = vec![
-            (0, Rect::new(1, 20, 78, 1)),
-            (1, Rect::new(1, 21, 78, 1)),
-        ];
+        *app.viewport.last_slash_menu_hitboxes.borrow_mut() =
+            vec![(0, Rect::new(1, 20, 78, 1)), (1, Rect::new(1, 21, 78, 1))];
         let entries = crate::tui::slash_menu::visible_slash_menu_entries(&app, 128);
         assert!(entries.len() >= 2, "prefix must offer multiple entries");
 
@@ -2047,7 +2047,6 @@ mod tests {
         ));
         assert_eq!(app.slash_menu_selected, 0);
     }
-
 
     #[test]
     fn send_click_matches_the_keyboard_submit_and_focus_never_leaves_the_composer() {

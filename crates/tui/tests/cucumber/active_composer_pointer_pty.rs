@@ -341,9 +341,13 @@ fn assert_startup_contract(frame: &Frame, rows: u16, cols: u16, size: &str) {
 
 fn assert_live_shell_contract(frame: &Frame, cols: u16, size: &str) {
     let text = frame.text();
+    // The bottom metrics row owns the model; repository state belongs to
+    // the launch header and git view. This sealed offline session uses the
+    // default model, which must remain visible even at 40 columns.
+    let metrics = frame.row(frame.rows().saturating_sub(1));
     assert!(
-        text.contains("no git"),
-        "{size}: live shell misses the info line\n{}",
+        metrics.contains("deepseek-v4-pro"),
+        "{size}: live shell misses the model in the metrics line\n{}",
         frame.debug_dump()
     );
     // The shell advertises one help route per surface: the info line's
