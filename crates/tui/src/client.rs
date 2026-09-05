@@ -1668,6 +1668,25 @@ fn build_default_headers(
             HeaderValue::from_static("Codewhale"),
         );
     }
+    // OpenCode Go / OpenCode Zen gateways (https://opencode.ai/docs/go/)
+    // ask clients to send a stable `x-opencode-session` header so the
+    // service can optimize prompt caching and attribute traffic to a
+    // conversation. Generate one UUID v4 per process so every request a
+    // session makes to the gateway shares a single ID ("one stable ID per
+    // conversation"). A user-configured header of the same name wins: the
+    // extra-header loop below overwrites this value.
+    if matches!(
+        api_provider,
+        ApiProvider::OpencodeGo | ApiProvider::OpencodeZen
+    ) {
+        static OPENCODE_SESSION: OnceLock<String> = OnceLock::new();
+        let session = OPENCODE_SESSION
+            .get_or_init(|| uuid::Uuid::new_v4().to_string());
+        headers.insert(
+            HeaderName::from_static("x-opencode-session"),
+            HeaderValue::from_str(session)?,
+        );
+    }
     for (name, value) in extra_headers {
         let name = name.trim();
         let value = value.trim();
@@ -8041,6 +8060,86 @@ mod tests {
             Some("application/json")
         );
         assert!(headers.get("api-key").is_none());
+    }
+
+    #[test]
+    fn opencode_go_and_zen_requests_carry_stable_session_header() {
+        for api_provider in [ApiProvider::OpencodeGo, ApiProvider::OpencodeZen] {
+            let headers = DeepSeekClient::default_headers_for_provider(
+                "configured-key",
+                &HashMap::new(),
+                api_provider,
+                "https://opencode.ai/zen/go/v1",
+            )
+            .expect("headers");
+            let session = headers
+                .get("x-opencode-session")
+                .expect("x-opencode-session must be present for OpenCode gateways")
+                .to_str()
+                .expect("session id must be valid utf-8");
+            assert!(!session.is_empty(), "session id must be non-empty");
+
+            // The gateway requires one stable ID per conversation: a second
+            // request from the same process must reuse the same value.
+            let headers2 = DeepSeekClient::default_headers_for_provider(
+                "configured-key",
+                &HashMap::new(),
+                api_provider,
+                "https://opencode.ai/zen/go/v1",
+            )
+            .expect("headers2");
+            assert_eq!(
+                headers2
+                    .get("x-opencode-session")
+                    .and_then(|value| value.to_str().ok()),
+                Some(session),
+                "session id must be stable within a process"
+            );
+        }
+    }
+
+    #[test]
+    fn user_configured_opencode_session_header_wins() {
+        let mut extra = HashMap::new();
+        extra.insert(
+            "x-opencode-session".to_string(),
+            "user-configured-id".to_string(),
+        );
+        let headers = DeepSeekClient::default_headers_for_provider(
+            "configured-key",
+            &extra,
+            ApiProvider::OpencodeGo,
+            "https://opencode.ai/zen/go/v1",
+        )
+        .expect("headers");
+        assert_eq!(
+            headers
+                .get("x-opencode-session")
+                .and_then(|value| value.to_str().ok()),
+            Some("user-configured-id"),
+            "a user-configured x-opencode-session must override the default"
+        );
+    }
+
+    #[test]
+    fn non_opencode_providers_do_not_carry_session_header() {
+        for api_provider in [
+            ApiProvider::Deepseek,
+            ApiProvider::Anthropic,
+            ApiProvider::Openai,
+        ] {
+            let headers = DeepSeekClient::default_headers_for_provider(
+                "configured-key",
+                &HashMap::new(),
+                api_provider,
+                "https://example.invalid/v1",
+            )
+            .expect("headers");
+            assert!(
+                headers.get("x-opencode-session").is_none(),
+                "non-OpenCode provider {api_provider:?} must not send the session header"
+            );
+        }
     }
 
     #[test]
