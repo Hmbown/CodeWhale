@@ -2914,6 +2914,27 @@ async fn reload_if_config_changed_swaps_config_on_content_change() {
 }
 
 #[tokio::test]
+async fn stale_handshake_cannot_be_restamped_after_config_reload() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp.json");
+    std::fs::write(&path, r#"{"servers":{"local":{"command":"node"}}}"#).unwrap();
+    let mut pool = McpPool::from_config_path(&path).unwrap();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let mut connection = test_connection(Box::new(DropCountingTransport {
+        drops: drops.clone(),
+    }));
+    connection.catalog_generation = pool.current_catalog_generation();
+    std::fs::write(&path, r#"{"servers":{}}"#).unwrap();
+    pool.reload_from_config_sources(true).unwrap();
+    let error = pool
+        .store_ready_connection("local".to_string(), connection)
+        .unwrap_err();
+    assert!(error.to_string().contains("configuration changed"));
+    assert!(!pool.connections.contains_key("local"));
+    assert_eq!(drops.load(AtomicOrdering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn reload_if_config_changed_drops_live_connections() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("mcp.json");

@@ -20756,6 +20756,23 @@ async fn reload_mcp_op_recovers_from_invalid_initial_config_in_process() {
 
 #[tokio::test]
 async fn mcp_boot_reports_ready_server_before_stalled_server_finishes() {
+    assert_incremental_mcp_boot(false).await;
+}
+
+#[tokio::test]
+async fn mcp_boot_does_not_restore_servers_removed_during_handshake() {
+    assert_incremental_mcp_boot(true).await;
+}
+
+async fn assert_incremental_mcp_boot(invalidate_config: bool) {
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping MCP stdio fixture because node is unavailable");
+        return;
+    }
     let tmp = tempdir().expect("tempdir");
     let server = tmp.path().join("server.mjs");
     let release = tmp.path().join("release-slow");
@@ -20794,14 +20811,15 @@ lines.on('line', async (line) => {
         .expect("config JSON"),
     )
     .expect("MCP config");
-    let (engine, handle) = Engine::new(
+    let (mut engine, handle) = Engine::new(
         EngineConfig {
             workspace: tmp.path().to_path_buf(),
-            mcp_config_path: config_path,
+            mcp_config_path: config_path.clone(),
             ..Default::default()
         },
         &Config::default(),
     );
+    let pool = engine.ensure_mcp_pool().await.expect("engine pool");
     let task = tokio::spawn(async move { engine.run().await });
     let mut events = handle.rx_event.write().await;
     let progress = tokio::time::timeout(Duration::from_secs(10), async {
@@ -20820,6 +20838,19 @@ lines.on('line', async (line) => {
         panic!("engine event channel closed");
     })
     .await;
+    let ready_tools = pool.lock().await.to_api_tools();
+    if invalidate_config {
+        std::fs::write(
+            &config_path,
+            r#"{"servers":{"slow":{"command":"node","disabled":true}}}"#,
+        )
+        .expect("remove servers");
+        pool.lock()
+            .await
+            .reload_if_config_changed()
+            .await
+            .expect("reload config");
+    }
     // Release and shut down even when testing the old batch-buffered behavior.
     std::fs::write(&release, "continue").expect("release stalled fixture");
     let finished = tokio::time::timeout(Duration::from_secs(10), async {
@@ -20852,13 +20883,17 @@ lines.on('line', async (line) => {
             .iter()
             .any(|row| row.name == "slow" && !row.connected)
     );
-    assert!(
-        finished
-            .expect("finished boot")
-            .servers
-            .iter()
-            .all(|row| row.connected)
-    );
+    assert!(ready_tools.iter().any(|tool| tool.name == "mcp_fast_ready"));
+    assert!(!ready_tools.iter().any(|tool| tool.name == "mcp_slow_ready"));
+    let finished = finished.expect("finished boot");
+    if invalidate_config {
+        assert_eq!(finished.servers.len(), 1);
+        assert!(!finished.servers[0].enabled);
+        assert!(!finished.servers[0].connected);
+        assert!(pool.lock().await.to_api_tools().is_empty());
+    } else {
+        assert!(finished.servers.iter().all(|row| row.connected));
+    }
 }
 
 #[tokio::test]
@@ -20906,6 +20941,10 @@ async fn mcp_boot_updates_preserve_authority_errors_and_replace_ordinary_errors(
         ])
     );
     assert!(!engine.mcp_connection_errors.contains_key("stale-transport"));
+    assert_eq!(
+        engine.session.pending_prefix_change_reason.as_deref(),
+        Some("mcp-session-boot")
+    );
 
     engine.mcp_connection_errors.insert(
         "stale-between-updates".to_string(),
@@ -20933,6 +20972,42 @@ async fn mcp_boot_updates_preserve_authority_errors_and_replace_ordinary_errors(
                 "final connection failure".to_string(),
             ),
         ])
+    );
+}
+
+#[tokio::test]
+async fn mcp_boot_catalog_refresh_declares_prefix_before_mailbox_delivery() {
+    let tmp = tempdir().expect("tempdir");
+    let (mut engine, _handle) = Engine::new(
+        EngineConfig {
+            workspace: tmp.path().to_path_buf(),
+            ..Default::default()
+        },
+        &Config::default(),
+    );
+    engine.mcp_boot_generation = Some(1);
+    engine.mcp_boot_in_flight = true;
+    engine.session.pending_prefix_change_reason = None;
+    let _tools = engine.mcp_tools().await;
+    assert_eq!(
+        engine.session.pending_prefix_change_reason.as_deref(),
+        Some("mcp-session-boot")
+    );
+
+    engine.session.pending_prefix_change_reason = None;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    engine.mcp_boot_rx = Some(rx);
+    tx.send(McpBootUpdate::Progress {
+        generation: 1,
+        authority_errors: Arc::new(HashMap::new()),
+        connection_errors: HashMap::new(),
+        connecting: vec!["slow".to_string()],
+    })
+    .expect("queue progress");
+    engine.drain_mcp_boot_updates().await;
+    assert_eq!(
+        engine.session.pending_prefix_change_reason.as_deref(),
+        Some("mcp-session-boot")
     );
 }
 

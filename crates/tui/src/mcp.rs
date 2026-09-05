@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use futures_util::FutureExt;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
@@ -2864,7 +2865,7 @@ impl McpPool {
         };
         connection.catalog_generation = self.catalog_generation.load(Ordering::SeqCst);
 
-        self.store_ready_connection(server_name.to_string(), connection);
+        self.store_ready_connection(server_name.to_string(), connection)?;
         self.connections
             .get_mut(server_name)
             .ok_or_else(|| anyhow::anyhow!("Failed to store MCP connection for {server_name}"))
@@ -2913,7 +2914,7 @@ impl McpPool {
             anyhow::bail!("Failed to connect MCP server '{server_name}': server is disabled");
         }
 
-        let connection = match McpConnection::connect_with_policy(
+        let mut connection = match McpConnection::connect_with_policy(
             server_name.to_string(),
             server_config,
             &self.config.timeouts,
@@ -2927,14 +2928,25 @@ impl McpPool {
                 return Err(error);
             }
         };
-        self.store_ready_connection(server_name.to_string(), connection);
+        connection.catalog_generation = self.current_catalog_generation();
+        self.store_ready_connection(server_name.to_string(), connection)?;
         self.connections
             .get_mut(server_name)
             .ok_or_else(|| anyhow::anyhow!("Failed to store MCP connection for {server_name}"))
     }
 
-    pub(crate) fn store_ready_connection(&mut self, name: String, mut connection: McpConnection) {
-        connection.catalog_generation = self.catalog_generation.load(Ordering::SeqCst);
+    pub(crate) fn store_ready_connection(
+        &mut self,
+        name: String,
+        connection: McpConnection,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            connection.catalog_generation == self.current_catalog_generation(),
+            "MCP configuration changed while connecting {name}; retry against the current config"
+        );
+        if let Some(source) = connection.config().reviewed_plugin.as_ref() {
+            source.validate_before_use(&name, "use")?;
+        }
         // A successful connect settles the auth question for this server,
         // and the cooldown with it.
         self.connect_backoff.remove(&name);
@@ -2942,6 +2954,7 @@ impl McpPool {
             self.needs_auth_generation = self.needs_auth_generation.wrapping_add(1);
         }
         self.connections.insert(name, connection);
+        Ok(())
     }
 
     /// Record a connect failure's auth classification. When the failure looks
@@ -3107,18 +3120,23 @@ impl McpPool {
             let permit = semaphore.clone();
             let network_policy = network_policy.clone();
             joins.spawn(async move {
-                let _permit = permit.acquire_owned().await;
-                let connection = McpConnection::connect_with_policy(
-                    name.clone(),
-                    config,
-                    &timeouts,
-                    network_policy.as_ref(),
-                )
+                let connection = std::panic::AssertUnwindSafe(async {
+                    let _permit = permit.acquire_owned().await;
+                    McpConnection::connect_with_policy(
+                        name.clone(),
+                        config,
+                        &timeouts,
+                        network_policy.as_ref(),
+                    )
+                    .await
+                    .map(|mut connection| {
+                        connection.catalog_generation = catalog_generation;
+                        connection
+                    })
+                })
+                .catch_unwind()
                 .await
-                .map(|mut connection| {
-                    connection.catalog_generation = catalog_generation;
-                    connection
-                });
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("MCP connection task panicked")));
                 (name, connection)
             });
         }
@@ -3190,12 +3208,11 @@ impl McpPool {
             while let Some(joined) = connects.join_next().await {
                 let (name, result) = joined
                     .unwrap_or_else(|error| ("connection task".to_string(), Err(error.into())));
-                match result {
-                    Ok(connection) => self.store_ready_connection(name, connection),
-                    Err(error) => {
-                        self.note_connect_failure(&name, &error);
-                        errors.push((name, error));
-                    }
+                let result = result
+                    .and_then(|connection| self.store_ready_connection(name.clone(), connection));
+                if let Err(error) = result {
+                    self.note_connect_failure(&name, &error);
+                    errors.push((name, error));
                 }
             }
 
