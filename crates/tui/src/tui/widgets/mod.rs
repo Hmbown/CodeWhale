@@ -83,6 +83,61 @@ struct TranscriptScrollbar {
     total: usize,
 }
 
+/// A `todo_write` result is a full replacement snapshot, not an incremental
+/// transcript event. Keep only the newest successful snapshot in the visible
+/// transcript while retaining every tool result in history for model context
+/// and persistence.
+fn superseded_todo_write_indices(
+    history: &[HistoryCell],
+    active_entries: &[HistoryCell],
+) -> HashSet<usize> {
+    let mut hidden = HashSet::new();
+    let mut latest = None;
+
+    for (index, cell) in history.iter().chain(active_entries).enumerate() {
+        let HistoryCell::Tool(ToolCell::Generic(tool)) = cell else {
+            continue;
+        };
+        if tool.name != "todo_write" || tool.status != ToolStatus::Success {
+            continue;
+        }
+
+        if let Some(previous) = latest.replace(index) {
+            hidden.insert(previous);
+        }
+    }
+
+    if let Some(index) = latest {
+        let cell = history
+            .get(index)
+            .or_else(|| active_entries.get(index.saturating_sub(history.len())));
+        if cell.is_some_and(todo_write_snapshot_is_empty) {
+            hidden.insert(index);
+        }
+    }
+
+    hidden
+}
+
+fn todo_write_snapshot_is_empty(cell: &HistoryCell) -> bool {
+    let HistoryCell::Tool(ToolCell::Generic(tool)) = cell else {
+        return false;
+    };
+    let Some(output) = tool.output.as_deref() else {
+        return false;
+    };
+    let Some(json_start) = output.find('{') else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&output[json_start..]) else {
+        return false;
+    };
+    value
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(Vec::is_empty)
+}
+
 fn resolve_transcript_viewport_after_layout(
     viewport: &mut ViewportState,
     visible_lines: usize,
@@ -286,9 +341,10 @@ impl ChatWidget {
             .active_cell
             .as_ref()
             .map_or(&[], |active| active.entries());
+        let superseded_todos = superseded_todo_write_indices(&app.history, active_entries);
 
         let history_len = app.history.len();
-        let tool_runs = if app.tool_collapse_active() {
+        let mut tool_runs = if app.tool_collapse_active() {
             let cache_key_matches = app.tool_run_cache.history_version == app.history_version
                 && app.tool_run_cache.active_cell_revision == app.active_cell_revision
                 && app.tool_run_cache.active_len == active_entries.len()
@@ -312,6 +368,14 @@ impl ChatWidget {
         } else {
             Vec::new()
         };
+        // A collapsed run that crosses a hidden replacement snapshot would
+        // otherwise lose its summary start or count a row the user cannot
+        // see. Leave only that run expanded; unrelated dense runs still use
+        // the normal collapse path.
+        tool_runs.retain(|run| {
+            !(run.start..run.start.saturating_add(run.count))
+                .any(|index| superseded_todos.contains(&index))
+        });
         let collapsed_run_starts: HashSet<usize> = tool_runs
             .iter()
             .filter_map(|run| (!app.expanded_tool_runs.contains(&run.start)).then_some(run.start))
@@ -329,7 +393,9 @@ impl ChatWidget {
         // v0.9.1: do not collapse concurrent sub-agent cards into an Enter-
         // expand shelf. Count lives in header chrome; full cards stay visible;
         // sidebar / SubAgents modal are the drill-in surface.
-        let has_collapsed = !app.collapsed_cells.is_empty() || !collapsed_run_starts.is_empty();
+        let has_collapsed = !app.collapsed_cells.is_empty()
+            || !collapsed_run_starts.is_empty()
+            || !superseded_todos.is_empty();
 
         // Fast path: no collapsed cells — use original slices directly.
         if !has_collapsed {
@@ -394,6 +460,9 @@ impl ChatWidget {
                 Vec::with_capacity(history_len + active_entries.len());
 
             for (idx, cell) in app.history.iter().enumerate() {
+                if superseded_todos.contains(&idx) {
+                    continue;
+                }
                 if app.collapsed_cells.contains(&idx) {
                     continue;
                 }
@@ -423,6 +492,9 @@ impl ChatWidget {
                 let active_rev = app.active_cell_revision;
                 for (i, cell) in active_entries.iter().enumerate() {
                     let original_idx = history_len + i;
+                    if superseded_todos.contains(&original_idx) {
+                        continue;
+                    }
                     if app.collapsed_cells.contains(&original_idx) {
                         continue;
                     }
@@ -7489,6 +7561,64 @@ mod tests {
             !rendered.contains("><>") && !rendered.contains("<><"),
             "a full transcript is not an aquarium:\n{rendered}"
         );
+    }
+
+    fn todo_write_cell(item: Option<&str>) -> HistoryCell {
+        let items = item.map_or_else(
+            || "[]".to_string(),
+            |content| format!(r#"[{{"id":1,"content":"{content}","status":"pending"}}]"#),
+        );
+        let count = usize::from(item.is_some());
+        HistoryCell::Tool(ToolCell::Generic(GenericToolCell {
+            name: "todo_write".to_string(),
+            status: ToolStatus::Success,
+            input_summary: Some(format!("todos: <{count} items>")),
+            output: Some(format!(
+                "Todo list updated ({count} items, 0% settled)\n{{\"items\":{items},\"completion_pct\":0}}"
+            )),
+            prompts: None,
+            spillover_path: None,
+            output_summary: None,
+            is_diff: false,
+        }))
+    }
+
+    #[test]
+    fn todo_write_renders_only_the_latest_successful_snapshot() {
+        let mut app = create_test_app();
+        app.add_message(todo_write_cell(Some("stale task")));
+        app.add_message(HistoryCell::Assistant {
+            content: "working".to_string(),
+            streaming: false,
+        });
+        app.add_message(todo_write_cell(Some("current task")));
+
+        let area = Rect::new(0, 0, 80, 20);
+        let mut buf = Buffer::empty(area);
+        ChatWidget::new(&mut app, area).render(area, &mut buf);
+        let rendered = buffer_text(&buf, area);
+
+        assert!(!rendered.contains("stale task"), "{rendered}");
+        assert!(rendered.contains("current task"), "{rendered}");
+        assert_eq!(app.collapsed_cell_map, vec![1, 2]);
+    }
+
+    #[test]
+    fn empty_todo_write_hides_the_previous_snapshot() {
+        let mut app = create_test_app();
+        app.add_message(todo_write_cell(Some("finished task")));
+        let active = app.active_cell.get_or_insert_with(ActiveCell::new);
+        active.push_untracked(todo_write_cell(None));
+        app.bump_active_cell_revision();
+
+        let area = Rect::new(0, 0, 80, 20);
+        let mut buf = Buffer::empty(area);
+        ChatWidget::new(&mut app, area).render(area, &mut buf);
+        let rendered = buffer_text(&buf, area);
+
+        assert!(!rendered.contains("finished task"), "{rendered}");
+        assert!(!rendered.contains("todo_write"), "{rendered}");
+        assert!(app.collapsed_cell_map.is_empty());
     }
 
     /// Probe: confirm `cell.lines_with_motion` returns no Line whose total
