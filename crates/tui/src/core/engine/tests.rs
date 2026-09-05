@@ -20770,7 +20770,7 @@ async fn assert_incremental_mcp_boot(invalidate_config: bool) {
         .output()
         .is_err()
     {
-        eprintln!("skipping MCP stdio fixture because node is unavailable");
+        tracing::warn!("skipping MCP stdio fixture because node is unavailable");
         return;
     }
     let tmp = tempdir().expect("tempdir");
